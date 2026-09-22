@@ -526,7 +526,7 @@ func isPoolSharedStorage(s protocol.StorageRegistration) bool {
 
 // poolVMExecutionContext binds a VM operation to the master-approved clustered
 // storage profile.  It is deliberately derived from the local managed journal,
-// never from the client command.  ValidateClusteredISCSI is also a live native
+// never from the client command. ValidateClusteredISCSIAt is also a live native
 // readiness gate before a start permit is written.
 func poolVMExecutionContext(ctx context.Context, s *Store, v protocol.VMCreateSpec) (context.Context, error) {
 	storage, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()

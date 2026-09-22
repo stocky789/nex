@@ -144,7 +144,9 @@ endpoints, schedulers or UI controls now:
   a small supported set whose deployment, updates and recovery are verified. VM image/bootstrap
   and Phase 10 prerequisites still apply; this adds neither LXC nor Docker workloads on Core.
   Deployed application identity/configuration must be recoverable from the pool, including its
-  managed Swarm, without a sole Controller-held recipe or mapping.
+  managed Swarm, without a sole Controller-held recipe or mapping. The
+  [application catalogue design](#application-catalogue) in Phase 10 is the agreed shape
+  (decision: project owner, 2026-09-22).
 - **Honest recovery:** describe validated restart/replacement behavior and its limits per workload;
   do not promise uninterrupted applications from a generic HA switch. Reserve controls and
   recovery priorities follow proven HA. Automatic balancing, power/temperature optimisation,
@@ -419,12 +421,23 @@ The pool-local cluster layer supplies quorum, fencing and execution exclusion, a
 integrated with the active master as one authority, never a competing scheduler. Members execute
 authorized work, not independent relocation decisions. Controller connectivity is not a quorum
 vote; a Controller or WAN outage alone must not remove the pool's decision-making authority.
+*(Narrow exception. Decision: project owner, 2026-09-22: a Controller may act as the automatic
+quorum-device witness that breaks a tie in a two-host pool, holding no durable pool state. Its
+outage removes only automatic takeover, never a Core operation or the pool's authority; see
+[two-host pool fencing](2026-09-22-two-host-pool-fencing.md#the-controller-as-witness-without-breaking-the-invariant).
+Planned, not implemented.)*
 The master is a transferable role, not a permanent dependency on one physical host; every
 change of master follows the [pool authority transfer](#pool-authority-transfer-and-master-succession)
 design. Without a provably valid master/ownership authority, block new starts and transfers and
 apply the tested no-quorum policy: the native cluster freezes on quorum loss
 (`no-quorum-policy=freeze`) and exclusion comes from verified external power-off fencing, not
-from hosts fencing themselves.
+from hosts fencing themselves. *(Amended 2026-09-22, project owner: pools of three or more hosts
+may also use hardware-watchdog self-fencing under the proof rules in
+[automatic host fencing](2026-09-22-automatic-host-fencing.md#rule-change). Slices 1-4c are
+implemented in the working tree, with pre-merge review fixes applied 2026-09-22: a pool of three
+to five hosts without clustered storage forms its own cluster and arms its hosts. Go tests and a
+nested lab only — no physical watchdog has been read, armed or expired and no physical host has
+been reset; clustered-storage pools and pools above five hosts arm nothing and report why.)*
 
 Controller outage leaves running guests and established pool-local HA operating. Before HA exists, uncertainty results in alerts and restricted operations, never an automatic failover. With HA enabled, a missing heartbeat alone still cannot authorize a second VM start: the HA authority must establish quorum, required storage/capacity, and successful fencing of an uncertain previous owner.
 
@@ -486,6 +499,7 @@ browsable reference and agent protocol documentation; later phases extend them. 
 8. Provide a scoped inventory table, VM summary, visible task history, fresh/stale status, and basic CPU/RAM/disk usage. Add deletion protection and keep force-stop visually separate from graceful shutdown. The detailed UI sequence is in the companion review.
    **Usage observation, 2026-09-16:** each active VM is sampled with `virsh domstats --raw --nowait`; Core reports CPU, memory and disk on host inventory, Controller passes them through on `GET /api/v1/vms`, and **VM details** renders the nullable values (fresh/stale on the panel heading; no separate sample-age row). `--nowait` is required, not an optimisation: a probe that takes the domain's job stalls behind a long shutdown on the very VM being watched. Disposable-host and real-browser verification passed for both a running VM's measurements and a shut-off VM's absent sample. See the [VM foundation debts](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
    **Usage history, 2026-09-17:** Core now also records VM and host history on each host (5 s, 1 min, 1 h and 1 day tiers, up to a year) and serves it, with an on-demand 1-second realtime view under a host-owned lease, through an outbound stats channel; the **Stats** tab charts it. State owner: Core; a replacement Controller shows the same history. Implemented in the working tree with simulated-host evidence; remaining checks are in the [usage history plan](2026-09-16-usage-history.md#remaining-work).
+   **Host hardware and sensors, 2026-09-22:** Core discovers its own hardware and records hwmon temperatures in host usage history; the host **Stats** tab gains a hardware panel, gauges and a temperature chart. State owner: Core. Implemented in the working tree with simulated evidence only; the real-hardware walkthrough belongs to the project owner and is outstanding. See the [hardware and sensors plan](2026-09-22-host-hardware-and-sensors.md).
    **VirtIO driver media, 2026-09-17:** the second driver disc is complete. **0.3.2** ships
    Fedora virtio-win 0.1.302 on the Core ISO with retained Fedora corresponding source
    ([ISO build](../qa/iso/2026-09-17-core-0.3.2-build.md)); hosts seed `/usr/share/nex/media/virtio-win.iso`
@@ -749,9 +763,14 @@ Core on that member proves replica integrity, replica supremacy and accepted VM 
 its own fence proof by powering the lost master off and observing it, and only then takes the pool
 authority at generation + 1; a host that cannot prove it holds the pool's current authority
 restricts itself before any start path is exposed and rejoins automatically only after it has
-reconciled). It carries two honest limits that are part of the design and not defects: only a
-`virsh` fence profile can be recorded, so **a physical pool cannot be fence-promoted** until BMC
-identity verification is implemented; and an opted-in pool whose master restarts while one other
+reconciled). It carries two honest limits that are part of the design and not defects: at that
+date only a `virsh` fence profile could be recorded, so a physical pool could not be
+fence-promoted — [automatic host fencing](2026-09-22-automatic-host-fencing.md) lifts that in the
+working tree, where BMC identity verification (SMBIOS UUID reported over
+`POST /api/v1/pool/advertise`, certificate-pinned Redfish and `ipmilan` profiles) and in-band
+account provisioning let a physical pool record a BMC fence profile, though **no physical
+management controller has been contacted and no host has been powered off**; and an opted-in pool
+whose master restarts while one other
 ready member is permanently dead **stays restricted**, with no escape action and none to be added
 (owner decision OD-5, 2026-09-19) — the recovery is to bring that host back or restore its Core
 state. Its initial evidence was in-process multi-host Go `-race` tests, Controller tests and
@@ -851,7 +870,12 @@ planned/outstanding.
      define and test that proof before implementation. Missing or ambiguous authority records
      block promotion; fencing alone cannot make an incomplete replica authoritative.
   3. When the old master is not cooperating, obtain verified power-off through the existing
-     fencing proof mechanism. A timeout or heartbeat loss is never proof.
+     fencing proof mechanism. A timeout or heartbeat loss is never proof. *(Amended 2026-09-22:
+     a watchdog exclusion proof combines quorum, the target's own armed hardware-watchdog report
+     and an elapsed bound; see [automatic host fencing](2026-09-22-automatic-host-fencing.md#rule-change).
+     Implemented in the working tree (slices 4a-4c), with pre-merge review fixes applied
+     2026-09-22; verified by Go tests and a nested lab only — no promotion has been driven by a
+     watchdog proof anywhere, and no physical watchdog has been armed or expired.)*
   4. The target activates as master at generation + 1 and signs the new authority.
   5. Members re-point to the new master and accept only the higher generation.
   6. The old master is demoted, or refused by generation/epoch check when it returns, and
@@ -902,7 +926,11 @@ planned/outstanding.
   members (counted by the established pool quorum layer, not a Nex consensus), a verified fence
   proof of the old master, and the most recent replica generation among the majority. Pools that
   cannot form a majority, including two hosts, never auto-elect and use manual, fence-verified
-  promotion. Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
+  promotion. *(Amended 2026-09-22, project owner: a two-host pool auto-elects its survivor when it
+  holds a valid BMC, storage-lease or witness exclusion proof and passes the same replica-supremacy
+  check; without such a proof nothing is automatic. See
+  [two-host pool fencing](2026-09-22-two-host-pool-fencing.md#automatic-takeover); planned, not
+  implemented.)* Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
 - **Health after promotion.** A new master re-collects fresh member access observations before
   reporting health (member access is memory-only, BUG-0158); the replica is never health evidence.
 - **Fence credentials travel sealed, and every ready member can open its own copy.** The host that
@@ -1334,6 +1362,7 @@ recovery guidance with the feature.
 ### 9. Optional per-pool HA
 
 1. Evaluate Corosync/Pacemaker and fencing agents in a separate lab; establish one pool-local authority for HA-managed VM starts/stops. The controller must submit to that authority rather than compete with it.
+   **Pool-owned cluster and host fencing, 2026-09-22:** Core forms and maintains one resource-free Corosync/Pacemaker cluster per pool and runs the watchdog arming rollout (`internal/vmhost/pool_cluster.go`, `internal/agent/pool_cluster.go`, `internal/agent/pool_watchdog_arming.go`), so item 1's evaluation is settled — do not add a second cluster layer. State owner: Core; the nodelist is derived from pool membership, with no durable cluster record. Implemented in the working tree, with pre-merge review fixes applied 2026-09-22, and proved by Go tests and a nested lab only. The gate items below stay OPEN: physical fence hardware, clustered-storage pools (which arm nothing and report why), pools above five hosts, HA-managed resources, quorum-loss/fence-failure policy and duplicate-writer proof. See the [automatic host fencing plan](2026-09-22-automatic-host-fencing.md).
 2. Define membership, quorum, fence devices, storage prerequisites, restart policy, reserved capacity, and maintenance behavior. Begin with three test nodes; two-node arrangements require a separately validated quorum design.
 3. Permit recovery elsewhere only after fencing proves the original execution cannot continue. A missing heartbeat is insufficient evidence.
 4. HA-managed guests must not also have independent libvirt autostart paths that can race recovery. Coordinate startup after power restoration and controller reconnection.
@@ -1435,6 +1464,64 @@ This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs
 - VM HA owns recovery of Docker node VMs; Swarm owns application tasks. Coordinate host maintenance, node draining, manager quorum, and fencing without both layers independently restoring application data or recreating node identities.
 - Scope controller permissions to the pool and supported operations. Protect Docker APIs, registry credentials, application secrets, and node bootstrap material; no public Docker socket or unrestricted privileged/host-device access in the initial application service. Keep tenant/application boundaries explicit.
 
+#### Application catalogue
+
+**Decision (project owner, 2026-09-22):** applications are installed from a catalogue that is a
+public Git repository, in the style of a home-lab app store. Nex maintains an official repository
+covering the common home-lab set (web servers, media automation stacks, and similar); operators may
+add community repositories. The catalogue also carries VM appliances, so one discovery and install
+experience covers both workload kinds. Almost every operator will use this through Nex Controller,
+and that is the intended experience; the design below exists so the Controller stays a replaceable
+front end onto it.
+
+- **The pool master fetches the catalogue, not Nex Controller.** Each catalogue repository is a
+  pool setting recorded on the master (name, Git URL, optional public key), with the official
+  repository as the default. A periodic job on the master (systemd timer) fetches every configured
+  repository and keeps a local checkout; air-gapped pools point the URL at a mirror. Nex Controller
+  asks the master for the available and installed applications and shows what it reports. Nothing
+  about the catalogue, the installed set or "update available" is computed or cached only in the
+  Controller.
+- **One folder, one file, nothing to learn.** The repository root holds one folder per
+  application, named after it, containing `nex.yaml` and an optional `icon.svg`. For a container
+  application `nex.yaml` is a plain Docker Compose file (consumed by `docker stack deploy` as-is,
+  testable with `docker compose up`) plus one top-level `x-nex` block, which Compose ignores by
+  design: name, description, category, and `options`. Operator-fillable values use Compose's own
+  `${VAR}` interpolation; `options` only adds each variable's label, type and default so the
+  wizard knows what to ask. Types are a short fixed list (`storage`, `port`, `text`, `password`,
+  `bool`); a `storage` option becomes a pool volume the wizard lets the operator pick or create,
+  with `access: shared` marking concurrent-safe use. No version field: "update available" means
+  the folder changed in the catalogue since install, which Git already records. A VM appliance
+  uses the same file name with `kind: vm` in `x-nex` and an image reference with checksum plus
+  hardware defaults in place of `services`. There is no template language and no second format
+  underneath Advanced mode; it edits the same file.
+- **Trust.** The official repository is signed: a release step signs an index naming the commit,
+  and the matching public key ships in the Nex Core package. The master refuses an unsigned or
+  badly signed fetch and keeps serving the last verified checkout with a visible warning. Community
+  repositories are verified only when the operator supplies the maintainer's public key; their
+  applications carry a clear community badge and source name. Rotating the official key is a Core
+  package update; the private key is held by the project owner outside CI. Core resolves image
+  tags to digests at install time and records the digest, so what runs is what was reviewed and
+  updates are explicit.
+- **Install and update are Core operations.** The Controller submits one request: catalogue
+  application ID plus the operator's answers. The master validates against the manifest, renders
+  `nex.yaml`, writes the durable application record (application ID, source repository and
+  commit, answers, any advanced overrides, resolved digests, volumes), then deploys
+  through the managed Swarm or libvirt. "Update available" is the master comparing that record
+  with its current checkout; updating re-renders the base and re-applies the operator's overrides
+  before Swarm's rolling update. Registry credentials and application secrets go to Swarm secrets
+  with the durable copy on the master, following the storage cluster secrets pattern.
+- **Basic by default, advanced by disclosure.** The manifest declares the few questions a normal
+  operator answers (name, storage for config and data, port); everything else keeps sensible
+  defaults inside the stack file. One install flow, with an Advanced disclosure on the review step
+  that exposes the rendered Compose stack or VM definition for editing. Manual edits are stored as
+  an overlay on the record so the wizard keeps working after them. Never two install paths.
+- **Proof without a Controller.** The catalogue fetch, signature check, timer, Swarm client and
+  application records all ship in the Nex Core package. A host-local Core CLI over the same API is
+  built in the same slice as the API, not as an operator product but as the acceptance evidence
+  that the master does the work: browse, install, observe an update and reboot the master with no
+  Controller enrolled, then enrol a fresh Controller and see the Applications screen fill in with
+  nothing re-entered.
+
 #### Incremental delivery
 
 1. **Enable Container Services:** choose pool, participating hosts, worker capacity, management/application networking, and supported storage. Preflight resources and connectivity; automatically create/bootstrap node VMs, form the swarm, and display durable progress. Make retries idempotent and offer cleanup of incomplete provisioning without deleting application data.
@@ -1443,8 +1530,9 @@ This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs
 4. **Backup and restore:** integrate pool backup policies for application volumes and deployment configuration, with secure recovery of required secrets and registry/image references. Use application quiescing or a stopped-workload capture as appropriate; a worker-VM snapshot alone does not capture remotely mounted data. Restore as an isolated new application by default; replacing an original requires confirmed writer exclusion. Back up/recover Swarm manager state separately using Docker's supported process; prevent restored node disks from resurrecting stale managers or tasks into the live swarm.
 5. **Validated stateful recovery:** select an explicit supported application/storage combination, implement required ownership enforcement, then test crash, partition, reschedule, update, and restore before offering automatic failover. Explain unsupported workloads in the UI.
 6. **Operations and lifecycle:** drain/rebuild/replace nodes, preserve quorum and physical-host separation, rotate credentials, coordinate updates, and inspect infrastructure VMs through Nex Controller. Guard direct deletion of managed node VMs and provide intentional decommission/removal with clear effects and data-retention choices.
+7. **Application catalogue:** the official signed repository as the default pool catalogue source, the `nex.yaml` format, master-side fetch and verification, the wizard-plus-Advanced install flow for container applications, update detection and rolling update, and the Core CLI proof. Community repositories and VM appliance entries follow once the container path is verified. Start the official repository with two or three applications proven end to end before filling it out.
 
-**Acceptance gates:** each slice is usable entirely from Nex Controller. Deploy a stateless service, kill a worker and then its physical host, and verify replacement plus endpoint reachability with a surviving manager quorum. Disconnect Controller during Core provisioning, reconnect and retry without duplicate node VMs or applications; replace Controller and rediscover application identities, configuration, node relationships and operation results through Core inventory/adoption. Stop Nex Controller and confirm Swarm continues independently; lose manager quorum and report degraded orchestration honestly. Restore application data/configuration onto a new worker after making the original volume unavailable. For supported stateful HA, deliberately partition a writer and prove no unsafe concurrent access. Verify failure/retry/cleanup and manager replacement without duplicate node identities. Capture and review the colorful Applications UI, icon fallbacks, status clarity, keyboard access, and narrow-screen behavior.
+**Acceptance gates:** each slice is usable entirely from Nex Controller. Deploy a stateless service, kill a worker and then its physical host, and verify replacement plus endpoint reachability with a surviving manager quorum. Disconnect Controller during Core provisioning, reconnect and retry without duplicate node VMs or applications; replace Controller and rediscover application identities, configuration, node relationships and operation results through Core inventory/adoption. Stop Nex Controller and confirm Swarm continues independently; lose manager quorum and report degraded orchestration honestly. Restore application data/configuration onto a new worker after making the original volume unavailable. For supported stateful HA, deliberately partition a writer and prove no unsafe concurrent access. Verify failure/retry/cleanup and manager replacement without duplicate node identities. Capture and review the colorful Applications UI, icon fallbacks, status clarity, keyboard access, and narrow-screen behavior. For the catalogue: reject a tampered or unsigned official repository and keep serving the last verified checkout; install, update and list applications with no Controller enrolled; replace the Controller and rediscover every installed application, its source and its overrides through Core inventory/adoption.
 
 ## Guided hardware passthrough
 

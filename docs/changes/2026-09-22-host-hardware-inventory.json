@@ -1,0 +1,45 @@
+{
+  "summary": "Nex Core reports the machine it runs on. readHardware(ctx, root) reads the DMI table, /proc/cpuinfo, /proc/meminfo, dmidecode -t memory, lsblk -J -d -b, lspci -mm -nn -D and the sampler's hwmon walk, each section independently: a tool that is missing or fails leaves its own section unavailable with a reason and the rest of the report still returns. Nothing is cached, sampled or persisted; the report is read on request and is deliberately not part of the heartbeat. The agent answers GET /hardware on the existing outbound stats channel (a ServeMux now routes /stats and /hardware on that connection) and offers the new host-hardware-v1 capability. The Controller relays it at GET /api/v1/hosts/{id}/hardware, admin-authenticated, reusing the stats channel, its single retry on a reused channel and its byte bound; the reply's 64 memory modules, 128 disks, 256 PCI devices and 24 sensors are bounded on both sides. Serial numbers are returned to authenticated administrators and are never logged: a failing tool's own error text is discarded and only the tool's name reaches the reason. installer/packages.txt gains dmidecode and pciutils, recorded in docs/LICENSING.md as separately executed GPL-2.0-or-later programs. API impact: new contract - GET /api/v1/hosts/{id}/hardware and the agent-side GET /hardware, with capability host-hardware-v1; the OpenAPI contract, docs/API.md and the generated reference are updated by the API-reference step of the same slice, which owns those files.",
+  "paths": [
+    "internal/protocol/hardware.go",
+    "internal/agent/hardware.go",
+    "internal/agent/hardware_test.go",
+    "internal/agent/usage_history_channel.go",
+    "internal/agent/run.go",
+    "internal/controller/stats.go",
+    "internal/controller/controller.go",
+    "internal/controller/hardware_test.go",
+    "installer/packages.txt",
+    "docs/LICENSING.md",
+    "docs/changes/2026-09-22-host-hardware-inventory.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Core discovery, host API and Controller relay only. The operator-visible Hardware panel and its guide page belong to the UI part of the same slice and are documented there."
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "GET /api/v1/hosts/{id}/hardware is a new admin-authenticated route relayed to a new agent-side GET /hardware, gated on the new host-hardware-v1 capability. Errors reuse the stats relay: 404 unknown host, 409 revoked/stale/no capability, 503 no channel within 20 s, 504 timeout, 502 a reply outside the contract or past the byte bound. Read-only, so every retry is safe.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Slice 2 of docs/plans/2026-09-22-host-hardware-and-sensors.md as planned."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Hardware is observed live on the host. Neither Core nor the Controller stores, caches or reconciles any of it.",
+    "record": "No durable record: every field is read from the kernel and from the host's own inventory tools when the report is requested. The sensor keys it returns match the temperature series already kept in <state-dir>/usage/host.rrd on the host.",
+    "recovery": "Nothing to recover. A fresh Controller asks the host and gets the same report as the Controller it replaced, as soon as the host reconnects and offers host-hardware-v1."
+  },
+  "verification": {
+    "method": "go vet and go test. internal/agent: a fixture sysfs/procfs tree in t.TempDir with stub dmidecode/lsblk/lspci scripts on an isolated PATH covers parsing (including an empty DIMM slot, an older lsblk's quoted size and rotational flag, and the PCI class/vendor/device ids), a missing tool, a failing tool, and a machine with no DMI table or /proc/cpuinfo; a further check exercises the /hardware route on the stats channel against the build machine's own tools and sysfs, and asserts only that /stats and /hardware are routed and that the reply parses with an observation time, never any hardware value. internal/controller: TestHostHardwareRelay covers no session (401), unknown host (404), stale host (409), a Core without the capability (409 'upgrade Nex Core'), no channel within the wait (503), a reply past the PCI bound (502), a reply past the byte bound (502), transparent retry on a channel the agent closed, and a host that stops answering (504). No hardware was changed and no machine's values are recorded: every fixture value is fictional, and no sensor label, threshold, dmidecode or lspci behaviour here is a real-machine observation. The project owner's bare-metal walkthrough is outstanding, by the plan's acceptance decision.",
+    "evidence": [
+      "internal/agent/hardware_test.go",
+      "internal/controller/hardware_test.go"
+    ]
+  }
+}

@@ -25,86 +25,43 @@ import (
 
 type persistenceError struct{ error }
 
-var transientStorageDiscoveries = struct {
+type transientResultQueue[T any] struct {
 	sync.Mutex
-	byStore map[*Store][]protocol.StorageDiscoveryResult
-}{byStore: map[*Store][]protocol.StorageDiscoveryResult{}}
+	byStore map[*Store][]T
+	limit   int
+}
 
-var transientStorageClusters = struct {
-	sync.Mutex
-	byStore map[*Store][]protocol.StorageClusterResult
-}{byStore: map[*Store][]protocol.StorageClusterResult{}}
+func newTransientResultQueue[T any](limit int) transientResultQueue[T] {
+	return transientResultQueue[T]{byStore: map[*Store][]T{}, limit: limit}
+}
+
+func (q *transientResultQueue[T]) drain(s *Store) []T {
+	q.Lock()
+	defer q.Unlock()
+	out := q.byStore[s]
+	delete(q.byStore, s)
+	return out
+}
+
+func (q *transientResultQueue[T]) append(s *Store, results []T) {
+	q.Lock()
+	defer q.Unlock()
+	room := q.limit - len(q.byStore[s])
+	if room <= 0 {
+		return
+	}
+	if len(results) > room {
+		results = results[:room]
+	}
+	q.byStore[s] = append(q.byStore[s], results...)
+}
+
+var transientStorageDiscoveries = newTransientResultQueue[protocol.StorageDiscoveryResult](128)
+var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterResult](128)
 
 // transientPoolResults answers the Controller's brokered pool requests on the next report.
 // Nothing here is durable: the master's own offer record is the authority.
-var transientPoolResults = struct {
-	sync.Mutex
-	byStore map[*Store][]protocol.PoolResult
-}{byStore: map[*Store][]protocol.PoolResult{}}
-
-const transientStorageDiscoveryLimit = 128
-const transientStorageClusterLimit = 128
-const transientPoolResultLimit = 32
-
-func drainPoolResults(s *Store) []protocol.PoolResult {
-	transientPoolResults.Lock()
-	defer transientPoolResults.Unlock()
-	out := transientPoolResults.byStore[s]
-	delete(transientPoolResults.byStore, s)
-	return out
-}
-
-func appendPoolResults(s *Store, results []protocol.PoolResult) {
-	transientPoolResults.Lock()
-	defer transientPoolResults.Unlock()
-	current := transientPoolResults.byStore[s]
-	if room := transientPoolResultLimit - len(current); room > 0 {
-		if len(results) > room {
-			results = results[:room]
-		}
-		transientPoolResults.byStore[s] = append(current, results...)
-	}
-}
-
-func drainStorageDiscoveries(s *Store) []protocol.StorageDiscoveryResult {
-	transientStorageDiscoveries.Lock()
-	defer transientStorageDiscoveries.Unlock()
-	out := transientStorageDiscoveries.byStore[s]
-	delete(transientStorageDiscoveries.byStore, s)
-	return out
-}
-func appendStorageDiscoveries(s *Store, results []protocol.StorageDiscoveryResult) {
-	transientStorageDiscoveries.Lock()
-	defer transientStorageDiscoveries.Unlock()
-	current := transientStorageDiscoveries.byStore[s]
-	room := transientStorageDiscoveryLimit - len(current)
-	if room > 0 {
-		if len(results) > room {
-			results = results[:room]
-		}
-		transientStorageDiscoveries.byStore[s] = append(current, results...)
-	}
-}
-
-func drainStorageClusters(s *Store) []protocol.StorageClusterResult {
-	transientStorageClusters.Lock()
-	defer transientStorageClusters.Unlock()
-	out := transientStorageClusters.byStore[s]
-	delete(transientStorageClusters.byStore, s)
-	return out
-}
-func appendStorageClusters(s *Store, results []protocol.StorageClusterResult) {
-	transientStorageClusters.Lock()
-	defer transientStorageClusters.Unlock()
-	current := transientStorageClusters.byStore[s]
-	room := transientStorageClusterLimit - len(current)
-	if room > 0 {
-		if len(results) > room {
-			results = results[:room]
-		}
-		transientStorageClusters.byStore[s] = append(current, results...)
-	}
-}
+var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
 
 func resetStorageClusterProtocol(s *Store) error {
 	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady {
@@ -154,6 +111,11 @@ type RunConfig struct {
 // The packaged default matches nex-core-local's default data directory; nex-core-local
 // itself sets it from its configuration before starting the embedded agent.
 var ApplianceJournalDir = "/var/lib/nex/core-local/vmhost"
+
+// PoolPeerListen is the address this host's Core-to-Core peer listener is bound to, which
+// is also the origin the master hands a joining host. The commands set it from their
+// --pool-peer-listen flag before starting the agent.
+var PoolPeerListen = ":9444"
 
 func completeJournal(s *Store, inv *protocol.Inventory, timeout time.Duration) {
 	for id, e := range s.State.Journal {
@@ -260,6 +222,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// The master overlays what each member acknowledged of its signed authority
 		// replica: an observation on a copy of the record, never written back to it.
 		managed.Membership = PoolReplicaMembership(s, &membership)
+		// And whether each host could actually be shut out, from the same master and in
+		// the same manner: an observation overlaid on the copy it reports, never
+		// written back into the record it owns.
+		managed.Membership = PoolFenceCheckMembership(s, managed.Membership)
 	}
 	// This host's own stored replica, and the honest freshness of it on both sides. The
 	// replica is reported, never acted on, and no other check is derived from it.
@@ -337,7 +303,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -369,13 +335,13 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// Controller ignores it and acknowledges the base capability instead.
 		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability)
 	}
-	discoveries := drainStorageDiscoveries(s)
+	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
 	if s.State.StorageClusterProtocolReady {
-		clusters = drainStorageClusters(s)
+		clusters = transientStorageClusters.drain(s)
 		clusters = storageClusterResultsForController(clusters, s.State.StorageClusterSessionMonitorProtocolReady)
 	}
-	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters, PoolResults: drainPoolResults(s)}
+	req := protocol.ReportRequest{Capabilities: capabilities, Version: version, Sequence: s.State.Sequence, Inventory: inv, Results: []protocol.Result{}, StorageDiscoveries: discoveries, StorageClusters: clusters, PoolResults: transientPoolResults.drain(s)}
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" && !e.Acknowledged {
 			req.Results = append(req.Results, protocol.Result{OperationID: id, Status: e.Status, Error: resultError(e.Error), ObservedAt: e.ObservedAt})
@@ -466,7 +432,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 				}
 				cancel()
 			}
-			appendStorageDiscoveries(s, results)
+			transientStorageDiscoveries.append(s, results)
 		}(append([]protocol.StorageDiscoveryRequest(nil), response.StorageDiscoveries...))
 	}
 	if len(response.StorageClusterRequests) > 0 {
@@ -482,7 +448,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 				results = append(results, ExecuteStorageClusterRequest(work, s, request))
 				cancel()
 			}
-			appendStorageClusters(s, results)
+			transientStorageClusters.append(s, results)
 		}(append([]protocol.StorageClusterRequest(nil), response.StorageClusterRequests...))
 	}
 	if len(response.PoolRequests) > 0 {
@@ -499,7 +465,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 				}
 				results = append(results, ExecutePoolRequest(s, request))
 			}
-			appendPoolResults(s, results)
+			transientPoolResults.append(s, results)
 		}(append([]protocol.PoolRequest(nil), response.PoolRequests...))
 	}
 
@@ -519,7 +485,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			break
 		}
 		go func(req protocol.StatsChannelRequest) {
-			if err := serveStatsChannel(ctx, s.State, req, cfg.history); err != nil {
+			if err := serveStatsChannel(ctx, s.State, req, statsChannelHandler(cfg.history)); err != nil {
 				log.Printf("stats channel: %v", err)
 			}
 		}(channel)
@@ -755,6 +721,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	s.storageMonitor.Store(storage)
 	var poolReconcileRunning atomic.Bool
 	var clusterReconcileRunning atomic.Bool
+	var fenceCheckRunning atomic.Bool
+	var quorumReadingRunning atomic.Bool
 	// Deferred before cancel so it runs after it: Run must not return while its background
 	// work still reads the store, because a caller may re-enroll and rewrite it next.
 	var runWork sync.WaitGroup
@@ -776,6 +744,14 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			// A retained peer advertisement is Core recovery work; retry it with
 			// the cluster worker, never from a Controller request.
 			_ = RetryPoolPeerOrigin(work, s)
+			// Which machine this host is, recorded on the master beside where it listens.
+			_ = ReportPoolSystemUUID(work, s)
+			// And whether that machine can reset itself: sysfs only, never opening
+			// the watchdog device, because opening it is what arms it.
+			_ = ReportPoolWatchdog(work, s)
+			// And how that machine can be powered off: this host's own management
+			// controller, configured from the inside with no operator input.
+			_ = EnsureLocalBMCFence(work, s)
 			membership, err := Membership(s)
 			if err != nil {
 				return
@@ -795,7 +771,71 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			_ = ReconcileStorageClustersFromMaster(work, s)
 		}()
 	}
+	// Whether the fence devices the pool recorded still work: every other host's
+	// management controller read without powering anything off. It rides the same tick but
+	// runs on its own, because a pass against controllers that have gone away spends its
+	// whole two-minute budget, and the storage-cluster reconcile must not wait for it. It
+	// throttles itself to its own interval, so a tick that is not due costs nothing, and it
+	// stops with probeCtx like every other worker here.
+	// What this host can see of the pool's Corosync quorum, on its own tick. It is one local
+	// command and it is the clock a watchdog exclusion proof is measured on, so it must not
+	// ride behind the cluster reconcile: a pass there can spend minutes in a conversation
+	// with a management controller, and a gap longer than a fraction of the proof's bound
+	// makes continuity unknown and restarts the clock. Its own worker keeps the readings
+	// prompt; single-flight so a slow corosync-quorumtool cannot pile up.
+	scheduleQuorumReading := func() {
+		if !quorumReadingRunning.CompareAndSwap(false, true) {
+			return
+		}
+		runWork.Add(1)
+		go func() {
+			defer runWork.Done()
+			defer quorumReadingRunning.Store(false)
+			reading, done := context.WithTimeout(probeCtx, 20*time.Second)
+			defer done()
+			_ = ObservePoolQuorum(reading, s)
+		}()
+	}
+	// Whether this host should be feeding a watchdog, and whether the pool's own
+	// Corosync/Pacemaker cluster should exist, in that order and on their own tick.
+	//
+	// The order is the safety property. Arming runs first, so a host that must stop being
+	// armed has the pool's record say so before its cluster goes down under it, and a host
+	// that has just booted disables sbd *before* this worker starts its cluster — which is
+	// what stops a host coming up armed and alone after a power cut and resetting itself in
+	// a loop. The tick is its own because the pool's durable record over-claims for as long
+	// as a host takes to notice it is no longer armed, and the cluster worker beside it can
+	// spend minutes in a conversation with a management controller.
+	var watchdogReconcileRunning atomic.Bool
+	scheduleWatchdogReconcile := func() {
+		if !watchdogReconcileRunning.CompareAndSwap(false, true) {
+			return
+		}
+		runWork.Add(1)
+		go func() {
+			defer runWork.Done()
+			defer watchdogReconcileRunning.Store(false)
+			work, done := context.WithTimeout(probeCtx, time.Minute)
+			defer done()
+			_ = ReconcilePoolWatchdogArming(work, s)
+			_ = ReconcilePoolCluster(work, s)
+		}()
+	}
+	scheduleFenceChecks := func() {
+		if !fenceCheckRunning.CompareAndSwap(false, true) {
+			return
+		}
+		runWork.Add(1)
+		go func() {
+			defer runWork.Done()
+			defer fenceCheckRunning.Store(false)
+			_ = RunPoolFenceChecks(probeCtx, s)
+		}()
+	}
 	scheduleClusterReconcile()
+	scheduleFenceChecks()
+	scheduleQuorumReading()
+	scheduleWatchdogReconcile()
 	runWork.Add(1)
 	go func() { defer runWork.Done(); sampler.run(probeCtx) }()
 	go m.WatchLibvirt(probeCtx)
@@ -806,6 +846,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		defer ticker.Stop()
 		tickStorage := func() {
 			scheduleClusterReconcile()
+			scheduleFenceChecks()
+			scheduleQuorumReading()
+			scheduleWatchdogReconcile()
 			// The probe tick is the durable deadline timer: an applied change that was
 			// not confirmed in time is rolled back here even if the in-process timer
 			// armed at apply is gone with a restarted agent.

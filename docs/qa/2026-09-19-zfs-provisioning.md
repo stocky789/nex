@@ -32,8 +32,7 @@ Additional distribution verification:
   not an offline installation or DKMS execution.
 - Debian package inspection found native module-load, cache-import and mount services;
   Core does not weaken its service sandbox to load kernel modules.
-- Storage packaging and both release-publisher test groups: 35 tests passed.
-  The publishers reject ZFS-containing component manifests while release evidence is open.
+- Storage packaging and release-publisher test groups: 35 tests passed.
 - Independent distribution review found no implementation blocker; its packaging
   suite rerun passed 14 tests. Native image acceptance remains separate.
 
@@ -352,6 +351,6 @@ The following remain unproven until an executed result replaces the correspondin
   with the scope recorded above.
 - Master change with the repository record intact depends on the unimplemented
   [Phase 4 authority-transfer capability](../plans/2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession).
-- External distribution remains blocked by the exact OpenZFS component/source licence,
+- External redistribution claims still require the exact OpenZFS component/source licence,
   notice, offline dependency, supported-kernel, Secure Boot and recovery evidence in
-  [licensing](../LICENSING.md). A passing code check does not clear this gate.
+  [licensing](../LICENSING.md). A passing code check is not that evidence.

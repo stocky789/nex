@@ -106,9 +106,10 @@ class APIContractTests(unittest.TestCase):
                 # Replicated bytes kept verbatim: the schema says so instead of
                 # inventing a Go type name for arbitrary JSON.
                 self.assertEqual(schema['x-go-type-raw'], 'json.RawMessage')
-            elif go_type in ('string', 'bool', 'int', 'int64', 'uint16', 'uint32', 'uint64'):
+            elif go_type in ('string', 'bool', 'int', 'int64', 'uint8', 'uint16', 'uint32', 'uint64'):
                 self.assertEqual(schema['type'], {'bool': 'boolean', 'int': 'integer',
-                                                 'int64': 'integer', 'uint16': 'integer',
+                                                 'int64': 'integer', 'uint8': 'integer',
+                                                 'uint16': 'integer',
                                                  'uint32': 'integer', 'uint64': 'integer'}.get(go_type, go_type))
                 if go_type in ('uint16', 'uint32', 'uint64'):
                     self.assertGreaterEqual(schema['minimum'], 0)
@@ -1194,6 +1195,8 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
     PREFLIGHT = '/api/v1/pools/{id}/master/promote/preflight'
     PROMOTE = '/api/v1/pools/{id}/master/promote'
     FENCE = '/api/v1/pools/{id}/members/{host_id}/fence-profile'
+    BMC = '/api/v1/pools/{id}/members/{host_id}/bmc-provisioning'
+    HOSTFENCING = '/api/v1/pools/{id}/host-fencing'
 
     @classmethod
     def setUpClass(cls):
@@ -1268,7 +1271,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
                                (ROOT / 'internal/protocol/pool.go').read_text())[1]
         documented = json.dumps({path: self.api['paths'][path]
-                                 for path in (self.PREFLIGHT, self.PROMOTE, self.FENCE)})
+                                 for path in (self.PREFLIGHT, self.PROMOTE, self.FENCE, self.BMC, self.HOSTFENCING)})
         purposes = re.findall(r'purpose = "([^"]+)"', self.handlers) + \
             re.findall(r'purpose := "([^"]+)"', self.handlers)
         self.assertEqual(len(purposes), 2)

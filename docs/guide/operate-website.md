@@ -11,11 +11,10 @@ separate from Nex Controller and Nex Core. Unrestricted public
 publication, SSH hardening, host-firewall rules and access-allowlist testing are outside
 this procedure.
 
-Pushes to `main` that change `website/` run the Website workflow. When the same
-`NEX_DEPLOY_*` secrets used for ISO/APT publication are set, that workflow builds the
-static site and publishes it through `nex-website-publish` on this host. ISO and package
-publication stays on the Release workflow; this page covers the static pages and manual
-publish or rollback.
+Every Release on `main` with deploy secrets set also builds and publishes the static site
+through `nex-website-publish` on this host, together with APT and downloads. Pushes that
+only change `website/` still run the lighter Website workflow so a page fix does not wait
+on an ISO rebuild. This page covers the static pages and manual publish or rollback.
 
 ## Prerequisites
 

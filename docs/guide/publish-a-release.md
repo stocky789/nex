@@ -10,14 +10,19 @@ and hosted publication checks have been inspected and recorded. Do not treat a s
 build as that evidence.
 
 Once those gates are recorded as complete, every push to `main` on the configured Git forge
-builds the ISO and both Debian packages at the newest `CHANGELOG.md` version and publishes them
-as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous release.
-One version identifies a release: the changelog heading, the tag and the Debian package version
-are the same number. No tag is pushed by hand; the workflow creates or moves it.
+builds the ISO and both Debian packages at the newest `CHANGELOG.md` version and publishes the
+ISO, matching source bundle and compliance manifest as the repository release for tag
+`vX.Y.Z[-preN]`, replacing that version's previous release. Standalone `.deb` files are not
+release downloads: Core is installed from the ISO, and Controller is not offered as a bare
+package install. Packages are still built so the ISO can install Core and so enrolled hosts can
+update from APT. One version identifies a release: the changelog heading, the tag and the
+Debian package version are the same number. No tag is pushed by hand; the workflow creates or
+moves it.
 
-If the website deploy secrets are set, the same run also publishes the packages to the signed
-APT archive and the ISO to the download tree. Static website pages are a separate Website
-workflow on pushes that change `website/`; see [operate the website](operate-website.md).
+If the website deploy secrets are set, the same Release run publishes the packages to the signed
+APT archive, the ISO and source to the download tree, and the static website pages. A separate
+Website workflow still exists for website-only pushes that skip the ISO build; see
+[operate the website](operate-website.md).
 [Return to the guide](README.md).
 
 ## Prerequisites
@@ -25,9 +30,12 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.4.2`, may publish to the private forge for internal labs.
-  Its ZFS-enabled ISO is still refused by the public website publisher until the ZFS
-  external-distribution gates are closed.
+  The current working version, `0.4.3`, may publish to the private forge for internal labs.
+  CI no longer blocks public publication, so leave the deploy secrets unset until that
+  evidence is recorded for this exact version: the `debian/copyright` and matching source for
+  `ipmitool` and `sbd` are still marked outstanding in
+  [Nex licensing](../LICENSING.md#release-evidence), which records exact-artifact evidence for
+  `0.2.9` only.
 - Maintainer access to the Nex repository on the configured Git forge. The runner needs Docker;
   it may execute jobs inside a container, since the build locates the workspace on the Docker
   host itself.
@@ -73,24 +81,26 @@ workflow on pushes that change `website/`; see [operate the website](operate-web
    (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and the ISO, checks each artifact declares the released version,
-   then creates the release. A ZFS-enabled manifest stops at the publisher before a forge or
-   download-tree release is created until its external-distribution gates are closed. A second push at the same version runs again and replaces the
-   release; a newer push cancels a release build still in progress.
+   builds the static website when deploy secrets are set, then creates the release and
+   publishes packages to APT, the ISO to the download tree and those pages. A failing website
+   build or a half-set deploy secret stops the run before the tag moves. A second push at the
+   same version runs again and replaces the release; a newer push cancels a release build
+   still in progress.
    The artifact verification step prints each output's byte size so packaging growth
    is visible before publication. Transfer compression of bundled Windows media
-   changes neither the restored driver ISO nor the release's eight-asset layout.
+   changes neither the restored driver ISO nor the release's six-asset layout.
 
 ## Expected result
 
 The repository's **Releases** page shows `Nex Core X.Y.Z` at tag `vX.Y.Z` for a final release, or
 the Debian-form `Nex Core X.Y.Z~preN` at tag `vX.Y.Z-preN` for a prerelease. A `-preN` version is
-marked prerelease. The changelog section supplies the notes and the release has eight assets:
+marked prerelease. The changelog section supplies the notes and the release has six assets:
 
 - `nex-core-<Debian-version>-amd64.iso` and its `.sha256` sidecar
 - `nex-core-<Debian-version>-source.tar.gz` and its `.sha256` sidecar
 - `nex-core-<Debian-version>-compliance-manifest.json` and its `.sha256` sidecar
-- `nex-core-local_<Debian-version>_amd64.deb`
-- `nex-controller_<Debian-version>_amd64.deb`
+
+Standalone `nex-core-local_*.deb` and `nex-controller_*.deb` files are not attached.
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
@@ -106,7 +116,9 @@ copies the ISO, matching source bundle, and matching compliance manifest into
 `https://<site>/downloads/<Debian-version>/`, writes a SHA-256 sidecar for each, and moves
 `latest` to the newest retained release; releases beyond the newest three download directories
 are pruned. The publisher rejects a manifest unless its recorded ISO and source-bundle filename
-and SHA-256 match the files being installed. The workflow then fetches the published APT indexes,
+and SHA-256 match the files being installed. The compliance manifest inventories ISO
+components for licensing; it does not enable or block publication by package name. The workflow
+then fetches the published APT indexes,
 ISO checksum, source bundle, and compliance manifest over HTTPS and fails if any are missing or
 the package index does not list the released version.
 
@@ -154,7 +166,8 @@ the package index does not list the released version.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
 - **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the
-  secrets and re-run, or publish to the website by hand from the release assets.
+  secrets and re-run, or publish the ISO and source from the release assets and the packages
+  through `nex-apt-publish` on the website host.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
 - **Disk pressure on the website host** — the APT archive keeps every package version and each

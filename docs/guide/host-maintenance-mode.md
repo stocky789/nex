@@ -2,10 +2,10 @@
 
 ## Status
 
-Development product 0.4.2. Maintenance mode is a drain flag the **pool master** records for one
+Development product 0.4.3. Maintenance mode is a drain flag the **pool master** records for one
 host in the pool: while it is set, the master places no new virtual machine on that host and
 refuses starting one there. Set it from Nex Controller: pool detail → **Hosts** → the host's
-**Maintenance** column → **Enter maintenance**.
+**Actions** menu → **Enter maintenance**.
 
 What it does not do, in this release and by design:
 
@@ -16,8 +16,12 @@ What it does not do, in this release and by design:
   stop the guests yourself.
 - A placement the master already accepted before the flag was set finishes. Maintenance refuses
   *new* work.
-- It is not a fence. It does not protect against a host being used by something other than the
-  pool master, and it is not part of any failure-recovery story.
+- It is not a fence, and it does not protect against a host being used by something other than the
+  pool master. It **is**, in a pool with **Host fencing** on, the supported way to make disruptive
+  work safe: Nex Core puts this host's watchdog down *before* the host leaves the pool's cluster,
+  which restarts that host's cluster services — one host at a time, a minute or two — and in a
+  three-host pool it disarms the whole pool until the host returns. See
+  [Host fencing, and the watchdog line](pool-authority-and-recovery.md#host-fencing-and-the-watchdog-line).
 - There is no scheduled or automatic maintenance, and no maintenance window.
 
 The flag is durable state of the **pool master**, not of Controller: it survives a Controller
@@ -46,7 +50,7 @@ record then refuses placements and starts on itself.
 2. Find the host's row and read the **Maintenance** column. It shows **available**, **in
    maintenance**, or **unknown**. *unknown* means the pool master is not fresh, so nothing can be
    said about the flag; it never means *available*.
-3. Select **Enter maintenance**. A dialog opens with the host's name, what maintenance does and
+3. Open **Actions** at the end of the host's row and select **Enter maintenance**. A dialog opens with the host's name, what maintenance does and
    does not do, and the guests still on the host — for example *2 guests · 1 running · build, db*.
    If the host is not reporting, the dialog says *Guests unknown: this host is not reporting.*
    Treat that as unknown, not as an empty host.
@@ -65,6 +69,9 @@ record then refuses placements and starts on itself.
 - The pool master refuses a new virtual machine placed on that host, and refuses starting one
   there, with *the selected VM host is in maintenance mode; take it out of maintenance before
   placing or starting VMs on it*. Autostart-by-placement skips the host and records why.
+- **With Host fencing on for the pool**, the **Host fencing** line reports the teardown while it
+  runs and can say it is *blocked by* a host that is missing. Wait until the pool reports that no
+  host is armed before you start work that interrupts a host's network or power.
 - In the VM creation screen, the host is disabled as a placement target until the open form has a
   fresh authoritative pool-members report. A reported maintenance state, missing state, stale
   master report or request error shows its reason beside the host; this conservative UI check
@@ -121,6 +128,12 @@ as old as the last successful push while it is not.
   expected against the table above: it blocks new placements, definitions, starts and resumes, and
   it blocks guests starting themselves after a host reboot. It does not block reboot or force-reboot
   of a guest that is already running there, and it never blocks stopping anything.
+- **Other hosts restarted their cluster services, or the pool says it is disarmed.** Expected in a
+  pool with **Host fencing** on. Putting this host's watchdog down happens before it leaves the
+  pool's cluster and restarts cluster services one host at a time, and a three-host pool that loses
+  one host has no majority side, so the whole pool disarms deliberately and arms again when the
+  host returns. Nothing running on any host is affected. See
+  [Host fencing, and the watchdog line](pool-authority-and-recovery.md#host-fencing-and-the-watchdog-line).
 - **Controller was restarted or replaced.** The flag is unaffected. A new Controller shows it
   again as soon as the master reports.
 - **Recovering without Controller.** The flag lives on the master. Sign in to the master's own

@@ -2,30 +2,16 @@
 // S1 "Add host to pool": there is no test harness in web/ (no vitest/jest), so this bundles the
 // real module with the already-installed esbuild and renders it with react-dom/server, the same
 // way managed.test.mjs does. Run with: node src/pool-members.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/pool-members.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./pool-members.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
+const moduleURL = bundleTestModule(new URL("./pool-members.tsx", import.meta.url), "pool-members");
 const src = readFileSync(new URL("./pool-members.tsx", import.meta.url), "utf8");
-const { MembersTable, AddHostDialog, MaintenanceDialog, convergenceSummary, joinProgressText, peerOriginOf, masterOriginOf, maintenanceText, guestsText, maintenanceInFlight, maintenanceResultText, replicaText, replicaGenerations, replicaTimes, recoveryText, seenAgo, membershipVersionReady } = await import(`file://${outfile}`);
-const managedOutfile = `${outdir}/managed-held.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./managed.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile: managedOutfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
-const { heldRequestID } = await import(`file://${managedOutfile}`);
+const { MembersTable, AddHostDialog, MaintenanceDialog, convergenceSummary, joinProgressText, peerOriginOf, maintenanceText, guestsText, maintenanceInFlight, maintenanceResultText, replicaText, replicaGenerations, replicaTimes, recoveryText, seenAgo, membershipVersionReady, fencingSummaryText, HostFencingSetting } = await import(moduleURL);
+const { heldRequestID } = await import(bundleTestModule(new URL("./managed.tsx", import.meta.url), "managed-held"));
 
 const master = {
   host_id: "host-a", name: "core-a", role: "master", status: "ready", connection: "fresh",
@@ -64,7 +50,8 @@ assert.match(rows, /https:\/\/192\.0\.2\.12:9444/);
 // Corrected in S6: each host's own report — its connection, its checks, its copy of the pool
 // records — is that host's, not the master's, and survives the master going quiet.
 const stale = table({ report: { ...report, master_connection: "stale", authoritative: false } });
-assert.equal((stale.match(/badge unknown">unknown/g) || []).length, 5, "membership and maintenance are unknown for both hosts, and the member's authority copy has none to report");
+assert.equal((stale.match(/badge unknown">unknown/g) || []).length, 7, "membership, maintenance and fencing are unknown for both hosts, and the member's authority copy has none to report");
+assert.match(stale, /Fence device: unknown — the pool master keeps this record and is not reporting\./, "fencing is the master's record too");
 assert.doesNotMatch(stale, /ready/, "the membership status is the master's record");
 assert.doesNotMatch(stale, /uplink lab0/, "the failures it recorded are its observations");
 assert.doesNotMatch(stale, /2 healthy, 1 failed/, "so is its view of each member's access");
@@ -101,7 +88,7 @@ const candidates = [
     { check: "vms", subject: "2 virtual machines", result: "refuses_join", detail: "a host with virtual machines cannot join a pool" },
   ] },
 ];
-const dialogProps = { candidates, loading: false, error: "", busy: false, submitError: "", masterOrigin: "", onConfirm: () => {}, onClose: () => {}, onRetryCandidates: () => {} };
+const dialogProps = { candidates, loading: false, error: "", busy: false, submitError: "", onConfirm: () => {}, onClose: () => {}, onRetryCandidates: () => {} };
 const dialog = renderToStaticMarkup(createElement(AddHostDialog, dialogProps));
 assert.match(dialog, /<input type="radio" name="join-candidate" value="host-c"/, "a candidate with only will-not-converge rows stays selectable");
 assert.match(dialog, /<input type="radio" disabled="" name="join-candidate" value="host-d"/, "a refusing candidate is visible but not selectable");
@@ -113,29 +100,18 @@ assert.match(dialog, /id="peer-origin"[^>]*aria-describedby="peer-origin-help"/)
 assert.match(dialog, /the pool master uses to reach this host/);
 // Nothing is selected on open, so the confirm button cannot submit a join by itself.
 assert.match(dialog, /disabled[^>]*>Add host to pool</);
-// A master that has never advertised a peer origin: the address is asked for, and is required.
-assert.match(dialog, /<label for="master-url">Pool master peer address<\/label>/);
-assert.match(dialog, /id="master-url" required=""(?![^>]*readonly)/);
-assert.match(dialog, /other hosts in the pool use to reach the pool master(&#x27;|')s peer port, for example https:\/\/192\.0\.2\.11:9444/);
-assert.doesNotMatch(dialog, /already has this address on record/);
-// A master that has one: it is shown read-only and never re-entered or re-sent.
-const known = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, masterOrigin: "https://192.0.2.11:9444" }));
-assert.match(known, /id="master-url"[^>]*readonly=""[^>]*value="https:\/\/192\.0\.2\.11:9444"/i);
-assert.doesNotMatch(known, /id="master-url" required/);
-assert.match(known, /already has this address on record/);
-assert.equal(masterOriginOf(report), "", "a master that has not advertised an origin reports none");
-assert.equal(masterOriginOf({ ...report, members: [{ ...master, peer_origin: "https://192.0.2.11:9444" }, member] }), "https://192.0.2.11:9444");
-assert.equal(masterOriginOf(null), "");
-// The 409 the Controller returns when no master address is on record is shown verbatim.
-const noOrigin = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, submitError: "the pool master has not advertised a peer origin; supply master_url Submitting again repeats the same request; it never starts a second join." }));
-assert.match(noOrigin, /role="alert"[^>]*>the pool master has not advertised a peer origin; supply master_url/);
+// The master works out its own peer address, so the dialog never asks for it.
+assert.doesNotMatch(dialog, /master-url|Pool master peer address/);
 // An error carries the server's own message, for example the 409 the Controller returns.
 const conflict = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, submitError: "host core-d is already a member of pool pool-2 Submitting again repeats the same request; it never starts a second join." }));
 assert.match(conflict, /role="alert"[^>]*>host core-d is already a member of pool pool-2/);
 // Loading and candidate-error states.
 assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [], loading: true })), /Asking the hosts for their current state/);
 assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [], error: "pool master is not connected" })), /pool master is not connected/);
-assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [] })), /nothing to add/);
+// An empty list is not "no master": the host to add has not enrolled yet, so say how to enroll it.
+const noCandidates = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [] }));
+assert.match(noCandidates, /There is no other enrolled host at this site to add\. Enroll the new host first with <strong>Add host<\/strong> in the toolbar/);
+assert.doesNotMatch(noCandidates, /master of its own single-host pool/);
 
 // peer_origin is validated here so an obvious mistake does not spend a round trip on a 400.
 assert.deepEqual(peerOriginOf(" https://192.0.2.12:9444 "), { origin: "https://192.0.2.12:9444", error: "" });
@@ -150,15 +126,14 @@ assert.match(peerOriginOf("https://user:pw@192.0.2.12:9444").error, /no path/);
 let minted = 0;
 Object.defineProperty(globalThis, "crypto", { configurable: true, value: { randomUUID: () => `request-${++minted}` } });
 const held = { id: "", signature: "" };
-assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.12:9444\n"), "request-1");
-assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.12:9444\n"), "request-1", "an unchanged retry replays the same request");
-assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.13:9444\n"), "request-2", "an edited payload is a new request");
-assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.13:9444\nhttps://192.0.2.11:9444"), "request-3", "an edited master address is a new request");
+assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.12:9444"), "request-1");
+assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.12:9444"), "request-1", "an unchanged retry replays the same request");
+assert.equal(heldRequestID(held, "pool-1\nhost-c\nhttps://192.0.2.13:9444"), "request-2", "an edited payload is a new request");
+assert.equal(heldRequestID(held, "pool-1\nhost-d\nhttps://192.0.2.13:9444"), "request-3", "another host is a new request");
 assert.equal(minted, 3);
-// The POST body is exactly the contract's, the master address is part of the request identity, and
-// it carries the held request id rather than a fresh one.
-assert.match(src, /const request_id = heldRequestID\(held\.current, `\$\{poolID\}\\n\$\{hostID\}\\n\$\{peerOrigin\}\\n\$\{masterURL\}`\);/);
-assert.match(src, /"POST", masterURL \? \{ request_id, host_id: hostID, peer_origin: peerOrigin, master_url: masterURL \} : \{ request_id, host_id: hostID, peer_origin: peerOrigin \}\)/);
+// The POST body is exactly the contract's and carries the held request id rather than a fresh one.
+assert.match(src, /const request_id = heldRequestID\(held\.current, `\$\{poolID\}\\n\$\{hostID\}\\n\$\{peerOrigin\}`\);/);
+assert.match(src, /"POST", \{ request_id, host_id: hostID, peer_origin: peerOrigin \}\)/);
 assert.doesNotMatch(src, /request_id: crypto\.randomUUID\(\)/);
 // A failed submit keeps the dialog open with the same held request id: retrying replays it.
 assert.doesNotMatch(src, /held\.current = \{ id: "", signature: "" \}/);
@@ -172,7 +147,7 @@ const drained = {
 const supported = { ...report, maintenance_supported: true, members: [{ ...master, maintenance: false, guests: { known: true, total: 0, running: 0, names: [] } }, drained] };
 
 // The flag, its timestamp and the guests still on the host are rendered from the master's report.
-const drainedRows = table({ report: supported, onMaintenance: () => {} });
+const drainedRows = table({ report: supported, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} });
 assert.match(drainedRows, /badge warning">in maintenance/);
 assert.match(drainedRows, /badge ok">available/, "a member that is not drained reads as available, not blank");
 assert.match(drainedRows, /<small>Since 2026-09-19T10:00:00Z<\/small>/);
@@ -185,7 +160,7 @@ assert.equal(guestsText({ ...member, guests: { known: false, total: 0, running: 
 assert.equal(guestsText(member), "Guests unknown: this host is not reporting.", "a member with no guests field at all is unknown too");
 assert.equal(guestsText({ ...member, guests: { known: true, total: 0, running: 0, names: [] } }), "No guests on this host.");
 assert.equal(guestsText({ ...member, guests: { known: true, total: 1, running: 0, names: ["build"] } }), "1 guest · 0 running · build");
-assert.match(table({ report: { ...supported, members: [{ ...drained, guests: { known: false, total: 0, running: 0, names: [] } }] }, onMaintenance: () => {} }), /Guests unknown: this host is not reporting\./);
+assert.match(table({ report: { ...supported, members: [{ ...drained, guests: { known: false, total: 0, running: 0, names: [] } }] }, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} }), /Guests unknown: this host is not reporting\./);
 
 // null maintenance (the master is not fresh) is unknown, never "available".
 assert.deepEqual(maintenanceText({ ...member, maintenance: null }, true), { label: "unknown", badge: "unknown" });
@@ -194,7 +169,7 @@ assert.deepEqual(maintenanceText({ ...member, maintenance: false }, true), { lab
 assert.deepEqual(maintenanceText({ ...member, maintenance: true }, false), { label: "unknown", badge: "unknown" }, "a non-authoritative report is unknown whatever it holds");
 
 // Without pool-maintenance-v1 on the master there is no toggle at all, and the reason is shown.
-const unsupported = table({ report: { ...supported, maintenance_supported: false }, onMaintenance: () => {} });
+const unsupported = table({ report: { ...supported, maintenance_supported: false }, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} });
 assert.doesNotMatch(unsupported, />Enter maintenance</);
 assert.match(unsupported, /Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master\./);
 // With no handler (the view is unavailable) neither the button nor the upgrade note is offered.
@@ -208,13 +183,13 @@ assert.equal(maintenanceResultText({ operation_id: "op-3", status: "needs_attent
 assert.equal(maintenanceResultText({ operation_id: "op-4", status: "succeeded" }), "");
 assert.equal(maintenanceResultText({ operation_id: "op-5", status: "queued" }), "Maintenance change submitted. The pool master records it; this shows its own report.");
 assert.equal(maintenanceResultText(null), "");
-const conflictRows = table({ report: { ...supported, members: [{ ...drained, last_maintenance: conflictOp }] }, onMaintenance: () => {} });
+const conflictRows = table({ report: { ...supported, members: [{ ...drained, last_maintenance: conflictOp }] }, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} });
 assert.match(conflictRows, /role="alert"[^>]*>pool membership changed since this request was composed; review the pool and try again The pool changed since you loaded it — reload\./);
 // An in-flight change is not offered a second button while Core is still working on it.
 assert.equal(maintenanceInFlight({ operation_id: "op-6", status: "queued" }), true);
 assert.equal(maintenanceInFlight({ operation_id: "op-7", status: "succeeded" }), false);
 assert.equal(maintenanceInFlight(null), false);
-assert.match(table({ report: { ...supported, members: [{ ...drained, last_maintenance: { operation_id: "op-6", status: "queued" } }] }, onMaintenance: () => {} }), /<button type="button" disabled=""[^>]*>Exit maintenance</);
+assert.match(table({ report: { ...supported, members: [{ ...drained, last_maintenance: { operation_id: "op-6", status: "queued" } }] }, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} }), /<button type="button" disabled=""[^>]*>Exit maintenance</);
 
 // The dialog states plainly what maintenance does and does not do, and lists the guests.
 const enterDialog = renderToStaticMarkup(createElement(MaintenanceDialog, { member: { ...drained, maintenance: false }, busy: false, submitError: "", submitReady: true, onConfirm: () => {}, onClose: () => {} }));
@@ -284,7 +259,7 @@ assert.match(currentRows, /Received 2026-09-19T10:04:11Z · Acknowledged 2026-09
 assert.doesNotMatch(currentRows, /This host reports copy/, "agreeing reports need no explanation");
 
 // The master's own row holds the authority; it is not blank and it is not a state.
-assert.match(currentRows, /Holds the pool authority; there is nothing to copy to it\./);
+assert.match(currentRows, /<small>Holds the pool records<\/small>/);
 
 // Both generations, with a plain sentence saying which side is the older report.
 assert.equal(replicaGenerations(null), "");
@@ -358,18 +333,19 @@ const transferReport = {
 };
 const handlers = { onMasterChange: () => {}, onEject: () => {}, onMaintenance: () => {} };
 
-// The row actions live in the host cell as a disclosure: the members table is already the
-// widest in the app and this adds no column.
+// The row actions are one disclosure in a trailing, visually unlabelled column.
 const withActions = table({ report: transferReport, ...handlers });
-assert.match(withActions, /<details class="pool-row-actions"><summary>Actions<\/summary>/);
+assert.match(withActions, /<details class="pool-row-actions"><summary>Actions<span class="sr-only"> for [^<]+<\/span><\/summary>/);
 assert.match(withActions, />Make pool master</);
 assert.match(withActions, />Eject from pool</);
-assert.equal((withActions.match(/<th>/g) || []).length, 7, "no new column was added for the two actions");
+assert.equal((withActions.match(/<th[ >]/g) || []).length, 9, "one actions column, after the Fencing one");
+assert.match(withActions, /<th><span class="sr-only">Actions<\/span><\/th>/);
+assert.equal((table({ report: transferReport }).match(/<th[ >]/g) || []).length, 8, "no actions column without handlers");
 // Without the handlers (an unavailable view) there are no row actions at all.
 assert.doesNotMatch(table({ report: transferReport }), /pool-row-actions/);
-// The master's row shows both actions refused, with the reason beside each.
-assert.match(withActions, /This host is already the pool master\./);
-assert.match(withActions, /The pool master cannot be ejected; change the pool master first\./);
+// The master's row does not offer actions that can never apply to it.
+assert.doesNotMatch(withActions, /This host is already the pool master\.|The pool master cannot be ejected/);
+assert.equal((withActions.match(/>Make pool master</g) || []).length, 1, "only the member's row offers it");
 
 // The absolute generation the S4 column had no reference for, and how far behind a copy is.
 assert.match(withActions, /The pool authority is at generation 9\./);
@@ -467,8 +443,8 @@ assert.match(table({ report: { ...recovery, members: [recovery.members[0], { ...
   /disabled=""[^>]*>Promote to pool master…<\/button><small>This host does not report a copy of the pool records it has verified, so it cannot be promoted\.<\/small>/);
 assert.match(recoveryRows, /Fence device: unknown — the pool master keeps this record and is not reporting\./);
 assert.match(recoveryRows, /<button type="button" class="danger">Promote to pool master…<\/button>/);
-assert.match(recoveryRows, /<button type="button" disabled="">Record fence device…<\/button>/);
-assert.equal((recoveryRows.match(/<th>/g) || []).length, 7, "the recovery view adds no column either");
+assert.match(recoveryRows, /<button type="button" disabled="">Set BMC access…<\/button>/);
+assert.equal((recoveryRows.match(/<th[ >]/g) || []).length, 9, "the recovery view adds no further column");
 assert.equal((recoveryRows.match(/<details/g) || []).length, 2, "one disclosure per row, not one per slice");
 // Core's own pool-restricted check is not repeated in the convergence cell beside the badge.
 const checkedRestricted = table({ report: { ...recovery, members: [recovery.members[0], { ...recovery.members[1], checks: [{ name: "pool-restricted", status: "failed", detail: restricted.reason }] }] }, ...handlers });
@@ -476,8 +452,99 @@ assert.equal((checkedRestricted.match(/superseded by another master/g) || []).le
 // With a fresh master the fence device is the master's record, and recording one is offered.
 const fenced = table({ report: { ...report, transfer_supported: true, members: [{ ...master, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true } }, member] }, ...handlers, onPromote: () => {}, onFenceProfile: () => {} });
 assert.match(fenced, /Fence device: virsh · lab\.example\.test · configured/);
-assert.match(fenced, /<button type="button">Record fence device…<\/button>/);
+assert.match(fenced, /<button type="button">Set BMC access…<\/button>/);
 // A promotion is not offered against a pool master that is reporting.
 assert.match(fenced, /Use “Make pool master” for a planned master change; promoting is for a pool master that is gone\./);
 
 console.log("pool-members.test.mjs: ok");
+
+// The pool's own fencing line, counted from the master's per-host answers. It never turns a
+// quiet master into a protected pool, and it names the hosts whose rows say why.
+{
+  const readiness = ready => ({ ready, methods: [{ kind: "ipmilan", state: ready ? "ready" : "not_ready", reason: ready ? "" : "this management controller did not answer (from core-b)" }] });
+  const withPool = pool => ({
+    ...report, authoritative: true, fence: pool,
+    members: [
+      { ...report.members[0], fence: { configured: true, kind: "ipmilan", readiness: readiness(true) } },
+      { ...report.members[1], fence: { configured: true, kind: "ipmilan", readiness: readiness(false) } },
+    ],
+  });
+  // The count is the pool master's own, on its own row, and the names are resolved through
+  // the same membership; nothing here counts the rows it is about to render.
+  const fenced = withPool({ ready: 1, total: 2, unready: [report.members[1].host_id], host_fencing: true });
+  assert.match(fencingSummaryText(fenced), /Fencing: ready for 1 of 2 hosts\./);
+  assert.match(fencingSummaryText(fenced), /the Fencing column on that row says why/);
+  assert.match(fencingSummaryText(fenced), new RegExp(report.members[1].name));
+  assert.match(fencingSummaryText(withPool({ ready: 2, total: 2, host_fencing: true })), /Fencing: ready for 2 of 2 hosts\./);
+  assert.match(fencingSummaryText({ ...fenced, authoritative: false }), /^Fencing: unknown/);
+  // A master too old to report a count, and a pool of one host, each say their own thing.
+  assert.match(fencingSummaryText(withPool(undefined)), /^Fencing: not reported/);
+  assert.match(fencingSummaryText(withPool({ ready: 0, total: 1, host_fencing: true })), /this pool has one host/);
+  // And the column itself is a real, labelled column in the table.
+  assert.match(table({ report: fenced }), /<th class="pool-fencing-cell">Fencing<\/th>/);
+}
+
+// The Host fencing setting. It defaults to on, so the operator has to meet the consequence
+// without going looking for it, and the checklist beside it is Core's own.
+{
+  const withSetting = (fence, extra = {}) => ({ ...report, authoritative: true, host_fencing_supported: true, fence, ...extra });
+  const summary = {
+    ready: 3, total: 3, host_fencing: true,
+    prerequisites: [
+      { name: "hosts", state: "met", detail: "this pool has 3 hosts, so a partition can have a majority side" },
+      { name: "watchdogs", state: "unmet", detail: "these hosts report no hardware watchdog: core-b" },
+      { name: "quorum", state: "unknown", detail: "this pool has no quorum service yet" },
+    ],
+  };
+  const setting = renderToStaticMarkup(createElement(HostFencingSetting, { report: withSetting(summary), onChange: () => {} }));
+  assert.match(setting, /Host fencing/);
+  assert.match(setting, /checked=""/, "the switch shows the state the pool master records");
+  // The consequence is on the page, not behind the switch.
+  assert.match(setting, /resets itself and its running virtual machines stop/);
+  assert.match(setting, /reboots the minority side/);
+  assert.match(setting, /does not arm anything by itself/);
+  // Core's checklist, with Core's own sentences and the line names this page supplies.
+  assert.match(setting, /Hardware watchdogs/);
+  assert.match(setting, /these hosts report no hardware watchdog: core-b/);
+  assert.match(setting, /Pool quorum/);
+  assert.match(setting, /this pool has no quorum service yet/);
+  // Turned off, the switch follows the master and the consequence is still shown.
+  const off = renderToStaticMarkup(createElement(HostFencingSetting, { report: withSetting({ ...summary, host_fencing: false }), onChange: () => {} }));
+  assert.doesNotMatch(off, /checked=""/);
+  assert.match(off, /reboots the minority side/);
+  // A master that is not reporting, and one too old for the setting, each say their own
+  // thing and offer no switch at all.
+  const quiet = renderToStaticMarkup(createElement(HostFencingSetting, { report: withSetting(summary, { authoritative: false }) }));
+  assert.match(quiet, /is not reporting/);
+  assert.doesNotMatch(quiet, /<input/);
+  const older = renderToStaticMarkup(createElement(HostFencingSetting, { report: { ...report, authoritative: true, host_fencing_supported: false } }));
+  assert.match(older, /too old to report the host fencing setting/);
+  assert.doesNotMatch(older, /<input/);
+
+  // The pool's own cluster: what it is doing, which host it is waiting for by name, and the
+  // management-network consequence, which is now a way an armed host can be reset by planned
+  // work rather than by a failure.
+  assert.match(setting, /refused while that host is armed/);
+  const arming = renderToStaticMarkup(createElement(HostFencingSetting, {
+    report: withSetting({ ...summary, cluster: { state: "arming", detail: "arming host 2 of 3", armed: 1, total: 3, arming_host_id: report.members[1].host_id } }),
+    onChange: () => {},
+  }));
+  assert.match(arming, /1 of 3 hosts armed/);
+  assert.match(arming, new RegExp(`Waiting for ${report.members[1].name}`), "the host whose turn it is is named, not shown as an opaque ID");
+  const unavailable = renderToStaticMarkup(createElement(HostFencingSetting, {
+    report: withSetting({ ...summary, cluster: { state: "not_available", detail: "this pool runs clustered storage; watchdog fencing for it is not available yet", armed: 0, total: 0 } }),
+    onChange: () => {},
+  }));
+  assert.match(unavailable, /this pool runs clustered storage/);
+  assert.match(unavailable, /not available/);
+}
+
+// A refused Host fencing toggle is a panel action, not a failed membership read: its refusal
+// lands in the action alert, so the page never claims the master could not be asked for its
+// membership and the refusal clears on the next attempt.
+{
+  const handler = src.slice(src.indexOf("async function setHostFencing"), src.indexOf("async function setBMCProvisioning"));
+  assert.match(handler, /setActionError\(""\); setNotice\(""\);/, "the toggle clears the previous refusal before asking again");
+  assert.match(handler, /setActionError\(`\$\{\(e as Error\)\.message\}/, "Core's refusal goes to the action alert");
+  assert.doesNotMatch(handler, /setError\(/, "setError is refresh()'s, and renders as a membership read failure");
+}

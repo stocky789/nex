@@ -80,7 +80,7 @@ func TestStorageLifecycleAllowsIndependentRechecksAndGenerationChain(t *testing.
 	}
 }
 
-func TestStorageCredentialRetireCanFollowReleasedReference(t *testing.T) {
+func TestStorageDetachReleasesAttachedCredential(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	storage := filepath.Join(root, "storage")
@@ -115,8 +115,15 @@ func TestStorageCredentialRetireCanFollowReleasedReference(t *testing.T) {
 	if result, err := e.Execute(ctx, lifecycleCommand("detach-1", "storage-detach", detach), nil); err != nil || result.Status != "succeeded" {
 		t.Fatalf("detach = %+v, %v", result, err)
 	}
-	if result, err := e.Execute(ctx, retire("retire-released"), nil); err != nil || result.Status != "succeeded" {
-		t.Fatalf("released retire = %+v, %v", result, err)
+	retired, err := os.ReadFile(credentialPath(state, handoff.Offer.RequestID))
+	if err != nil || strings.Contains(string(retired), handoff.Credentials.Secret) || !strings.Contains(string(retired), `"status":"retired"`) {
+		t.Fatalf("detach did not retire the attached credential %q: %v", retired, err)
+	}
+	if _, err = os.Stat(filepath.Join(state, credentialDirectory, receipt.Receipt)); !os.IsNotExist(err) {
+		t.Fatalf("mount credential remains after detach: %v", err)
+	}
+	if result, err := e.Execute(ctx, retire("retire-after-detach"), nil); err != nil || result.Status != "succeeded" {
+		t.Fatalf("retire after detach = %+v, %v", result, err)
 	}
 }
 

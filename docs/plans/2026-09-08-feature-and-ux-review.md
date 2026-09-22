@@ -214,8 +214,14 @@ capabilities and must not imply an unimplemented failure simulator.
 
 The future application catalogue can include VM appliances and Docker applications with shared
 discovery and progress views, while retaining their distinct lifecycle and protection controls.
-Introduce it only after the corresponding Core capabilities and acceptance gates work; do not
-add placeholder controls or change the current implementation queue. The platform plan owns
+Its shape is agreed (project owner, 2026-09-22): a signed official Git repository plus optional
+community repositories, fetched and verified by the pool master, with one install flow that asks
+the few questions a manifest declares and exposes the rendered Compose stack or VM definition
+behind an Advanced disclosure on the review step. Community applications carry a visible badge
+and source name. The Controller browses, asks and shows; a replacement Controller re-adopts
+every installed application from the master. Introduce it only after the corresponding Core
+capabilities and acceptance gates work; do not add placeholder controls or change the current
+implementation queue. The [platform plan](2026-09-08-nex-platform.md#application-catalogue) owns
 this direction and its dependencies. API impact: **none** and guide impact: **none** for this
 planning clarification; future contracts and verified operator instructions ship with each slice.
 

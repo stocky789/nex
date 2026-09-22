@@ -173,6 +173,7 @@
         "HA and migration controlled by the active pool master, building on the earlier master succession; returning VMs to a preferred host only when requested or explicitly enabled, with stability checks to prevent repeated moves",
         "Repeated disaster-recovery, fencing and failback tests under partitions, master loss and stale-host return, with independent safety review before any supported reliability claim",
         "Container Services: Docker Swarm inside Nex-managed node VMs, deployed and operated from Controller rather than over SSH",
+        "An application catalogue fed by a signed official Git repository and optional community repositories, fetched by the pool master, covering container applications and VM appliances with a simple install wizard and an Advanced view of the underlying stack",
         "Guided passthrough of physical hardware to a VM",
         "Templates, clones, cloud-init and creating several VMs at once",
         "Ceph storage, once the NFS path is solid",

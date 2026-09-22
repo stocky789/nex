@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.2. Change a Nex Core host's own management addressing — which interface
+Development product 0.4.3. Change a Nex Core host's own management addressing — which interface
 carries management, DHCP or a static address, an optional management VLAN tag, the default gateway
 and the DNS servers — from Nex Controller, in a staged flow with a timed rollback the **host**
 performs by itself: host detail → **Networking** tab → the **Management network** panel.
@@ -43,6 +43,13 @@ What this workflow is **not**, in this release:
 - **Console access to the host, arranged before you start.** Physical access, a BMC/IPMI console or
   the host's own **Console** tab in Nex Controller. The automatic rollback is designed to bring the
   host back without it, but a console is the only recovery if the rollback itself fails.
+- **The host must not be feeding a watchdog.** A pool's Corosync cluster runs on the management
+  network, so interrupting it on an armed host is the same thing as partitioning that host, and an
+  armed host on the minority side resets itself. **Host fencing** is on by default, so on a pool of
+  three to five hosts with no clustered storage expect this to apply. Put the host in
+  **maintenance mode**, or turn Host fencing off for the pool, and wait until the pool reports the
+  host as not armed before you stage anything. See
+  [Host fencing, and the watchdog line](pool-authority-and-recovery.md#host-fencing-and-the-watchdog-line).
 - The host's `/etc/network/interfaces` and `/etc/dhcpcd.conf` must be the ones Nex Core or the Nex
   installer wrote. Nex Core refuses to overwrite a file it cannot prove it rendered, and says which
   one. A freshly installed host always passes.
@@ -131,6 +138,18 @@ configuration at once and reports *rolled back at your request*.
 - *The host has not reported since the change was applied; it cannot be confirmed until it reaches
   this Controller again.* — expected between applying and the host reappearing. Wait, or reach the
   host on its new address.
+- *This host is feeding a watchdog that resets it if it loses this pool's quorum, and this pool's
+  cluster runs on the management network. Turn Host fencing off for this pool, or put this host in
+  maintenance, before changing its management network* — both staging and applying are refused
+  while the host is armed, because changing this network partitions it and an armed host on the
+  minority side resets itself. Do one of the two things the message names and wait until the pool
+  reports the host as not armed; putting a watchdog down means restarting that host's cluster
+  services, so it takes a minute or two. See
+  [Host fencing, and the watchdog line](pool-authority-and-recovery.md#host-fencing-and-the-watchdog-line).
+- *Nex Core could not read whether this host is feeding a watchdog, so it will not change the
+  network its pool's cluster runs on* — the same guard, when the host could not answer the question
+  about itself. It fails closed. Check that the host's own services are healthy, then retry; if it
+  persists, turn Host fencing off for the pool or put the host in maintenance.
 - *This host is revoked.* — the host's enrollment was revoked; nothing can be sent to it.
 - *This host reports management network revision N; reload the host network page and retry.* — the
   host's configuration moved while the page was open. Reload and start again.

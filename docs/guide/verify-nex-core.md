@@ -62,8 +62,8 @@ enrollment, which places the host in its own automatically created pool as pool 
 remains separate. No bridge/NAT network or persistent guest is
 created by this procedure.
 
-For an internal ZFS-enabled QA image, also inspect the installed module only after the
-ordinary host checks pass:
+When the installed host includes OpenZFS (VM storage repositories), also inspect the module
+only after the ordinary host checks pass:
 
 ```sh
 dkms status

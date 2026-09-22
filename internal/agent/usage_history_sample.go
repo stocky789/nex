@@ -291,23 +291,29 @@ func readHostPoints(at time.Time, previous counters) (counters, []historyPoint) 
 		dir := "/sys/class/net/" + name + "/statistics/"
 		netStats[name] = [2]string{read(dir + "rx_bytes"), read(dir + "tx_bytes")}
 	}
-	return hostHistoryPoints(read("/proc/stat"), read("/proc/meminfo"), read("/proc/diskstats"), read("/proc/loadavg"), nics, netStats, wholeDisk, at, previous)
+	return hostHistoryPoints(read("/proc/stat"), read("/proc/meminfo"), read("/proc/diskstats"), read("/proc/loadavg"), nics, netStats, hwmonSensorsWithin("/sys/class/hwmon", usageSampleDeadline), wholeDisk, at, previous)
 }
 
 // wholeDisk reports whether a diskstats name is a whole block device worth charting. Partitions
 // and device-mapper volumes would count the same I/O twice.
 func wholeDisk(name string) bool {
+	_, err := os.Stat("/sys/block/" + name)
+	return err == nil && physicalDisk(name)
+}
+
+// physicalDisk reports whether a block device name is installed hardware rather than one of
+// the kernel's virtual devices: zram, loop, optical, floppy, network and device-mapper.
+func physicalDisk(name string) bool {
 	for _, prefix := range []string{"loop", "ram", "zram", "dm-", "sr", "fd", "nbd", "md"} {
 		if strings.HasPrefix(name, prefix) {
 			return false
 		}
 	}
-	_, err := os.Stat("/sys/block/" + name)
-	return err == nil
+	return true
 }
 
 // hostHistoryPoints turns host counters into history points, as vmHistoryPoints does for a VM.
-func hostHistoryPoints(stat, meminfo, diskstats, loadavg string, nics []string, netStats map[string][2]string, whole func(string) bool, at time.Time, previous counters) (counters, []historyPoint) {
+func hostHistoryPoints(stat, meminfo, diskstats, loadavg string, nics []string, netStats map[string][2]string, temps []hwmonSensor, whole func(string) bool, at time.Time, previous counters) (counters, []historyPoint) {
 	current := counters{at: at, values: map[string]float64{}}
 	var points []historyPoint
 	add := func(key, group, label, unit string, v float64) {
@@ -412,6 +418,11 @@ func hostHistoryPoints(stat, meminfo, diskstats, loadavg string, nics []string, 
 			}
 			add("load."+name, "load", "Load "+name+"m", "load", v)
 		}
+	}
+	// Temperatures join the fixed series, ahead of the per-core CPU points below, so a large
+	// host's cores cannot starve them.
+	for _, s := range temps {
+		add(s.Key, "temperature", s.Label, "celsius", s.Celsius)
 	}
 	return current, append(points, cores...)
 }

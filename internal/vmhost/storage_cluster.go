@@ -206,12 +206,6 @@ func ConnectClusteredISCSI(ctx context.Context, stateDir string, s protocol.Stor
 	return s, nil
 }
 
-// ValidateClusteredISCSI is the no-mutation storage admission check. Use it before
-// a VM disk write/start; failure means no new writer, never a remount or retry loop.
-func ValidateClusteredISCSI(ctx context.Context, s protocol.StorageRegistration, c protocol.StorageClusterConfig) (storageAccess, error) {
-	return ValidateClusteredISCSIAt(ctx, "/var/lib/nex-core-agent", s, c)
-}
-
 // ValidateClusteredISCSIAt is the no-mutation clustered-storage admission
 // check for a specific Core state root. Callers that have an agent state
 // directory must use it so health checks render the same fence secret paths
@@ -433,26 +427,117 @@ func gfs2MetadataRead(ctx context.Context, device string) (string, int, error) {
 	return lock[1], n, nil
 }
 
-// RenderStorageCluster returns the only Corosync file Nex writes. It contains no
-// secret: the auth key is separately generated/distributed by the Core peer layer.
+// RenderStorageCluster returns the Corosync file clustered storage asks for. A host has one
+// corosync.conf and therefore one cluster, so this and the pool's own watchdog cluster
+// (RenderPoolCluster) are two callers of one renderer and one writer, never two writers.
+// It contains no secret: the auth key is separately generated/distributed by the Core peer
+// layer.
 func RenderStorageCluster(c protocol.StorageClusterConfig) (string, error) {
 	if len(c.Nodes) < 3 || len(c.Nodes) > 5 {
 		return "", errors.New("cluster needs three to five nodes")
 	}
-	var b strings.Builder
-	b.WriteString("# Managed by Nex Core; do not edit.\n")
-	b.WriteString("totem {\n  version: 2\n  cluster_name: " + c.ClusterID + "\n  transport: knet\n  secauth: on\n  crypto_cipher: aes256\n  crypto_hash: sha256\n}\n")
-	b.WriteString("nodelist {\n")
+	nodes := make([]corosyncNode, 0, len(c.Nodes))
 	for _, node := range c.SortedNodes() {
-		// Pacemaker addresses STONITH requests by this Corosync node name. It
-		// deliberately equals the durable Nex Core host ID used in pcmk_host_*.
-		fmt.Fprintf(&b, "  node {\n    ring0_addr: %s\n    name: %s\n    nodeid: %d\n  }\n", node.CorosyncAddress, node.HostID, node.CorosyncNodeID)
+		nodes = append(nodes, corosyncNode{address: node.CorosyncAddress, name: node.HostID, id: node.CorosyncNodeID})
+	}
+	return renderCorosyncConfig("", c.ClusterID, nodes, false), nil
+}
+
+// corosyncNode is one nodelist entry. The name is deliberately the durable Nex Core host ID:
+// Pacemaker addresses STONITH requests by the Corosync node name and pcmk_host_* already
+// matches it, and a watchdog proof reads the same names back out of corosync-quorumtool.
+type corosyncNode struct {
+	address string
+	name    string
+	id      uint32
+}
+
+// renderCorosyncConfig is the only rendering of /etc/corosync/corosync.conf in Nex Core.
+// marker is the owning consumer's extra header line, so a host can tell which of the two
+// wrote the file it already has and refuse to take it over.
+func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, waitForAll bool) string {
+	var b strings.Builder
+	b.WriteString("# Managed by Nex Core; do not edit.\n" + marker)
+	b.WriteString("totem {\n  version: 2\n  cluster_name: " + clusterName + "\n  transport: knet\n  secauth: on\n  crypto_cipher: aes256\n  crypto_hash: sha256\n}\n")
+	b.WriteString("nodelist {\n")
+	for _, node := range nodes {
+		fmt.Fprintf(&b, "  node {\n    ring0_addr: %s\n    name: %s\n    nodeid: %d\n  }\n", node.address, node.name, node.id)
 	}
 	// Corosync's brace syntax requires stanza entries on a subsequent line.
 	// Keeping quorum as an inline stanza makes the daemon reject the whole
 	// configuration before it can form a safe quorum.
-	b.WriteString("}\nquorum {\n  provider: corosync_votequorum\n}\n")
-	return b.String(), nil
+	b.WriteString("}\nquorum {\n  provider: corosync_votequorum\n")
+	if waitForAll {
+		// Two properties, and the second one is why this must not be removed.
+		//
+		// A partition that has never seen the whole pool must not decide it is the
+		// majority: without this, a pool coming back one host at a time can form a
+		// quorum of survivors while the rest of it is still booting.
+		//
+		// And it is what holds no-quorum-policy=suicide back on a cold start. Measured:
+		// a host that starts this cluster alone, inquorate, with suicide already in its
+		// persisted CIB, does NOT panic, because Pacemaker refuses to apply the policy to
+		// a cluster that has never had quorum and says so — "Resetting no-quorum-policy
+		// to 'stop': cluster has never had quorum". wait_for_all is what makes a lone
+		// host's membership never-quorate, so it is load-bearing for the guarantee that
+		// nothing resets a host that boots with its peers still down.
+		b.WriteString("  wait_for_all: 1\n")
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// writeCorosyncConfig is the one place Nex Core writes /etc/corosync/corosync.conf. Both
+// consumers go through it, so a host can never end up with two writers of one cluster: a file
+// this Core wrote for the other consumer is refused rather than replaced, and an
+// administrator's own file is refused unless packaging's marker still binds it to an untouched
+// vendor file. It reports whether the bytes on disk changed.
+func writeCorosyncConfig(stateDir, rendered, marker string) (bool, error) {
+	old, readErr := os.ReadFile(corosyncConfigPath)
+	switch {
+	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
+		return false, readErr
+	case readErr == nil && strings.HasPrefix(string(old), "# Managed by Nex Core;"):
+		if corosyncConfigMarker(old) != marker {
+			return false, errors.New("this host's Corosync configuration belongs to another Nex Core cluster on this pool; one host has one cluster")
+		}
+	case readErr == nil:
+		if !corosyncUnconfiguredMarker(stateDir, old) {
+			return false, errors.New("refusing to replace administrator Corosync configuration")
+		}
+		// Packaging creates the marker only for a recognized untouched vendor
+		// file. Preserve that file before its one permitted replacement.
+		if err := os.MkdirAll(filepath.Join(stateDir, "storage-cluster"), 0700); err != nil {
+			return false, err
+		}
+		if err := atomicWrite(filepath.Join(stateDir, "storage-cluster", "corosync-precluster.conf"), old); err != nil {
+			return false, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(corosyncConfigPath), 0700); err != nil {
+		return false, err
+	}
+	changed := old == nil || !bytes.Equal(old, []byte(rendered))
+	if changed {
+		if err := atomicWrite(corosyncConfigPath, []byte(rendered)); err != nil {
+			return false, err
+		}
+	}
+	if err := os.Remove(corosyncUnconfiguredMarkerPath(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return changed, nil
+}
+
+// corosyncConfigMarker is the owning consumer's header line, empty for clustered storage,
+// which wrote this file before the pool's own cluster existed.
+func corosyncConfigMarker(config []byte) string {
+	for _, line := range strings.SplitN(string(config), "\n", 3) {
+		if strings.HasPrefix(line, "# Nex ") {
+			return line + "\n"
+		}
+	}
+	return ""
 }
 
 // StartStorageClusterAt applies only the local Corosync projection and starts
@@ -471,35 +556,11 @@ func StartStorageClusterAt(ctx context.Context, stateDir string, c protocol.Stor
 	if err != nil {
 		return err
 	}
-	old, readErr := os.ReadFile(corosyncConfigPath)
-	if readErr == nil && !strings.HasPrefix(string(old), "# Managed by Nex Core;") {
-		if !corosyncUnconfiguredMarker(stateDir, old) {
-			return errors.New("refusing to replace administrator Corosync configuration")
-		}
-		// Packaging creates the marker only for a recognized untouched vendor
-		// file. Preserve that file before its one permitted replacement.
-		if err := os.MkdirAll(filepath.Join(stateDir, "storage-cluster"), 0700); err != nil {
-			return err
-		}
-		if err := atomicWrite(filepath.Join(stateDir, "storage-cluster", "corosync-precluster.conf"), old); err != nil {
-			return err
-		}
-	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return readErr
-	}
-	if err := os.MkdirAll(filepath.Dir(corosyncConfigPath), 0700); err != nil {
+	changed, err := writeCorosyncConfig(stateDir, rendered, "")
+	if err != nil {
 		return err
 	}
-	configCurrent := old != nil && bytes.Equal(old, []byte(rendered))
-	if !configCurrent {
-		if err := atomicWrite(corosyncConfigPath, []byte(rendered)); err != nil {
-			return err
-		}
-	}
-	if err := os.Remove(corosyncUnconfiguredMarkerPath(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if configCurrent {
+	if !changed {
 		ready, err := storageClusterServicesReady(ctx)
 		if err != nil {
 			return err
@@ -1769,6 +1830,15 @@ func cibHasProperty(raw []byte, name, value string) bool {
 	})
 	return len(values) == 1 && values[0] == value
 }
+
+// cibHasPropertyName is whether a cluster property is set at all, whatever its value.
+func cibHasPropertyName(raw []byte, name string) bool {
+	var root cibNode
+	return xml.Unmarshal(raw, &root) == nil && root.walk(func(n cibNode) bool {
+		return n.XMLName.Local == "nvpair" && n.attr("name") == name
+	})
+}
+
 func cibHasOrder(raw []byte, id, first, then string) bool {
 	var root cibNode
 	return xml.Unmarshal(raw, &root) == nil && root.walk(func(n cibNode) bool {
@@ -1952,7 +2022,7 @@ func fenceCIBCreateArgs(stateDir string, node protocol.StorageClusterNode) ([]st
 		}
 		kv := strings.TrimPrefix(arg, "--")
 		key, value, ok := strings.Cut(kv, "=")
-		if !ok && key == "ssh" {
+		if !ok && (key == "ssh" || key == "lanplus") {
 			value, ok = "1", true
 		}
 		if !ok || value == "" {

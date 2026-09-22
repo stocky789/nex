@@ -46,7 +46,7 @@ func TestPoolMembersReportsCoreOwnedTransferAndRestrictionFields(t *testing.T) {
 	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: "op-2", Stage: "fence", Status: "pending", Cancellable: false, ObservedAt: now,
 		Verdict: &protocol.PoolPromotionVerdict{PoolID: l.master.pool, CandidateHostID: l.member.id, OldMasterHostID: l.master.id, AuthorityGeneration: 9,
 			CanPromote: false, ReadyToFence: true, FenceRequired: true, FenceRecorded: true, FenceUsable: false,
-			FenceUnusableReason: "BMC fencing identity verification is not implemented", ObservedAt: now}}
+			FenceUnusableReason: "this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own", ObservedAt: now}}
 	l.send(&l.master, nil)
 	l.send(&l.member, nil)
 
@@ -91,7 +91,7 @@ func TestPoolMembersReportsCoreOwnedTransferAndRestrictionFields(t *testing.T) {
 		"fence_recorded":        true,
 		"fence_usable":          false,
 		"can_promote":           false,
-		"fence_unusable_reason": "BMC fencing identity verification is not implemented",
+		"fence_unusable_reason": "this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own",
 	} {
 		if got, ok := verdict[field]; !ok || got != want {
 			t.Fatalf("verdict %s = %v (present %v), want %v", field, got, ok, want)

@@ -1,0 +1,39 @@
+{
+  "summary": "Gitea Release with deploy secrets set publishes APT packages, ISO/source downloads, and the static website in the same run. The deploy-credential check and the website build run before the release is created, so a bad build or a half-set secret stops the run before the tag moves, and the website release id is left to website-ci-deploy.sh's unique timestamp-sha fallback instead of the package version. API impact: none.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/operate-website.md",
+    "tests/test_ci_security.py",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-release-publishes-website.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md",
+      "docs/guide/operate-website.md"
+    ],
+    "reason": "Release now publishes static pages with APT and downloads and fails before tagging; the prerequisite no longer implies public clearance for 0.4.3."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI publish wiring only; no Controller/Core API contract change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Publication pipeline only."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state; CI and public site artifacts only."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_security tests.test_website_hosting tests.test_release_publish; python3 scripts/check_docs.py --worktree \u2014 new checks test_deploy_checks_and_website_build_run_before_the_tag_moves and test_website_release_id_is_left_to_the_deploy_script",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

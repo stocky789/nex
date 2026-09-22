@@ -359,6 +359,17 @@ func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialRec
 	return out, nil
 }
 
+// releaseStorageCredential deletes the Core-local secret for a repository that is being
+// detached or whose credentials were replaced. Unlike storage-credential-retire, callers
+// pass the storage row being released; attachment is not re-checked against the journal
+// because that row still names the receipt until the detach or update is journaled.
+func releaseStorageCredential(stateDir string, s protocol.StorageRegistration) error {
+	if s.CredentialReceipt == "" {
+		return nil
+	}
+	return retireStorageCredential(stateDir, s.CredentialReceipt, s.PoolID, s.HostID, false)
+}
+
 // retireStorageCredential removes an unreferenced Core-local secret. The managed storage
 // projection supplies attached=true while a repository still names the receipt, so a browser
 // request can never detach credentials from an active repository.

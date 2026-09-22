@@ -146,19 +146,17 @@ class PublishTests(unittest.TestCase):
             gitea.publish(self.repo, "v1.0.0-rc1", "same", "Nex Core", "", [deb])
         self.assertNotIn("DELETE", [c[0] for c in FakeGitea.calls])
 
-    def test_private_forge_publishes_zfs_enabled_manifest(self):
-        # The private forge is internal lab delivery. Public website publishing
-        # still rejects ZFS; that gate lives in scripts/release-publish.py.
+    def test_compliance_manifest_may_list_iso_components(self):
         FakeGitea.state = {"release": None, "tag_sha": None}
         with tempfile.TemporaryDirectory() as temporary:
             manifest = Path(temporary) / "nex-core-1.0.0-compliance-manifest.json"
-            manifest.write_text(json.dumps({"components": [{"package": "zfsutils-linux"}]}))
+            manifest.write_text(json.dumps({"components": [{"package": "bridge-utils"}]}))
             release = gitea.publish(self.repo, "v1.0.0-rc1", "new", "Nex Core", "", [manifest])
         self.assertFalse(release["draft"])
         self.assertIn("POST", [c[0] for c in FakeGitea.calls])
 
     def test_unreadable_manifest_fails_closed_before_creating_a_draft(self):
-        # BUG-0314: corrupt JSON must not ship; ZFS packages alone are allowed on the forge.
+        # BUG-0314: corrupt JSON must not ship.
         with tempfile.TemporaryDirectory() as temporary:
             manifest = Path(temporary) / "nex-core-1.0.0-compliance-manifest.json"
             manifest.write_text("{not json")

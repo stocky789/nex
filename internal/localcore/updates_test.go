@@ -40,6 +40,8 @@ func stubApt(t *testing.T, installed, candidate string, gate <-chan struct{}) {
 			return exec.CommandContext(ctx, "printf", "%s", current.Load().(string))
 		case strings.HasPrefix(line, "apt-cache policy"):
 			return exec.CommandContext(ctx, "printf", "  Candidate: %s\n", candidate)
+		case name == "dpkg":
+			return exec.CommandContext(ctx, name, args...)
 		case strings.Contains(line, "install -y"):
 			if gate != nil {
 				<-gate

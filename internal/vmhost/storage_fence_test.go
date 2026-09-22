@@ -149,3 +149,39 @@ func TestVerifyStorageClusterFenceRejectsBMCWithoutIdentityVerification(t *testi
 		t.Fatalf("BMC proof = %#v, %v, called=%v", proof, err, called)
 	}
 }
+
+// Every identity read and readiness check Core makes signs in over RMCP+ (ipmitool -I
+// lanplus -C <suite>), so the power-off must too: fence_ipmilan defaults to IPMI 1.5, which
+// a controller running 2.0 often refuses, and --cipher means nothing without --lanplus — the
+// "checked from 2 hosts but cannot be fenced" failure, first reached at a promotion.
+func TestIPMIFenceRunsOverTheSameRMCPSessionTheIdentityWasProvedOver(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage-cluster", "fence-credentials")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bmc-secret"), FencePasswordScript("hunter2"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	fence := protocol.StorageClusterFence{Kind: protocol.FenceIPMI, Endpoint: "bmc.example.test", TargetID: "1",
+		Username: "nexfence", Cipher: 17, CredentialRef: "bmc-secret"}
+	agent, args, err := fenceAgentArgs(root, fence, "off")
+	if err != nil || agent != "fence_ipmilan" {
+		t.Fatalf("IPMI fence command = %q, %v", agent, err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--lanplus", "--cipher=17"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("IPMI fence arguments omit %q: %v", want, args)
+		}
+	}
+	// Pacemaker fences through the same parameters, so the stonith resource renders the
+	// valueless flag as lanplus=1 rather than refusing the argument.
+	cib, err := fenceCIBCreateArgs(root, protocol.StorageClusterNode{HostID: "host-a", Fence: fence})
+	if err != nil {
+		t.Fatalf("CIB arguments for an IPMI fence device: %v", err)
+	}
+	if !strings.Contains(strings.Join(cib, "\n"), "lanplus=1") {
+		t.Fatalf("stonith resource omits lanplus=1: %v", cib)
+	}
+}

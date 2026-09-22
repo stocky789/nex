@@ -101,6 +101,13 @@ func validClusterSecret(s *Store, r ClusterSecretReceipt, m ClusterSecretMateria
 		if m.Credentials == nil || m.SSHPrivateKey != "" || m.SSHKnownHosts != "" {
 			return errors.New("invalid typed cluster credential")
 		}
+		if r.Kind == "fence_bmc" {
+			// Core decides this, not the Controller: the password is about to become the
+			// script a fence agent runs, and the agent would strip whitespace Core keeps.
+			if err := vmhost.FenceSecretUsable(m.Credentials.Secret); err != nil {
+				return err
+			}
+		}
 	case "fence_ssh":
 		if m.Credentials != nil || len(m.SSHPrivateKey) == 0 || len(m.SSHPrivateKey) > 65536 || len(m.SSHKnownHosts) == 0 || len(m.SSHKnownHosts) > 65536 || strings.ContainsAny(m.SSHPrivateKey+m.SSHKnownHosts, "\x00") {
 			return errors.New("invalid typed cluster credential")
@@ -227,10 +234,7 @@ func materializeClusterSecret(s *Store, r ClusterSecretReceipt, m ClusterSecretM
 		}
 		return writePrivate(filepath.Join(dir, r.Reference+".known_hosts"), []byte(materializedKnownHosts(m.SSHKnownHosts)), 0600)
 	}
-	// The password script receives no parameters and quotes the value rather than
-	// putting it in a command argument or environment.
-	quoted := strings.ReplaceAll(m.Credentials.Secret, "'", "'\"'\"'")
-	return writePrivate(filepath.Join(dir, r.Reference), []byte("#!/bin/sh\nprintf '%s\\n' '"+quoted+"'\n"), 0700)
+	return writePrivate(filepath.Join(dir, r.Reference), vmhost.FencePasswordScript(m.Credentials.Secret), 0700)
 }
 
 // materializedKnownHosts bridges OpenSSH's default-port lookup: it looks up

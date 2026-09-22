@@ -127,8 +127,8 @@ func TestHostHistoryPointsMeasureCPUMemoryDiskAndLoad(t *testing.T) {
 	meminfo := "MemTotal:       1000 kB\nMemAvailable:    250 kB\n"
 	nics := []string{"eno1"}
 	base := time.Unix(1_800_000_000, 0)
-	first, _ := hostHistoryPoints(stat(100, 100), meminfo, disk(0), "0.5 1.0 1.5 1/100 42", nics, map[string][2]string{"eno1": {"0", "0"}}, whole, base, counters{})
-	_, points := hostHistoryPoints(stat(175, 125), meminfo, disk(10), "0.5 1.0 1.5 1/100 42", nics, map[string][2]string{"eno1": {"1000\n", "0"}}, whole, base.Add(5*time.Second), first)
+	first, _ := hostHistoryPoints(stat(100, 100), meminfo, disk(0), "0.5 1.0 1.5 1/100 42", nics, map[string][2]string{"eno1": {"0", "0"}}, nil, whole, base, counters{})
+	_, points := hostHistoryPoints(stat(175, 125), meminfo, disk(10), "0.5 1.0 1.5 1/100 42", nics, map[string][2]string{"eno1": {"1000\n", "0"}}, nil, whole, base.Add(5*time.Second), first)
 	values := map[string]float64{}
 	for _, p := range points {
 		values[p.Key] = p.Value
@@ -401,7 +401,7 @@ func TestHostHistoryPointsCapCoresBehindOtherSeries(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		fmt.Fprintf(&stat, "cpu%d 1 0 0 1 0 0 0 0\n", i)
 	}
-	_, points := hostHistoryPoints(stat.String(), "MemTotal: 1 kB\nMemAvailable: 1 kB\n", "", "0 0 0", []string{"eno1"}, map[string][2]string{}, func(string) bool { return false }, time.Now(), counters{})
+	_, points := hostHistoryPoints(stat.String(), "MemTotal: 1 kB\nMemAvailable: 1 kB\n", "", "0 0 0", []string{"eno1"}, map[string][2]string{}, nil, func(string) bool { return false }, time.Now(), counters{})
 	f := newRing()
 	if complete, _ := f.add(time.Now(), points); !complete {
 		t.Fatalf("%d host series exceed the file cap", len(points))

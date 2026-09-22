@@ -127,14 +127,15 @@ class MaintainerScriptRetentionTests(unittest.TestCase):
         missing = sorted(p for p in referenced if p not in source.FILES and not self.covered_by_tree(p))
         self.assertEqual(missing, [], f'referenced by a package builder but absent from the source archive: {missing}')
 
-    def test_cluster_storage_delivery_sources_are_retained(self):
+    def test_package_delivery_sources_are_retained(self):
         root = Path(__file__).parents[1]
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'source'
             source.copy_sources(root, target)
             for path in ('packaging/cluster-storage/Dockerfile',
                          'packaging/cluster-storage/build-matched-dlm.sh',
-                         'packaging/cluster-storage/cluster-iscsi-session'):
+                         'packaging/cluster-storage/cluster-iscsi-session',
+                         'packaging/core-local/nex-sensors.conf'):
                 self.assertEqual((target / path).read_bytes(), (root / path).read_bytes())
 
     @staticmethod

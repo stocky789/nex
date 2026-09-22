@@ -10,13 +10,19 @@ cc -Wall -Wextra -Werror -O2 packaging/core-local/nex-root-auth.c -lpam -o /buil
 pkg=/build/package
 install -d "$pkg/DEBIAN" "$pkg/usr/lib/nex" "$pkg/usr/lib/systemd/system" "$pkg/usr/share/nex/core-local/web" "$pkg/usr/share/nex/appliance" "$pkg/usr/share/doc/nex-core-local" "$pkg/etc/libvirt/hooks/qemu.d" "$pkg/usr/share/nex/core-local"
 install -d "$pkg/usr/share/keyrings"
-install -d "$pkg/etc/pam.d" "$pkg/etc/nex"
+install -d "$pkg/etc/pam.d" "$pkg/etc/nex" "$pkg/etc/modules-load.d"
 printf 'repo_url=https://nexvirtualization.com/apt\n' > "$pkg/etc/nex/updates.conf"
 install -m644 packaging/core-local/nex.list.example "$pkg/usr/share/nex/core-local/"
 # The Nex APT archive public key; postinst writes the matching signed apt source.
 install -m644 packaging/core-local/nex-archive-keyring.gpg "$pkg/usr/share/keyrings/nex-archive-keyring.gpg"
 install -m644 packaging/core-local/nex-core-local.pam "$pkg/etc/pam.d/nex-core-local"
-printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n' > "$pkg/DEBIAN/conffiles"
+# SATA and SAS disks report their temperature only once drivetemp is loaded; CPU, NVMe and GPU
+# sensors bind on their own. The agent never loads modules (ProtectKernelModules=yes).
+install -m644 packaging/core-local/nex-sensors.conf "$pkg/etc/modules-load.d/nex-sensors.conf"
+# /dev/ipmi0 exists only once the IPMI driver is loaded. It is what lets a host configure
+# its own management controller for fencing without an operator typing an address.
+install -m644 packaging/core-local/nex-ipmi.conf "$pkg/etc/modules-load.d/nex-ipmi.conf"
+printf '/etc/pam.d/nex-core-local\n/etc/nex/updates.conf\n/etc/modules-load.d/nex-sensors.conf\n/etc/modules-load.d/nex-ipmi.conf\n' > "$pkg/DEBIAN/conffiles"
 install -m755 /build/nex-root-auth "$pkg/usr/lib/nex/"
 install -m755 /build/nex-core-local "$pkg/usr/lib/nex/"
 install -m755 packaging/core-local/core-local-setup "$pkg/usr/lib/nex/"
@@ -72,7 +78,7 @@ Package: nex-core-local
 Version: ${NEX_VERSION}
 Architecture: amd64
 Maintainer: Nex contributors
-Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh
+Depends: init-system-helpers, libc6 (>= 2.41), python3, python3-virt-firmware, openssl, libpam0g, libpam-modules, iproute2, ifupdown, bridge-utils, vlan, dmidecode, pciutils, libvirt-clients, libvirt-daemon-system, qemu-system-x86, qemu-utils, genisoimage, nfs-common, libnfs-utils, cifs-utils, smbclient, open-iscsi, corosync, dlm-controld, gfs2-utils, pacemaker, pacemaker-cli-utils, pcs, fence-agents-redfish, fence-agents-ipmilan, fence-agents-virsh, ipmitool, sbd
 Recommends: linux-headers-amd64, zfs-dkms, zfsutils-linux
 Section: admin
 Priority: optional

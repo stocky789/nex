@@ -1,21 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // S5 "Planned master change and member eject": same harness as pool-members.test.mjs — esbuild
 // bundles the real module and react-dom/server renders it. Run with: node src/pool-authority.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/pool-authority.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./pool-authority.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
+const moduleURL = bundleTestModule(new URL("./pool-authority.tsx", import.meta.url), "pool-authority");
 const src = readFileSync(new URL("./pool-authority.tsx", import.meta.url), "utf8");
 const membersSrc = readFileSync(new URL("./pool-members.tsx", import.meta.url), "utf8");
 const {
@@ -23,7 +15,7 @@ const {
   transferActionText, transferStageText, transferInProgress, transferCancellable,
   transferResumePrompt, lastTransferText, authorityText, behindText, masterConflictText,
   masterChangeBlock, ejectBlock, hostName,
-} = await import(`file://${outfile}`);
+} = await import(moduleURL);
 
 // react-dom/server escapes apostrophes, so Core's sentences are matched as they are rendered.
 const rx = text => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "(&#x27;|')"));
@@ -81,16 +73,16 @@ assert.equal(ejectBlock(busy, member), "Another pool authority transfer is alrea
 
 // The row menu shows both actions with their reasons, and is a disclosure, not a column.
 const menu = renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {} }));
-assert.match(menu, /<details class="pool-row-actions"><summary>Actions<\/summary>/);
+assert.match(menu, /<details class="pool-row-actions"><summary>Actions<span class="sr-only"> for core-b<\/span><\/summary>/);
 assert.match(menu, /<button type="button">Make pool master<\/button>/);
 assert.match(menu, /<button type="button" class="danger">Eject from pool<\/button>/);
-// Later slices add their own row actions to the same disclosure rather than a second one.
+// The row's other actions share the same disclosure, ahead of the destructive eject.
 assert.match(renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {}, extra: createElement("button", { type: "button" }, "Promote to pool master…") })),
-  /Eject from pool<\/button><button type="button">Promote to pool master…<\/button><\/div><\/details>/);
+  /<div><button type="button">Promote to pool master…<\/button><button type="button">Make pool master<\/button><button type="button" class="danger">Eject from pool<\/button><\/div><\/details>/);
 assert.equal((renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {}, extra: createElement("span") })).match(/<details/g) || []).length, 1);
+// The master can never be made master or ejected, so its row does not offer either.
 const masterMenu = renderToStaticMarkup(createElement(MemberActions, { report, member: master, onMasterChange: () => {}, onEject: () => {} }));
-assert.match(masterMenu, /<button type="button" aria-describedby="[^"]+-promote" disabled="">Make pool master<\/button><small id="[^"]+-promote">This host is already the pool master\.<\/small>/);
-assert.match(masterMenu, /aria-describedby="[^"]+-eject" disabled="">Eject from pool<\/button><small id="[^"]+-eject">The pool master cannot be ejected; change the pool master first\.<\/small>/);
+assert.doesNotMatch(masterMenu, /Make pool master|Eject from pool/);
 
 // ------------------------------------------------------------ the transfer status strip
 

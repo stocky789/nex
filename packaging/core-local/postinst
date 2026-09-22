@@ -59,6 +59,20 @@ APT
             fi
         done
     fi
+    # sbd is the watchdog self-fencing daemon. Debian's package leaves its unit ENABLED on
+    # install, and the unit is RequiredBy=corosync.service, so on a host that already runs a
+    # cluster the next corosync start would pull sbd in with Debian's own configuration
+    # instead of Nex Core's — and if it could not start, corosync would not either. A watchdog
+    # is armed only when a pool asks for it, so this is disabled unconditionally, including on
+    # a host that already has a Corosync configuration. It is never stopped here: disabling an
+    # enabled unit is inert, and stopping a service under a live cluster is not.
+    # Nex Core re-enables it when a pool's Host fencing setting and prerequisites call for it.
+    # A host whose sbd Nex Core already manages is left alone: an ordinary package upgrade
+    # must not disarm a pool, and it would — disabling is inert on the running unit, so
+    # nothing would look wrong until each host's next reboot came up unarmed.
+    if ! grep -qs '^# Managed by Nex Core' "$root/etc/default/sbd"; then
+        deb-systemd-helper disable sbd.service
+    fi
     # Nex Core's release identity is this package's version: the distribution and
     # the software Nex ships on it are one thing. Divert Debian's package-owned
     # symlink once so the local /etc file wins without touching /usr/lib/os-release.

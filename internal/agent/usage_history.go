@@ -128,7 +128,15 @@ func (f *ringFile) index(p historyPoint, at time.Time) int {
 		}
 	}
 	if len(f.Series) >= historyMaxSeries {
-		return -1
+		i := f.evictableCore(p.Key)
+		if i < 0 {
+			return -1
+		}
+		f.Series[i], f.seen[i], f.layout = p.seriesMeta, at, true
+		for t := range f.rings {
+			f.rings[t][i], f.Acc[t][i] = nanRing(tierOf(t).Points), accumulator{}
+		}
+		return i
 	}
 	f.Series, f.seen, f.layout = append(f.Series, p.seriesMeta), append(f.seen, at), true
 	for t := range f.rings {
@@ -136,6 +144,23 @@ func (f *ringFile) index(p historyPoint, at time.Time) int {
 		f.Acc[t] = append(f.Acc[t], accumulator{})
 	}
 	return len(f.Series) - 1
+}
+
+// evictableCore is the last per-core CPU series in a full file, which is the lowest-priority
+// thing in it: a core is sampled every cycle, so compact never frees its slot, and a host that
+// was already at the cap before temperatures existed would never admit one. A cpu.core.* key
+// evicts nothing, so a displaced core stays out instead of pushing out its neighbour.
+func (f *ringFile) evictableCore(key string) int {
+	if strings.HasPrefix(key, "cpu.core.") {
+		return -1
+	}
+	last := -1
+	for i, s := range f.Series {
+		if strings.HasPrefix(s.Key, "cpu.core.") {
+			last = i
+		}
+	}
+	return last
 }
 
 // add records one sample taken at `at`. It reports whether every series fit under the cap, and

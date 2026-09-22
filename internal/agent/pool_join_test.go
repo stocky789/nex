@@ -4,7 +4,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http/httptest"
+	"net/url"
 	"nex.local/nex/internal/protocol"
 	"os"
 	"path/filepath"
@@ -130,6 +133,81 @@ func TestPoolJoinInvitationRecordsMasterPeerOrigin(t *testing.T) {
 	}
 	if row = poolMember(t, master, "master-1"); row.PeerOrigin != "https://192.0.2.11:9444" || second.MasterURL != "https://192.0.2.11:9444" {
 		t.Fatalf("second invitation = %q, master row = %+v", second.MasterURL, row)
+	}
+}
+
+// TestPoolJoinInvitationWorksOutMasterPeerOrigin: with no master_url supplied, the master
+// records and issues the address its own peer listener is bound to. A wildcard bind names
+// no address, so only then does it fall back to the default route — and it never invents a
+// port the listener does not answer on, because that origin is recorded for good.
+func TestPoolJoinInvitationWorksOutMasterPeerOrigin(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	own, ownErr := ownPeerOrigin()
+	invitation, err := CreatePoolJoinInvitation(master, "", "member-1")
+	if ownErr != nil {
+		if err == nil || err.Error() != ownErr.Error() {
+			t.Fatalf("no default route: err = %v, want %v", err, ownErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own.Port() != "9444" || own.Hostname() == "" || invitation.MasterURL != own.String() || poolMember(t, master, "master-1").PeerOrigin != own.String() {
+		t.Fatalf("own origin %q, invitation %q, master row %+v", own, invitation.MasterURL, poolMember(t, master, "master-1"))
+	}
+
+	// An operator-chosen listen address is the one a joining host must dial.
+	previous := PoolPeerListen
+	t.Cleanup(func() { PoolPeerListen = previous })
+	PoolPeerListen = "192.0.2.50:9500"
+	bound := peerStore(t, "master-2", "pool-2")
+	if err = EnsurePoolMembership(bound); err != nil {
+		t.Fatal(err)
+	}
+	invitation, err = CreatePoolJoinInvitation(bound, "", "member-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.MasterURL != "https://192.0.2.50:9500" || poolMember(t, bound, "master-2").PeerOrigin != invitation.MasterURL {
+		t.Fatalf("invitation %q, master row %+v", invitation.MasterURL, poolMember(t, bound, "master-2"))
+	}
+
+	// Every spelling of a wildcard bind names no address, so each falls back to the default
+	// route on the configured port. This machine may have no IPv6 route, so what the fallback
+	// resolved to cannot be asserted — only that it is not the wildcard and keeps the port.
+	for i, listen := range []string{"[::]:9444", "[::0]:9444"} {
+		PoolPeerListen = listen
+		wildcard := peerStore(t, fmt.Sprintf("master-w%d", i), fmt.Sprintf("pool-w%d", i))
+		if err = EnsurePoolMembership(wildcard); err != nil {
+			t.Fatal(err)
+		}
+		if invitation, err = CreatePoolJoinInvitation(wildcard, "", "member-1"); err != nil {
+			t.Fatal(err)
+		}
+		u, parseErr := url.Parse(invitation.MasterURL)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if u.Port() != "9444" || u.Hostname() == "" || net.ParseIP(u.Hostname()).IsUnspecified() {
+			t.Fatalf("a %s bind gave %q, want the default-route address on port 9444", listen, invitation.MasterURL)
+		}
+	}
+
+	// A literal IPv6 listen address is the one a joining host must dial, brackets and all.
+	PoolPeerListen = "[2001:db8::1]:9444"
+	literal := peerStore(t, "master-6", "pool-6")
+	if err = EnsurePoolMembership(literal); err != nil {
+		t.Fatal(err)
+	}
+	if invitation, err = CreatePoolJoinInvitation(literal, "", "member-1"); err != nil {
+		t.Fatal(err)
+	}
+	if invitation.MasterURL != "https://[2001:db8::1]:9444" {
+		t.Fatalf("invitation %q, want the configured IPv6 listen address", invitation.MasterURL)
 	}
 }
 

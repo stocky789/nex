@@ -87,9 +87,12 @@ Validation and conflicts:
   **the enrolling host** as pool master. Either way only the recorded master's own authenticated
   report is read, and the enrolling host must still be listed `ready`. The second form is what makes
   the documented member-first Controller replacement work: the member reconnects, creates the pool
-  row with itself recorded as master, reports the real membership, the real master then enrolls on
-  that record, and its own first report moves the pool row through the reconnect arm of the adoption
-  rule. `POST /api/v1/sites/{id}/hosts` recognises this refusal by name and answers it as a
+  row with itself recorded as master, and its first report, which names another master, moves the
+  pool row to that master at once (the disclaim arm below). When the recorded master has **never
+  enrolled** with this Controller — the old master is gone — the evidence is instead the pool's
+  record as its enrolled, unrevoked hosts report it: the enrolling host must be listed `ready` by
+  **every** one of their memberships naming that master, so the other members can still enroll and
+  the pool can be promoted, but no single member can admit a host. `POST /api/v1/sites/{id}/hosts` recognises this refusal by name and answers it as a
   retryable conflict rather than a transport failure.
 - A presented `host_id` already on record, or a `pool_id` already held by another master
   host, is 409: a token holder cannot claim an existing identity. Only a token bound to a
@@ -840,7 +843,14 @@ The Controller may still hand a joining host an invitation whose `expires_at` is
 in the past by Controller wall clock, so ordinary clock skew does not force a full re-join; Core
 remains the authority that refuses a truly expired invitation at redemption. The master also
 records the `master_url` it issued an invitation for as its own member `peer_origin` when that is
-empty, so only the first join in a pool's life needs an operator to supply an address.
+empty. An invite with an empty `master_url` asks the master to work out its own origin from the
+pool-peer listener it is configured with (`-pool-peer-listen`): always that listener's port, and
+its address too when the bind is to a concrete address. Only a wildcard bind leaves the address
+open, and then the master uses the source address of its default route, refused as `the pool
+master cannot work out its own peer address because it has no default route` when there is none. The invitation's
+`master_url` is always the master's recorded origin, and it is what the Controller forwards to the
+joining host. Masters built before this rule refuse an empty `master_url`; supply one explicitly for
+them.
 
 **Durable command (Controller → joining host).** `protocol.Command{kind:"pool-join",
 pool:{action:"join", request_id, member_host_id, master_url, pool_ca_pem, invitation,
@@ -873,7 +883,8 @@ inventory, so a replaced Controller adopts an interrupted join instead of losing
 the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation.
 
 - `POST /api/v1/pools/{id}/members` — body
-  `{request_id, host_id, peer_origin, master_url?}`. `peer_origin` and `master_url` must be bare
+  `{request_id, host_id, peer_origin, master_url?}`. `master_url` is an optional override: omitted,
+  the master supplies its own origin (above), and the web UI never sends it. `peer_origin` and `master_url` must be bare
   HTTPS origins (scheme, host and port only). A single trailing `/` is accepted and normalised
   away, exactly as the host-local route accepts it; the normalised, slash-less form is what is
   stored and forwarded, so `https://host:9444` and `https://host:9444/` are the **same** request
@@ -884,8 +895,8 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   any changed field, `master_url` included, is `409 request_id already used with another payload`.
   `404` for `pool not found` / `host not found`. `409` for a host already in the pool, a master or
   joining host that is not fresh and active, a missing capability on either side, a host that is
-  not the master of its own single-host pool, managed VMs, existing remote storage, a master with
-  no advertised peer origin and no `master_url`, an already active pool request, and for any
+  not the master of its own single-host pool, managed VMs, existing remote storage, an already
+  active pool request, and for any
   refusal the master itself decided, relayed verbatim — a `failed` result that carries no message
   becomes `409 the pool master refused to issue a join invitation`, so a terse Core refusal is
   never an empty body. `504` on the broker deadline, with the
@@ -908,7 +919,8 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   record rather than an observation of it, so it is reported either way; a quiet master does not
   make a member's address untrue. `pending` means the member has reported no access row for that
   resource yet; the master's own row carries no counts, because `member_access` is the master's
-  record about its members.
+  record about its members. A `500 membership lookup failed` response means the membership
+  lookup failed before a projection could be returned; this read-only request is safe to retry.
 - `GET /api/v1/pools/{id}/join-candidates` — the compatibility preview for the dialog, composed
   from host-reported inventory only: connection, agent version, capabilities, existing
   membership, managed VMs, non-local storage, NIC names against each pool VLAN uplink, and CPU
@@ -1466,7 +1478,15 @@ own membership names **it** master at a *strictly higher* generation than the mi
 second is the **reconnect**: the recorded master's own mirrored membership already names the
 claimant as pool master, in which case the two agree and the row moves at the same generation. No
 host but the recorded master can produce that pointer, so a member cannot use either arm to take a
-pool. Neither arm is a conflict.
+pool. Neither arm is a conflict. A third arm only gives the row away: when the **recorded master's
+own** report names another host master of the same pool, the row moves to that host, even one that
+has not enrolled here; this corrects a replacement Controller where a member reconnected first.
+Mirror rows move only to an enrolled master, and a recorded master that enrolls late takes them
+back at enrollment. While the recorded master has never enrolled, the mirrored membership the arms
+compare against combines the memberships naming it that the pool's enrolled hosts reported: the
+highest generation any of them claims, and only the hosts all of them list with the same status. So
+a claim must be newer than every such report, and one member's report cannot widen the pool. Then `GET /api/v1/pools/{id}/members` lists that membership with `authoritative:
+false`, so a surviving member can be promoted from the Hosts view.
 What is left, and all `master_conflict` lists, is two cases: an **equal-generation rival**, a host
 whose own membership names itself master at exactly the mirrored generation; and a **newer membership
 naming a third host**, a host reporting a strictly higher generation for a master that is neither
@@ -1538,17 +1558,235 @@ back or restore its Core state. The reasoning is in the plan; the short form is 
 observation that a host is off proves it is not writing *now*, does not prove it never took the
 authority, and does not survive that host powering on again — accepting it constructs two masters.
 
-**The honest hardware limit (D2).** A fence profile is the same closed typed profile clustered
-storage already uses, and `ExecutePoolFenceProfile` **refuses at record time** any profile this
-build cannot verify: `this fence profile cannot be verified by this host: BMC fencing identity
-verification is not implemented` for `redfish`/`ipmilan`, and the same shape carrying `SCSI
-persistent-reservation fencing is unsupported` for `scsi_pr`. **Only `virsh` profiles can be
-recorded, so only a disposable lab pool can be fence-promoted; a physical pool cannot be.** The
-limit is enforced at record time deliberately: a profile in a membership therefore always came from
+**Proving the fence target is the right machine.** A fence profile is the same closed typed profile
+clustered storage already uses. Two things bind a BMC fence to one machine.
+
+*The certificate.* A management controller ships a self-signed certificate with no usable name, so a
+chain proves nothing and skipping verification would send the password to whoever answers. When a
+`redfish` profile is recorded, Core connects, captures the exact certificate, stores its leaf SHA-256
+in `StorageClusterFence.tls_fingerprint` on the pool master and reports it so an operator can compare
+it with the controller's own page. Every later connection must present exactly that certificate; a
+different one refuses the fence with `this management controller presented a different certificate
+than the one recorded for it; record its access again…`, which is deliberately not the
+`did not answer` sentence. That pin is also what binds the identity read and the power-off to one
+endpoint, so a name that resolves elsewhere between them cannot separate them. `fence_redfish`
+cannot be bound to it — its hostname check cannot be satisfied by a factory certificate, and
+`--ssl-insecure` would send the password to an unauthenticated peer — so **Core performs the Redfish
+fence itself** over the pinned connection: the identity `GET`, a `ComputerSystem.Reset` `ForceOff`
+`POST`, then a separate `PowerState` read as the observed-off evidence. Redirects are never followed.
+`ipmilan` has no TLS and nothing to pin: RMCP+ authenticates its own session, and the power-off and
+observed-off still run through the shipped `fence_ipmilan`.
+
+*The machine.* Over that connection Core asks which system the controller manages — the Redfish
+`ComputerSystem.UUID`, compared **exactly**, or IPMI *Get System GUID*, where either documented byte
+order counts because the two specifications disagree about it — and compares it with
+`PoolMember.system_uuid`, the SMBIOS system UUID the target host itself reported while it was alive.
+**A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the
+fence and power nothing off.** Recording a `redfish` profile performs all of this live, so an
+unreachable or wrong controller is refused while the master is still there to record a corrected one.
+
+`ExecutePoolFenceProfile` **refuses at record time** every profile this build could not turn into a
+proof, in the shape `this fence profile cannot be verified by this host: <reason>`, and releases the
+password the credential handoff delivered when it does, so a refusal leaves nothing behind. The
+check is enforced at record time deliberately: a profile in a membership therefore always came from
 a build that can verify it, and any build that can verify it also applies the boot rule to it, so
 there is no version-skew window where one build promotes over a profile another build treats as
-unusable. The limit is reported structurally as `fence_recorded: false` / `fence_usable: false`
-with a `fence_unusable_reason`, not only in prose.
+unusable. It is reported structurally as `fence_recorded: false` / `fence_usable: false` with a
+`fence_unusable_reason`, not only in prose.
+
+`StorageClusterFence` gains `username`, the management-controller account (power control only) the
+profile signs in with, and `tls_fingerprint`, which a client never supplies. The account's password
+goes to Core over the existing one-time credential handoff as a `fence_bmc` credential and never
+reaches the Controller. `PoolMember` gains `system_uuid`. A host records it at join and re-reports it
+on every reconcile pass over the existing `POST /api/v1/pool/advertise` peer route, which now carries
+`system_uuid` beside `origin` and records each independently, so a pool formed before this existed
+gains the identity of every host that is still alive without re-joining anything. A member running an
+older Core reports none, keeps working exactly as before, and simply cannot be given a
+management-controller fence device. Both fields are recorded observations: neither moves a membership
+generation. A fresh Controller recovers all of it from the master's reported inventory and stores
+none of it.
+
+**A host may not defeat its own fencing.** The advertise route is authenticated by the member
+certificate and writes only the calling member's own row, and within that row the master refuses two
+changes: replacing a `system_uuid` it already reported while a BMC fence profile is recorded against
+it — otherwise a host a promotion must exclude could advertise a random identity and make every proof
+for itself fail for ever — and claiming a `system_uuid` another member already holds, because an
+identity two hosts report is not an identity. Known firmware placeholders (all-zero, all-`f`, and the
+widely shipped `03000200-0400-0500-0006-000700080009`) are rejected outright. Replacing a motherboard
+is: clear the fence device, let the host report, record the new controller's access.
+
+**The Redfish power-off waits for the machine to go off.** `ComputerSystem.Reset` is asynchronous:
+a controller answers and goes on reporting `PowerState: On` for seconds. Core therefore polls the
+same pinned `ComputerSystem` every 2 seconds for up to 30 (monotonic) and only then reports the
+exclusion as unconfirmed. For the same reason a **non-2xx answer to the Reset is not a failure**:
+several controllers refuse `ForceOff` for a machine that is already off, which is exactly the case a
+pool fence exists for, and Core's own polled `PowerState` reads decide. Identity is still proved
+first, and nothing is powered off or reported excluded without it.
+
+**Automatic in-band provisioning.** Each host configures its own management controller, so no
+operator normally types a BMC address or password. On every reconcile pass `EnsureLocalBMCFence`
+reads this host's own controller over `/dev/ipmi0` (`ipmitool -I open`): every LAN channel's
+address, the RMCP+ cipher suite (17 where offered, else 3; suite 0 is never selected and never
+accepted into a profile), and the controller's user table — read by `ipmitool`'s own row format,
+and refused outright rather than guessed at if a line does not fit, because reading a slot as free
+when it is not would hand Nex somebody else's account. **The chosen slot is recorded durably before
+the first command that changes anything**, so a controller that refuses halfway through leaves an
+account this host still recognises as its own and finishes on the next pass, instead of a stranded
+`nexfence` account it would refuse to touch for ever. The account gets a random 16-character
+password written to `ipmitool`'s own prompt on standard input — never a command argument —
+**Operator** privilege (the lowest IPMI privilege that may issue Chassis Control), IPMI-over-LAN on
+the fencing channel and explicitly no access on every other LAN channel the controller reports.
+Channels that are not LAN are not touched; constraining them in-band differs by firmware, so the
+hardware walkthrough checks the account on every channel instead.
+
+The host then offers the profile and the password to the pool master: the master records its own, a
+member posts `POST /api/v1/pool/fence-provision` over the existing pool mTLS. The master writes the
+password into its private fence-credential store and records the profile through the same
+`ExecutePoolFenceProfile` path an operator-entered profile takes, **including the live identity
+proof**, so nothing that was not proved enters the membership. Until it is recorded there is no
+fence device: the host keeps the account **and its password** in its own private fence-credential
+store and offers exactly the same profile again on later passes, so a master that is away for an
+hour does not mean an hour of password writes to the controller's flash.
+
+`StorageClusterFence` gains `cipher` and `provisioned_by_core`, neither of which a client may supply
+(400). `provisioned_by_core` is the durable marker that makes the rest safe: Core replaces an account
+under its own name only when this host's own record or the master's membership row says Core created
+it — a reinstalled host therefore still recognises its own account, and an account somebody else made
+under that name is a reported conflict with nothing changed. An operator-entered profile always wins:
+`ExecutePoolFenceProfile` refuses to replace one with a Core-provisioned profile (`this host already
+has a fence device an operator set…`).
+
+**One operator action, one meaning.** Clearing a Core-provisioned fence device — the existing
+`POST /api/v1/pools/{id}/members/{host_id}/fence-profile` with a null fence — is what withdraws it:
+the master clears the profile through the one path that clears a profile (so
+`recordPoolSelfFenceExposure` still runs and a master is not left restricted after a restart) and
+sets `PoolMember.bmc_provisioning_disabled`. The host reads that from the membership it already
+holds, removes the account from its own controller and reports `removed`; a controller that refuses
+is reported honestly and retried, and the operator's decision stands either way.
+`POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning` is the other direction only — let this
+host configure its controller again — and is relayed to the master with the same membership and
+capability check a fence profile takes.
+
+`PoolMember` gains `bmc` (`PoolHostBMC`: `state`, Core's `detail` sentence, `address`, `channel`,
+`account`, `observed_at`), `bmc_provisioning_disabled` and `system_uuid_conflict_host_id`, the member
+that already holds an identity a host's report was refused for, so the refusal names something an
+operator can act on. **A host's report is an observation and nothing else**: it travels on the
+existing advertise route, it is recorded in the calling member's own row, and it can neither delete
+the fence device the pool recorded nor change the operator's decision — the same rule slice 1
+established for `system_uuid`. A report identical to the one already recorded but for its timestamp
+is **not written at all**, because the membership is signed and replicated and a settled pool must
+not re-sign and re-push its whole authority replica every ten seconds because of a clock.
+
+### Continuous non-destructive checks, and fencing readiness
+
+A fence device recorded once and never tried again is a promise, not a protection. Every ready host
+therefore reads **every other** host's fence device periodically — the management controller's own
+report of which machine it manages, and that machine's power state, over the recorded profile and
+the replicated credential — and tells the master what it found.
+
+**Nothing on that path can power anything off.** The whole check is `vmhost.CheckPoolFenceTarget`:
+the identity read the fence already performs, then a power read whose action is the literal
+`status`. The caller cannot pass an action in, and a test asserts that a whole checking pass issues
+no state-changing Redfish request and runs no fence agent with anything but `--action=status`.
+
+**Cadence.** One pass per host every five minutes with up to a fifth of that in jitter, targets
+taken one at a time (20 s each, 2 minutes for the whole pass) so a pool never opens many sessions on
+one controller at once — management controllers have small session tables. The pass rides the
+existing reconcile tick but runs on its own worker, so a pass spending its whole budget against
+controllers that have gone away never delays the storage-cluster reconcile beside it; it
+self-throttles to its own interval and stops with the agent. IPMI needs two short sessions per
+target (the `Get System GUID` read and `chassis power status`, both with the password in
+`IPMI_PASSWORD` and never in `argv`); Redfish needs one pinned connection for both.
+
+**Where the password comes from.** The pool master reads it from its own fence-credential store. A
+member holds no other host's material on disk — only the sealed copy inside its own signed authority
+replica — so it unseals that copy **in memory** for the pass and discards it. Materialising other
+hosts' fence passwords on every member so a read-only check could run would spread the secret across
+the pool for no gain, so `CheckPoolFenceTarget` takes the secret as a parameter and never reads the
+store itself.
+
+**`POST /api/v1/pool/fence-checks`** (pool mTLS, member → master) carries one pass:
+`PoolFenceCheckRequest{checks: [PoolFenceCheck{host_id, result, detail, power}]}`, at most 64, body
+at most 64 KiB. The member certificate says who is calling; the report is credited to that host and
+**an entry naming the caller itself is dropped**, because a host does not get to say whether it can
+be shut out. `result` is closed: `ok`, `unreachable`, `credentials_rejected`, `identity_mismatch`,
+`certificate_changed`, `tool_missing`, `no_profile`, `unusable`. A wrong machine and a changed
+certificate are deliberately their own results rather than network faults.
+
+**These are observations, and the master keeps them in memory.** They are overlaid on the membership
+the master reports as `PoolMember.fence_readiness` — exactly as `replica_generation` already is — and
+**never written into the durable membership record**, so a pool's signed authority does not move
+because a check ran (a test runs twenty passes and asserts `pool-peer.json` is byte-identical
+afterwards). A master that restarts has forgotten them and says so: every method reads `unknown`,
+*not checked yet*, until the next pass re-establishes it within one interval. There is no new durable
+store, and a fresh Controller recovers readiness from the master's reported inventory like everything
+else.
+
+**Freshness is the master's own clock.** It stamps `observed_at` when a result arrives, so nothing
+depends on two hosts agreeing about the time, and marks a result `stale` once it has not been
+confirmed for three intervals. **A stale check is shown as stale and is never readiness.**
+
+`PoolFenceReadiness{ready, methods}` is the master's per-host answer, one
+`PoolFenceMethod{kind, state, reason, checks}` per fencing method. `state` is `ready`, `not_ready`,
+`unknown`, `no_peer` or `not_applicable`. A host is ready by BMC when its profile is recorded, its identity is
+recorded and **at least one other ready host** has a fresh `ok` check against it; otherwise the
+reason names the host that found the problem (*"this management controller did not answer (from
+host-b)"*). `no_peer` is its own state because it is not a wait: a pool of one ready host has nobody
+to be checked from, ever, and nothing to promote over either. Slice 2's provisioning states fold in
+as reasons, including an operator's deliberate withdrawal, which is reported without an upgrade nag.
+The watchdog method is the second entry in that list; see **Watchdog capability, and the Host
+fencing setting** below.
+
+**Readiness is an observation, and it gates nothing.** No decision path reads it. A promotion is
+decided by `PoolFenceUsable` and by the live fence proof Core produces and verifies itself, exactly
+as before this slice: a host whose checks are all stale is still promotable over, and a host
+reported ready can still fail its fence when the moment comes. Readiness exists so an operator finds
+out before that moment instead of during it. A compromised member can report a false result and move
+another host's readiness either way, which is survivable precisely because nothing decides from it —
+and it is why the next method must not change that.
+
+Every result is bound to the profile it was taken against (`PoolFenceCheck.profile`, a digest of the
+recorded kind, address, target, account, pinned certificate and cipher plus the hardware identity).
+The stamp covers the credential too (`StorageClusterFence.credential_ref` and
+`PoolMember.fence_credential_version`), because rotating only the password leaves every other field
+identical and a check taken with the previous password would otherwise go on reading as ready. The
+master drops results whose stamp is not the one its membership records now, so **replacing** a fence
+device, or rotating its credential, immediately reads as *not checked yet* instead of inheriting the
+old device's success.
+
+**Version compatibility of the stamp.** `PoolFenceCheck.profile` is optional on the wire. A member
+running a Nex Core from before the stamp existed sends a pass with none, and the master accepts the
+pass and drops the unstamped results where stamps are compared — they read as *not checked yet*.
+Refusing the whole report with 400 would lose every other host's result in it for the sake of one
+field the master would drop anyway. An older *master* serves no such route at all, answers 404, and
+reports no readiness, which the Controller shows as **not reported**.
+
+`PoolMembership.fence_summary` carries `PoolFenceSummary{ready, total, unready, host_fencing,
+prerequisites}` once for the whole pool, not per row — the count is Core's, over this pool's *ready*
+members, so an ejected tombstone or a host that has not finished joining is neither counted nor
+named. A client displays that number; it does not add up the rows it is about to render.
+
+Also settled here, because a staleness gate depends on it: **`PoolHostBMC.observed_at` is when that
+finding last *changed*, not when it was last confirmed.** An unchanged finding is deliberately not
+re-reported (see above), so the field says nothing about whether the host is still reporting. Host
+liveness is that host's own connection; fence-device freshness is `PoolFenceCheck.observed_at`.
+
+The Controller relays and stores nothing: `poolMemberFence` gains `readiness` and
+`provisioning_disabled` — the master's own recorded withdrawal decision, which the host row's actions
+are now driven from rather than the host's echo of it, so a host that is down after its device was
+cleared still shows the truth and still offers both ways out. A master too old to report readiness
+leaves the field absent, which the UI shows as **not reported** and never as ready.
+
+`PoolPromotionHost` gains `fence_kind`, the method a promotion would shut that host out with, and
+`fence_check_warning`, **advisory only**: what the candidate's own last check of that device found
+when it was failing or stale. The proof path is unchanged and still decides.
+
+**What is not proven.** No physical management controller has been contacted and **no host has been
+powered off**. Every Redfish behaviour above is exercised only against an `httptest` server, and
+every `ipmitool` interaction — in-band provisioning and the LAN identity read alike — only against a
+fake command runner, whose user-table fixture is `ipmitool` 1.8.19's own header string and row format
+rather than a real controller's output. The in-band LAN side in particular is unexercised: a QEMU BMC
+simulator has no network side at all, so the provisioned account has never authenticated over RMCP+.
 
 **Where the fence credential lives, and who can open it.** The host that fences is the **candidate**,
 and it cannot be handed the material after the master it must fence is gone. So the master seals a
@@ -1839,6 +2077,323 @@ not prove contradictory-owner recovery, all start paths, duplicate-writer safety
 or permanently-dead-member recovery. The G2 maintenance walkthrough proves enter/exit and normal
 start/stop, but its reboot/autostart case remains open; it is distinct from the S6-14 restriction
 boot result. See the [current native-acceptance record](qa/2026-09-19-phase4-native-acceptance.md).
+
+### Watchdog capability, and the Host fencing setting
+
+A management controller is how one host shuts out *another*. A watchdog is how a host shuts out
+**itself**: the machine's own hardware resets it when Nex Core stops feeding a timer, which is the
+only exclusion that still works when a host is hung rather than merely unreachable. This slice
+detects and reports the device, arms it through the native `sbd` daemon where the pool's
+prerequisites hold, records the armed report durably, and adds the `watchdog` proof kind that a
+promotion may use to exclude a host that reset itself.
+
+**Detection never opens the device.** On most drivers opening `/dev/watchdogN` *is* the arming — the
+timer starts and the machine resets unless something keeps writing to it — so a host that has not
+been told to arm a watchdog must not be reset by having been looked at. `vmhost.LocalWatchdog` reads
+`/sys/class/watchdog/watchdogN` only: `identity`, `timeout`, `nowayout`, `state`, and the driver name
+from the `device/driver` link. It names the device by its sysfs name, never by a path under `/dev`;
+one test builds a fake sysfs tree and another asserts no string literal in the detection source names
+a device node.
+
+**Classification is by driver, in one list.** `iTCO_wdt`, `sp5100_tco`, `ipmi_watchdog`, `hpwdt`,
+`wdat_wdt`, `i6300esb`, `ib700wdt`, `mei_wdt` and `sbsa_gwdt` are **hardware**; `softdog` is
+**software**; a driver Nex Core does not recognise is **unknown** and counts as nothing until it is
+classified. Three of those drivers — `i6300esb`, `ib700wdt` and the ACPI `wdat_wdt` — are real chips
+and also what a hypervisor shows a guest, so a host whose DMI system vendor is a hypervisor reports
+**`emulated`** instead. An emulated device really does reset that virtual machine, so Nex Core arms
+it and a nested laboratory exercises the whole path; it is its own kind because a reset a hypervisor
+performs is not evidence about hardware, and every proof, row and guide sentence resting on one says
+so. A physical host never reports it. A
+driver that registers with no parent device — the IPMI watchdog is one — is classified on the
+identity string the kernel gives it instead. **Only hardware ever counts**: a hung kernel does not
+run the kernel's own software timer, so `softdog` is reported and reported as not counting.
+Decision: project owner, 2026-09-22. A host with several devices reports the one Nex Core would use
+— the first hardware one — and how many it found.
+
+**The host reports it; the master records it.** `PoolMember.watchdog` (`PoolHostWatchdog`: `kind`,
+`device`, `driver`, `timeout_seconds`, `nowayout`, `in_use`) travels on the
+existing `POST /api/v1/pool/advertise` peer route beside `system_uuid` and `bmc`, is recorded in the
+calling member's own row, and is refused with 400 when the kind is outside the closed set or a string
+is over length. It is a **capability**, not a running observation: it is written only when the
+finding changes — so a settled pool does not re-sign and re-push its authority because a pass ran —
+and it carries **no timestamp**, because nothing decides anything from how long ago a host last said
+it. Whether a watchdog is *armed* is a different, freshness-bearing report and belongs with the
+arming: `PoolMember.watchdog_armed`, below.
+
+**The Host fencing setting is a decision, so it is durable.** `PoolMembership.host_fencing_disabled`
+lives in the master's replicated membership with every other pool decision. It is recorded as the
+negative so that an absent field is **on**: fencing is on for a pool that has never been told
+otherwise, and a record written before the setting existed keeps the default with nothing to migrate.
+Decision: project owner, 2026-09-22.
+`POST /api/v1/pools/{id}/host-fencing` (`{request_id, enabled}`, administrator session, same origin,
+CSRF) relays it to the master as one durable `pool-host-fencing` command whose `PoolCommand` action
+is `host-fencing` and which names no member, because the setting is the pool's. `ExecutePoolHostFencing`
+records it only on the master, only through `poolAuthorityWritable` — so a frozen or handed-over
+authority waits out the transfer rather than writing into a generation somebody else is about to hold
+— and treats it as a desired state: re-sending the state already recorded answers `succeeded`.
+It needs `pool-host-fencing-v1` on the master; without it the Controller offers no switch and refuses
+the request with 409 naming the upgrade. The Controller stores nothing: a fresh Controller recovers
+the setting, like the rest of the membership, from the master's reported inventory.
+
+**Turning it on arms nothing by itself.** The master reports its own prerequisite checklist with its
+membership, so an operator meets it whether or not they ever open the setting:
+`PoolFenceSummary.prerequisites`, one `PoolFencePrerequisite{name, state, detail}` per line, with
+`name` closed to `hosts`, `watchdogs`, `bmc` and `quorum` and `state` one of `met`, `unmet` and
+`unknown`. A line that is about particular hosts ends its `detail` before naming them and puts their IDs
+in `hosts`, because a host ID is an opaque durable identifier and only a client knows the display
+names. **Quorum is this pool's Corosync quorum**, read by the master from `corosync-quorumtool -p`:
+`met` when the cluster is quorate and every ready host is in the partition, `unmet` when it is not
+and naming the hosts outside it, and `unknown` — never read as met — where this host runs no Corosync
+cluster at all, which is honest rather than a fault. The **fence-device** line is computed from the
+fence-device method specifically and never from "any method is ready", so an armed watchdog can never
+satisfy the prerequisite for arming watchdogs. The checklist is computed on the master from the
+membership it owns and runs nothing.
+
+**Arming: the engine, and what it needs.** Nex Core does not feed a watchdog itself. It writes
+`/etc/default/sbd` — `SBD_WATCHDOG_DEV=/dev/<sysfs name>`, `SBD_WATCHDOG_TIMEOUT=5`,
+`SBD_PACEMAKER=yes`, no `SBD_DEVICE` (diskless watchdog-only mode) — and enables the packaged
+`sbd.service`. **One hardware watchdog device, one owner:** sbd opens it, nothing else in Nex does,
+and a device something else already holds open is reported and left alone rather than taken.
+
+Three properties of that engine, all measured in a nested laboratory and none of them optional:
+
+- **Diskless sbd needs Pacemaker.** sbd's only sources of truth are a shared block device and
+  Pacemaker; with neither it starts, holds the watchdog open and **never expires it** — a host that
+  reads as armed and could never be fenced. So Nex Core arms only where `pacemaker.service` is
+  running and otherwise reports *this host is not running this pool's Pacemaker cluster*.
+- **The cluster's `no-quorum-policy` must be `suicide`.** Measured both ways: with `freeze` a
+  partitioned host was still running after two minutes, because freeze means "stay put" and sbd
+  goes on feeding the watchdog; with `suicide` the same host left the quorate partition after 8.6 s
+  and had reset and rebooted by 15.7 s, while the survivors stayed quorate and did not reset. So
+  Nex Core reads the policy and **refuses to arm** a cluster that says anything else, rather than
+  reporting a protection that does not exist. **The rest of what slice 4b settled here about
+  `stonith-watchdog-timeout` — a bound of 30 s, and per-host BMC STONITH resources on the same
+  cluster — is superseded by *The pool's own cluster* below: on a pool-owned cluster that property
+  is not written at all and there are no STONITH resources.** The victim's reset does not depend on
+  either: it is Pacemaker's own `no-quorum-policy`, and the lab's journal is that call —
+  *"emerg: Signaling sbd to panic the system: Quorum lost"*. `PoolWatchdogBound`, the proof's own
+  floor, is 60 s and never reads the CIB.
+- **Arming happens only as a cluster starts.** Debian's `sbd.service` is `RefuseManualStart` and
+  exists only as a dependency of `corosync.service`. Nex Core therefore enables it and then needs a
+  cluster start. On a **pool-owned** cluster it performs that start itself, one host at a time (see
+  *The pool's own cluster* below); on any other cluster — today, a clustered-storage cluster — it
+  stops there and reports `ErrWatchdogArmingPending`, *put the host in maintenance mode and restart
+  it*. **It never restarts a cluster that is running resources**, which is checked against the CIB
+  and not assumed.
+- **sbd waits for the cluster to form.** `SBD_DELAY_START=yes` makes sbd wait out the cluster's own
+  message timeout before it begins feeding, so a cluster that is still forming is not reset while it
+  forms. It is the second line of defence, not the first: the first is that Nex Core never enables a
+  pool's cluster at boot.
+
+Disarming is `systemctl disable` and **nothing else**: measured, disabling the unit under a live
+cluster is inert (corosync, pacemaker and sbd all stayed active and the device stayed held), while a
+`SIGTERM` left the unit `failed` on its `RequiredBy=corosync.service` edge — with no clustered
+filesystem mounted, which is the case that matters and the one not measured. So a host that is still
+feeding a watchdog reports `disarm pending` and releases the device at its next cluster stop,
+mirroring the arming rule in the other direction; with `nowayout` only a reboot puts the timer down,
+and Nex Core says so. The pool's durable record says *not armed* either way, which is what governs
+whether a survivor may prove an exclusion. Disabling also runs on every host the pool has **not**
+asked to arm, because Debian's `sbd` package leaves the unit **enabled on install** (measured) and it
+is `RequiredBy=corosync.service`: an unmanaged sbd would otherwise be pulled into the next cluster
+start with the distribution's configuration instead of Nex Core's. `nex-core-local`'s postinst
+disables it unconditionally for the same reason, and never stops it.
+Arming follows the Host fencing setting and the checklist and needs no command of its own: the
+setting is the only decision and it already replicates. A host is never armed because of, and never
+reset by, an agent restart, an upgrade, a join, an eject, a master change or a Controller outage —
+sbd feeds the device, not the agent.
+
+**The armed report.** `PoolMember.watchdog_armed` (`PoolWatchdogArmed`: `armed`, `kind`, `device`,
+`timeout_seconds`, `fencing_generation`, `detail`, `observed_at`) travels on the same
+`POST /api/v1/pool/advertise` route as a fifth key, is recorded in the calling member's own row, is
+refused with 400 for an armed report whose kind could not reset a machine independently of its
+kernel, and is written only when it changes. Unlike the capability beside it, it is **durable and
+replicated**, because the host that has to read it is a promotion candidate whose master has gone and
+which reads the signed replica it already holds. Its staleness rule is `fencing_generation` — the
+pool membership generation the host armed at — and not a clock: a wall clock could not survive a lost
+master, and the generation is exactly what changes when the set of hosts that makes a majority
+changes. `observed_at` is when the finding last *changed*, as `PoolHostBMC.observed_at` is, and
+nothing decides anything from it. An unarmed report carries no kind, device, timeout or generation,
+so a stale record can never read as evidence.
+
+**The watchdog method in the readiness shape.** Every host's `PoolFenceReadiness.methods` carries a
+second entry, `kind: "watchdog"`, beside the fence device. It is `ready` only when the host has armed
+an independent device, said so itself at this pool's current membership generation, and is inside a
+quorate Corosync partition this master can read. Its other states:
+
+- `not_applicable` — fewer than three ready hosts. Two hosts have no majority, so neither side of a
+  partition may conclude it is the one that should keep running; those pools are fenced through their
+  management controllers, and this is not something an operator can fix. It is not a wait and never
+  reads as one. A pool of **one** host is told only that a watchdog needs three or more hosts, and
+  not that it is fenced through its management controllers, because it needs no fence device at all.
+  Decision: project owner, 2026-09-22.
+- `not_ready` with Core's own sentence: the arming reason the host reported (no cluster, arming
+  pending, the device already held by something else, sbd missing), *…only the kernel's software
+  watchdog, which a hung kernel cannot run, so it does not count*, *…does not recognise this host's
+  watchdog driver `<driver>`*, *this host reports no watchdog device*, *Host fencing is turned off
+  for this pool*, *this host armed its watchdog under an earlier record of this pool*, *this pool's
+  Corosync cluster is not quorate*, or *this host is not in this pool's quorate Corosync partition*.
+- `unknown` — the host does not report whether it has a watchdog or whether it armed one, or this
+  master cannot read the pool's Corosync quorum. A Core too old to report is *not reported*, never
+  *none*.
+
+**The `watchdog` proof kind.** `StorageClusterFenceStatus` gains `method` (absent for a fence device
+Nex Core powered off and independently observed off, which is every proof there was before this;
+`"watchdog"` for a host that reset itself) and `watchdog` (`PoolWatchdogExclusion`: `kind`,
+`timeout_seconds`, `armed_generation`, `held_seconds`, `bound_seconds`, `partition`). A clustered
+storage fence only ever produces the absent one.
+
+Nobody performs this fence. The proving host establishes that the target's own timer must already
+have reset it, and `PoolPromotionFenceVerified` re-checks all three conditions of the plan's rule
+change every time the proof is used:
+
+1. the target's own armed report is in the durable record, `armed`, of a kind that resets the
+   machine independently of its kernel, with a non-zero timeout, **at the generation being
+   promoted**;
+2. the recorded partition is by the pool's Corosync votequorum, contains more than one host and does
+   **not** contain the target — Nex's own heartbeats are never the input, because sbd resets a host
+   because votequorum said so; and
+3. `held_seconds >= bound_seconds >= 2 × timeout_seconds`, never less than a minute
+   (`protocol.PoolWatchdogBound`). The hold is continuous on a **monotonic** clock, kept by the
+   proving host's own reconcile pass, and **any flap restarts it from zero**: the target reappearing
+   in the partition, this pool losing quorum, a gap in observation longer than three passes, or the
+   proving agent restarting — an agent that was not running cannot say what happened while it was
+   not looking.
+
+Before the bound, Core refuses and says how long remains (*…has been out of this pool's quorate
+partition for 31s of the 1m0s its watchdog needs; wait 29s and try again*), and the promotion
+verdict's `old-master-exclusion` check carries the same wait per host. Proofs stay bound to pool,
+host, operation and generation exactly as a fence-device proof is, and there is still no force and no
+"declare host lost". A two-host pool can never produce one.
+
+**Method choice in a promotion.** `poolPromotionFenceReadiness` answers for both methods in the
+plan's order: the fence device where this candidate could use it — a usable profile and a credential
+it can open — otherwise the target's own watchdog. `PoolPromotionHost.fence_kind` names the method
+per host, so the UI shows what is about to happen rather than only that something will.
+
+**Version compatibility.** A Core too old to report `watchdog_armed` leaves it absent, which is never
+a watchdog proof and never readiness; a Core too old to accept the field ignores it, and the member
+keeps reporting. An older master reports no `hosts` on a prerequisite, and the client shows the
+sentence as written. `method` is absent on every proof an older Core produced, which is exactly the
+fence-device meaning, so no proof changes meaning across an upgrade.
+
+### The pool's own cluster, and the arming rollout
+
+API impact: **changed contract**, implemented. `PoolFenceSummary.cluster` (`PoolFenceCluster`),
+`PoolWatchdogArmed.armed_at`, and the `pool-watchdog-cluster-v1` capability. Nothing else moved: the
+nodelist is **derived** from the membership the master already owns, so there is no cluster record,
+no registration and nothing for a Controller to keep or recover. A fresh Controller learns the whole
+of it by asking the master for its membership, exactly as it learns everything else.
+
+**When Nex Core forms one.** A pool of three or more ready hosts, at most
+`PoolWatchdogClusterHosts` (5) of them, with Host fencing on and **no clustered-storage
+repository**. Every ready host that is not in maintenance is in it; the ring address is the host
+part of the `peer_origin` the pool already records, the Corosync node name is the durable host ID
+(which is what `corosync-quorumtool` reads back and what `pcmk_host_*` already matches), and the
+node ID is a stable digest of that host ID, never reused for another host. A host the pool counts as
+ready but has no address for stops the whole cluster being formed, with the reason: a host silently
+left out of the nodelist is one the rest of the pool makes quorum decisions without. The master
+writes the CIB policy — `no-quorum-policy=suicide` and `stonith-enabled=true` — and every host
+reads `no-quorum-policy` back before it arms. `stonith-watchdog-timeout` is deliberately **not
+written, and is removed wherever it is found**. Measured in the nested laboratory: Pacemaker
+answers that property plus one node without sbd by logging *"emerg: Shutting down:
+stonith-watchdog-timeout configured (30s) but SBD not active"* and taking the cluster down — and
+the shutdown reaches nodes that are still feeding, whose sbd then expires rather than being
+released. That is a healthy host reset, and **every** ordinary event on a pool's cluster produces
+an unarmed node: forming it, the arming rollout, a teardown, and a host rebooting back into an
+armed pool. What the property buys is a wait before Pacemaker recovers resources, and this cluster
+has **none**; Nex's own proof bound (`PoolWatchdogBound`, 60 s, four times the measured worst case)
+is what gates a promotion and is independent of the CIB. A host will not *restart* its cluster while the property is
+still there — the teardown turn reads the CIB and waits — but nothing can strip it from a CIB
+before Pacemaker is running, so a cluster that inherits one from an earlier Core or an
+administrator is repaired by the master once it is up, not refused at the start. The property
+belongs with the slice that puts DLM and GFS2 resources on a pool's cluster, where the wait means
+something.
+
+**Clustered storage and watchdog fencing exclude each other, in Core, both ways.** A pool with a
+clustered repository is never given a watchdog cluster and reports *this pool runs clustered storage;
+watchdog fencing for it is not available yet*; and `POST /api/v1/pools/{id}/storage-cluster`'s apply
+is refused on a pool whose hosts are armed or whose watchdog cluster Nex Core is forming, naming the
+way out (*Turn Host fencing off for this pool first*). Under both, one host has one
+`corosync.conf` and `writeCorosyncConfig` refuses to take a file over from the other consumer, so
+the interlock does not depend on an intent check being right. The reason is measured:
+clustered storage writes `no-quorum-policy=freeze`, and a `freeze` host was still running two
+minutes after it was partitioned.
+
+**Nothing comes up armed.** Corosync and Pacemaker are **started by the reconcile and never enabled
+at boot**, and `ApplyPoolCluster` disables `sbd.service` immediately before it starts them,
+unconditionally. That is structural on purpose: sbd is still enabled from the last time this host
+armed, on a `corosync.service.requires` edge that would pull it in, and the arming pass that would
+otherwise have disabled it can fail to reach the master — which is exactly the state a host boots
+into after a site power cut. This is the one hazard
+with no failure behind it: a host whose cluster starts alone — a site power cut, the last host of a
+pool rebooting — is inquorate from its first moment, and under `suicide` it would reset itself in a
+loop while every host in the pool was healthy. `wait_for_all: 1` is set for the same reason in the
+other direction: a partition that has never seen the whole pool must not decide it is the majority.
+
+**Arming is a rollout, run by Core and never by a Controller.** A host arms only when it has watched
+one unchanged Corosync membership, quorate and containing every host of the cluster, for a full
+`PoolWatchdogBound` (60 s) — and only when it is **its turn**. Whose turn it is is derived from the
+membership, not granted: the first ready host, in host-ID order, that has not reported itself armed.
+There is therefore nothing to record, nothing to resume and no way for two hosts to hold it at once,
+and the rollout survives a Controller that is not there at all. The host whose turn it is enables
+sbd and restarts its own `corosync`/`pacemaker`; the others stay quorate throughout, and a host that
+cannot arm holds the turn so the rollout stops there, visibly, with that host's own reason.
+`PoolFenceSummary.cluster` reports `off`, `not_available`, `forming`, `arming` (with
+`arming_host_id`), `armed` or `degraded`, with Core's own sentence.
+
+**A teardown is the rollout in reverse, and that is a safety property, not tidiness.** Disarming
+has latency: `DisarmLocalWatchdog` disables the unit and the device goes on being fed until that
+host's cluster next stops. Expected votes do not shrink because somebody else stopped, so hosts
+leaving in no order leave the last one standing inquorate and still feeding, and it resets — during
+planned maintenance, or as the immediate consequence of turning the safety switch off. So
+`PoolWatchdogArmed.feeding` reports the device separately from `armed`: **nobody leaves the
+cluster while any host of it is still feeding**, and one host at a time puts its device down by
+restarting its own cluster services while the rest stay quorate, in the same derived host-ID
+order the arming rollout uses. A drained host stays in every survivor's nodelist until its own
+record says it has stopped feeding, so the survivors never raise their expected votes above a host
+that can still reset itself.
+
+**A membership change is a reload.** Adding or removing a host rewrites the nodelist and runs
+`corosync-cfgtool -R`, so Nex's ready count and votequorum's expected votes move together without
+restarting a peer that is feeding a watchdog. A host entering **maintenance** stops feeding first and
+leaves afterwards, as above; a three-host pool that loses one is two, which has no majority side,
+so the whole pool disarms through the same ordered path and reports it rather than leaving two
+hosts able to reset each other.
+
+**The ring runs on the management network**, because that is where the pool's own traffic runs. A
+staged management-network edit on an armed host is therefore a partition of that host, so
+`POST /api/v1/hosts/{id}/network` **refuses to stage or apply while this host is feeding a
+watchdog**, naming maintenance mode and the Host fencing setting as the ways out. The Host fencing
+setting shows the same consequence beside the switch.
+
+**`armed_at`, and the withdrawal window.** A survivor's armed record is only evidence about the
+target as it is *now*. `PoolWatchdogArmed.armed_at` is the host's own clock at the moment it started
+feeding a device, carried over unchanged while it goes on feeding the same one, so a host that
+stopped and started its watchdog produces a record that **differs** from the one before — an
+identical record is never written or replicated. A proving host refuses a watchdog proof against a
+target that **joined its Corosync partition after the last armed record it holds**, because a host
+that comes back comes back unarmed until the pool arms it again. Ageing the record out instead would
+be wrong in the other direction: a legitimately partitioned host cannot refresh its report either,
+so a freshness rule would refuse exactly the proofs the feature exists for. The cost of the rule
+chosen is an honest refusal: a target that flaps while the pool has no master to re-confirm its
+arming cannot be proved excluded until the pool confirms it again.
+
+**Version compatibility.** A master without `pool-watchdog-cluster-v1` forms no cluster and reports
+no `cluster`, which a client shows as no cluster line rather than as a cluster that is off. A member
+too old to report `armed_at` leaves it zero, which is never treated as a re-arm; the proving host's
+rejoin check then refuses after a rejoin until the record changes for another reason, which is the
+safe direction.
+
+**What is not proven.** **No physical watchdog device of any model has been read, armed or expired,
+and no physical host has been reset.** Every timing above was measured in nested QEMU guests with an
+emulated `i6300esb`; nested labs prove logic and timing, never hardware, and the acceptance gate
+naming exact models is outstanding. **Pools with clustered storage are not armed at all**: the
+`freeze` → `suicide` change under a mounted GFS2 filesystem, and whether DLM recovery on the quorate
+side really waits out `stonith-watchdog-timeout`, are unmeasured and are their own slice and their
+own decision. `stonith-watchdog-timeout=30s` and the 60 s proof bound rest on one nested-lab run of
+each policy on a two-second poll. The arming rollout, the interlocks, the maintenance path and the
+management-network refusal are covered by runnable checks and, where physical behaviour is involved,
+by the nested laboratory recorded in the change record — not by a physical deployment.
 
 ### Staged management network edits (GET|POST /api/v1/hosts/{id}/network)
 
@@ -2528,9 +3083,10 @@ directory.
 
 For non-clustered repositories, changing only a repository name is metadata-only: it preserves the existing Core credential and
 does not reconnect the backend. Changing a source or detaching a repository uses the full
-dependency guard. Credential-only rotation may keep an attached receipt, but only after every VM
+dependency guard. Detach also removes the Core-local secret for that repository when one is
+attached (SMB password or iSCSI CHAP). Credential-only rotation replaces the attached receipt after every VM
 using the repository is shut off and no pending or `needs_attention` disk, media, or ISO work
-refers to it. If Core cannot prove rollback restored the previous backend state, it reports
+refers to it; the previous Core-local secret is retired when the new receipt is applied. If Core cannot prove rollback restored the previous backend state, it reports
 `needs_attention`; it does not present that uncertainty as a safe failed update.
 
 An identical Controller request replay only returns its original accepted operation; it does not
@@ -2556,13 +3112,15 @@ After an interrupted credential request, `GET /api/v1/storage/credentials/{reque
 the same pool/host and repository or registration-request scope returns Core-reported redacted
 receipt metadata when delivery completed. It never returns the credential bytes.
 
-`GET /api/v1/storage/credentials?pool_id=<pool>&host_id=<host>` lists only Core-reported
-redacted receipts currently eligible for explicit cleanup. Eligibility is an observation, not a
-reservation: `POST /api/v1/storage/credentials/{receipt}/retire` queues a Core-only command
-with `{request_id,pool_id,host_id}`, and Core rechecks that the receipt has no active or pending
+`GET /api/v1/storage/credentials?pool_id=<pool>&host_id=<host>` lists Core-reported redacted
+receipts currently eligible for cleanup. Eligibility is an observation, not a reservation:
+`POST /api/v1/storage/credentials/{receipt}/retire` queues a Core-only command with
+`{request_id,pool_id,host_id}`, and Core rechecks that the receipt has no active or pending
 repository references before deleting its local secret. A refused cleanup changes nothing. A
 retired receipt cannot restore or recreate a secret through request replay; no Controller table
-or secret state is used for cleanup.
+or secret state is used for cleanup. Ordinary detach and credential rotation already retire the
+attached secret on Core; this pair remains for support of leftovers that never bound to a
+repository. The Controller UI does not expose unused-credential cleanup.
 
 The package also installs a QEMU prepare hook that invokes the internal
 `nex-core-agent storage-guard --state-dir <agent-state-dir>` (or
@@ -3628,6 +4186,23 @@ balloon statistics period, which VM definitions now set (`<stats period='5'/>` o
 balloon); an existing VM gets it the next time its definition is saved, and the series stays
 unknown until the guest's balloon driver reports.
 
+**Host temperatures.** API impact: **existing contract** — the same host `StatsHistory` gains
+series in group `temperature` with unit `celsius`; no field, endpoint or capability changes, and a
+client that does not know the group ignores it. The host sampler also walks `/sys/class/hwmon` on
+every tick and records each usable `tempN_input` as a gauge. A key is
+`temp.<chip>-<device>.<n>`, built from the hwmon chip name and the sensor device's sysfs basename:
+hwmon index numbers are assigned in probe order and change across boots, so they are never part of
+a key. Labels come from the driver — one series per CPU package rather than per core, the block
+device name for `drivetemp`, the NVMe device and model, the PCI address for GPU and NIC chips, and
+otherwise the chip's own `tempN_label`. An absent, unreadable or implausible reading (below −40 °C
+or above 150 °C, which some chips return for an unconnected input) is recorded as unknown, never
+zero. At most 24 sensors are kept per host, registered ahead of the per-core CPU series so a large
+host's cores cannot starve them. Over that budget the lowest-priority chips are dropped first —
+CPU package and NVMe sensors are kept ahead of per-drive temperatures — and the survivors stay
+sorted by key, so the same sensors survive from one boot to the next. A host with no sensors reports none, which is normal. SATA and SAS
+disk temperatures need the kernel `drivetemp` module, which the Nex Core package loads through
+`/etc/modules-load.d/nex-sensors.conf`; the agent never loads modules itself.
+
 **Query path.** A host cannot be dialled by the Controller, so a query uses an outbound channel:
 when no channel to the host is open, the Controller returns `stats_channels: [{token}]` in the next
 report response (only to a host that offered `usage-history-v1`), the agent dials
@@ -3685,6 +4260,56 @@ handler, channel and relay; mocked-browser review of the Stats tab and Realtime 
 heartbeat) that passed every exercised check, including Controller replacement, realtime for a
 running and a stopped VM, and lease expiry. Not exercised on a host: the 10 s default heartbeat
 latency, 30d/1y tiers and retention, the 8-object realtime cap, and rates under load.
+
+## Host hardware
+
+API impact: **new contract** — Controller `GET /api/v1/hosts/{id}/hardware`, agent `GET /hardware`
+on the existing stats channel, schema `HostHardware` (with `HardwareSystem`, `HardwareCPU`,
+`HardwareMemory`/`MemoryModule`, `HardwareDisks`/`HardwareDisk`, `HardwarePCI`/`PCIDevice`,
+`HardwareSensors`/`TemperatureSensor`) and the `host-hardware-v1` capability. No report member
+changes: the data is static and several kilobytes, and the report is decoded strictly, so putting
+it there would force a Controller-before-Core upgrade for no benefit.
+
+**State owner: Core.** A host reads itself on request — `/sys/class/dmi/id` for system, board,
+chassis and firmware; `/proc/cpuinfo` and the CPU topology sysfs for the processor; `/proc/meminfo`
+plus `dmidecode -t memory` for the installed total and the module in each slot; `lsblk` for whole
+disks; `lspci` for PCI devices; and the same `/sys/class/hwmon` walk as the temperature series for
+the sensor list. Nothing is cached, sampled or persisted on either side, so a replacement
+Controller sees the same report with nothing to re-enter. A section whose source is missing or
+fails is returned `unavailable` with a short reason naming the tool; the other sections still
+return. The tool's own error text is discarded: it can name paths, and which tool failed is what an
+operator acts on. The whole report is bounded well inside the channel deadline, so a tool that
+hangs costs its own section a reason rather than the request a timeout.
+
+Each sensor carries the key of its temperature series with the chip's own `tempN_max` and
+`tempN_crit`, so a gauge takes its scale and warning band from the hardware. A chip that publishes
+no threshold reports none, and the gauge is then a plain value with no band.
+
+**Query path.** The same outbound stats channel as usage history: the Controller writes
+`GET /hardware`, so a host that offers either `usage-history-v1` or `host-hardware-v1` is sent a
+channel token. Statuses: `404` unknown host; `409` revoked or stale
+(`the host is not freshly connected; its hardware cannot be read now`) or an older Core
+(`the host agent does not report its hardware; upgrade Nex Core`, which hides the panel rather than
+alerting); `502` the host could not read its hardware, or the reply was malformed or over the
+bounds (at most 64 memory modules, 128 disks, 256 PCI devices, 24 sensors — the same bound the host
+enforces on itself); `503` the host did not dial within 20 s; `504` the host did not answer within
+10 s. Read-only, so every retry is safe.
+
+Serial numbers (system, board and disk) are returned to authenticated administrators only. They are
+never logged and no diagnostic-bundle path collects the report.
+
+`dmidecode` and `pciutils` are executed as separate GPL-2.0-or-later programs, not linked into Nex;
+they are recorded in [LICENSING](LICENSING.md) for the component manifest and retained source.
+
+Compatibility: shared upgrade rule — Controller before Core. An older Core never offers
+`host-hardware-v1` and the Hardware panel is hidden without issuing a request. No pool-scoped
+setting is introduced.
+
+Verification: Go unit tests against fixture sysfs trees and stub tools (every section, a missing
+and a failing tool, no sysfs or proc at all) and Controller relay tests for the refusals above;
+browser review against mocked replies. **The real-hardware walkthrough belongs to the project
+owner** (decision: project owner, 2026-09-22) and is outstanding: no sensor label, threshold,
+`drivetemp`, `dmidecode` or `lspci` output here has been observed on a real machine.
 
 ## Software updates
 

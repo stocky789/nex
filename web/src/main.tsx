@@ -1447,7 +1447,7 @@ function App() {
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
               {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div></>}
               {vm && tab === "Stats" && <Stats key={vm.id} kind="vm" id={vm.id} api={api} />}
-              {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} />}
+              {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} />}
               {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
               {host && !vm && tab === "Networking" && <HostNetwork key={host.id} hostID={host.id} api={api} unavailable={Boolean(error)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || tab === "Stats" || Boolean(pool && !host && tab !== "General")}>

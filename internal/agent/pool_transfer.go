@@ -1181,7 +1181,7 @@ func resumeAfterFencedPoolTarget(ctx context.Context, s *Store, record *poolTran
 	}
 	generation := record.AuthorityGeneration
 	digest := protocol.PoolPromotionFenceDigest(state.Membership.PoolID, target.HostID, record.OperationID, generation)
-	proof, fenceErr := poolFenceVerify(ctx, s.dir, target.Fence, target.HostID, record.OperationID, digest, generation)
+	proof, fenceErr := poolFenceVerify(ctx, s.dir, target.Fence, target.SystemUUID, target.HostID, record.OperationID, digest, generation)
 	record.Fences = append(poolPromotionProofsWithout(record.Fences, target.HostID), proof)
 	if err = savePoolTransfer(s, record); err != nil {
 		return errors.New("the fence proof could not be recorded durably")
@@ -1189,7 +1189,7 @@ func resumeAfterFencedPoolTarget(ctx context.Context, s *Store, record *poolTran
 	if fenceErr != nil {
 		return errors.New(poolFenceRefusal(proof, fenceErr))
 	}
-	if err = protocol.PoolPromotionFenceVerified(&proof, target.Fence, state.Membership.PoolID, target.HostID, record.OperationID, generation, time.Now().UTC()); err != nil {
+	if err = protocol.PoolPromotionFenceVerified(&proof, target, state.Membership.PoolID, target.HostID, record.OperationID, generation, time.Now().UTC()); err != nil {
 		return errors.New("the fence of pool host " + target.HostID + " produced no usable proof: " + err.Error())
 	}
 	poolPeerMu.Lock()

@@ -1,0 +1,41 @@
+{
+  "summary": "Pool Hosts tab: row actions (maintenance, fence device, promotion, master change, eject) move into one Actions menu in a trailing column; the master's row no longer offers actions that can never apply to it; every column but Convergence shrinks to its content; and the empty Add host to pool dialog says the new host must be enrolled first instead of reading as if the pool had no master. API impact: none — the page calls the same pool member, join-candidate and action endpoints with the same payloads.",
+  "paths": [
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-authority.test.mjs",
+    "web/src/pool-promotion.tsx",
+    "web/src/style.css",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/changes/2026-09-22-pool-hosts-tab-layout.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Enter maintenance moved from the Maintenance column into the row's Actions menu, and the join steps now explain the empty candidate list and the enroll-first step.",
+    "pages": [
+      "docs/guide/join-a-pool.md",
+      "docs/guide/host-maintenance-mode.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation only: no request, response, command or report changes; GET /api/v1/pools/{id}/members and /join-candidates are read exactly as before."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "UI polish inside the existing Phase 4 pool Hosts view."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state is added or moved; the view renders what the pool master and hosts report."
+  },
+  "verification": {
+    "method": "npm test and tsc --noEmit in web/; simulated headless Firefox captures of the rendered MembersTable and empty AddHostDialog markup with style.css at 1600 px and 420 px (labelled simulation, not a live Controller walkthrough).",
+    "evidence": [
+      "web/src/pool-members.test.mjs",
+      "web/src/pool-authority.test.mjs"
+    ]
+  }
+}

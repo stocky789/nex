@@ -139,10 +139,9 @@ type poolMemberAPIRequest struct {
 	RequestID  string `json:"request_id"`
 	HostID     string `json:"host_id"`
 	PeerOrigin string `json:"peer_origin"`
-	// MasterURL is the address the joining host will dial the master on. A master of its own
-	// single-host pool has never advertised a peer origin to anyone, so there is nothing for
-	// the Controller to project; the operator supplies it exactly as the host-local procedure
-	// does. When the master has advertised one, that reported value wins.
+	// MasterURL optionally overrides the address the joining host will dial the master on.
+	// Left empty, the master works it out itself; once the master has recorded one, that
+	// reported value wins.
 	MasterURL string `json:"master_url,omitempty"`
 }
 
@@ -202,7 +201,7 @@ func (c *Controller) addPoolMember(w http.ResponseWriter, r *http.Request, user,
 		fail(w, http.StatusConflict, refusal)
 		return
 	}
-	c.commandPoolJoin(w, user, pool, masterURL, payload, *result.Invitation)
+	c.commandPoolJoin(w, user, pool, payload, *result.Invitation)
 }
 
 // poolJoinTargets validates both ends of the join and returns the master and the URL the
@@ -253,9 +252,8 @@ func (c *Controller) poolJoinTargets(tx *sql.Tx, pool, host, requestedMaster str
 			}
 		}
 	}
-	if requestedMaster == "" {
-		return "", "", http.StatusConflict, fmt.Errorf("the pool master has not advertised a peer origin; supply master_url")
-	}
+	// With neither a recorded nor a supplied origin, the empty master_url asks the master to
+	// work out its own peer address.
 	// A reported peer_origin is canonicalised the same way the operator's master_url is.
 	// Anything else a host reports is passed through unchanged for Core to refuse.
 	if normalized := normalizedHTTPSOrigin(requestedMaster); normalized != "" {
@@ -324,7 +322,7 @@ func poolRequestDeadline(action string) string {
 
 // commandPoolJoin journals the one durable command. The stored replay payload is the client
 // request; the invitation rides only in the command that is delivered to the joining host.
-func (c *Controller) commandPoolJoin(w http.ResponseWriter, user, pool, masterURL string, payload poolJoinPayload, invitation protocol.PoolJoinInvitation) {
+func (c *Controller) commandPoolJoin(w http.ResponseWriter, user, pool string, payload poolJoinPayload, invitation protocol.PoolJoinInvitation) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "storage unavailable")
@@ -335,7 +333,7 @@ func (c *Controller) commandPoolJoin(w http.ResponseWriter, user, pool, masterUR
 		return
 	}
 	id, opID := random(), random()
-	cmd := protocol.Command{OperationID: opID, Kind: "pool-join", Pool: &protocol.PoolCommand{RequestID: payload.RequestID, Action: "join", MemberHostID: payload.HostID, MasterURL: masterURL, PoolCAPEM: invitation.PoolCAPEM, Invitation: invitation.Invitation, PeerOrigin: payload.PeerOrigin}}
+	cmd := protocol.Command{OperationID: opID, Kind: "pool-join", Pool: &protocol.PoolCommand{RequestID: payload.RequestID, Action: "join", MemberHostID: payload.HostID, MasterURL: invitation.MasterURL, PoolCAPEM: invitation.PoolCAPEM, Invitation: invitation.Invitation, PeerOrigin: payload.PeerOrigin}}
 	op, err := c.saveResource(tx, user, payload.RequestID, pool, payload.HostID, payload.HostID, id, cmd, payload)
 	if err != nil || tx.Commit() != nil {
 		fail(w, http.StatusInternalServerError, "pool join storage failed")
@@ -548,6 +546,14 @@ type poolMembersView struct {
 	// TransferSupported is the master's capability: without it no master change or eject
 	// is offered at all, because the whole transfer is run by the hosts.
 	TransferSupported bool `json:"transfer_supported"`
+	// HostFencingSupported is the master's capability: without it there is no Host fencing
+	// switch, because the setting that means anything is the master's.
+	HostFencingSupported bool `json:"host_fencing_supported"`
+	// Fence is the pool's own fencing answer as the master reported it with its
+	// membership: the count, the Host fencing setting and Core's prerequisite checklist.
+	// Mirrored verbatim and stored nowhere; nil when the master is not fresh or is too old
+	// to report one, which reads as "not reported" and never as ready.
+	Fence *protocol.PoolFenceSummary `json:"fence"`
 	// Authority is the master's own reported authority generation and digest: the only
 	// absolute number in the pool, and what a member's replica generation is compared
 	// against. Nil when the master is not fresh or does not report one.
@@ -648,9 +654,23 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 	// is gone. Nothing about it is recorded here.
 	out.Promotion = reportedPromotion(hosts, pool)
 	membership := reportedMembership(master.inventory)
+	if membership == nil && master.id == "" {
+		// The recorded master never enrolled here, so the pool is shown as its enrolled
+		// hosts last reported it. Nothing in it is authoritative.
+		if membership, err = poolRecordNaming(tx, pool, out.MasterHostID); err != nil {
+			fail(w, http.StatusInternalServerError, "membership lookup failed")
+			return
+		}
+	}
 	members := []protocol.PoolMember{}
+	out.HostFencingSupported = slices.Contains(master.capabilities, protocol.PoolHostFencingCapability)
 	if membership != nil {
 		out.Generation, members = membership.Generation, membership.Members
+		if out.Authoritative {
+			// The pool's fencing answer is the master's, computed over the membership
+			// it owns. Nothing here counts rows or decides a prerequisite.
+			out.Fence = membership.FenceSummary
+		}
 	} else if master.id != "" {
 		members = []protocol.PoolMember{{HostID: master.id, Status: "unknown"}}
 	}
@@ -687,7 +707,7 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 		}
 		// peer_origin is part of the master's durable membership record, not an observation
 		// of it: it is how this member is reached, and a quiet master does not make it
-		// untrue. The UI prefills master_url from it. Everything observational stays unknown.
+		// untrue. Everything observational stays unknown.
 		view.PeerOrigin = member.PeerOrigin
 		view.Guests = memberGuests(host)
 		if last, ok := maintenance[member.HostID]; ok {

@@ -1,0 +1,74 @@
+{
+  "summary": "Apply the minimality audit cleanups: native Debian version comparison, shared bounded transient queues, one sensor cap, unused wrapper/CSS deletion, shared UI test bundling and removal of browser-covered source assertions. Declare hardware package dependencies, verify the already-corrected sensor source archive, remove redundant workflow chmod, and document an existing membership lookup error. Recovery policy is unchanged; its architecture concern remains unresolved.",
+  "paths": [
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/controller/updates_test.go",
+    "internal/localcore/updates_test.go",
+    "internal/agent/run.go",
+    "internal/agent/managed_test.go",
+    "internal/agent/storage_protocol_test.go",
+    "internal/agent/usage_history_hwmon.go",
+    "internal/agent/usage_history_hwmon_test.go",
+    "internal/agent/transient_queue_test.go",
+    "internal/vmhost/storage_cluster.go",
+    "internal/agent/pool_vm.go",
+    "packaging/core-local/build-inside.sh",
+    "tests/test_build_source.py",
+    "tests/test_core_local_package.py",
+    ".github/workflows/website.yml",
+    ".gitea/workflows/website.yml",
+    "web/src/style.css",
+    "web/src/test-helpers.mjs",
+    "web/src/vm-edit.test.mjs",
+    "web/src/zfs.test.mjs",
+    "web/src/host-network.test.mjs",
+    "web/src/managed.test.mjs",
+    "web/src/storage.test.mjs",
+    "web/src/pool-authority.test.mjs",
+    "web/src/pool-members.test.mjs",
+    "web/src/stats.test.mjs",
+    "web/src/pool-promotion.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Existing update, hardware, storage and recovery workflows remain unchanged. This corrects Debian ordering and package delivery, simplifies internals/tests, and removes unused CSS; no operator action or configuration is added.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Controller/local update Check and Apply retain their request/result schemas and now use Debian version ordering; comparison failures use existing error/progress results. Agent report result queues retain ordering, limits and capability gates. GET /api/v1/pools/{id}/members has its existing retry-safe HTTP 500 membership lookup error documented; no handler or recovery behavior changes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Cleanup and delivery corrections do not change a phase acceptance status or milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state or authority. Queues remain ephemeral per-Store results; existing Core journals, update progress and Controller projections retain their owners and formats."
+  },
+  "verification": {
+    "method": "2026-09-22, Linux/amd64, Go 1.27.1, Node 24.21.0 and Python 3.14.7. All Go packages and 394 Python tests passed in an isolated copy of the pre-cleanup working tree with this scoped patch applied; this excludes concurrent fencing edits. The shared working-tree full checks encountered unrelated in-progress BMC test signature errors and StorageClusterFence fields absent from the API schema; no whole-working-tree green claim is made. Focused agent/vmhost tests, agent queue race checks, nexupdate race tests, 27 source/package tests and installer/check.sh passed. The old version comparator failed the corrected Debian-revision expectation; package dependency checks failed before adding the missing packages (BUG-0415/0416). The existing API error-message regression failed before the reference correction and passed afterward (BUG-0417). Web test/typecheck/build passed. Existing storage_repositories_browser.py and zfs_provisioning_browser.py ran in Chromium against built UI with simulated Core replies: results passed with no reported storage page errors, covering loading/empty/error/stale states, keyboard use, typed erase confirmation, replay after lost replies, and narrow VM-picker layout. The primary inspected smb-browser.png, empty.png, vm-picker-mobile.png, confirmation-top.png and stale-discovery.png under untracked local scratch directories (not in the repository) evidence directories; these captures are untracked, so only this written report and runnable harnesses travel with the repository. No real storage, fencing, package install or upgrade was exercised. Independent review caught incomplete test-helper migration and removal of uniquely covered assertions; both were corrected, and safeguards without browser equivalents were retained. Final independent scoped review found no actionable findings. Repository privacy, generated API reference checks, documentation structure (--all) and diff whitespace checks passed. The shared-tree documentation coverage check (--worktree) is blocked by concurrent out-of-scope internal/vmhost/bmc_inband.go lacking an assessment at the time of checking.",
+    "evidence": [
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/agent/transient_queue_test.go",
+      "tests/test_build_source.py",
+      "tests/test_core_local_package.py",
+      "tests/test_api_contract.py",
+      "tests/integration/storage_repositories_browser.py",
+      "tests/integration/zfs_provisioning_browser.py",
+      "web/src/zfs.test.mjs",
+      "web/src/storage.test.mjs"
+    ]
+  }
+}

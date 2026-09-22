@@ -175,47 +175,18 @@ class PublishTests(unittest.TestCase):
             with self.assertRaisesRegex(publish.ReleasePublishError, "source_bundle binding"):
                 publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
 
-    def test_rejects_zfs_enabled_iso_without_release_evidence(self):
+    def test_publishes_iso_with_component_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             iso = make_iso(tmp, "0.1.6")
             source = make_source(tmp, "0.1.6")
             manifest = make_manifest(tmp, "0.1.6")
             data = json.loads(manifest.read_text())
-            data["components"] = [{"package": "zfs-dkms"}]
+            data["components"] = [{"package": "bridge-utils"}]
             manifest.write_text(json.dumps(data) + "\n")
-            with self.assertRaisesRegex(publish.ReleasePublishError, "ZFS-enabled ISO publishing is blocked"):
-                publish.publish(Path(tmp) / "downloads", iso, source, manifest, keep=3)
-
-    def test_check_zfs_blocked_reports_blocked_or_clear(self):
-        import io
-        import sys
-        from contextlib import redirect_stdout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            clear = make_manifest(tmp, "0.1.6")
-            blocked = Path(tmp) / "nex-core-0.1.7-compliance-manifest.json"
-            blocked.write_text(json.dumps({
-                "version": "0.1.7",
-                "components": [{"package": "zfsutils-linux"}],
-            }) + "\n")
-
-            def gate(path):
-                out = io.StringIO()
-                with redirect_stdout(out):
-                    status = publish.main(["--check-zfs-blocked", str(path)])
-                return status, out.getvalue().strip()
-
-            self.assertEqual(gate(clear), (0, "clear"))
-            self.assertEqual(gate(blocked), (0, "blocked"))
-            bad = Path(tmp) / "bad.json"
-            bad.write_text("{not json")
-            status, _ = gate(bad)
-            self.assertEqual(status, 1)
-            self.assertEqual(
-                subprocess.check_output(
-                    [sys.executable, str(ROOT / "scripts/release-publish.py"),
-                     "--check-zfs-blocked", str(blocked)], text=True).strip(),
-                "blocked")
+            version, _, _, _ = publish.publish(
+                Path(tmp) / "downloads", iso, source, manifest, keep=3)
+            self.assertEqual(version, "0.1.6")
+            self.assertTrue((Path(tmp) / "downloads" / "0.1.6" / iso.name).is_file())
 
 
 if __name__ == "__main__":

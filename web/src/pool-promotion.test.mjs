@@ -2,21 +2,13 @@
 // S6 "Fence-verified manual promotion and safe rejoin": same harness as the other pool tests —
 // esbuild bundles the real module and react-dom/server renders it.
 // Run with: node src/pool-promotion.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/pool-promotion.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./pool-promotion.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
+const moduleURL = bundleTestModule(new URL("./pool-promotion.tsx", import.meta.url), "pool-promotion");
 const src = readFileSync(new URL("./pool-promotion.tsx", import.meta.url), "utf8");
 const membersSrc = readFileSync(new URL("./pool-members.tsx", import.meta.url), "utf8");
 const {
@@ -24,8 +16,10 @@ const {
   promotionBlock, fenceProfileBlock, fenceText, promotionRunnable, promotionStageText, promotionInProgress,
   oldMasterReachable, fenceProfileMissing, fenceUnusableReason, lastPromotionText, restrictedClearsText,
   fenceHostIDs, unfenceableBlockers, fenceBlockerReason, fenceCellText,
-  restrictedUnconfirmed, fenceBuildLimit, HostRestrictedBanner,
-} = await import(`file://${outfile}`);
+  restrictedUnconfirmed, HostRestrictedBanner,
+  bmcText, manualBMCOffered, bmcReenableOffered,
+  FencingCell, fencingText, fenceCheckLines, watchdogText, fenceMethodName,
+} = await import(moduleURL);
 
 const master = { host_id: "host-a", name: "core-a", role: "master", connection: "stale" };
 const member = {
@@ -42,11 +36,11 @@ const liveReport = { ...report, master_connection: "fresh", authoritative: true,
 
 const notFenced = "the pool master host-a has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed";
 const stillMaster = "the pool master host-a is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting";
-const noProfile = "the pool master host-a has no recorded fence profile; record one before promoting, and note that BMC fencing identity verification is not implemented";
+const noProfile = "the pool master host-a has no recorded fence profile; record one before promoting";
 const ownershipConflict = "pool VM vm-7 is recorded differently by the host that owns it; resolve that before promoting";
 const noProfileReason = "no fence profile is recorded for host-a";
 const noCredential = "this host holds no fence credential for host-a; it cannot fence it, so it cannot be promoted over it";
-const unverifiable = "BMC fencing identity verification is not implemented";
+const unverifiable = "this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own";
 
 const verdictOf = (checks, extra = {}) => ({
   pool_id: "pool-1", candidate_host_id: "host-b", old_master_host_id: "host-a",
@@ -99,10 +93,77 @@ assert.equal(fenceText({ ...member, fence: { kind: "virsh", endpoint: "lab.examp
 assert.equal(fenceText({ ...member, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true, credential_version: 3 } }, true),
   "Fence device: virsh · lab.example.test · configured · credential recorded");
 
+// ------------------------------------- the host's own management controller
+
+// Each host configures its own controller, and the row says what its Core found. Every state
+// is Core's own; this file only decides which of them still needs an operator.
+const provisioned = { ...member, fence: { configured: true, kind: "ipmilan", username: "nexfence", provisioned_by_core: true, credential_version: 1, bmc: { state: "provisioned", address: "192.0.2.15", account: "nexfence" } } };
+assert.equal(bmcText(provisioned, true), "Management controller: configured by Nex Core at 192.0.2.15 as nexfence.");
+// Master-derived, so nothing is repeated from an old report while the master is not fresh.
+assert.equal(bmcText(provisioned, false), "");
+assert.equal(bmcText(member, true), "");
+// A refusal is Core's sentence, shown as written and never re-worded here.
+const noInBand = { ...member, fence: { configured: false, bmc: { state: "no_local_interface", detail: "this host has no local IPMI interface" } } };
+assert.equal(bmcText(noInBand, true), "Management controller: this host has no local IPMI interface");
+// The identity conflict names the host that holds the identity, so there is something to do.
+assert.match(bmcText({ ...member, fence: { configured: false, system_uuid_conflict_host_id: "host-c" } }, true),
+  /this host reports the same hardware identity as host-c/);
+
+// Set BMC access… is offered everywhere except a host whose own Core configured its controller.
+assert.equal(manualBMCOffered(provisioned), false);
+assert.equal(manualBMCOffered(noInBand), true);
+assert.equal(manualBMCOffered(member), true, "a host whose Core is too old to report keeps the manual form");
+// Letting Nex configure the controller again is offered only where an operator turned it off,
+// and never while the master is not fresh. It is the pool master's own recorded decision, not
+// the host's echo of it: a host that is down after its device was cleared has echoed nothing
+// and must still offer both ways out. There is no separate remove action: clearing the fence
+// device is what removes the account, one operator action with one meaning.
+const withdrawn = { ...member, fence: { configured: false, provisioning_disabled: true } };
+assert.equal(bmcReenableOffered(withdrawn, true), true, "the master's decision is shown before the host echoes it");
+assert.equal(bmcReenableOffered(withdrawn, false), false);
+assert.equal(manualBMCOffered(withdrawn), true, "and a withdrawn host is never left with no action at all");
+assert.equal(bmcReenableOffered({ ...member, fence: { configured: false, provisioning_disabled: true, bmc: { state: "removed" } } }, true), true);
+assert.equal(bmcReenableOffered(provisioned, true), false);
+assert.equal(bmcReenableOffered(noInBand, true), false);
+{
+  const row = renderToStaticMarkup(createElement(PromotionActions, { report: liveReport, member: provisioned, authoritative: true, onFenceProfile: () => {}, onBMCProvisioning: () => {} }));
+  assert.doesNotMatch(row, /Set BMC access/, "a host Nex Core configured is not asked for a controller address");
+  assert.match(row, /Clear fence device…/, "and its device is cleared from the same one entry point");
+  assert.doesNotMatch(row, /Remove Nex fence account/, "there is no second destructive action");
+  // What the device is and what Core found on the controller is in the Fencing column now,
+  // not repeated beside the buttons.
+  assert.doesNotMatch(row, /configured by Nex Core at 192\.0\.2\.15/);
+  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: provisioned, authoritative: true })),
+    /configured by Nex Core at 192\.0\.2\.15/);
+}
+{
+  const row = renderToStaticMarkup(createElement(PromotionActions, { report: liveReport, member: noInBand, authoritative: true, onFenceProfile: () => {}, onBMCProvisioning: () => {} }));
+  assert.match(row, /Set BMC access…/);
+}
+{
+  const removed = { ...member, fence: { configured: false, provisioning_disabled: true, bmc: { state: "removed", detail: "an operator withdrew this host's fence device" } } };
+  const row = renderToStaticMarkup(createElement(PromotionActions, { report: liveReport, member: removed, authoritative: true, onBMCProvisioning: () => {} }));
+  assert.match(row, /Let Nex configure this controller again/);
+  const busy = renderToStaticMarkup(createElement(PromotionActions, { report: liveReport, member: removed, authoritative: true, onBMCProvisioning: () => {}, bmcBusy: true }));
+  assert.match(busy, /disabled=""/, "a row action shows it is in flight");
+}
+// Clearing a device Nex Core provisioned says that the account goes too, and the clear block
+// is offered only where a profile actually exists.
+{
+  const dialog = renderToStaticMarkup(createElement(FenceProfileDialog, { report: liveReport, member: provisioned, busy: false, submitError: "", onConfirm: () => {}, onClear: () => {}, onClose: () => {} }));
+  assert.match(dialog, /Clear fence device…/);
+  const none = renderToStaticMarkup(createElement(FenceProfileDialog, { report: liveReport, member: noInBand, busy: false, submitError: "", onConfirm: () => {}, onClear: () => {}, onClose: () => {} }));
+  assert.doesNotMatch(none, /Clear fence device…/, "a host with no fence device is not offered one to clear");
+}
+// The re-enable request goes to the pool master, which owns the record, and its refusal is
+// rendered on the panel rather than in a dialog the row never opens.
+assert.match(membersSrc, /members\/\$\{encodeURIComponent\(member\.host_id\)\}\/bmc-provisioning/);
+assert.match(membersSrc, /\{actionError && <p className="alert" role="alert">\{actionError\}<\/p>\}/);
+
 const actions = renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false, onPromote: () => {}, onFenceProfile: () => {} }));
 assert.match(actions, /<button type="button" class="danger">Promote to pool master…<\/button>/);
-assert.match(actions, /<button type="button" disabled="">Record fence device…<\/button>/);
-assert.match(actions, /Fence device: unknown/);
+assert.match(actions, /<button type="button" disabled="">Set BMC access…<\/button>/);
+assert.match(renderToStaticMarkup(createElement(FencingCell, { member, authoritative: false })), /Fence device: unknown/);
 // Without the handlers (an unavailable view) neither button is offered at all.
 assert.doesNotMatch(renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false })), /<button/);
 
@@ -166,8 +227,7 @@ assert.equal(promotionRunnable(null), false);
 assert.equal(promotionRunnable(verdictOf([])), false, "a verdict with no checks claims nothing");
 // Core's no outranks a set of checks that would otherwise read as ready: no inference is left.
 assert.equal(promotionRunnable({ ...legacyReady, ready_to_fence: false }), false);
-// Only a Core that reports neither field falls back to the per-check walk, which still never
-// reads an unknown as a pass.
+// A Core old enough to report neither field is never runnable; nothing is inferred from checks.
 assert.equal(promotionRunnable(legacyReady), false, "without Core's structural fields nothing is inferred");
 assert.equal(promotionRunnable(verdictOf([{ name: "replica-integrity", status: "unknown" }])), false);
 const reachableVerdict = verdictOf([
@@ -239,8 +299,6 @@ assert.doesNotMatch(noProfileDialog, /promotion-fence-confirm/);
 assert.match(noProfileDialog, /No fence device is recorded for core-a, so core-b cannot shut it out and cannot be promoted over it\./);
 assert.match(noProfileDialog, /has no recorded fence profile; record one before promoting/);
 assert.match(noProfileDialog, /only be recorded while the pool master is reporting — that is, before it is lost/);
-assert.match(noProfileDialog, /Only lab virsh fence devices can be verified in this release; a physical pool cannot be promoted this way yet\./);
-assert.match(fenceBuildLimit, /^Only lab virsh fence devices can be verified in this release/);
 // A verdict with fence_recorded false and no check reason at all still reaches this state.
 assert.match(dialog({ verdict: { ...noProfileVerdict, checks: [] } }), /No fence device is recorded for core-a/);
 
@@ -249,11 +307,9 @@ const noCredentialDialog = dialog({ verdict: noCredentialVerdict });
 assert.doesNotMatch(noCredentialDialog, /promotion-fence-confirm/);
 assert.match(noCredentialDialog, /A fence device is recorded for core-a, but core-b cannot use it, so it cannot be promoted over it\./);
 assert.match(noCredentialDialog, rx(noCredential));
-assert.match(noCredentialDialog, /Only lab virsh fence devices can be verified in this release/);
 const unverifiableDialog = dialog({ verdict: unverifiableVerdict });
 assert.doesNotMatch(unverifiableDialog, /promotion-fence-confirm/);
 assert.match(unverifiableDialog, rx(unverifiable));
-assert.match(unverifiableDialog, /Only lab virsh fence devices can be verified in this release/);
 
 // Ready: step 2 states plainly what Nex Core will do, and is gated on both confirmations.
 const readyDialog = dialog({ verdict: ready });
@@ -340,7 +396,6 @@ assert.match(unfenceableDialog, /core-c stops this promotion and cannot be power
 assert.match(unfenceableDialog, /<li class="task-error">core-c: no fence profile is recorded for host-c<\/li>/);
 assert.match(unfenceableDialog, /That host must be brought back so core-b can see it again, or be given a fence device on the pool master while it is still reporting\./);
 assert.match(unfenceableDialog, /core-b cannot prove no other host could take the pool authority as well/);
-assert.match(unfenceableDialog, /Only lab virsh fence devices can be verified in this release/);
 // Even a verdict Core still calls ready_to_fence does not reach step 2 while one exists.
 assert.doesNotMatch(dialog({ report: threeReport, verdict: { ...unfenceable, ready_to_fence: true } }), /promotion-fence-confirm/);
 
@@ -464,28 +519,36 @@ const fenceProps = { report: liveReport, member: { ...master, connection: "fresh
 const fenceDialog = renderToStaticMarkup(createElement(FenceProfileDialog, fenceProps));
 assert.match(fenceDialog, /aria-labelledby="fence-title"/);
 assert.match(fenceDialog, /Fence device for core-a/);
-assert.match(fenceDialog, /Only lab virsh fence devices can be verified in this release/);
-assert.match(fenceDialog, /<label for="fence-endpoint">Host running libvirt<\/label>/);
-assert.match(fenceDialog, /<label for="fence-target">libvirt domain of core-a<\/label>/);
-assert.match(fenceDialog, /<label for="fence-login">SSH login<\/label>/);
-assert.match(fenceDialog, /id="fence-port"[^>]*type="number"[^>]*value="22"/);
-assert.match(fenceDialog, /pinned to qemu:\/\/\/system over this SSH identity/);
+// The normal path is the management controller: address, kind, account, password. The SSH-key
+// virsh device is not on it at all.
+assert.match(fenceDialog, /<legend>Management controller of core-a<\/legend>/);
+assert.match(fenceDialog, /id="fence-kind-redfish"[^>]*type="radio"[^>]*checked=""/);
+assert.match(fenceDialog, /id="fence-kind-ipmi"[^>]*type="radio"/);
+assert.match(fenceDialog, /<label for="fence-address">Address<\/label>/);
+assert.match(fenceDialog, /<label for="fence-system">Redfish system identifier<\/label>/);
+assert.match(fenceDialog, /<label for="fence-account">Account<\/label>/);
+assert.match(fenceDialog, /id="fence-password"[^>]*type="password"[^>]*class="secret"/);
+assert.doesNotMatch(fenceDialog, /Host running libvirt|SSH private key/);
+// What Nex Core actually does when this is submitted, said where the operator enters it:
+// pin the certificate, prove the machine, and hold every later connection to that certificate.
+assert.match(fenceDialog, /records the exact certificate it presents and asks it which machine it manages/);
+assert.match(fenceDialog, /a host that does not report a unique hardware identity cannot be given a controller here/);
+assert.match(fenceDialog, /every connection must present that same certificate/);
 // The credential is entered once, never stored by the Controller and never shown back.
-assert.match(fenceDialog, /<textarea id="fence-key" required="" class="secret" autoComplete="off" spellCheck="false"[^>]*><\/textarea>/);
-assert.match(fenceDialog, /<textarea id="fence-known-hosts" required="" class="secret"[^>]*><\/textarea>/);
 assert.match(fenceDialog, /never stored by this Controller, never written to the audit trail and never shown back here/);
-assert.doesNotMatch(fenceDialog, /BEGIN OPENSSH PRIVATE KEY/);
+// The lab device stays reachable behind one link, and is not the normal path.
+assert.match(fenceDialog, /aria-expanded="false"[^>]*>This host runs as a virtual machine in a lab<\/button>/);
 // The state holding the credential is emptied as soon as it is handed over.
-assert.match(src, /setKey\(""\);\n\s*setKnownHosts\(""\);/);
-// Nothing in the dialog ever renders a credential the server sent: only the two inputs hold one.
+assert.match(src, /setPassword\(""\);\n\s*setKey\(""\);\n\s*setKnownHosts\(""\);/);
+// Nothing in the dialog ever renders a credential the server sent: only the inputs hold one.
 assert.doesNotMatch(src, /credential_ref|ssh_host_key_ref/);
 // Core's record-time refusal arrives verbatim.
-assert.match(renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, submitError: "this fence profile cannot be verified by this host: BMC fencing identity verification is not implemented" })),
-  /role="alert"[^>]*>this fence profile cannot be verified by this host: BMC fencing identity verification is not implemented/);
+assert.match(renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, submitError: "this fence profile cannot be verified by this host: this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own" })),
+  /role="alert"[^>]*>this fence profile cannot be verified by this host: this host does not report a unique hardware identity/);
 // Clearing is offered only when a profile exists, and only behind its own confirmation.
 assert.doesNotMatch(fenceDialog, /Clear fence device…/);
-const configured = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, member: { ...fenceProps.member, fence: { kind: "virsh", endpoint: "lab.example.test", configured: true } } }));
-assert.match(configured, /Fence device: virsh · lab\.example\.test · configured/);
+const configured = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, member: { ...fenceProps.member, fence: { kind: "redfish", endpoint: "bmc.example.test", username: "nex-fence", tls_fingerprint: "ab".repeat(32), configured: true, credential_version: 2 } } }));
+assert.match(configured, /Fence device: redfish · bmc\.example\.test · nex-fence · configured · credential recorded · certificate abab/);
 assert.match(configured, /<button type="button" class="danger">Clear fence device…<\/button>/);
 
 // The two bodies are exactly the contract's: the profile as sent, the credential in its own
@@ -548,3 +611,93 @@ for (const sentence of [
 assert.doesNotMatch(src, /\.(reason|error|detail|stage)[^\n]*\.(includes|startsWith|endsWith|match)\(/);
 
 console.log("pool-promotion.test.mjs: ok");
+
+// ------------------------------------------------- the Fencing column and the pool summary
+
+// Every word of the column is the pool master's own answer; this only chooses the wording,
+// and never turns an unknown or a stale check into a protected host.
+{
+  const withReadiness = (readiness, fence = {}) => ({ ...member, fence: { configured: true, kind: "ipmilan", ...fence, readiness } });
+  const ok = (host_id, extra = {}) => ({ host_id, result: "ok", power: "on", observed_at: "2026-09-22T00:10:00Z", ...extra });
+
+  // Ready, and how many hosts confirm it — a BMC device says "BMC", not its wire kind.
+  const ready = withReadiness({ ready: true, methods: [{ kind: "ipmilan", state: "ready", checks: [ok("host-a"), ok("host-c")] }] });
+  assert.equal(fencingText(ready, true).label, "BMC · checked from 2 hosts");
+  assert.equal(fencingText(ready, true).badge, "ok");
+  assert.equal(fenceMethodName("redfish"), "BMC");
+  assert.equal(fenceMethodName("virsh"), "virsh lab device");
+
+  // Stale is stale, never ready, and the badge is not the only thing that says so.
+  const stale = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "not_ready", reason: "the last check from host-a is stale", checks: [ok("host-a", { result: "ok", stale: true })] }] });
+  assert.equal(fencingText(stale, true).label, "BMC · stale");
+  assert.notEqual(fencingText(stale, true).badge, "ok");
+  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: stale, authoritative: true })), /stale/);
+
+  // A failing check names the host that found it, on the row.
+  const broken = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "not_ready",
+    reason: "this management controller did not answer (from host-a)",
+    checks: [{ host_id: "host-a", result: "unreachable", detail: "this management controller did not answer", observed_at: "2026-09-22T00:10:00Z" }] }] });
+  assert.match(fencingText(broken, true).label, /^Not protected — /);
+  assert.match(fenceCheckLines(broken, true)[0], /^host-a: this management controller did not answer/);
+
+  // No device at all, and a host nothing has looked at yet. Neither is ever ready.
+  const none = { ...member, fence: { configured: false, readiness: { ready: false, methods: [{ kind: "bmc", state: "not_ready", reason: "no fence device is recorded for this host" }] } } };
+  assert.equal(fencingText(none, true).label, "Not protected — no fence device is recorded for this host");
+  const unchecked = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "unknown", reason: "no other host in this pool has checked this host's management controller yet" }] });
+  assert.match(fencingText(unchecked, true).label, /^Not protected — no other host/);
+  assert.notEqual(fencingText(unchecked, true).badge, "ok");
+
+  // A pool master too old to report readiness is "not reported", never ready.
+  const older = { ...member, fence: { configured: true, kind: "ipmilan" } };
+  assert.equal(fencingText(older, true).label, "not reported");
+  assert.match(fencingText(older, true).reasons[0], /does not report fencing readiness/);
+  // And a master that is not reporting at all says so rather than repeating its last word.
+  assert.equal(fencingText(ready, false).label, "unknown");
+  assert.deepEqual(fenceCheckLines(ready, false), []);
+
+  // A pool of one host is not waiting for a check that cannot happen.
+  const alone = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "no_peer",
+    reason: "this pool has no other host to check this host's management controller from, and no other host to promote in its place" }] });
+  assert.equal(fencingText(alone, true).label, "BMC · no other host to check from");
+  assert.notEqual(fencingText(alone, true).badge, "ok");
+  assert.doesNotMatch(fencingText(alone, true).reasons[0], /yet/);
+  assert.equal(fenceMethodName("watchdog"), "Watchdog");
+
+  // The watchdog is a second method, on its own line. Nothing arms one in this release, so
+  // it must never read as protection and must never change the badge.
+  const watchdog = state => withReadiness({ ready: false, methods: [
+    { kind: "ipmilan", state: "unknown", reason: "no other host in this pool has checked this host's management controller yet" }, state] });
+  const unarmed = watchdog({ kind: "watchdog", state: "not_ready", reason: "this host's hardware watchdog is not armed: Nex Core arms watchdogs once this pool has quorum" });
+  assert.match(fencingText(unarmed, true).label, /^Not protected — no other host/, "the watchdog must not change the badge");
+  assert.match(watchdogText(unarmed, true), /^Watchdog: this host's hardware watchdog is not armed/);
+  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: unarmed, authoritative: true })), /hardware watchdog is not armed/);
+  const software = watchdog({ kind: "watchdog", state: "not_ready", reason: "this host has only the kernel's software watchdog, which a hung kernel cannot run, so it does not count" });
+  assert.match(watchdogText(software, true), /does not count/);
+  const twoHosts = watchdog({ kind: "watchdog", state: "not_applicable", reason: "a watchdog needs three or more hosts to have a majority side; this pool is fenced through its management controllers" });
+  assert.match(watchdogText(twoHosts, true), /three or more hosts/);
+  assert.doesNotMatch(watchdogText(twoHosts, true), /yet/, "a two-host pool is not waiting for anything");
+  // A ready BMC still reads as ready with a watchdog beside it, and the watchdog line is
+  // still there to say why nothing is armed.
+  const both = withReadiness({ ready: true, methods: [{ kind: "ipmilan", state: "ready", checks: [ok("host-a")] },
+    { kind: "watchdog", state: "not_ready", reason: "this host's hardware watchdog is not armed: Nex Core arms watchdogs once this pool has quorum" }] });
+  assert.equal(fencingText(both, true).label, "BMC · checked from 1 host");
+  assert.match(watchdogText(both, true), /not armed/);
+  // A master that is not reporting says nothing about a watchdog either.
+  assert.equal(watchdogText(both, false), "");
+}
+
+// The promotion verdict names the method each blocking host would be shut out with, and
+// warns from the candidate's own last check without letting it decide anything.
+{
+  const verdict = { pool_id: "pool-1", candidate_host_id: "host-b", authority_generation: 4, can_promote: false,
+    fence_required: true, fence_host_ids: ["host-a"],
+    hosts: [{ host_id: "host-a", reachable: false, blocks: true, fence_recorded: true, fence_usable: true,
+      fence_kind: "ipmilan", fence_check_warning: "this host's last check of that fence device failed: no answer" }] };
+  assert.equal(fenceCellText(verdict, verdict.hosts[0]), "powered off by this promotion · BMC");
+  const view = renderToStaticMarkup(createElement(PromotionVerdictView, { report, verdict }));
+  assert.match(view, /Advisory: this host&#x27;s last check of that fence device failed/);
+  assert.match(view, /<small class="pool-fence-advisory">Nex Core proves the fence itself when the promotion runs; this stops nothing\.<\/small>/);
+  // It is one line inside a table cell, not the block callout .warning renders.
+  assert.match(view, /class="pool-fence-advisory"/);
+  assert.doesNotMatch(view, /<small class="warning">/);
+}

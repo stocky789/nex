@@ -20,6 +20,10 @@ export type PromotionHost = {
   // whether the candidate could shut it out. `fence_unusable_reason` is Core's sentence and is
   // shown verbatim; nothing here is inferred from it.
   blocks?: boolean; fence_recorded?: boolean; fence_usable?: boolean; fence_unusable_reason?: string;
+  // The method this promotion would shut this host out with, and what the candidate's own
+  // last non-destructive check of that device found when it was failing or stale. The
+  // warning is advisory: Core proves the fence again and decides.
+  fence_kind?: string; fence_check_warning?: string;
 };
 export type PromotionVM = { vm_id: string; host_id: string; state: "confirmed" | "fenced" | "blocked"; reason?: string };
 export type FenceStatus = { host_id: string; status: string; target_id?: string; exclusion_verified?: boolean; observed_at?: string; error?: string };
@@ -55,7 +59,60 @@ export type Restricted = { reason: string; kind?: "unconfirmed" | "superseded"; 
 // `credential_version` is the master's own counter for the private material behind the
 // profile; the material never reaches this Controller. 0 means none was ever recorded, so a
 // fence device that exists on paper cannot actually run.
-export type MemberFence = { kind: string; endpoint?: string; configured: boolean; credential_version?: number };
+export type MemberFence = {
+  // Empty when no profile is recorded and this record carries only the controller report.
+  kind?: string; endpoint?: string; username?: string; tls_fingerprint?: string; configured: boolean; credential_version?: number;
+  // Whether the account behind this profile is one Nex Core created on the host's own
+  // controller, so clearing it also removes that account.
+  provisioned_by_core?: boolean;
+  // What this host's own Nex Core found on its own management controller, reported through
+  // the pool master. `state` is Core's closed set and is what this page switches on;
+  // `detail` is Core's sentence and is shown as written.
+  bmc?: HostBMC | null;
+  // The member that already reported the hardware identity this host reports, when the
+  // master refused this host's report because of it.
+  system_uuid_conflict_host_id?: string;
+  // The master's own decision that this host must not configure its controller. It is what
+  // the row's actions are decided from: a host that is down after its device was cleared
+  // has echoed nothing, and the master's decision is the one that is true.
+  provisioning_disabled?: boolean;
+  // The master's own per-method answer to "could this host be shut out right now". Absent
+  // means the master did not report one, which is never ready.
+  readiness?: FenceReadiness | null;
+  // What this host's own Nex Core found when it looked for a watchdog, mirrored from the
+  // master's membership. Absent means the host never reported one.
+  watchdog?: HostWatchdog | null;
+  // That host's own report that it has armed the device, mirrored from the master's durable
+  // membership. Absent means the host never said.
+  watchdog_armed?: WatchdogArmed | null;
+};
+// `kind` is Core's own classification and is the only thing acted on: only "hardware" can ever
+// count, and the kernel's software watchdog is reported precisely so an operator sees why.
+export type HostWatchdog = { kind: "hardware" | "emulated" | "software" | "unknown" | "none"; device?: string; driver?: string; timeout_seconds?: number; nowayout?: boolean; in_use?: boolean };
+// The host's own report that it has armed that device. `kind` is what it armed, which is
+// "emulated" where the host is itself a virtual machine: such a proof is evidence about a
+// hypervisor, never about hardware, and every line that rests on one says so.
+export type WatchdogArmed = { armed: boolean; kind?: string; device?: string; timeout_seconds?: number; fencing_generation?: number; detail?: string; observed_at?: string };
+export type HostBMC = { state: string; detail?: string; address?: string; channel?: number; account?: string; observed_at?: string };
+// One other host's last non-destructive read of this host's fence device. `stale` is the
+// master's own answer about how long ago that was; nothing here computes freshness.
+export type FenceCheck = { host_id: string; result: string; detail?: string; power?: string; observed_at?: string; stale?: boolean };
+export type FenceMethod = { kind: string; state: "ready" | "not_ready" | "unknown" | "no_peer" | "not_applicable"; reason?: string; checks?: FenceCheck[] };
+// The pool's own fencing answer, reported by the master with its membership: the count, the
+// Host fencing setting and Core's prerequisite checklist. Nothing here counts rendered rows or
+// decides a prerequisite — a client would count ejected tombstones and hosts still joining.
+// `hosts` is which hosts the sentence is about, as host IDs: Core ends the sentence before
+// naming them, because only a client knows their display names.
+export type FencePrerequisite = { name: string; state: "met" | "unmet" | "unknown"; detail: string; hosts?: string[] };
+// The pool's own Corosync/Pacemaker cluster, which exists only so a watchdog has a quorum to
+// lose. Nex Core forms it for a pool that has no clustered storage; a pool that has one keeps
+// the cluster clustered storage already owns, and is not armed at all.
+export type FenceCluster = {
+  state: "off" | "not_available" | "forming" | "arming" | "armed" | "degraded";
+  detail?: string; armed: number; total: number; arming_host_id?: string;
+};
+export type FenceSummary = { ready: number; total: number; unready?: string[]; host_fencing: boolean; prerequisites?: FencePrerequisite[]; cluster?: FenceCluster | null };
+export type FenceReadiness = { ready: boolean; methods?: FenceMethod[] };
 // Structural shapes only, so pool-members.tsx keeps one richer type of its own.
 export type PromotionMember = {
   host_id: string; name?: string; role: "master" | "member"; connection?: string;
@@ -67,11 +124,6 @@ export type PromotionReport = {
   authoritative: boolean; transfer_supported?: boolean;
   promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: PromotionMember[];
 };
-
-// The build limit, said once and reused wherever a fence device is entered or missing. Nex
-// Core refuses to record anything else, so an operator is never left believing a physical
-// pool is protected.
-export const fenceBuildLimit = "Only lab virsh fence devices can be verified in this release; a physical pool cannot be promoted this way yet. Nex Core refuses to record any other kind of fence device.";
 
 const checkTitles: Record<string, string> = {
   "replica-integrity": "This host's copy of the pool records is whole and signed",
@@ -148,20 +200,18 @@ export function fenceBlockerReason(host: PromotionHost) {
 }
 // What the table says about a host's fence, from the structural fields only.
 export function fenceCellText(verdict: PromotionVerdict, host: PromotionHost) {
-  if (fenceHostIDs(verdict).includes(host.host_id)) return "powered off by this promotion";
+  if (fenceHostIDs(verdict).includes(host.host_id)) {
+    return `powered off by this promotion${host.fence_kind ? ` · ${fenceMethodName(host.fence_kind)}` : ""}`;
+  }
   if (host.blocks) return `cannot be fenced — ${fenceBlockerReason(host)}`;
   return "not powered off";
 }
 // When the operator may be offered the destructive step. The candidate answers this itself:
 // `ready_to_fence` means confirming proceeds to the fence rather than to a refusal, and
-// `can_promote` means the whole proof already holds. Neither is inferred from the checks.
-// The per-check walk below is only for a Core old enough to report neither field; it never
-// reads an `unknown` as "fine" either.
+// `can_promote` means the whole proof already holds. Neither is inferred from the checks, so a
+// Core old enough to report neither field is simply never runnable.
 export function promotionRunnable(verdict?: PromotionVerdict | null) {
-  if (!verdict) return false;
-  if (verdict.can_promote || verdict.ready_to_fence) return true;
-  if (typeof verdict.can_promote === "boolean" || typeof verdict.ready_to_fence === "boolean") return false;
-  return false;
+  return Boolean(verdict?.can_promote || verdict?.ready_to_fence);
 }
 
 // Every reason below mirrors a refusal the route would answer with 409, so an action that
@@ -187,9 +237,152 @@ export function fenceProfileBlock(report: PromotionReport, member: PromotionMemb
 // so it is unknown while the master is not fresh rather than repeated from its last report.
 export function fenceText(member: PromotionMember, authoritative: boolean) {
   if (!authoritative) return "Fence device: unknown — the pool master keeps this record and is not reporting.";
-  if (!member.fence) return "Fence device: not configured. A pool master with no fence device cannot be promoted over.";
+  if (!member.fence || !member.fence.kind) return "Fence device: not configured. A pool master with no fence device cannot be promoted over.";
   const credential = member.fence.credential_version ? "credential recorded" : "no credential recorded";
-  return `Fence device: ${member.fence.kind}${member.fence.endpoint ? ` · ${member.fence.endpoint}` : ""} · ${member.fence.configured ? "configured" : "not configured"} · ${credential}`;
+  const account = member.fence.username ? ` · ${member.fence.username}` : "";
+  // The pinned certificate is shown so an operator can compare it with the controller's own
+  // page; it is not a secret and it is the only thing that identifies that endpoint.
+  const pinned = member.fence.tls_fingerprint ? ` · certificate ${member.fence.tls_fingerprint}` : "";
+  return `Fence device: ${member.fence.kind}${member.fence.endpoint ? ` · ${member.fence.endpoint}` : ""}${account} · ${member.fence.configured ? "configured" : "not configured"} · ${credential}${pinned}`;
+}
+
+// Each host configures its own management controller, so the normal row says what its own
+// Nex Core found there. Core's own sentence is shown as written; this only decides whether
+// there is one to show.
+export function bmcText(member: PromotionMember, authoritative: boolean) {
+  if (!authoritative) return "";
+  const bmc = member.fence?.bmc;
+  const conflict = member.fence?.system_uuid_conflict_host_id;
+  if (conflict) {
+    return `Management controller: this host reports the same hardware identity as ${conflict}, so neither of them can be given one until that is resolved. ${bmc?.detail || ""}`.trim();
+  }
+  if (!bmc) return "";
+  if (bmc.state === "provisioned") {
+    return `Management controller: configured by Nex Core${bmc.address ? ` at ${bmc.address}` : ""}${bmc.account ? ` as ${bmc.account}` : ""}.`;
+  }
+  return `Management controller: ${bmc.detail || "Nex Core reported no reason."}`;
+}
+
+// Set BMC access… is the way out of a host Nex Core could not configure from the inside, so
+// it is offered exactly there: everywhere except a host that has the device its own Core
+// created. It is decided from the pool master's record, never from the host's echo of it —
+// a host that is down after its device was cleared has echoed nothing, and would otherwise
+// be left with no action at all. It stays offered on a host whose profile an operator set by
+// hand, because that is where they change or clear it; on a host whose Core is too old to
+// report; and while the master is not fresh, where the button is disabled anyway.
+export function manualBMCOffered(member: PromotionMember) {
+  return !(member.fence?.configured && member.fence.provisioned_by_core);
+}
+
+// Letting a host configure its controller again is offered exactly where an operator turned
+// it off, which is the master's own recorded decision rather than the host's echo of it.
+// There is no separate "remove the account" action: clearing the fence device is what removes
+// it, one operator action with one meaning.
+export function bmcReenableOffered(member: PromotionMember, authoritative: boolean) {
+  return authoritative && Boolean(member.fence?.provisioning_disabled);
+}
+
+// ------------------------------------------------------------------ the Fencing column
+
+// How a host would be shut out, said in the fewest words that are true, with the reasons
+// underneath. Every judgement here is the pool master's: this only chooses the wording.
+//
+//   - The master is not reporting            → unknown. Its record is the only one.
+//   - It reports no readiness at all         → not reported. An older Core; never ready.
+//   - A method is ready                      → the method, and how many hosts confirm it.
+//   - Every check is stale                   → stale. A stale check is never readiness.
+//   - Anything else                          → not protected, and Core's own reason.
+const fenceMethodNames: Record<string, string> = { ipmilan: "BMC", redfish: "BMC", virsh: "virsh lab device", watchdog: "Watchdog" };
+export function fenceMethodName(kind: string) {
+  return fenceMethodNames[kind] || kind || "Fencing";
+}
+export function fencingText(member: PromotionMember, authoritative: boolean): { label: string; badge: string; reasons: string[] } {
+  // fenceText below already says why it is unknown, so the cell does not say it twice.
+  if (!authoritative) return { label: "unknown", badge: "unknown", reasons: [] };
+  const readiness = member.fence?.readiness;
+  if (!readiness || !(readiness.methods || []).length) {
+    return {
+      label: "not reported", badge: "unknown",
+      reasons: ["This pool master does not report fencing readiness. Upgrade it to see whether this host could be shut out."],
+    };
+  }
+  // The badge carries one method, so it carries the fence device where that is ready and
+  // the watchdog otherwise: a host another host can power off is protected whatever its own
+  // watchdog is doing. The watchdog's own line below says the rest.
+  const all = readiness.methods || [];
+  const methods = all.filter(method => method.kind !== "watchdog");
+  const armed = all.find(method => method.kind === "watchdog" && method.state === "ready");
+  if (armed && !methods.some(method => method.state === "ready")) {
+    const emulated = member.fence?.watchdog_armed?.kind === "emulated" ? " (emulated)" : "";
+    const seconds = member.fence?.watchdog_armed?.timeout_seconds;
+    return { label: `Watchdog · armed${emulated}`, badge: "ok",
+      reasons: [`This host feeds a watchdog that resets it${seconds ? ` ${seconds} seconds` : ""} after it loses this pool's quorum.`] };
+  }
+  if (!methods.length) return { label: "not protected", badge: "failed", reasons: [] };
+  // A pool with one host has nobody to be checked from, ever, and nothing to promote over.
+  // It is not pending and must not read as though it were.
+  const alone = methods.find(method => method.state === "no_peer");
+  if (alone && !methods.some(method => method.state === "ready")) {
+    return { label: `${fenceMethodName(alone.kind)} · no other host to check from`, badge: "unknown", reasons: alone.reason ? [alone.reason] : [] };
+  }
+  const ready = methods.find(method => method.state === "ready");
+  if (ready) {
+    const confirmed = (ready.checks || []).filter(check => check.result === "ok" && !check.stale);
+    const from = confirmed.length ? ` · checked from ${confirmed.length} host${confirmed.length === 1 ? "" : "s"}` : "";
+    return { label: `${fenceMethodName(ready.kind)}${from}`, badge: "ok", reasons: ready.reason ? [ready.reason] : [] };
+  }
+  const reasons = methods.map(method => method.reason).filter((reason): reason is string => Boolean(reason));
+  const checks = methods.flatMap(method => method.checks || []);
+  if (checks.length && checks.every(check => check.stale)) {
+    return { label: `${fenceMethodName(methods[0].kind)} · stale`, badge: "warning", reasons };
+  }
+  return { label: `Not protected — ${reasons[0] || "Nex Core reported no reason."}`, badge: "failed", reasons: reasons.slice(1) };
+}
+
+// Each other host's own last look at this host's fence device, so an operator sees which
+// host could not reach it rather than only that something could not.
+export function fenceCheckLines(member: PromotionMember, authoritative: boolean) {
+  if (!authoritative) return [];
+  return ((member.fence?.readiness?.methods || []).flatMap(method => method.checks || [])).map(check => {
+    const when = check.observed_at ? ` · last confirmed ${check.observed_at}` : "";
+    if (check.stale) return `${check.host_id}: stale — Nex Core has not had this confirmed recently${when}.`;
+    if (check.result === "ok") return `${check.host_id}: reachable${check.power ? `, machine ${check.power}` : ""}${when}.`;
+    return `${check.host_id}: ${check.detail || check.result}${when}.`;
+  });
+}
+
+// What the master says about this host's own watchdog, as its own line. When the watchdog is
+// what the badge above already carries the line would only repeat it, so it is left out.
+export function watchdogText(member: PromotionMember, authoritative: boolean) {
+  if (!authoritative) return "";
+  const methods = member.fence?.readiness?.methods || [];
+  const method = methods.find(entry => entry.kind === "watchdog");
+  if (!method) return "";
+  if (method.state === "ready") {
+    if (!methods.some(entry => entry.kind !== "watchdog" && entry.state === "ready")) return "";
+    const emulated = member.fence?.watchdog_armed?.kind === "emulated" ? ", emulated" : "";
+    return `Watchdog: armed${emulated} — this host also resets itself if it loses this pool's quorum.`;
+  }
+  return `Watchdog: ${method.reason || method.state}`;
+}
+
+// The Fencing cell: one badge whose text carries the state, the reasons under it, and what
+// every other host's last look at this host's fence device found. Nothing here is colour
+// alone, and nothing is hidden behind a hover.
+export function FencingCell({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
+  const fencing = fencingText(member, authoritative);
+  const checks = fenceCheckLines(member, authoritative);
+  return <>
+    <span className={`badge ${fencing.badge}`}>{fencing.label}</span>
+    {fencing.reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
+    <small>{fenceText(member, authoritative)}</small>
+    {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
+    {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
+    {checks.length > 0 && <details className="pool-fence-checks">
+      <summary>What each host found</summary>
+      <ul>{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>
+    </details>}
+  </>;
 }
 
 // A restarted master cannot know whether the pool promoted somebody while it was down, so it
@@ -240,10 +433,7 @@ export function HostRestrictedBanner({ poolID, hostID, api }: {
   poolID: string; hostID: string; api: <T>(path: string) => Promise<T>;
 }) {
   const [report, setReport] = useState<PromotionReport | null>(null);
-  const load = useRef(() => {
-    api<PromotionReport>(`pools/${encodeURIComponent(poolID)}/members`)
-      .then(answer => setReport(answer), () => {});
-  });
+  const load = useRef<() => void>(() => {});
   load.current = () => {
     api<PromotionReport>(`pools/${encodeURIComponent(poolID)}/members`)
       .then(answer => setReport(answer), () => {});
@@ -269,19 +459,27 @@ export function HostRestrictedBanner({ poolID, hostID, api }: {
 }
 
 // The row actions S6 adds, rendered inside the same disclosure as the S5 ones.
-export function PromotionActions({ report, member, authoritative, onPromote, onFenceProfile }: {
+export function PromotionActions({ report, member, authoritative, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy }: {
   report: PromotionReport; member: PromotionMember; authoritative: boolean;
-  onPromote?: () => void; onFenceProfile?: () => void;
+  onPromote?: () => void; onFenceProfile?: () => void; onBMCProvisioning?: () => void; bmcBusy?: boolean;
 }) {
   const promote = promotionBlock(report, member);
   const fence = fenceProfileBlock(report, member);
   return <>
-    <small>{fenceText(member, authoritative)}</small>
+    {/* What the fence device is and what Nex Core found on the controller is in the
+        Fencing column; this is only what an operator can do about it. */}
+    {/* One entry point to this host's fence device. On a host Nex Core configured itself
+        there is nothing to type, so it opens on the device that is there and its Clear
+        action — which is also what removes the account Core created. */}
     {onFenceProfile && <>
-      <button type="button" disabled={Boolean(fence)} onClick={onFenceProfile}>Record fence device…</button>
+      <button type="button" disabled={Boolean(fence)} onClick={onFenceProfile}>
+        {manualBMCOffered(member) ? "Set BMC access…" : "Clear fence device…"}
+      </button>
       {fence && <small>{fence}</small>}
     </>}
-    {onPromote && <>
+    {onBMCProvisioning && bmcReenableOffered(member, authoritative) &&
+      <button type="button" disabled={bmcBusy} onClick={onBMCProvisioning}>{bmcBusy ? "Submitting…" : "Let Nex configure this controller again"}</button>}
+    {onPromote && member.role !== "master" && <>
       <button type="button" className="danger" disabled={Boolean(promote)} onClick={onPromote}>Promote to pool master…</button>
       {promote && <small>{promote}</small>}
     </>}
@@ -317,7 +515,15 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
         <td>{host.reachable ? host.replica_generation || 0 : "unknown"}</td>
         <td>{host.reachable ? host.membership_generation || 0 : "unknown"}</td>
         <td><span className={`badge ${host.blocks ? "failed" : "ok"}`}>{host.blocks ? "stops it" : "no"}</span></td>
-        <td className={host.blocks && !fenceHostIDs(verdict).includes(host.host_id) ? "task-error" : undefined}>{fenceCellText(verdict, host)}</td>
+        <td className={host.blocks && !fenceHostIDs(verdict).includes(host.host_id) ? "task-error" : undefined}>
+          {fenceCellText(verdict, host)}
+          {/* Advisory: the candidate's own last non-destructive check of that device.
+              Nex Core proves the fence again when the promotion runs and decides. */}
+          {host.fence_check_warning && <>
+            <small className="pool-fence-advisory">Advisory: {host.fence_check_warning}</small>
+            <small className="pool-fence-advisory">Nex Core proves the fence itself when the promotion runs; this stops nothing.</small>
+          </>}
+        </td>
       </tr>)}</tbody>
     </table></div>}
 
@@ -410,22 +616,19 @@ export function PromotionDialog({ report, member, verdict, verdictError, verdict
           <p className="warning" role="status">No fence device is recorded for {oldMaster}, so {name} cannot shut it out and cannot be promoted over it.</p>
           {checkOf(verdict, "old-master-exclusion")?.reason && <p className="task-error">{checkOf(verdict, "old-master-exclusion")?.reason}</p>}
           <p>A fence device is part of the membership record the pool master keeps, so it can only be recorded while the pool master is reporting — that is, before it is lost. This pool cannot be promoted now.</p>
-          <p className="help">{fenceBuildLimit}</p>
         </>
         : unusable
           ? <>
             <p className="warning" role="status">A fence device is recorded for {oldMaster}, but {name} cannot use it, so it cannot be promoted over it.</p>
             <p className="task-error">{unusable}</p>
             <p>Nex Core on {name} decides this itself. Resolve what it named on the pool master while it is still reporting, then check again.</p>
-            <p className="help">{fenceBuildLimit}</p>
-          </>
+            </>
           : blockers.length
             ? <>
               <p className="warning" role="status">{blockers.map(host => hostName(report, host.host_id)).join(", ")} {blockers.length === 1 ? "stops" : "stop"} this promotion and cannot be powered off, so {name} cannot be promoted.</p>
               <ul className="pool-promotion-blocking">{blockers.map(host => <li key={host.host_id} className="task-error">{hostName(report, host.host_id)}: {fenceBlockerReason(host)}</li>)}</ul>
               <p>{blockers.length === 1 ? "That host" : "Those hosts"} must be brought back so {name} can see {blockers.length === 1 ? "it" : "them"} again, or be given a fence device on the pool master while it is still reporting. Until then this pool cannot be promoted: {name} cannot prove no other host could take the pool authority as well.</p>
-              <p className="help">{fenceBuildLimit}</p>
-            </>
+                </>
           : !runnable || !fenceIDs.length
           ? <p role="status">{!verdict
             ? "Nothing is offered until Nex Core has reported its checks."
@@ -487,9 +690,18 @@ export function PromotionStrip({ report }: { report: PromotionReport }) {
 
 // ------------------------------------------------------------------ the fence device dialog
 
-export type FenceProfileInput = { kind: "virsh"; endpoint: string; target_id: string; virsh_uri: string; ssh_login: string; ssh_port: number };
-export type FenceCredentialInput = { ssh_private_key: string; ssh_known_hosts: string };
+export type FenceProfileInput =
+  | { kind: "redfish" | "ipmilan"; endpoint: string; target_id: string; username: string }
+  | { kind: "virsh"; endpoint: string; target_id: string; virsh_uri: string; ssh_login: string; ssh_port: number };
+export type FenceCredentialInput = { secret: string } | { ssh_private_key: string; ssh_known_hosts: string };
 
+// The normal path is a management controller: an address, an account and a password. Nex Core
+// asks that controller which machine it manages and refuses to power anything off unless the
+// answer is this host, so nothing here is trusted on the operator's word.
+//
+// The virsh device below it is for a Nex Core running as a virtual machine in a disposable
+// lab, where there is no controller to ask. It stays reachable, behind a disclosure, because
+// it is not how a real pool is protected.
 export function FenceProfileDialog({ report, member, busy, submitError, onConfirm, onClear, onClose }: {
   report: PromotionReport; member: PromotionMember; busy: boolean; submitError: string;
   onConfirm: (fence: FenceProfileInput, credential: FenceCredentialInput) => void;
@@ -497,6 +709,12 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const [kind, setKind] = useState<"redfish" | "ipmilan">("redfish");
+  const [address, setAddress] = useState("");
+  const [systemID, setSystemID] = useState("");
+  const [account, setAccount] = useState("");
+  const [password, setPassword] = useState("");
+  const [lab, setLab] = useState(false);
   const [endpoint, setEndpoint] = useState("");
   const [targetID, setTargetID] = useState("");
   const [login, setLogin] = useState("");
@@ -504,18 +722,34 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
   const [key, setKey] = useState("");
   const [knownHosts, setKnownHosts] = useState("");
   const [clearing, setClearing] = useState(false);
+  // A host whose own Nex Core configured its controller has nothing to type. The row's
+  // action for it is Clear fence device…, so the dialog opens on that and keeps the manual
+  // form behind a disclosure instead of presenting an empty required form the label never
+  // promised. (Reported by independent review of slice 2.)
+  const provisioned = Boolean(member.fence?.configured && member.fence.provisioned_by_core);
+  const [manual, setManual] = useState(!provisioned);
   useEffect(() => { if (!dialog.current?.open) dialog.current?.showModal(); heading.current?.focus(); }, []);
   const name = member.name || member.host_id;
-  const complete = Boolean(endpoint.trim() && targetID.trim() && login.trim() && port.trim() && key.trim() && knownHosts.trim());
+  const complete = lab
+    ? Boolean(endpoint.trim() && targetID.trim() && login.trim() && port.trim() && key.trim() && knownHosts.trim())
+    : Boolean(address.trim() && systemID.trim() && account.trim() && password);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!complete || busy) return;
-    onConfirm(
-      { kind: "virsh", endpoint: endpoint.trim(), target_id: targetID.trim(), virsh_uri: "qemu:///system", ssh_login: login.trim(), ssh_port: Number(port) },
-      { ssh_private_key: key, ssh_known_hosts: knownHosts },
-    );
+    if (lab) {
+      onConfirm(
+        { kind: "virsh", endpoint: endpoint.trim(), target_id: targetID.trim(), virsh_uri: "qemu:///system", ssh_login: login.trim(), ssh_port: Number(port) },
+        { ssh_private_key: key, ssh_known_hosts: knownHosts },
+      );
+    } else {
+      onConfirm(
+        { kind, endpoint: address.trim(), target_id: systemID.trim(), username: account.trim() },
+        { secret: password },
+      );
+    }
     // The credential is handed over once and never held here afterwards: it is delivered to
     // Nex Core through the one-time credential handoff and never comes back on the wire.
+    setPassword("");
     setKey("");
     setKnownHosts("");
   }
@@ -524,43 +758,83 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
     onClose={() => { if (busy) dialog.current?.showModal(); else onClose(); }}>
     <div className="section-heading"><h2 id="fence-title" ref={heading} tabIndex={-1}>Fence device for {name}</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
     <p>A fence device is how another host powers {name} off and proves it is off. Without one, a surviving member cannot be promoted over {name} if it is lost.</p>
-    <p className="warning">{fenceBuildLimit}</p>
-    <p className="help">The pool master keeps this record, and every member receives it in its copy of the pool records. The credential is delivered to Nex Core once, over its own encrypted handoff; this Controller never stores it and never shows it again.</p>
+    <p className="help">The pool master keeps this record, and every member receives it in its copy of the pool records. The password is delivered to Nex Core once, over its own encrypted handoff; this Controller never stores it and never shows it again.</p>
     <p>{fenceText(member, report.authoritative)}</p>
     {submitError && <p className="alert" role="alert">{submitError}</p>}
-    <form onSubmit={submit}>
-      <fieldset disabled={busy}>
-        <legend>virsh fence device</legend>
-        <label htmlFor="fence-endpoint">Host running libvirt</label>
-        <input id="fence-endpoint" required autoComplete="off" placeholder="lab.example.test" aria-describedby="fence-endpoint-help" value={endpoint} onChange={event => setEndpoint(event.target.value)} />
-        <p className="help" id="fence-endpoint-help">The machine Nex Core connects to over SSH to power the guest off. It must be reachable from every host that could be promoted, not only from this browser.</p>
-        <label htmlFor="fence-target">libvirt domain of {name}</label>
-        <input id="fence-target" required autoComplete="off" aria-describedby="fence-target-help" value={targetID} onChange={event => setTargetID(event.target.value)} />
-        <p className="help" id="fence-target-help">The domain name or UUID of this host's own virtual machine. Nex Core confirms the domain's identity itself before it accepts a power-off as proof.</p>
-        <label htmlFor="fence-login">SSH login</label>
-        <input id="fence-login" required autoComplete="off" value={login} onChange={event => setLogin(event.target.value)} />
-        <label htmlFor="fence-port">SSH port</label>
-        <input id="fence-port" required type="number" min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} />
-        <p className="help">The connection is pinned to qemu:///system over this SSH identity.</p>
-      </fieldset>
-      <fieldset disabled={busy}>
-        <legend>Credential</legend>
-        <label htmlFor="fence-key">SSH private key</label>
-        <textarea id="fence-key" required className="secret" autoComplete="off" spellCheck={false} rows={4} aria-describedby="fence-key-help" value={key} onChange={event => setKey(event.target.value)} />
-        <p className="help" id="fence-key-help">Entered once. It is sent to Nex Core over the one-time credential handoff, never stored by this Controller, never written to the audit trail and never shown back here.</p>
-        <label htmlFor="fence-known-hosts">SSH known hosts entry</label>
-        <textarea id="fence-known-hosts" required className="secret" autoComplete="off" spellCheck={false} rows={2} value={knownHosts} onChange={event => setKnownHosts(event.target.value)} />
-        <p className="help">The host key line Nex Core pins the connection to, so a fence can never talk to a substituted machine.</p>
-      </fieldset>
+    {provisioned && <p className="help">
+      <button type="button" className="link" disabled={busy} aria-expanded={manual} onClick={() => setManual(!manual)}>
+        {manual ? "Keep the device Nex Core configured" : "Set BMC access by hand instead…"}
+      </button>
+    </p>}
+    {manual && <form onSubmit={submit}>
+      {!lab && <fieldset disabled={busy}>
+        <legend>Management controller of {name}</legend>
+        <fieldset className="pool-fence-kind">
+          <legend>Kind</legend>
+          <label className="checkbox" htmlFor="fence-kind-redfish">
+            <input id="fence-kind-redfish" type="radio" name="fence-kind" value="redfish" checked={kind === "redfish"} onChange={() => setKind("redfish")} />
+            Redfish
+          </label>
+          <label className="checkbox" htmlFor="fence-kind-ipmi">
+            <input id="fence-kind-ipmi" type="radio" name="fence-kind" value="ipmilan" checked={kind === "ipmilan"} onChange={() => setKind("ipmilan")} />
+            IPMI
+          </label>
+        </fieldset>
+        <label htmlFor="fence-address">Address</label>
+        <input id="fence-address" required autoComplete="off" placeholder="bmc.example.test" aria-describedby="fence-address-help" value={address} onChange={event => setAddress(event.target.value)} />
+        <p className="help" id="fence-address-help">The management controller of {name}, reachable from every host that could be promoted — not only from this browser.</p>
+        <label htmlFor="fence-system">{kind === "redfish" ? "Redfish system identifier" : "IPMI plug"}</label>
+        <input id="fence-system" required autoComplete="off" placeholder={kind === "redfish" ? "1" : "1"} aria-describedby="fence-system-help" value={systemID} onChange={event => setSystemID(event.target.value)} />
+        <p className="help" id="fence-system-help">{kind === "redfish"
+          ? "The ComputerSystem this controller manages, usually 1 or System.Embedded.1."
+          : "The outlet or plug this controller powers, usually 1."}</p>
+        <label htmlFor="fence-account">Account</label>
+        <input id="fence-account" required autoComplete="off" aria-describedby="fence-account-help" value={account} onChange={event => setAccount(event.target.value)} />
+        <p className="help" id="fence-account-help">An account with power control on this controller. Nex Core needs nothing else from it.</p>
+        <label htmlFor="fence-password">Password</label>
+        <input id="fence-password" required type="password" className="secret" autoComplete="off" aria-describedby="fence-password-help" value={password} onChange={event => setPassword(event.target.value)} />
+        <p className="help" id="fence-password-help">Entered once. It is sent to Nex Core over the one-time credential handoff, never stored by this Controller, never written to the audit trail and never shown back here.</p>
+        <p className="help">When you submit this, Nex Core connects to the controller, records the exact certificate it presents and asks it which machine it manages. It refuses unless the answer is {name}'s own machine, so a host that does not report a unique hardware identity cannot be given a controller here. Afterwards every connection must present that same certificate: the recorded fingerprint is shown on this host's row, and you can compare it with the controller's own page.</p>
+      </fieldset>}
+      {lab && <>
+        <fieldset disabled={busy}>
+          <legend>virsh fence device</legend>
+          <label htmlFor="fence-endpoint">Host running libvirt</label>
+          <input id="fence-endpoint" required autoComplete="off" placeholder="lab.example.test" aria-describedby="fence-endpoint-help" value={endpoint} onChange={event => setEndpoint(event.target.value)} />
+          <p className="help" id="fence-endpoint-help">The machine Nex Core connects to over SSH to power the guest off. It must be reachable from every host that could be promoted, not only from this browser.</p>
+          <label htmlFor="fence-target">libvirt domain of {name}</label>
+          <input id="fence-target" required autoComplete="off" aria-describedby="fence-target-help" value={targetID} onChange={event => setTargetID(event.target.value)} />
+          <p className="help" id="fence-target-help">The domain name or UUID of this host's own virtual machine. Nex Core confirms the domain's identity itself before it accepts a power-off as proof.</p>
+          <label htmlFor="fence-login">SSH login</label>
+          <input id="fence-login" required autoComplete="off" value={login} onChange={event => setLogin(event.target.value)} />
+          <label htmlFor="fence-port">SSH port</label>
+          <input id="fence-port" required type="number" min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} />
+          <p className="help">The connection is pinned to qemu:///system over this SSH identity.</p>
+        </fieldset>
+        <fieldset disabled={busy}>
+          <legend>Credential</legend>
+          <label htmlFor="fence-key">SSH private key</label>
+          <textarea id="fence-key" required className="secret" autoComplete="off" spellCheck={false} rows={4} aria-describedby="fence-key-help" value={key} onChange={event => setKey(event.target.value)} />
+          <p className="help" id="fence-key-help">Entered once. It is sent to Nex Core over the one-time credential handoff, never stored by this Controller, never written to the audit trail and never shown back here.</p>
+          <label htmlFor="fence-known-hosts">SSH known hosts entry</label>
+          <textarea id="fence-known-hosts" required className="secret" autoComplete="off" spellCheck={false} rows={2} value={knownHosts} onChange={event => setKnownHosts(event.target.value)} />
+          <p className="help">The host key line Nex Core pins the connection to, so a fence can never talk to a substituted machine.</p>
+        </fieldset>
+      </>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || !complete}>{busy ? "Submitting…" : "Record fence device"}</button>
+        <button className="primary" disabled={busy || !complete}>{busy ? "Submitting…" : lab ? "Record virsh fence device" : "Set BMC access"}</button>
       </div>
-    </form>
-    {member.fence && <div className="actions pool-fence-clear">
+    </form>}
+    {manual && <p className="help pool-fence-lab">
+      <button type="button" className="link" disabled={busy} aria-expanded={lab} onClick={() => setLab(!lab)}>
+        {lab ? "This host has a management controller" : "This host runs as a virtual machine in a lab"}
+      </button>
+    </p>}
+    {member.fence?.kind && <div className="actions pool-fence-clear">
       {clearing
         ? <>
-          <p className="warning" role="status">Clearing the fence device means no surviving member can be promoted over {name} if it is lost. Virtual machines are not affected.</p>
+          <p className="warning" role="status">Clearing the fence device means no surviving member can be promoted over {name} if it is lost. Virtual machines are not affected.{member.fence.provisioned_by_core ? ` Nex Core configured this controller itself, so it also removes the ${member.fence.username || "Nex"} account from it and stops configuring it until you say otherwise.` : ""}</p>
           <button type="button" disabled={busy} onClick={() => setClearing(false)}>Keep it</button>
           <button type="button" className="danger" disabled={busy} onClick={onClear}>{busy ? "Submitting…" : `Clear the fence device for ${name}`}</button>
         </>

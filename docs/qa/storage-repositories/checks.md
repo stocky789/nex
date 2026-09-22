@@ -103,8 +103,8 @@ bounded workers.
 
 Open: corrected NFS identity final guest baseline; all backend failure, guest durability and
 reboot gates not recorded here. Simulation does not prove storage durability, kernel recovery,
-physical hardware or multi-host writer exclusion. OpenZFS redistribution, Secure Boot and kernel
-upgrade recovery are separate delivery gates.
+physical hardware or multi-host writer exclusion. OpenZFS Secure Boot and kernel upgrade
+recovery evidence are tracked separately in licensing and QA.
 
 ## Pause audit
 

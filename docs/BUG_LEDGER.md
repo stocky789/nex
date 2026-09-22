@@ -3537,7 +3537,7 @@ Append resolved defects with their evidence and the approach to avoid.
 
 ## BUG-0312 — Updating an older host failed on unsatisfiable OpenZFS dependencies
 
-- Date: 2026-09-19; found by independent review before any ZFS-enabled package was published.
+- Date: 2026-09-19; found by independent review before OpenZFS packages shipped in Core updates.
 - Symptom (by analysis, not observed): a host installed from 0.3.4 or earlier could not apply the
   update, because `zfs-dkms` and `zfsutils-linux` had no installation candidate.
 - Root cause: the Core package declared them as hard dependencies, but they live in Debian
@@ -3571,12 +3571,11 @@ Append resolved defects with their evidence and the approach to avoid.
 ## BUG-0314 — A blocked release printed a traceback
 
 - Date: 2026-09-19; found by independent review.
-- Symptom: `scripts/gitea-release.py` refusing a ZFS-enabled manifest, or reading an invalid one,
-  printed a Python traceback instead of its one-line reason. The exit status was already non-zero.
-- Root cause: the gate raised a bare `RuntimeError` and JSON parsing was unguarded, outside the
-  exception types `main` reports.
-- Fix: raise `GiteaError` for the gate and for an invalid or non-object manifest; still fail closed
-  before any release API call.
+- Symptom: `scripts/gitea-release.py` reading an invalid compliance manifest printed a Python
+  traceback instead of its one-line reason. The exit status was already non-zero.
+- Root cause: JSON parsing was unguarded, outside the exception types `main` reports.
+- Fix: raise `GiteaError` for an invalid or non-object manifest; still fail closed before any
+  release API call.
 - Regression: `python3 -m unittest tests.test_gitea_release` failed before the fix and passed
   after it; both workflows run it.
 - Avoid: broadening `main` to catch every exception, or letting an unreadable manifest pass.
@@ -5919,3 +5918,620 @@ Append resolved defects with their evidence and the approach to avoid.
   Independent review found the reassembly problem, which is fixed as above.
 - Avoid: Preseeding `partman-md/device_remove_md`: it clears RAID metadata from disks the
   operator did not select. Treating a blank-VM-disk install as coverage for previously used disks.
+
+## BUG-0414 — A replaced Controller could not recover a pool whose master was gone
+
+- Date: 2026-09-22
+- Symptom: After Nex Controller was replaced while a pool's master was down for good, the first
+  member to re-enroll showed as **Pool master**. Every other member's enrollment was held with
+  `pool identity is held`, and promoting the survivor was refused with `this host is already the
+  pool master`, so the pool could not be recovered through the product.
+- Root cause: Enrollment into a pool unknown to the Controller records the enrolling host as
+  master, on the assumption that the real master enrolls later and is adopted. The adoption rule
+  only followed a host claiming mastery for itself, so the survivor's own report naming the dead
+  master never corrected the row, and the enrollment and promotion checks trusted the row.
+- Fix: `adoptReportedMaster` (`internal/controller/pooltransfer.go`) lets the recorded master's
+  own report give the row away to the master it names, even one not enrolled here; mirror rows
+  move only to an enrolled master (`moveRecordedMaster`). While the recorded master has never
+  enrolled, `poolRecordNaming` supplies the evidence conservatively: the highest generation any
+  enrolled host's membership naming it claims, and only the hosts all of them list with the same
+  status. Enrollment (`coreReportedPoolMember`), the claim arm of adoption and
+  `GET /api/v1/pools/{id}/members` use it. A recorded master that enrolls late takes the pool's
+  mirror rows back at enrollment.
+- Regression: `go test ./internal/controller/ -run TestReplacementControllerWithTheMasterGoneCanPromote`
+  (`internal/controller/pool_evidence_test.go`) — fails on the old code at the first assertion
+  (the survivor stays recorded as master) and passes with the fix. It also checks the second
+  member enrolls, the Hosts view lists all three hosts non-authoritatively, promotion is not
+  refused, the promoted member is adopted at the next generation, and an equal-generation rival is
+  not. `TestAMemberCannotAdmitAHostThroughAGoneMastersRecord` (one member listing an extra host
+  cannot admit it) and `TestAReturningMasterTakesItsMirrorsBack` (mirror rows move to the late
+  master) were each confirmed to fail with their part of the fix disabled. All run in the Go test
+  jobs of the forge and hosted workflows; `go test ./internal/controller/` passes. Independent
+  review found the forged-evidence and orphaned-mirror gaps, fixed as above. Not exercised on a
+  disposable multi-host lab.
+- Avoid: Taking the newest member report as evidence: each is a payload its member controls.
+  Letting any member's report move the row by claiming mastery for itself; only the
+  recorded master may give the row away, and a claim still needs a strictly newer generation or
+  the recorded master's pointer.
+
+## BUG-0415 — Hardware tooling was missing from Core package delivery metadata
+
+- Date: 2026-09-22
+- Symptom: A package upgrade could leave memory-module and PCI inventory unavailable because
+  `dmidecode` and `lspci` were only installed by the ISO recipe. The source archive also omitted
+  the sensor module configuration installed by the package builder.
+- Root cause: The hardware slice updated the ISO inputs and package installation script without
+  updating Core's runtime dependencies and source-file allowlist together.
+- Fix: Require `dmidecode` and `pciutils` in the Core package. Retain the existing `.conf`
+  source-allowlist correction and check that the archive copies `nex-sensors.conf` unchanged.
+- Regression: The extended `test_depends_cover_what_core_runs` failed for both missing packages
+  before the dependency edit. The audit's `python3 -m unittest tests.test_build_source -v`
+  failed with the missing sensor configuration before the allowlist correction; that correction
+  was already present when cleanup implementation began. Afterward,
+  `python3 -m unittest tests.test_build_source tests.test_core_local_package -v` passed 27 tests,
+  and `bash installer/check.sh` passed. The existing push/PR Python discovery jobs in
+  `.github/workflows/github.yml`, `.github/workflows/phase1.yml` and the forge copy execute these
+  regressions. No package was installed or upgraded on a real host.
+- Avoid: Treating an ISO package list as the dependency declaration for package upgrades, or
+  assuming a file installed by the package builder is automatically retained in its source archive.
+
+## BUG-0416 — Update comparison disagreed with Debian version ordering
+
+- Date: 2026-09-22
+- Symptom: Nex considered `0.1.0-dev` older than `0.1.0`, although Debian considers its explicit
+  revision newer. Update availability and completion checks could disagree with APT.
+- Root cause: A custom comparator implemented different revision rules and parsed arbitrary
+  numeric components into machine integers instead of using Debian's version engine.
+- Fix: Execute `dpkg --compare-versions` through the existing command seam, with caller
+  cancellation and a five-second bound. Only exit status 1 means a false comparison; command
+  failures do not report an available update or a successfully completed installation.
+- Regression: In an isolated copy of the old code, changing the existing version test to the
+  correct Debian expectation failed with `-1 want 1`. Read-only native `dpkg` checks confirmed
+  revision, epoch, tilde and long numeric ordering. `go test -count=1 -race ./internal/nexupdate`
+  passed with the fix, including comparison arguments/results, cancellation, missing-command
+  and invalid-version errors, and update/progress failure handling. The existing push/PR Go
+  jobs in `.github/workflows/github.yml`, `.github/workflows/phase1.yml` and the forge copy
+  execute the regression. No real APT update or package installation was performed.
+- Avoid: Reimplementing Debian version syntax or treating a subprocess failure as equality.
+
+## BUG-0417 — Pool membership lookup error was absent from the API reference
+
+- Date: 2026-09-22
+- Symptom: The contract check rejected the members endpoint because its implemented
+  `membership lookup failed` response was undocumented.
+- Root cause: The recovery lookup added a handler error without its OpenAPI error description.
+- Fix: Document the existing retry-safe HTTP 500 response in the OpenAPI contract and API guide,
+  and regenerate the HTML reference; handler behavior is unchanged.
+- Regression: The full Python suite first failed
+  `PoolJoinContractTests.test_documented_refusals_are_the_literal_handler_messages` with the
+  missing message. After the correction,
+  `python3 -m unittest tests.test_api_contract.PoolJoinContractTests.test_documented_refusals_are_the_literal_handler_messages`
+  passed. Existing push/PR Python discovery runs this test on the forge and hosted CI.
+- Avoid: Adding a new error path without updating its machine-readable contract and reference.
+
+## BUG-0418 — A host joining mid-rollout tore the pool's watchdog cluster down
+
+- Date: 2026-09-22
+- Symptom: During an arming rollout, a fourth host completing its CSR join (ready, `peer_origin`
+  still empty until `/pool/advertise` lands) made every unarmed host stop Corosync and Pacemaker
+  at once, leaving the one still-feeding host a minority of one; `no-quorum-policy=suicide` plus
+  `sbd` then reset a healthy host.
+- Root cause: `poolClusterIntent`'s "missing peer origin" branch returned `nil` for the nodelist —
+  the only one of its five branches that discarded the nodes it had already collected — so
+  `poolClusterMayLeave`'s `!poolClusterContains(nodes, hostID)` escape hatch, meant for drained and
+  ejected hosts, fired for every host, and `poolWatchdogTeardownTurn` iterating the same nil slice
+  never gave the armed host a disarm turn.
+- Fix: Return `nodes` from that branch (`internal/agent/pool_cluster.go`); `want` stays false, so
+  `applyPoolCluster` still never runs and no nodelist is rewritten.
+- Regression: `TestAJoiningHostWithNoAddressYetDoesNotTearThePoolDown`
+  (`internal/agent/pool_cluster_test.go`) fails with `a host enrolling reset [master-1]` on the old
+  code. `go test -count=1 -run TestAJoiningHostWithNoAddressYet ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 0.026s`; `go test -count=1 ./internal/agent/ ./internal/vmhost/`
+  → `ok` for both. Run by the existing Go jobs in `.github/workflows/` and the forge copies.
+- Avoid: Special-casing an empty `peer_origin` at the join path, or guarding inside
+  `poolClusterMayLeave`. The invariant is that `poolClusterIntent` always reports the running
+  cluster's members even when it answers "no".
+
+## BUG-0419 — Nothing released the pool's `corosync.conf`, so clustered storage could never be added
+
+- Date: 2026-09-22
+- Symptom: After a pool formed a watchdog cluster, turning Host fencing off and then registering a
+  clustered-storage repository failed permanently on every host with `this host's Corosync
+  configuration belongs to another Nex Core cluster on this pool; one host has one cluster` — the
+  exact remedy both the refusal text and the guide tell the operator to use.
+- Root cause: `LeavePoolCluster` only stopped Pacemaker and Corosync and left the pool-marker
+  `/etc/corosync/corosync.conf` on disk; nothing in the tree ever removed `corosyncConfigPath`, and
+  `writeCorosyncConfig` refuses any file whose marker differs from the caller's (the unconfigured
+  vendor marker is deleted on first write).
+- Fix: `LeavePoolCluster` (`internal/vmhost/pool_cluster.go`) removes the file it owns once stopped,
+  on both the running and the already-stopped path, ignoring `os.ErrNotExist`. It is idempotent
+  because the next pass sees `PoolClusterOwnsCorosync() == false`.
+- Regression: `TestLeavingThePoolClusterReleasesItsCorosyncConfiguration`
+  (`internal/vmhost/pool_cluster_test.go`) fails with `the pool's cluster configuration was left on
+  disk after this host left it` with the `os.Remove` taken out.
+  `go test -count=1 -run TestLeavingThePoolCluster ./internal/vmhost/` →
+  `ok nex.local/nex/internal/vmhost 0.007s`; the full package run passes
+  (`ok nex.local/nex/internal/vmhost 8.635s`).
+- Avoid: Relaxing `writeCorosyncConfig`'s marker check, or re-creating the unconfigured marker so
+  the other consumer can take the file over. The interlock is what keeps a
+  `no-quorum-policy=freeze` cluster from landing under armed hosts; release the file where
+  ownership ends instead. The symmetric storage-side release — freeing a storage-written
+  `corosync.conf` when the last clustered repository is removed — is still outstanding.
+
+## BUG-0420 — The IPMI fence ran over IPMI 1.5, not the session the identity was proved over
+
+- Date: 2026-09-22
+- Symptom: A host whose identity reads and every `PoolFenceCheck` succeeded over RMCP+ showed its
+  fence device Ready, but the power-off at promotion failed on controllers with IPMI 1.5 disabled.
+- Root cause: `fenceAgentArgs` built `fence_ipmilan` without `--lanplus`; the agent defaults to
+  IPMI 1.5 and `--cipher` only applies to lanplus, so the proved cipher suite was silently dropped
+  and the 1.5 path was first exercised at the fence itself.
+- Fix: Pass `--lanplus` (`internal/vmhost/storage_fence.go`) and widen `fenceCIBCreateArgs`'
+  valueless-flag case (`internal/vmhost/storage_cluster.go`) so the stonith resource renders
+  `lanplus=1`.
+- Regression: `TestIPMIFenceRunsOverTheSameRMCPSessionTheIdentityWasProvedOver`
+  (`internal/vmhost/storage_fence_test.go`) asserts `--lanplus`/`--cipher=17` in the agent args and
+  `lanplus=1` in the CIB args; without the first half it fails `IPMI fence arguments omit
+  "--lanplus"`, without the second `invalid native fence argument`.
+  `go test -count=1 ./internal/agent/ ./internal/vmhost/` → `ok` for both packages.
+- Avoid: Adding `--lanplus` alone — `fenceCIBCreateArgs` rejects any valueless `--flag` with
+  `invalid native fence argument`, so Pacemaker resource creation breaks.
+
+## BUG-0421 — A timed-out fence-check pass erased the results it never reached
+
+- Date: 2026-09-22
+- Symptom: When a checking pass hit the two-minute pass timeout, targets it never reached flipped
+  from their previous result to `no other host in this pool has checked this host's management
+  controller yet`, and a previously recorded `credentials_rejected` stopped warning.
+- Root cause: `recordPoolFenceChecks` replaced `poolFenceChecks[dir][checker]` wholesale,
+  contradicting its own comment that unreached targets keep their previous result and go stale.
+- Fix: Start the pass as a `maps.Clone` of the checker's existing entry so the pass merges into it
+  (`internal/agent/pool_fence_check.go`).
+- Regression: `TestATruncatedPassKeepsTheResultsItDidNotReach`
+  (`internal/agent/pool_fence_check_test.go`) reports the `host-c` entry as zero-valued with the
+  clone removed. `go test -count=1 ./internal/agent/ ./internal/vmhost/` → `ok` for both packages.
+- Avoid: Adding pruning alongside the merge. `PoolFenceCheckMembership` already drops non-ready
+  checkers and profile-stamp mismatches and recomputes `Stale`, so a carried-over entry cannot
+  read as fresh or resurrect a removed device.
+
+## BUG-0422 — A peer-offered fence password was not checked against the shared rule
+
+- Date: 2026-09-22
+- Symptom: A modified pool member could offer a fence password with leading or trailing whitespace.
+  It authenticated every `ipmitool -E` readiness check and the row read Ready, while
+  `fence_ipmilan`, which strips the script's output, would fail the one power-off that matters.
+- Root cause: The peer boundary hand-rolled its own password clauses instead of applying
+  `vmhost.FenceSecretUsable`, which the operator-entered boundary does apply.
+- Fix: `AcceptProvisionedFence` (`internal/agent/pool_bmc.go`) applies `FenceSecretUsable` at the
+  peer boundary; the redundant `password == ""` clause is deleted and the NUL/interior-CRLF clause
+  kept.
+- Regression: `TestAPaddedPasswordAPeerOffersIsRefused` (`internal/agent/pool_bmc_test.go`) fails
+  with the old clause restored (the offer gets past the guard and fails later with a different
+  message). `go test -count=1 ./internal/agent/ ./internal/vmhost/` → `ok` for both packages.
+- Avoid: Replacing the whole clause set with `FenceSecretUsable` — it does not cover NUL or
+  interior CR/LF.
+
+## BUG-0423 — Provisioning left password scripts on the host that nothing named
+
+- Date: 2026-09-22
+- Symptom: Root-owned 0700 password scripts accumulated in
+  `<state>/storage-cluster/fence-credentials/` with nothing naming them — one per interrupted
+  provisioning, and one per withdraw/re-enable cycle after the master recorded a profile.
+- Root cause: The only name for the file lived inside `record.Pending`, which is written after the
+  file and cleared once the master records the profile.
+- Fix: `poolLocalBMCRecord` gains `Ref` (`internal/agent/pool_bmc.go`), saved with the slot before
+  the controller is touched, reused on later passes (retire, then write) and retired on every exit
+  path — withdrawal, leaving the pool and re-provisioning. The script is deliberately not retired
+  when the master records the profile: on a master `AcceptProvisionedFence` writes the same material
+  under the same ref, so retiring there would delete the master's own live credential.
+- Regression: `TestAnInterruptedProvisioningLeavesNoSecondPasswordFile` and the two-case
+  `TestRemovingTheAccountRetiresThePasswordItOpened`
+  (`internal/agent/pool_bmc_test.go`). Without ref reuse and the retire-before-write they fail with
+  `this host holds 2 fence password scripts for one account`; with the old `record.Pending`-based
+  retire, `the password of a removed account is still on this host`.
+  `go test -count=1 ./internal/agent/ ./internal/vmhost/` → `ok` for both packages.
+- Avoid: Saving `Pending` before writing the credential. That inverts the window into
+  `Pending != nil` with no secret file, and `offerPendingFence` then fails
+  `ReadFenceCredentialSecret` on every pass and reports `PoolBMCPendingMaster` for ever with no path
+  back to re-provisioning.
+
+## BUG-0424 — A management controller that refused configuration was rewritten every ten seconds
+
+- Date: 2026-09-22
+- Symptom: Firmware that accepts `user set name` and `user set password` but refuses `user priv` or
+  `channel setaccess` caused about 8,640 name-and-password NVRAM writes per day, for ever.
+- Root cause: The failure path left `{Created:true, Slot:n, Pending:nil, Recorded:false}`, which
+  matches no exit arm, so the ten-second reconcile pass re-planned the same slot and generated a new
+  password each time; the `Pending` guard only covers a configuration that already succeeded.
+- Fix: `poolLocalBMCRecord` gains `RetryAfter` (`internal/agent/pool_bmc.go`), set to one check
+  interval on a `configureLocalBMCAccount` failure and saved before the refusal is reported; a new
+  switch arm skips the pass until it passes, after the `Pending` arm so withdrawal and a manual
+  profile still take precedence, and the last report stands.
+- Regression: `TestAControllerThatKeepsRefusingIsNotRewrittenEveryPass`
+  (`internal/agent/pool_bmc_test.go`) runs five passes against a refusing controller and asserts
+  exactly one in-band configure call; with the new arm removed it fails `a refusing controller was
+  written to 5 times`. `go test -count=1 ./internal/agent/ ./internal/vmhost/` → `ok` for both
+  packages.
+- Avoid: Setting `BMCProvisioningDisabled` in response to a refusal — that is the operator's
+  withdrawal decision and would also remove the account.
+
+## BUG-0425 — An ejected row held a machine's identity for ever
+
+- Date: 2026-09-22
+- Symptom: After a host was ejected and its physical machine re-imaged and re-enrolled under a new
+  host ID, the new host could never record its SMBIOS UUID, so `vmhost.PoolFenceUsable` refused
+  every `redfish` or `ipmilan` profile for it and the operator was told to eject a host that is
+  already ejected, with no in-product way to clear it.
+- Root cause: `acceptPoolSystemUUID` scanned every membership row for a duplicate identity without
+  skipping `Status == "ejected"`; `nextPoolMembership` keeps ejected rows verbatim, `SystemUUID`
+  included, and nothing prunes them.
+- Fix: Skip ejected rows in the duplicate check (`internal/agent/peer.go`), as the join, authority,
+  CPU and promotion scans already do.
+- Regression: `TestAnEjectedRowDoesNotHoldAMachineIdentityForEver`
+  (`internal/agent/pool_system_uuid_test.go`) fails with the clause removed: `an ejected host still
+  holds the machine's identity: "", conflict "member-1"`. `go test -count=1 -run
+  'TestAnEjectedRowDoesNotHoldAMachineIdentityForEver|TestPoolJoinInvitationWorksOutMasterPeerOrigin'
+  ./internal/agent/` → `ok nex.local/nex/internal/agent 0.025s`; full package run
+  `ok nex.local/nex/internal/agent 12.513s`.
+- Avoid: Pruning ejected rows, or letting an operator clear `SystemUUIDConflictHostID`. The ejected
+  row is deliberate durable history, and a live duplicate must still be refused.
+
+## BUG-0426 — A master on a non-default pool-peer listener recorded an unreachable origin
+
+- Date: 2026-09-22
+- Symptom: A pool master running a non-default `--pool-peer-listen` port, or bound to a NIC that is
+  not the default-route one, wrote an unreachable origin into its own membership row on the first
+  invitation. Every later join dialled the dead address, and the recorded value could not be moved:
+  the UI sends no `master_url` and the Controller overwrites a supplied one with the reported value.
+- Root cause: `ownPeerOrigin` hard-coded port 9444 and the default-route source address while the
+  listener is operator-configurable, and the derived value is persisted before any join proves it.
+- Fix: Derive both host and port from the configured listener (`agent.PoolPeerListen`, set straight
+  from the flag in `cmd/nex-core-agent/main.go` and `cmd/nex-core-local/main.go`), keeping the
+  default-route fallback only for a wildcard bind (`internal/agent/pool_join.go`,
+  `internal/agent/run.go`). The now-unread `localcore.Config.PoolPeerListen` was deleted.
+- Regression: `TestPoolJoinInvitationWorksOutMasterPeerOrigin`
+  (`internal/agent/pool_join_test.go`) gained a `192.0.2.50:9500` listener case; with the literal
+  `":9444"` restored it fails on the derived default-route origin. `go test -count=1 -run
+  'TestAnEjectedRowDoesNotHoldAMachineIdentityForEver|TestPoolJoinInvitationWorksOutMasterPeerOrigin'
+  ./internal/agent/` → `ok nex.local/nex/internal/agent 0.025s`.
+- Avoid: Making the record non-durable by leaving the master row empty for a derived origin, or
+  adding a Controller-side `master_url` fallback. The master's peer origin is host-owned durable
+  state, and pinning it once recorded is the design.
+
+## BUG-0427 — A pool master could hand its pool row to a host of another pool
+
+- Date: 2026-09-22
+- Symptom: A compromised or buggy pool master could point its pool's `master_host_id` and all of its
+  storage, network and media mirror rows at an enrolled host of a different pool or site. The pool's
+  page then rendered the other pool's membership, fence profiles and BMC addresses, and its own
+  mirrors stopped being refreshed — a self-inflicted denial of service plus display corruption.
+  Cross-pool command execution stayed blocked by `managedHost`.
+- Root cause: The disclaim arm of `adoptReportedMaster` only checked `claim.PoolID` and
+  `master == host`, never that `claim.MasterHostID` belongs to the pool, and `moveRecordedMaster`
+  looked the host up with a pool-unscoped `count(*)`.
+- Fix: Scope that lookup to the pool inside `moveRecordedMaster`
+  (`internal/controller/pooltransfer.go`), the single writer both arms go through:
+  `sql.ErrNoRows` keeps today's "master not enrolled here" behaviour, an enrolled host of another
+  pool is left untouched, and otherwise the row is recorded and rekeyed as before.
+- Regression: `TestADisclaimedMasteryStaysInsideThePool`
+  (`internal/controller/pool_evidence_test.go`) fails with the pool check removed: `a master handed
+  its pool row to a host of another pool`. `go test -count=1 -run
+  TestADisclaimedMasteryStaysInsideThePool ./internal/controller/` →
+  `ok nex.local/nex/internal/controller 0.144s`; full package run
+  `ok nex.local/nex/internal/controller 31.472s`.
+- Avoid: Adding the check only to the disclaim arm of `adoptReportedMaster`. The shared writer is
+  where every caller routes, and it is also what keeps the "master that never enrolled here" path
+  working.
+
+## BUG-0428 — A stalled temperature sensor stopped all usage sampling
+
+- Date: 2026-09-22
+- Symptom: On a host with an NVMe controller in reset or a SATA disk in error recovery, all host and
+  VM usage sampling stopped for tens of seconds per tick, history flushes were skipped, the usage
+  probe reported nothing because the latest sample aged past `usageMaxAge`, and `GET /hardware`
+  timed out past the Controller's `statsQueryWait` on every retry.
+- Root cause: `readHwmonSensors` reaches NVMe and `drivetemp` chips with a plain `os.ReadFile` on
+  `tempN_input`, which is a device command (NVMe Get Log Page, ATA/SCSI SMART), not a cheap procfs
+  read. It was called synchronously from `sampleHost()` — which `run()` invokes with no context and
+  no deadline on the single sampler goroutine — and from `readSensors`, outside the
+  `hardwareReportWait` context.
+- Fix: `hwmonSensorsWithin(root, wait)` (`internal/agent/usage_history_hwmon.go`) runs the read on a
+  background goroutine with at most one read in flight and returns the last completed read's values
+  when the bound expires; the sampler passes `usageSampleDeadline`
+  (`internal/agent/usage_history_sample.go`) and the hardware report `hardwareToolWait`
+  (`internal/agent/hardware.go`). A caller that finds a read already in flight does not wait on it
+  at all and returns the cache at once, so a wedged chip costs the sampler one tick rather than its
+  whole deadline on every tick; and the cache carries the time it completed, so past
+  `hwmonLastMaxAge` (two sample steps) it is dropped and the series takes a gap instead of
+  publishing the same temperature for ever.
+- Regression: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls`
+  (`internal/agent/usage_history_hwmon_test.go`) blocks a sensor with a fifo — a real blocking
+  `open(2)` — and asserts each 200 ms-bounded read returns the last known values, that the reads
+  after the one that stalls return in under a quarter of that bound, that a cache older than
+  `hwmonLastMaxAge` is not served, and that three stalled ticks add at most one goroutine.
+  Reverted to the synchronous read it fails `panic: test timed out after 20s` with the stack in
+  `hwmonSensorsWithin`; with the nil-channel wait restored it fails `read 1 took 200.057442ms while
+  a read was already in flight`; with the staleness bound removed it fails `a reading older than
+  10s was still served`. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 12.006s`;
+  `go test -race -count=3 -run 'Hwmon|PeerOrigin|WatchdogArming|SeriesCap' ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 1.774s`.
+- Avoid: Adding a context to `readHwmonSensors` — `os.ReadFile` is not cancellable, so the read
+  still blocks. And spawning a goroutine per tick without an in-flight guard, which leaks one
+  goroutine every five seconds for as long as the chip is wedged.
+
+## BUG-0429 — The sensor budget dropped CPU and NVMe temperatures alphabetically
+
+- Date: 2026-09-22
+- Symptom: On an AMD host with about 24 or more SATA/SAS drives, the CPU package temperature and
+  every NVMe temperature were missing from both the usage-history chart and the hardware panel,
+  while 24 individual disk temperatures were kept. The only trace was a one-shot log line naming
+  nothing.
+- Root cause: `readHwmonSensors` sorted purely by key and truncated to
+  `protocol.HardwareMaxSensors`, and `drivetemp` sorts before `k10temp` and `nvme`. The
+  `/etc/modules-load.d/nex-sensors.conf` the package installs makes every disk publish a sensor, so
+  the alphabetical cut undid the per-core suppression `hwmonLabel` performs for exactly this reason.
+- Fix: Over budget only, stable-sort by a new `hwmonRank` (CPU packages, then NVMe, then other
+  devices, then per-drive sensors), cut, then re-sort the survivors by key so ordering and
+  boot-to-boot stability are unchanged (`internal/agent/usage_history_hwmon.go`).
+- Regression: `TestHwmonBudgetKeepsCPUAndNVMeAheadOfDisks`
+  (`internal/agent/usage_history_hwmon_test.go`) — 26 `drivetemp` chips plus one `k10temp` and one
+  `nvme` — asserts both the CPU and NVMe keys survive and the survivors stay key-sorted; with plain
+  truncation the survivors are 24 `temp.drivetemp-*`. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.950s`.
+- Avoid: Raising `HardwareMaxSensors` — the bound is a wire contract on both sides. And dropping the
+  key sort entirely: hwmon indexes are probe-order and change across boots, so an unsorted cut keeps
+  different sensors after every reboot.
+
+## BUG-0430 — An upgraded host at the series cap never recorded a temperature
+
+- Date: 2026-09-22
+- Symptom: A host upgraded to the temperature build whose `host.rrd` was already at the 128-series
+  cap — a 64-thread machine with about 14 disks or 10 guest bridges — never recorded a single
+  `temp.*` series, so its temperature charts stayed permanently empty; only a "more than 128 series"
+  warning appeared.
+- Root cause: `ringFile.index()` refused any unknown key once `len(f.Series) >= historyMaxSeries`,
+  `decodeRing` loads the full series list from the existing file and marks every series seen, and
+  `compact()` only drops a series that is both idle for an hour and entirely NaN — a `cpu.core.*`
+  series is sampled every cycle, so it never frees its slot. The new priority ordering in
+  `hostHistoryPoints` only decides who wins in a file being filled from empty.
+- Fix: At the cap, a non-`cpu.core.*` key reclaims the last `cpu.core.*` slot — series meta, `seen`,
+  a fresh ring and a zeroed accumulator per tier (`internal/agent/usage_history.go`). A `cpu.core.*`
+  key evicts nothing, so a displaced core stays out and there is no thrash, and genuinely
+  unprioritised extras still get the existing warning.
+- Regression: `TestRingFileAtSeriesCapEvictsACoreForATemperature` (`internal/agent/usage_history_hwmon_test.go`) fills a ring to exactly 128 with
+  `cpu.total` and cores, adds a temperature point, and asserts it is admitted, `cpu.total` survives,
+  and that the series list after a second identical sample is exactly the one after the first — the
+  displaced core stays out and nothing else moves; with the old `return -1` it fails with 128
+  series, all cores, no temperature. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 12.006s`.
+- Avoid: Testing the ordering only from `newRing()` — the empty-file path passes while the upgrade
+  path it is meant to protect fails. And loosening `compact()` to evict live series, which would
+  drop real data.
+
+## BUG-0431 — The Hardware panel listed zram, loop and optical devices as installed disks
+
+- Date: 2026-09-22
+- Symptom: The host Hardware panel listed `/dev/zram0` as a 64 GB disk with no model or serial, plus
+  `/dev/sr0` and any active loop device, contradicting the disk-I/O series on the same page and
+  eating into the 128-disk bound.
+- Root cause: `readDisks` ran `lsblk -J -d -b` and appended every top-level block device
+  unconditionally; `lsblk -d` lists zram, loop and optical devices.
+- Fix: Extract the prefix classifier the package already had inside `wholeDisk` into
+  `physicalDisk(name)` (`internal/agent/usage_history_sample.go`) and skip non-physical devices in
+  `readDisks` (`internal/agent/hardware.go`), so both panels use one list.
+- Regression: `fixtureLsblk` gained `zram0`, `sr0` and `loop0`, and
+  `TestReadHardwareReportsEverySection` (`internal/agent/hardware_test.go`) asserts exactly two
+  devices; without the filter it reports five. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.950s`.
+- Avoid: Filtering on lsblk's `TYPE != "disk"` — `zram0` reports `TYPE=disk`, so it would drop `sr0`
+  and `loop0` and keep the very device the report cited. And calling `wholeDisk` from `readDisks`:
+  its `os.Stat("/sys/block/<name>")` would make the fixture test depend on the build machine really
+  having those devices.
+
+## BUG-0432 — A refused Host fencing toggle was shown as a failed membership read
+
+- Date: 2026-09-22
+- Symptom: Turning the pool's Host fencing switch on or off against a master that refuses rendered
+  Core's sentence under "The pool master could not be asked for its membership:", although the
+  membership had loaded and was still displayed below, and the false message persisted until the
+  operator pressed Refresh.
+- Root cause: `setHostFencing` was the one command handler writing its catch into `error`, the state
+  owned by `refresh()`, and it neither cleared that state on entry nor refreshed on failure.
+- Fix: Reuse the existing panel-level action alert (`bmcError` renamed `actionError`) in
+  `web/src/pool-members.tsx`: cleared at the start of `setHostFencing` and written on refusal, so
+  `error` belongs to `refresh()` alone.
+- Regression: The source assertion added to `web/src/pool-members.test.mjs` fails
+  `Core's refusal goes to the action alert` with `setError(` restored in the catch. From `web/`:
+  `npx tsc --noEmit` → exit 0, no diagnostics; `node --test src/*.test.mjs` →
+  `tests 11, pass 11, fail 0`.
+- Avoid: Adding a third error state, or calling `refresh()` in the catch — the panel already had the
+  right slot, and refreshing would have discarded Core's refusal.
+
+## BUG-0433 — Chart series colours fell below the 3:1 non-text contrast minimum
+
+- Date: 2026-09-22
+- Symptom: On the Stats tabs the second to fifth plotted line of any chart — network rx/tx and disk
+  read/write reach series 2 on every host — were drawn at 2 px on a near-white card in colours
+  measuring 1.80:1 to 2.98:1, with the yellow line effectively invisible. The legend swatch used the
+  same token, so it was no mitigation, and the numeric values were reachable only through a hover
+  tooltip.
+- Root cause: The staged palette change aliased `--series-N` directly to the vivid card and gauge
+  accents, replacing a previous all-dark series palette that passed.
+- Fix: `web/src/stats.css` gives series 2 to 5 their own darkened hues (`#0e7490`, `#1179b5`,
+  `#0f8a5f`, `#9a6700`, measuring 4.36:1 to 4.87:1 on white) while the accents stay vivid for card
+  tints, gauge arcs and pills; two comments asserting the old, false mitigation were corrected.
+  Series 3 was darkened too, beyond the three the review named, because it also measured below 3:1.
+- Regression: A new block in `web/src/stats.test.mjs` parses `stats.css`, resolves the
+  `var(--accent-*)` aliases, derives the darkest 6% card tint and asserts every `--series-1..8` is
+  at least 3:1 against it; reverting `--series-2` fails
+  `--series-2 #00d1b2 is 1.80:1 on #fff3f5, below 3:1`. From `web/`: `npx tsc --noEmit` → exit 0;
+  `node --test src/*.test.mjs` → `tests 11, pass 11, fail 0`.
+- Avoid: Keeping the aliases and claiming the legend or tooltip compensates — both inherit the same
+  token, and the tooltip is unreachable by keyboard.
+
+## BUG-0434 — The release workflow pinned the website release id to the package version
+
+- Date: 2026-09-22
+- Symptom: With deploy secrets set, a second push to `main` at an unchanged CHANGELOG version, or
+  any prerelease version, turned the Release run red at the last step — after the tag had moved and
+  APT and the download tree had already published, leaving the site on the previous build.
+- Root cause: The release workflow passed `NEX_WEBSITE_RELEASE_ID: ${{ steps.version.outputs.version }}`,
+  the Debian version, bypassing `scripts/website-ci-deploy.sh`'s unique `${stamp}-${sha:0:12}`
+  fallback. `website-release.py publish` refuses an existing `releases/<id>`, and the deploy
+  script's `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` regex rejects the `~` a prerelease Debian version
+  carries.
+- Fix: Delete the env line from `.github/workflows/release.yml` and the `.gitea/workflows/release.yml`
+  copy, so the script derives its own per-run id as the Website workflow already does.
+- Regression: `tests/test_ci_security.py::ReleaseDeployCredentialTests::test_website_release_id_is_left_to_the_deploy_script`
+  fails on both provider copies against the pre-fix workflows.
+  `python3 -m unittest tests.test_ci_security tests.test_website_hosting tests.test_release_publish`
+  → `Ran 33 tests in 0.413s` `OK`. The existing Python discovery jobs run it on the forge and hosted
+  CI.
+- Avoid: Substituting the tag form (`steps.version.outputs.tag`) — it dodges the `~` but keeps the
+  collision on a same-version republish, which is the documented normal path.
+
+## BUG-0435 — The website was built after the release tag had already moved
+
+- Date: 2026-09-22
+- Symptom: A TypeScript error under `website/src`, or a half-set `NEX_DEPLOY_*` secret, aborted the
+  Release job after "Create or replace the release" had created the forge release and moved the
+  version tag, so APT and `/downloads` stayed on the previous version and the reachability check was
+  skipped too — a half-published release.
+- Root cause: "Check for deploy credentials", "Set up Node.js for the website" and "Build the static
+  website" were placed after the release-creation step although none of them consumes its output.
+- Fix: Move all three directly before "Create or replace the release" in both workflow copies, and
+  correct the credentials-step comment that asserted the old order.
+- Regression: `tests/test_ci_security.py::ReleaseDeployCredentialTests::test_deploy_checks_and_website_build_run_before_the_tag_moves`
+  fails on both provider copies against the pre-fix workflows; the stale opposite-order assertion in
+  `test_publish_and_verify_steps_are_gated_on_the_same_result` was removed rather than duplicated.
+  `python3 -m unittest tests.test_ci_security tests.test_website_hosting tests.test_release_publish`
+  → `Ran 33 tests in 0.413s` `OK`.
+- Avoid: Relying on the separate Website workflow to catch the bad build — it runs in a different
+  job and cannot stop the Release job. And adding a post-failure cleanup or retry step instead of
+  ordering the cheap checks first.
+
+## BUG-0436 — A watchdog proof was never counted, so a pool without fence devices could not promote
+
+- Date: 2026-09-22
+- Symptom: In a pool with Host fencing on and no BMC profiles, promotion produced a valid watchdog
+  proof, reached stage `activate`, then failed `this pool promotion is not proved` on every retry,
+  leaving the pool with no master.
+- Root cause: The proof-verification loops skipped members with no fence profile, so a watchdog proof
+  was never counted.
+- Fix: Drop the `member.Fence == nil` short-circuit from `evaluatePoolPromotion`,
+  `promotionExpiredFenceOnly` and `poolRestartUnreachableExcluded`
+  (`internal/agent/pool_promote.go`); `protocol.PoolPromotionFenceVerified` is the single decider,
+  and the verifier already rejects a non-watchdog proof without a profile.
+- Regression: `TestTheWatchdogProofAndReadinessAgreeThroughTheRealPromotionPath`
+  (`internal/agent/pool_watchdog_proof_test.go`) extended into `activatePromotedPoolAuthority`; with
+  the skip restored it fails `pool host master-1 has not been fenced for this promotion`.
+  `go test -count=1 ./internal/agent/` → `ok nex.local/nex/internal/agent 11.854s`;
+  `go test -count=1 -race ./internal/agent/` → `ok nex.local/nex/internal/agent 29.176s`.
+- Avoid: Special-casing the watchdog at each call site, or relaxing
+  `protocol.PoolPromotionFenceVerified`.
+
+## BUG-0437 — The fence step chose a method the readiness preflight had not promised
+
+- Date: 2026-09-22
+- Symptom: A promotion the preflight approved through the watchdog aborted on confirm with the
+  credential refusal, and repeated for ever.
+- Root cause: The fence step re-derived the method from `vmhost.PoolFenceUsable` alone, ignoring the
+  credential condition readiness applies.
+- Fix: `fencePoolExcludedHosts` (`internal/agent/pool_promote.go`) loads peer state once and calls
+  `poolPromotionFenceReadiness` per host, branching on the kind it returns; the duplicated "no
+  recorded fence profile" refusal was removed, leaving one decider.
+- Regression: `TestAPromotionFencesByTheMethodReadinessPromised`
+  (`internal/agent/pool_watchdog_proof_test.go`) fails on the old predicate with `this host holds no
+  fence credential for master-1`. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.854s`; `go test -count=1 -race ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 29.176s`.
+- Avoid: Adding the credential check to `vmhost.PoolFenceUsable`, or duplicating the rule in the
+  fence step.
+
+## BUG-0438 — A watchdog-only master rebooted ungated after its own watchdog reset it
+
+- Date: 2026-09-22
+- Symptom: A watchdog-only master that its watchdog had reset, and that the pool had promoted over,
+  rebooted with no boot restriction and autostarted the same shared-storage VMs the new master was
+  running — two writable copies of the same disks.
+- Root cause: Nothing on the arming path recorded self-fence exposure, so
+  `EnsurePoolBootRestriction` returned early and the storage guard's skip applied. Only a recorded
+  fence profile set it.
+- Fix: New `poolSelfFenceExposed(member)` — a usable fence profile or `WatchdogArmed.Armed` — used by
+  `poolSelfFencePromotable` and `recordPoolSelfFenceExposure`, and
+  `applyPoolWatchdogArmedReport` records the exposure for this host before saving peer state
+  (`internal/agent/pool_watchdog_arming.go`, `internal/agent/pool_promote.go`).
+  `internal/vmhost/storage_guard.go` is unchanged.
+- Regression: `TestAnArmedMasterIsRestrictedOnTheBootAfterItsWatchdogCouldHaveResetIt`
+  (`internal/agent/pool_watchdog_arming_test.go`) fails `arming recorded no self-fence exposure`
+  with either half reverted. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.854s`; `go test -count=1 -race ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 29.176s`.
+- Avoid: Adding a watchdog branch to `poolHostRestricted` in `internal/vmhost/storage_guard.go` —
+  the exposure record is what every consumer already reads.
+
+## BUG-0439 — An armed host read its own `sbd` as another program holding the watchdog
+
+- Date: 2026-09-22
+- Symptom: On real or emulated hardware an armed host reported `another program on this host already
+  holds its watchdog device` on the next pass, was recorded not armed with `sbd` disabled, held the
+  arming turn for ever, and the pool never armed.
+- Root cause: The sysfs state reads `active` as soon as the device is opened, which this host's own
+  `sbd` does, and the in-use gate ran before the armed check.
+- Fix: `poolWatchdogArmingIntent` (`internal/agent/pool_watchdog_arming.go`) refuses only a device
+  another program holds: `if w.InUse` becomes `if w.InUse && !armed`. The armed short-circuit is
+  deliberately not hoisted above the maintenance gate.
+- Regression: `TestAnArmedHostDoesNotReadItsOwnSBDAsAnotherProgram`
+  (`internal/agent/pool_watchdog_arming_test.go`) fails on the old gate with `an armed host stopped
+  feeding its watchdog because its own sbd holds the device`. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.854s`; `go test -count=1 -race ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 29.176s`.
+- Avoid: Hoisting the armed short-circuit above the maintenance gate, which would keep a host
+  feeding its watchdog after an operator asked for maintenance.
+
+## BUG-0440 — Draining two hosts of a four-host pool reset the two healthy survivors
+
+- Date: 2026-09-22
+- Symptom: A four-host pool with every host armed, two hosts put into maintenance, reset the two
+  healthy hosts that stayed. It reproduces only when the drained hosts sort before the survivors by
+  host ID, which is why the existing four-host drain test never saw it.
+- Root cause: `poolClusterMayLeave` let a host leave the cluster whenever it was no longer in the
+  derived nodelist, even while peers were still feeding watchdogs. That escape was written for a
+  drain in a pool that keeps its cluster, where the survivors reload the nodelist and stop counting
+  the departing vote. In a teardown (`want == false`) nobody reloads anything, because
+  `applyPoolCluster` only runs on the wanted path: the two maintenance hosts stopped feeding, dropped
+  out of the nodelist and left, and the two hosts still feeding were 2 live votes against an on-disk
+  expectation of 4, went inquorate, and `sbd` reset them.
+- Fix: `want` is threaded into `poolClusterMayLeave` (`internal/agent/pool_cluster.go`) and the
+  escape becomes `feeding == 0 || (want && !poolClusterContains(nodes, hostID))`. During a teardown
+  the master strips the quorate side's bound first and `poolWatchdogTeardownTurn` refuses a turn
+  while it is set, so an unarmed node lingering on the cluster is no longer the case the escape
+  guarded against.
+- Regression: `TestDrainingTwoHostsOfFourTearsThePoolDownWithoutResettingAnybody`
+  (`internal/agent/pool_cluster_test.go`) fails on the unfixed code with `draining two hosts of four
+  reset [member-2 member-3]` and passes with the fix. `go test -count=1 ./internal/agent/` →
+  `ok nex.local/nex/internal/agent 11.981s`; `go test -race -count=2 -run 'Cluster|Watchdog'
+  ./internal/agent/` → `ok nex.local/nex/internal/agent 4.351s`.
+- Avoid: Writing the regression with arbitrary drained hosts (draining `member-2` and `member-3`
+  passes on the buggy code because teardown turns run in host-ID order), and fixing it by having
+  teardown hosts reload a shrunken nodelist, which lowers expected votes under peers that are still
+  feeding and is the same reset in the other direction.
+
+> BUG-0418 to BUG-0440 were found in pre-merge review of unreleased working-tree work — the
+> automatic host fencing slices, the host hardware and sensor slices, the Stats palette change and
+> the release-publishes-website workflow change — plus one found by the independent review of
+> those fixes (BUG-0440) — before any of it was committed or any ISO or
+> package carrying it was built. Their regression evidence is the Go, Node and Python checks named
+> in each entry, every one of them red-to-green: each fix was reverted in place, its test observed
+> failing with the message quoted in the entry, and the fix restored. None of it is hardware
+> evidence. No physical management controller was contacted, no host was powered off, no physical
+> watchdog was read, armed or expired, and no release was published; the fencing measurements behind
+> these entries come from a nested virtual laboratory, recorded in
+> [QA evidence](qa/2026-09-22-automatic-host-fencing.md). The concurrent review runs also saw two
+> transient failures in `internal/agent` (`TestAHostFinishesAnAccountAControllerRefusedHalfway` and
+> `TestAnArmedMasterIsRestrictedOnTheBootAfterItsWatchdogCouldHaveResetIt`) while other agents were
+> mid-edit in the same package. Both were then run eight times in a row and three times under the
+> race detector on the settled tree (`go test -count=8 -run '<name>|<name>' ./internal/agent/`, then
+> `-race -count=3`), all passing: the failures were build races between concurrent editors, not
+> defects.

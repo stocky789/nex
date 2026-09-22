@@ -1,0 +1,44 @@
+{
+  "summary": "Nex Core records host temperatures. The existing 5 s host sampler also walks /sys/class/hwmon and records each usable tempN_input as a gauge series in group temperature, unit celsius, keyed temp.<chip>-<device>.<n> so a key never depends on the kernel's hwmon index. Labels follow the driver (one series per CPU package, the block device for drivetemp, the NVMe name and model, the PCI address for GPU and NIC chips). An unreadable or implausible reading (below -40 C or above 150 C) records a gap, at most 24 sensors are kept, and they are registered ahead of the per-core CPU series. The same walk carries each sensor's tempN_max and tempN_crit for the hardware report in slice 2. The package now ships /etc/modules-load.d/nex-sensors.conf so SATA and SAS disks expose a temperature through drivetemp. scripts/build-source.py keeps .conf files under packaging/core-local in the corresponding-source archive, so that new file is present when the package is built from it. API impact: changed contract (existing) - host StatsHistory gains the temperature group and celsius unit additively over GET /api/v1/hosts/{id}/stats; no new field, endpoint or capability, and an older UI ignores an unknown group. The StatsSeries group and unit enums in docs/api/openapi.json, the generated reference and the usage-history section of docs/API.md are updated here.",
+  "paths": [
+    "internal/agent/usage_history_hwmon.go",
+    "internal/agent/usage_history_hwmon_test.go",
+    "internal/agent/usage_history_sample.go",
+    "internal/agent/usage_history_test.go",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/nex-sensors.conf",
+    "scripts/build-source.py",
+    "docs/changes/2026-09-22-host-temperature-sensors.json",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Core sampling only. The operator-visible temperature chart, gauges and guide page belong to the UI part of the same slice and are documented there."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "GET /api/v1/hosts/{id}/stats returns the same StatsHistory shape with additional series in a new group; no request, capability or error changes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Slice 1 of docs/plans/2026-09-22-host-hardware-and-sensors.md as planned."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Temperature history is observed state kept by the host.",
+    "record": "The temperature series live in <state-dir>/usage/host.rrd on each host, beside the CPU, memory, network, disk and load series.",
+    "recovery": "Nothing to recover: a fresh Controller reads the same history from the host over the existing stats channel as soon as the host reconnects, and hwmon thresholds are read live from the kernel."
+  },
+  "verification": {
+    "method": "go vet and go test ./internal/agent/ against fixture sysfs trees built in t.TempDir (renumbered hwmon indexes, per-driver labels, implausible and unreadable readings, a 64-core host with 30 sensors). No hardware was touched: no sensor label, threshold or drivetemp behaviour here is a real-machine observation, and the owner's bare-metal walkthrough is outstanding.",
+    "evidence": [
+      "internal/agent/usage_history_hwmon_test.go"
+    ]
+  }
+}

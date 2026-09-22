@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -60,6 +61,18 @@ func serveStatsChannel(ctx context.Context, s State, req protocol.StatsChannelRe
 	_ = conn.SetDeadline(time.Time{})
 	serveStatsConn(ctx, bufferedConn{conn, r}, history)
 	return nil
+}
+
+// statsChannelHandler answers the Controller's read-only queries on a stats channel: the
+// host's usage history, and its hardware, which is observed on request and kept nowhere.
+func statsChannelHandler(history http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/stats", history)
+	mux.HandleFunc("GET /hardware", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(readHardware(r.Context(), "/"))
+	})
+	return mux
 }
 
 // bufferedConn keeps bytes the upgrade response reader already buffered.

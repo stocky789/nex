@@ -32,7 +32,8 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
 TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
          'web/public': {'.html'}, 'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
-         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg'},
+         'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg',
+                                  '.conf'},
          'packaging/controller': {'.py', '.sh', '.service', '.path', '.md'},
          'packaging/cluster-storage': {'.sh'},
          'docs/api': {'.json', '.html', '.css'}}

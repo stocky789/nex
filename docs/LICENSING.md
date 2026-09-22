@@ -217,20 +217,89 @@ identifies CDDL-1.0 and separately licensed BSD-2-Clause portions. Retain the co
 exact-package notices and matching source, including all component-specific terms;
 this summary is not a blanket combined-kernel licensing determination.
 
-**External distribution of ZFS-enabled images, including alphas, remains blocked.**
-The exact final component/source licence review, matching corresponding source and
-notice retention, supported-kernel DKMS build, offline installation, Secure Boot
-signing/key handling where applicable, kernel-upgrade and known-good boot recovery
-must have inspected evidence. Until those gates close, ZFS-enabled images are for
-internal disposable labs only. Private forge releases of those images count as that
-internal lab delivery (project owner, 2026-09-19 follow-up); the public website download
-tree and APT archive remain blocked. Configuration changes and unit tests do not establish
-that an image builds, boots or can be redistributed. See the
-[rollout verification](qa/2026-09-19-zfs-provisioning.md) for actual checks and limits.
-That report records internal QA4 offline installation, first boot, reboot, and a
-separate disposable kernel-package upgrade and retained-kernel fallback. Those
-results narrow the technical unknowns; they do not close the remaining licence,
-Secure Boot, exact-final-artifact, or external source-delivery gates.
+Release publication does not inspect the compliance manifest for OpenZFS or other
+storage-related packages; forge, website downloads and APT use the same Release workflow
+when deploy secrets are set. Component licence review and source retention in this
+section still apply to external redistribution claims.
+
+## In-band management-controller tool (`ipmitool`) — 2026-09-22
+
+BMC fencing adds Debian `ipmitool` to `installer/packages.txt` and to the
+`nex-core-local` package's `Depends`. Nex executes it as a separate program —
+`ipmitool -I open …` against this host's own controller over `/dev/ipmi0`, and
+`ipmitool -I lanplus … mc guid` to read a target controller's system GUID — and
+parses its standard output. No `ipmitool` code is copied into Nex and nothing
+links against its libraries, so this is aggregation, not a combined program.
+
+Upstream `ipmitool` is BSD-3-Clause (Sun Microsystems, 2003). That was verified
+against an installed copy of upstream release 1.8.19's own `COPYING` file on the
+workstation used for this change. **Outstanding, not verified here:** the Debian
+binary package's own `debian/copyright` was not inspected, because no Debian
+system or package archive was available offline for this review; Debian's
+packaging may add files under other terms, and `ipmitool` links OpenSSL, whose
+notice travels with its own package. Inspect the exact Debian archive's
+copyright file and record the exact version before any external distribution,
+exactly as the clustered-storage dependency review did for its packages.
+
+The kernel IPMI drivers (`ipmi_si`, `ipmi_devintf`) are part of Debian's own
+`linux-image-amd64`, already in `installer/packages.txt`. Nex only lists them in
+`/etc/modules-load.d/nex-ipmi.conf` so the kernel loads them at boot; it ships no
+kernel code and creates no combined work with them.
+
+Because this package enters the ISO through `installer/packages.txt`, the build's
+generated component manifest and compliance manifest cover it automatically.
+Before any external ISO distribution, retain the exact package's copyright notice
+and matching corresponding source under the release evidence gate above. No
+external release clearance is granted here.
+
+## Watchdog self-fencing daemon (`sbd`) — 2026-09-22
+
+Watchdog fencing adds Debian `sbd` to `installer/packages.txt` and to the
+`nex-core-local` package's `Depends`. Nex Core does not execute `sbd` at all: it
+writes `/etc/default/sbd` — a plain shell-variable configuration file of its own
+authorship — and enables the packaged `sbd.service` through `systemctl`, which
+Debian's own unit then starts as a dependency of `corosync.service`. No `sbd`
+code is copied into Nex and nothing links against its libraries, so this is
+aggregation, not a combined program. It stands beside `corosync`, `pacemaker`
+and `dlm-controld`, which the clustered-storage dependency review already
+covers and which `sbd` is built against.
+
+Upstream `sbd` (ClusterLabs) is **GPL-2.0-or-later**, per the licence headers in
+its own sources. GPL-2.0-or-later may be taken at version 3, so it is compatible
+with distribution alongside AGPL-3.0-only Nex code — but Nex must not combine any
+of it into its own sources, and does not: the only interface is a configuration
+file and a systemd unit name.
+
+**Outstanding, not verified here:** the Debian binary package's own
+`debian/copyright` was not inspected, because no Debian package archive was
+available offline for this review, and `sbd` links `libqb` and Pacemaker's
+libraries, whose notices travel with their own packages. Inspect the exact
+Debian archive's copyright file and record the exact version before any external
+distribution, exactly as the clustered-storage dependency review did.
+
+Because this package enters the ISO through `installer/packages.txt`, the build's
+generated component manifest and compliance manifest cover it automatically.
+Before any external ISO distribution, retain the exact package's copyright notice
+and matching corresponding source under the release evidence gate above. No
+external release clearance is granted here.
+
+## Host hardware inventory tools — 2026-09-22
+
+Host hardware discovery adds Debian `dmidecode` and `pciutils` to
+`installer/packages.txt`. The Nex agent executes `dmidecode -t memory` and
+`lspci -mm -nn -D` as separate programs and parses their standard output; no
+code is copied into Nex and nothing is linked against them, so this is
+aggregation, not a combined program. Both are GPL-2.0-or-later, which Nex must
+not combine into its AGPL-3.0-only sources. `pciutils` also ships the `pci.ids`
+device-name database under its own terms. `lsblk` is part of `util-linux`,
+already in the base system, and is executed the same way.
+
+Because these packages enter the ISO through `installer/packages.txt`, the
+build's generated component manifest and compliance manifest cover them
+automatically. Before any external ISO distribution, retain each exact
+package's copyright notice and matching corresponding source under the release
+evidence gate above, including the `pci.ids` data file's own terms. No external
+release clearance is granted here.
 
 ## Native clustered-GFS2 dependencies — 2026-09-12
 

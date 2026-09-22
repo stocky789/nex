@@ -4,6 +4,7 @@ package nexupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,8 +56,8 @@ func TestCompareVersions(t *testing.T) {
 		{"0.1.0", "0.1.0", 0},
 		{"0.1.0", "0.1.1", -1},
 		{"0.1.1", "0.1.0", 1},
-		{"0.1.0-dev", "0.1.0", -1},
-		{"0.1.0", "0.1.0-dev", 1},
+		{"0.1.0-dev", "0.1.0", 1},
+		{"0.1.0", "0.1.0-dev", -1},
 		{"0.1.0+apt1", "0.1.0", 1},
 		{"0.1.0", "0.1.0+apt1", -1},
 		{"0.1.0+apt1", "0.1.0+apt2", -1},
@@ -66,11 +67,63 @@ func TestCompareVersions(t *testing.T) {
 		{"0.1.0+vlan1", "0.1.0+upd3", 1},
 		{"0.1.0+vlan1", "0.1.1", -1},
 		{"0.1.0+console2", "0.1.1", -1},
+		{"1.0~rc1", "1.0", -1},
+		{"1.0-1", "1.0", 1},
+		{"1.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002", "1.1", 1},
 	}
+	exits := make(map[string]int)
 	for _, c := range cases {
-		if got := CompareVersions(c.a, c.b); got != c.want {
-			t.Fatalf("CompareVersions(%q, %q)=%d want %d", c.a, c.b, got, c.want)
+		exits["dpkg --compare-versions "+c.a+" lt "+c.b] = 1
+		exits["dpkg --compare-versions "+c.a+" gt "+c.b] = 1
+		if c.want < 0 {
+			exits["dpkg --compare-versions "+c.a+" lt "+c.b] = 0
+		} else if c.want > 0 {
+			exits["dpkg --compare-versions "+c.a+" gt "+c.b] = 0
 		}
+	}
+	calls := fakeCommands(t, func(line string) (string, int) {
+		code, ok := exits[line]
+		if !ok {
+			t.Fatalf("unexpected command %q", line)
+		}
+		return "", code
+	})
+	for _, c := range cases {
+		if got, err := CompareVersions(context.Background(), c.a, c.b); err != nil || got != c.want {
+			t.Fatalf("CompareVersions(%q, %q)=(%d, %v) want %d", c.a, c.b, got, err, c.want)
+		}
+	}
+	if got := strings.Count(joined(calls), "dpkg --compare-versions"); got < len(cases) {
+		t.Fatalf("native dpkg comparator was not used for every case:\n%s", joined(calls))
+	}
+}
+
+func TestCompareVersionsReturnsCommandFailures(t *testing.T) {
+	fakeCommands(t, func(line string) (string, int) {
+		if strings.HasPrefix(line, "dpkg --compare-versions") {
+			return "bad version", 2
+		}
+		return "", 0
+	})
+	if _, err := CompareVersions(context.Background(), "bad:1", "1.0"); err == nil {
+		t.Fatal("invalid dpkg comparison succeeded")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := CompareVersions(ctx, "1.0", "1.1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+}
+
+func TestCompareVersionsReturnsStartFailure(t *testing.T) {
+	previous := Command
+	Command = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/nonexistent/dpkg")
+	}
+	t.Cleanup(func() { Command = previous })
+	if _, err := CompareVersions(context.Background(), "1.0", "1.1"); err == nil {
+		t.Fatal("missing dpkg succeeded")
 	}
 }
 
@@ -178,6 +231,25 @@ func TestCheckCandidateNone(t *testing.T) {
 	st, _ := Check(context.Background(), "https://mirror.example/apt", "nex-core-local")
 	if st.Error == "" || st.UpdateAvailable {
 		t.Fatalf("%+v", st)
+	}
+}
+
+func TestCheckReportsComparatorFailure(t *testing.T) {
+	isolatePaths(t)
+	fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return "0.1.0", 0
+		case strings.HasPrefix(line, "apt-cache policy"):
+			return "Candidate: 0.2.0\n", 0
+		case strings.HasPrefix(line, "dpkg --compare-versions"):
+			return "invalid version", 2
+		}
+		return "", 0
+	})
+	st, err := Check(context.Background(), "https://mirror.example/apt", "nex-core-local")
+	if err != nil || st.Error != "could not compare package versions" || st.UpdateAvailable {
+		t.Fatalf("%v %+v", err, st)
 	}
 }
 
@@ -333,6 +405,9 @@ func TestApplyLocalRejectsUnchangedVersion(t *testing.T) {
 		if strings.HasPrefix(line, "dpkg-query") {
 			return "0.1.0", 0
 		}
+		if strings.HasPrefix(line, "dpkg --compare-versions") {
+			return "", 1
+		}
 		return "nex-core-local is already the newest version (0.1.0).", 0
 	})
 	dir := t.TempDir()
@@ -369,6 +444,27 @@ func TestApplyLocalReportsAptFailure(t *testing.T) {
 	prog, _ := ReadProgress(dir)
 	if !strings.Contains(prog.Error, "held broken packages") {
 		t.Fatalf("progress lost the error: %+v", prog)
+	}
+}
+
+func TestApplyLocalRejectsComparatorFailure(t *testing.T) {
+	isolatePaths(t)
+	installed := "0.1.0"
+	fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return installed, 0
+		case strings.Contains(line, "install -y nex-core-local"):
+			installed = "0.2.0"
+			return "", 0
+		case strings.HasPrefix(line, "dpkg --compare-versions"):
+			return "invalid version", 2
+		}
+		return "", 0
+	})
+	res, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", t.TempDir())
+	if err == nil || res.Status != "failed" || res.Message != "could not compare package versions" {
+		t.Fatalf("%+v %v", res, err)
 	}
 }
 

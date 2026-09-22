@@ -37,7 +37,8 @@ func TestPoolPromotionFenceProofFreshBoundary(t *testing.T) {
 func TestPoolPromotionFenceVerified(t *testing.T) {
 	now := time.Now().UTC()
 	fence := &StorageClusterFence{Kind: FenceVirsh, TargetID: "target-1", Endpoint: "fence.example.test", CredentialRef: "cred-1", VirshURI: "qemu:///system", SSHLogin: "fence", SSHPort: 22, SSHHostKeyRef: "key-1"}
-	if err := PoolPromotionFenceVerified(fenceProof(now), fence, "pool-1", "master-1", "op-1", 7, now); err != nil {
+	member := PoolMember{HostID: "master-1", Fence: fence}
+	if err := PoolPromotionFenceVerified(fenceProof(now), member, "pool-1", "master-1", "op-1", 7, now); err != nil {
 		t.Fatalf("a bound, observed, fresh proof was refused: %v", err)
 	}
 	cases := []struct {
@@ -68,13 +69,13 @@ func TestPoolPromotionFenceVerified(t *testing.T) {
 				tc.break_(&value)
 				proof = &value
 			}
-			if err := PoolPromotionFenceVerified(proof, fence, "pool-1", "master-1", "op-1", 7, now); err == nil {
+			if err := PoolPromotionFenceVerified(proof, member, "pool-1", "master-1", "op-1", 7, now); err == nil {
 				t.Fatal("this was accepted as a fence proof")
 			}
 		})
 	}
 	// A host with no usable fence profile can never be excluded, whatever the proof says.
-	if err := PoolPromotionFenceVerified(fenceProof(now), nil, "pool-1", "master-1", "op-1", 7, now); err == nil {
+	if err := PoolPromotionFenceVerified(fenceProof(now), PoolMember{HostID: "master-1"}, "pool-1", "master-1", "op-1", 7, now); err == nil {
 		t.Fatal("a proof was accepted for a host with no fence profile")
 	}
 }

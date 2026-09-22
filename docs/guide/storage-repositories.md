@@ -126,14 +126,11 @@ for production workloads. Use an explicitly selected disposable lab host.
    with the new **CHAP account** and **CHAP secret**. First shut off every VM using the repository
    and settle pending disk, media and storage tasks; Nex does not stop VMs automatically. If an
    update is refused because the repository generation changed, reload, recheck and retry.
-9. To remove an unused credential, open **Unused storage credentials** at the bottom of the **Storage** page, select its **Host**, then
-   **Find unused credentials**. The table shows only opaque receipts, status and creation time.
-   Select **Retire unused credentials**, review the receipt and confirm. Core rejects it if the
-   receipt became attached in the meantime. Retiring never deletes repository data.
-10. To stop using a local, NFS, SMB, ZFS or ordinary iSCSI repository, select **Detach**, type the
+9. To stop using a local, NFS, SMB, ZFS or ordinary iSCSI repository, select **Detach**, type the
     exact **Repository name**, then select **Detach storage**. Core refuses while VM disks,
     retained disks, active work or media that has not been removed depend on it. Detach removes Nex configuration and Nex-managed
-    mount/session setup where applicable. For ZFS it unregisters Nex storage while
+    mount/session setup where applicable, including any SMB or iSCSI credentials Core held for that
+    repository. For ZFS it unregisters Nex storage while
     leaving the native pool and dataset intact. It never deletes data, formats a LUN,
     touches the original ZFS dataset, or removes `.nex-storage-marker`.
 
@@ -404,9 +401,8 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **A master NFS/SMB update, rotation or detach is refused for a member workload:** a member still
   references the repository for a VM disk or ISO. Remove that dependency and wait for the member to
   release it. Do not force a change or detach the share on the member.
-- **Credential rotation or retirement is refused:** for rotation, shut off every VM using the
-  repository and settle pending operations. For retirement, refresh **Unused storage credentials**
-  and retry only if the receipt is still listed.
+- **Credential rotation is refused:** shut off every VM using the
+  repository and settle pending operations, then retry.
 - **An APT removal or downgrade is refused:** retained repository state needs a matching
   storage-capable package. Hosts with ZFS provisioning records and Controllers managing
   ZFS-provisioning Cores require the newer ZFS-capable package. Restore that matching build;

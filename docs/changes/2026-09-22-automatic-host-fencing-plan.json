@@ -1,0 +1,29 @@
+{
+  "summary": "Plan automatic host fencing: Core-provisioned BMC fencing with UUID identity checks, and hardware-watchdog fencing with quorum for pools of three or more hosts, replacing the manual fence-device dialog. Planning only. API impact: changed contract (planned, not implemented).",
+  "paths": [
+    "docs/plans/2026-09-22-automatic-host-fencing.md",
+    "docs/plans/2026-09-08-nex-platform.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No behaviour changes; the pool authority guide is updated in the implementing slices."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Planning only. The plan declares changed host-report, fence-profile, pool-setting and proof contracts for the implementing slices; docs/API.md lists no unimplemented interface as implemented."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The published roadmap describes shipped behaviour; it changes in the implementing slices. The decision is recorded in docs/plans."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state changes in this record. The planned feature is Core-owned: the pool master's membership record and the Core fence-credential store, recovered through master inventory."
+  },
+  "verification": {
+    "method": "Documentation link and scope review; documentation and privacy gates run.",
+    "evidence": [
+      "docs/plans/2026-09-22-automatic-host-fencing.md"
+    ]
+  }
+}

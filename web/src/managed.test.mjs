@@ -4,29 +4,20 @@
 // operator clicks Close. There is no test harness in web/ (no vitest/jest), so this bundles the
 // real module with the already-installed esbuild and renders it with react-dom/server;
 // run with: node src/managed.test.mjs
-import { buildSync, transformSync } from "esbuild";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { transformSync } from "esbuild";
+import { readFileSync, writeFileSync } from "node:fs";
+import { bundleTestModule, testCacheDir } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// The bundle keeps React external and is written inside web/node_modules so its bare imports
-// resolve to the same copy this file uses; two React instances cannot render together.
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/managed.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./managed.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
+const moduleURL = bundleTestModule(new URL("./managed.tsx", import.meta.url), "managed");
 
 // A restored pending request is how a form can be open on first render, which is also the
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(`file://${outfile}`);
+const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(moduleURL);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -65,7 +56,7 @@ const timingStart = mainSource.indexOf("const date =");
 const timingEnd = mainSource.indexOf("const size =", timingStart);
 assert.ok(timingStart >= 0 && timingEnd > timingStart, "task timestamp helper is present");
 const timingCode = transformSync(mainSource.slice(timingStart, timingEnd), { loader: "tsx", format: "esm" }).code;
-const timingFile = `${outdir}/main-task-timestamp.test.mjs`;
+const timingFile = `${testCacheDir}/main-task-timestamp.test.mjs`;
 writeFileSync(timingFile, timingCode);
 const { taskTimestamp } = await import(`file://${timingFile}?${Date.now()}`);
 const adopted = { id: "historic", host_id: "core-a", request_id: "adopt-outcome:core-a:historic", updated_at: "2026-09-01T00:00:00Z" };
@@ -221,7 +212,7 @@ assert.doesNotMatch(noTools, /no VirtIO display in this VM's definition/);
 const sessionStart = mainSource.indexOf("const signedInKey");
 const sessionEnd = mainSource.indexOf("function Brand()", sessionStart);
 assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, "session probe helpers are present");
-const sessionFile = `${outdir}/main-session-probe.test.mjs`;
+const sessionFile = `${testCacheDir}/main-session-probe.test.mjs`;
 writeFileSync(sessionFile, transformSync(mainSource.slice(sessionStart, sessionEnd), { loader: "tsx", format: "esm" }).code
   + "\nexport { signedInBefore, rememberSignedIn };\n");
 const store = new Map();
@@ -345,7 +336,7 @@ console.log("managed.test.mjs: ok");
     networkRemovable, mediaRemovable, confirmMatches, validResourceName, renameChanged,
     lifecycleBlocker, networkRemoveBody, networkRenameBody, stableRequestID, heldRequestID, resourceGeneration,
     networkMemberState, removalCapability,
-  } = await import(`file://${outfile}`);
+  } = await import(moduleURL);
 
   // Only a pool VLAN network is Nex's to rename or remove.
   assert.equal(networkRemovable({ kind: "vlan" }), true);
@@ -475,7 +466,7 @@ console.log("managed.test.mjs: pool resource removal ok");
 // warnings ride along with an accepted create, and a re-add before the master has reported the
 // member is a wait rather than a failure.
 {
-  const { placementWarningNotice } = await import(`file://${outfile}`);
+  const { placementWarningNotice } = await import(moduleURL);
   const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
   const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
   const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "pool-resource-removal-v1"], inventory: null };

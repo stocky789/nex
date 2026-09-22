@@ -443,7 +443,6 @@ def main():
             expect(cached_smb.get_by_text("last report", exact=True)).to_be_visible()
             pending_credentials.fulfill(json={"receipt": "core-only-race-receipt"})
             expect(page.get_by_role("alert")).to_contain_text(stale_reason)
-            expect(page.get_by_role("alert")).to_contain_text("Credential delivery may now be unused; use Unused storage credentials after reconnecting.")
             assert not any("storage/cached-smb/update" in request for request in requests[race_start:]), requests[race_start:]
             smb_update.get_by_role("button", name="Close", exact=True).click()
             mode["credential_deferred"] = False

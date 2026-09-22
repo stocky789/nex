@@ -30,6 +30,8 @@ func stubApt(t *testing.T, installed, candidate string) {
 			return exec.CommandContext(ctx, "printf", "%s", installed)
 		case strings.HasPrefix(line, "apt-cache policy"):
 			return exec.CommandContext(ctx, "printf", "  Candidate: %s\n", candidate)
+		case name == "dpkg":
+			return exec.CommandContext(ctx, name, args...)
 		}
 		return exec.CommandContext(ctx, "true")
 	}

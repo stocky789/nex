@@ -23,9 +23,9 @@ import (
 )
 
 type Config struct {
-	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath, PoolPeerListen string
-	Authenticate                                                         func(context.Context, string) error
-	Engine                                                               vmhost.Config
+	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath string
+	Authenticate                                         func(context.Context, string) error
+	Engine                                               vmhost.Config
 }
 
 // PoolPeerHandler serves the isolated Core-to-Core join endpoint; it never accepts an

@@ -1,0 +1,47 @@
+{
+  "summary": "Record the outcome of the host hardware and temperature rollout. The plan's status line and both slices now read 'implemented, hardware walkthrough outstanding': the hwmon temperature series, GET /api/v1/hosts/{id}/hardware with the host-hardware-v1 capability, and the Stats tab's Hardware panel, gauge row and Temperature chart are built and checked, and the project owner's real-hardware walkthrough is the one gate still open. A new QA record states what was actually exercised - Go unit and relay tests against fixture sysfs trees and stub tools, web unit checks, and a Chromium review against mocked host replies covering loading, a sensorless host, an unavailable section, an older Core, stale and failed reads, warm and critical gauges, keyboard use, the gauges' accessibility tree and a 390 px layout - together with the five render-level defects that review found and the limits that remain, including that the harness is untracked scratch. The usage history guide's verification note now links that record instead of saying no browser review has been done. Nothing here is a real-machine observation. The plan also records what the implementation settled differently from the design - the series key for a chip with no device link, sorting sensors by key before the 24-sensor budget truncates them, extending the existing usage history page instead of adding a second one, and fixture trees built in t.TempDir rather than committed - the platform plan and the usage history plan's series-cap decision are reconciled with it, and the UI slice record's evidence now reflects the browser review that has since run. Bumps the working version to 0.4.3 and describes the hardware panel, gauges, temperature chart and Stats restyle in the changelog, with the installed dmidecode/pciutils packages, the drivetemp module file and the host-hardware-v1 capability under Miscellaneous; the version sentence in the guide pages and installer/README.md follows, and the new hardware route is stamped x-introduced-version 0.4.3 in the OpenAPI contract with the reference regenerated. API impact: none - documentation of contracts implemented and already documented by the slices of the same plan (changed contract for the stats temperature group, new contract for the hardware route); the introduced-version stamp corrects reference metadata and changes no behaviour.",
+  "paths": [
+    "docs/plans/2026-09-22-host-hardware-and-sensors.md",
+    "docs/plans/2026-09-16-usage-history.md",
+    "docs/qa/2026-09-22-host-hardware-and-sensors.md",
+    "docs/guide/usage-history.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
+    "installer/README.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-host-hardware-and-sensors.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The usage history page's Verification section replaces 'no browser review yet' with what the simulated browser review covered and links the QA record. The other pages carry only the working-version sentence, moved to 0.4.3 by the bump; the evidence sentence naming the 0.4.2 Hosts-tab check is left at the version that check ran on. No step, limit or troubleshooting entry changed: behaviour is unchanged by this record.",
+    "pages": [
+      "docs/guide/usage-history.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Plan status, QA evidence and a guide verification note only. The temperature group on GET /api/v1/hosts/{id}/stats and the new GET /api/v1/hosts/{id}/hardware route are implemented and documented by the slice records of this plan; no contract, error, capability or bound changes here.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Host hardware and temperatures are not a milestone on the published roadmap board, and no milestone's built or outstanding items change with them.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation only. The feature it records is Core-owned: temperature series in each host's usage history file and hardware read live from the host, with nothing kept by the Controller."
+  },
+  "verification": {
+    "method": "Documentation link and scope review against the implementation and the executed checks; the QA record reports only checks that ran, labels every one simulated, and records the project owner's real-hardware walkthrough as outstanding. Documentation, API generation and privacy gates run.",
+    "evidence": [
+      "docs/qa/2026-09-22-host-hardware-and-sensors.md"
+    ]
+  }
+}

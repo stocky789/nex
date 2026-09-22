@@ -1,0 +1,63 @@
+{
+  "summary": "Add host to pool no longer asks for the pool master peer address. When no master_url is supplied and none is recorded, the master works out its own peer origin from the address its pool-peer listener is bound to, falling back to the default-route source address for a wildcard bind, records it as its member peer_origin, and the Controller forwards the invitation's master_url to the joining host. API impact: changed contract — POST /api/v1/pools/{id}/members master_url becomes a pure optional override, the 'has not advertised a peer origin' 409 is gone, and the invite PoolRequest accepts an empty master_url.",
+  "paths": [
+    "cmd/nex-core-agent/main.go",
+    "cmd/nex-core-local/main.go",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/changes/2026-09-22-pool-master-derives-peer-origin.json",
+    "docs/guide/join-a-pool.md",
+    "internal/agent/peer.go",
+    "internal/agent/pool_join.go",
+    "internal/agent/pool_join_test.go",
+    "internal/agent/pool_system_uuid_test.go",
+    "internal/agent/run.go",
+    "internal/controller/pool_evidence_test.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooljoin_fixes_test.go",
+    "internal/controller/pooltransfer.go",
+    "internal/localcore/service.go",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-members.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The join workflow drops the pool master address step and documents the new no-default-route refusal.",
+    "pages": [
+      "docs/guide/join-a-pool.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "master_url is now optional end to end: Core derives the master origin when it is empty, and the Controller forwards the invitation's master_url. Masters built before this change refuse an empty master_url with their existing origin error.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Usability fix inside the existing Phase 4 join slice."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The master's peer origin stays in the master's pool membership record (its own member peer_origin) on Nex Core; a fresh Controller reads it back from the reported membership. Limit: a derived origin is pinned once it is recorded, so a later explicit master_url cannot move it; on Nex Core the default route is the management interface by design, and an operator who binds the listener elsewhere gets that address instead.",
+    "record": "Pool master membership record, master member row peer_origin; recovered from inventory.managed.membership."
+  },
+  "verification": {
+    "method": "go build ./..., go vet ./internal/... ./cmd/..., go test -count=1 ./internal/agent/ ./internal/controller/ ./internal/localcore/ (TestPoolJoinInvitationWorksOutMasterPeerOrigin now covers a non-default listen address; TestAnEjectedRowDoesNotHoldAMachineIdentityForEver and TestADisclaimedMasteryStaysInsideThePool added, each confirmed failing with the fix reverted), npm test and tsc in web/, generate_api.py --check, check_docs.py --worktree and the repository privacy test. No disposable two-host lab join or browser capture was run for this change.",
+    "evidence": [
+      "internal/agent/pool_join_test.go",
+      "internal/agent/pool_system_uuid_test.go",
+      "internal/controller/pooljoin_fixes_test.go",
+      "internal/controller/pool_evidence_test.go",
+      "web/src/pool-members.test.mjs"
+    ]
+  }
+}

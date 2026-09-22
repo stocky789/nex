@@ -23,5 +23,11 @@ func scopedCredentialValid(kind string, v protocol.StorageCredentials) bool {
 	if strings.ContainsAny(v.Username+v.Secret, "\n") {
 		return false
 	}
+	// A fence account's password becomes a script fence_ipmilan runs, and the agent strips
+	// the whitespace around what it printed. Core refuses those passwords itself; the same
+	// refusal here means the operator is told at the form rather than by a failed fence.
+	if kind == "fence_bmc" && strings.TrimSpace(v.Secret) != v.Secret {
+		return false
+	}
 	return v.Secret != "" && v.SSHPrivateKey == "" && v.SSHKnownHosts == ""
 }

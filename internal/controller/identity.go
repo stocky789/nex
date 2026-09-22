@@ -241,6 +241,13 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "host storage failed")
 		return
 	}
+	// A recorded master enrolling late (the pool's own record named it while it was away)
+	// takes back the mirror rows another host held meanwhile.
+	var master string
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || (master == host && rekeyPoolMirrors(tx, pool, host) != nil) {
+		fail(w, 500, "pool mirror storage failed")
+		return
+	}
 	if _, err = tx.Exec("DELETE FROM certificates WHERE host_id=?", host); err != nil {
 		fail(w, 500, "certificate storage failed")
 		return
@@ -265,15 +272,31 @@ func (c *Controller) enroll(w http.ResponseWriter, r *http.Request) {
 // already-enrolled master has reported the Core-owned membership record.  The database
 // copy is a disposable inventory projection, never an authority to add or retain members.
 func (c *Controller) coreReportedPoolMember(tx *sql.Tx, site, pool, host string) bool {
-	var raw, master string
-	if tx.QueryRow("SELECT p.master_host_id,h.inventory FROM pools p JOIN hosts h ON h.id=p.master_host_id WHERE p.id=? AND p.site_id=? AND h.revoked=0", pool, site).Scan(&master, &raw) != nil {
+	var master string
+	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=? AND site_id=?", pool, site).Scan(&master) != nil {
 		return false
 	}
-	var inventory protocol.Inventory
-	if json.Unmarshal([]byte(raw), &inventory) != nil || inventory.Managed == nil || inventory.Managed.Membership == nil {
+	var membership *protocol.PoolMembership
+	var raw string
+	var revoked bool
+	switch err := tx.QueryRow("SELECT revoked,inventory FROM hosts WHERE id=?", master).Scan(&revoked, &raw); {
+	case err == sql.ErrNoRows:
+		// A recorded master that never enrolled here: the pool's record as its enrolled
+		// hosts reported it is the only evidence there is (see adoptReportedMaster).
+		if membership, err = poolRecordNaming(tx, pool, master); err != nil {
+			return false
+		}
+	case err != nil || revoked:
+		return false
+	default:
+		var inventory protocol.Inventory
+		if json.Unmarshal([]byte(raw), &inventory) == nil {
+			membership = reportedMembership(inventory)
+		}
+	}
+	if membership == nil {
 		return false
 	}
-	membership := inventory.Managed.Membership
 	// The recorded master's own report is the evidence, and it settles two cases: it names
 	// itself master, or it names the host now presenting this pool identity. The second is a
 	// replacement Controller where a member reconnected first and so holds the pool row it
@@ -700,7 +723,8 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		}
 	}
 	out.Consoles = c.consoles.pending(host)
-	if slices.Contains(v.Capabilities, protocol.UsageHistoryCapability) {
+	// The hardware relay shares this channel, so either capability is reason to deliver it.
+	if slices.Contains(v.Capabilities, protocol.UsageHistoryCapability) || slices.Contains(v.Capabilities, protocol.HostHardwareCapability) {
 		out.StatsChannels = c.stats.pending(host)
 	}
 	rows, err := tx.Query("SELECT o.id,o.kind FROM operations o WHERE o.host_id=? AND o.status IN ('queued','dispatched') AND NOT (o.request_id='adopt-outcome:'||o.host_id||':'||o.id AND NOT EXISTS (SELECT 1 FROM managed_resources r WHERE r.operation_id=o.id)) ORDER BY o.rowid", host)

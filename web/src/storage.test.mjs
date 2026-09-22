@@ -6,12 +6,6 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 
 const src = readFileSync(new URL("./storage.tsx", import.meta.url), "utf8");
-// UI-1: a queued registration still has id "", so the key falls back to the operation. A failed
-// one now answers its Controller request-row key (pending-storage-<operation id>).
-assert.match(src, /<tr key=\{s\.id \|\| `op:\$\{s\.operation_id\}`\} data-storage-id=\{s\.id\}>/);
-assert.match(src, />Domain</);
-assert.match(src, /storage-existing-badge/);
-assert.doesNotMatch(src, /Existing directory within share/);
 const { code } = transformSync(src, { loader: "tsx", format: "esm" });
 const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
@@ -46,11 +40,6 @@ assert.equal(storageObservationFresh(new Date(Date.now() - 31_000).toISOString()
 assert.equal(storageObservationFresh(new Date(Date.now() + 5_000).toISOString()), false);
 assert.equal(storageObservationFresh(undefined), false);
 assert.equal(storageObservationFresh("not-a-date"), false);
-// H6: "Configure this host" is an explicit target in a disk-erasing flow. It carries the clicked
-// host into the wizard and excludes the hosts Core already reports for that repository.
-assert.match(src, /setConfigureZFS\(\{ \.\.\.repository, host_id: host\.id \}\)/);
-assert.match(src, /initialHostID=\{configureZFS\?\.host_id\}/);
-assert.match(src, /excludeHostIDs=\{configureZFS \? zfsOutcomes\.filter/);
 
 assert.equal(clusterStatusView(true, "", undefined, 0), "checking");
 assert.equal(clusterStatusView(false, "pool master unavailable", undefined, 0), "unavailable");
@@ -101,7 +90,4 @@ assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 0 }), fa
 assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 1 }), true);
 assert.equal(storageLifecycleReady({ ...ready, kind: "nfs", generation: 1, status: "failed" }), false);
 assert.equal(storageLifecycleReady({ ...ready, kind: undefined }), true);
-assert.match(src, />Register storage</);
-assert.match(src, />Add ZFS storage</);
-assert.match(src, /kind: "zfs"/);
 console.log("storage.test.mjs: ok");

@@ -28,6 +28,8 @@ pcs
 fence-agents-redfish
 fence-agents-ipmilan
 fence-agents-virsh
+ipmitool
+sbd
 sudo
 ca-certificates
 ifupdown
@@ -35,3 +37,5 @@ bridge-utils
 vlan
 dhcpcd-base
 genisoimage
+dmidecode
+pciutils

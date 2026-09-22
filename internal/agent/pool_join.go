@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 	"path/filepath"
@@ -52,9 +54,12 @@ type poolPendingJoin struct {
 // redemption"; the CSR-first host-local offer path is unchanged and still supported.
 func CreatePoolJoinInvitation(s *Store, masterURL, memberHostID string) (protocol.PoolJoinInvitation, error) {
 	var out protocol.PoolJoinInvitation
-	u, err := peerOrigin(masterURL)
-	if err != nil {
-		return out, err
+	var u *url.URL
+	var err error
+	if masterURL != "" {
+		if u, err = peerOrigin(masterURL); err != nil {
+			return out, err
+		}
 	}
 	if s.State.HostID == "" || s.State.PoolID == "" {
 		return out, errors.New("pool master identity is unavailable")
@@ -86,11 +91,11 @@ func CreatePoolJoinInvitation(s *Store, masterURL, memberHostID string) (protoco
 		return out, err
 	}
 	// Nothing advertises the master's own peer origin: AdvertisePoolPeerOrigin is member to
-	// master only, so the first brokered invitation records the master_url it was issued for
-	// as the master's own member peer_origin. A usable recorded origin wins and the supplied
-	// value is ignored, so a later caller cannot move the master. Like the member advertise
-	// handler (peer.go:184) this is a recorded observation, not a membership change: no
-	// generation bump.
+	// master only, so the first brokered invitation records the master's origin as its own
+	// member peer_origin: the supplied master_url, or else the one the master works out for
+	// itself. A usable recorded origin wins and the supplied value is ignored, so a later
+	// caller cannot move the master. Like the member advertise handler (peer.go:184) this is a
+	// recorded observation, not a membership change: no generation bump.
 	for i := range state.Membership.Members {
 		if state.Membership.Members[i].HostID != state.Membership.MasterHostID {
 			continue
@@ -98,9 +103,17 @@ func CreatePoolJoinInvitation(s *Store, masterURL, memberHostID string) (protoco
 		if recorded, recErr := peerOrigin(state.Membership.Members[i].PeerOrigin); recErr == nil {
 			u = recorded
 		} else {
+			if u == nil {
+				if u, err = ownPeerOrigin(); err != nil {
+					return out, err
+				}
+			}
 			state.Membership.Members[i].PeerOrigin = u.String()
 		}
 		break
+	}
+	if u == nil {
+		return out, errors.New("pool master must be an HTTPS origin")
 	}
 	state.MasterURL = u.String()
 	tokenBytes := make([]byte, 32)
@@ -124,6 +137,27 @@ func CreatePoolJoinInvitation(s *Store, masterURL, memberHostID string) (protoco
 		return out, err
 	}
 	return protocol.PoolJoinInvitation{MasterURL: u.String(), PoolCAPEM: state.CAPEM, Invitation: base64.RawURLEncoding.EncodeToString(b), ExpiresAt: expires}, nil
+}
+
+// ownPeerOrigin is this host's configured peer listener. A wildcard bind names no address,
+// so it falls back to the address this host uses for its default route, which on Nex Core is
+// the management interface. Connecting a UDP socket sends nothing.
+// ponytail: a derived origin is recorded for good; pick by the joining host's route if a
+// master ever needs a different address per member.
+func ownPeerOrigin() (*url.URL, error) {
+	host, port, err := net.SplitHostPort(PoolPeerListen)
+	if err != nil {
+		return nil, errors.New("the pool master's peer listen address is not an address and port")
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		conn, dialErr := net.Dial("udp", "192.0.2.1:9")
+		if dialErr != nil {
+			return nil, errors.New("the pool master cannot work out its own peer address because it has no default route")
+		}
+		defer conn.Close()
+		host = conn.LocalAddr().(*net.UDPAddr).IP.String()
+	}
+	return &url.URL{Scheme: "https", Host: net.JoinHostPort(host, port)}, nil
 }
 
 // ExecutePoolRequest answers one Controller-brokered pool request on the master. The

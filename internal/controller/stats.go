@@ -146,18 +146,12 @@ func (c *Controller) relayStats(w http.ResponseWriter, r *http.Request, object, 
 		fail(w, 400, "range must be live, 10m, 24h, 30d or 1y")
 		return
 	}
-	var raw string
-	var caps []string
-	c.db.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw)
-	json.Unmarshal([]byte(raw), &caps)
-	c.mu.Lock()
-	fresh := time.Since(c.seen[host]) <= c.cfg.StaleAfter
-	c.mu.Unlock()
-	if revoked || !fresh {
+	fresh, capable := c.hostAgent(host, protocol.UsageHistoryCapability, revoked)
+	if !fresh {
 		fail(w, 409, "the host is not freshly connected; its usage history cannot be read now")
 		return
 	}
-	if !slices.Contains(caps, protocol.UsageHistoryCapability) {
+	if !capable {
 		fail(w, 409, "the host agent does not keep usage history; upgrade Nex Core")
 		return
 	}
@@ -165,52 +159,11 @@ func (c *Controller) relayStats(w http.ResponseWriter, r *http.Request, object, 
 	if object == "vm" {
 		query.Set("id", id)
 	}
-	var status int
-	var history protocol.StatsHistory
-	var refusal string
-	// Queries are read-only, so a broken channel that was already open (the agent
-	// restarted, or closed it while idle) is retried once on a fresh channel.
-	for attempt := 0; ; attempt++ {
-		ch, reused := c.stats.open(host)
-		timer := time.NewTimer(statsAgentWait)
-		select {
-		case <-ch.ready:
-		case <-timer.C:
-		case <-r.Context().Done():
-		}
-		timer.Stop()
-		attached := c.stats.done(host, ch)
-		if r.Context().Err() != nil {
-			return
-		}
-		if !attached {
-			fail(w, 503, "the host did not open a stats connection in time; check the host connection and retry")
-			return
-		}
-		c.stats.mu.Lock()
-		if !ch.dead {
-			ch.idle.Reset(statsIdle) // before the query, so it cannot fire mid-query
-		}
-		c.stats.mu.Unlock()
-		var err error
-		status, history, refusal, err = ch.ask(query)
-		if err == nil {
-			break
-		}
-		c.stats.close(host, ch)
-		var timeout net.Error
-		timedOut := errors.As(err, &timeout) && timeout.Timeout()
-		// A host that stopped answering would only stall a retry as well.
-		if reused && attempt == 0 && !timedOut {
-			continue
-		}
-		if timedOut {
-			fail(w, 504, "the host did not answer the usage history query in time; retry")
-		} else {
-			fail(w, 502, "the host stats connection failed; retry")
-		}
+	status, body, refusal, ok := c.askAgent(w, r, host, "/stats", query, "usage history query")
+	if !ok {
 		return
 	}
+	var history protocol.StatsHistory
 	switch {
 	case status == 404:
 		fail(w, 404, "the host has no usage history for this "+map[string]string{"vm": "VM", "host": "host"}[object])
@@ -227,7 +180,7 @@ func (c *Controller) relayStats(w http.ResponseWriter, r *http.Request, object, 
 		fail(w, 502, "the host could not read its usage history")
 		return
 	}
-	if !validHistory(history, object, id, rng, tier) {
+	if json.Unmarshal(body, &history) != nil || !validHistory(history, object, id, rng, tier) {
 		fail(w, 502, "the host returned malformed usage history")
 		return
 	}
@@ -235,22 +188,86 @@ func (c *Controller) relayStats(w http.ResponseWriter, r *http.Request, object, 
 	write(w, 200, history)
 }
 
-// ask sends one query on the channel; queries from concurrent browsers take turns.
+// hostAgent reports whether the host is freshly connected and whether its agent offers the
+// capability a relayed query needs.
+func (c *Controller) hostAgent(host, capability string, revoked bool) (fresh, capable bool) {
+	var raw string
+	var caps []string
+	c.db.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw)
+	json.Unmarshal([]byte(raw), &caps)
+	c.mu.Lock()
+	fresh = !revoked && time.Since(c.seen[host]) <= c.cfg.StaleAfter
+	c.mu.Unlock()
+	return fresh, slices.Contains(caps, capability)
+}
+
+// askAgent opens or reuses the host's stats channel and sends one read-only request on it,
+// answering the browser itself and reporting false when it could not reach the host. what
+// names the query in the timeout message.
+func (c *Controller) askAgent(w http.ResponseWriter, r *http.Request, host, path string, query url.Values, what string) (int, []byte, string, bool) {
+	// Queries are read-only, so a broken channel that was already open (the agent
+	// restarted, or closed it while idle) is retried once on a fresh channel.
+	for attempt := 0; ; attempt++ {
+		ch, reused := c.stats.open(host)
+		timer := time.NewTimer(statsAgentWait)
+		select {
+		case <-ch.ready:
+		case <-timer.C:
+		case <-r.Context().Done():
+		}
+		timer.Stop()
+		attached := c.stats.done(host, ch)
+		if r.Context().Err() != nil {
+			return 0, nil, "", false
+		}
+		if !attached {
+			fail(w, 503, "the host did not open a stats connection in time; check the host connection and retry")
+			return 0, nil, "", false
+		}
+		c.stats.mu.Lock()
+		if !ch.dead {
+			ch.idle.Reset(statsIdle) // before the query, so it cannot fire mid-query
+		}
+		c.stats.mu.Unlock()
+		status, body, refusal, err := ch.ask(path, query)
+		if err == nil {
+			return status, body, refusal, true
+		}
+		c.stats.close(host, ch)
+		var timeout net.Error
+		timedOut := errors.As(err, &timeout) && timeout.Timeout()
+		// A host that stopped answering would only stall a retry as well.
+		if reused && attempt == 0 && !timedOut {
+			continue
+		}
+		if timedOut {
+			fail(w, 504, "the host did not answer the "+what+" in time; retry")
+		} else {
+			fail(w, 502, "the host stats connection failed; retry")
+		}
+		return 0, nil, "", false
+	}
+}
+
+// ask sends one request on the channel; requests from concurrent browsers take turns.
 // For a non-200 reply it also returns the host's error message.
-func (ch *statsChannel) ask(query url.Values) (int, protocol.StatsHistory, string, error) {
-	var history protocol.StatsHistory
+func (ch *statsChannel) ask(path string, query url.Values) (int, []byte, string, error) {
 	ch.query.Lock()
 	defer ch.query.Unlock()
 	if ch.conn == nil {
-		return 0, history, "", errors.New("stats channel closed")
+		return 0, nil, "", errors.New("stats channel closed")
 	}
-	req, err := http.NewRequest("GET", "http://nex/stats?"+query.Encode(), nil)
+	target := "http://nex" + path
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	req, err := http.NewRequest("GET", target, nil)
 	if err != nil {
-		return 0, history, "", err
+		return 0, nil, "", err
 	}
 	_ = ch.conn.SetDeadline(time.Now().Add(statsQueryWait))
 	if err = req.Write(ch.conn); err != nil {
-		return 0, history, "", err
+		return 0, nil, "", err
 	}
 	// Headers and body together are bounded, so a misbehaving host cannot stream an
 	// endless header. Responses are strictly one per request, so nothing is buffered
@@ -258,15 +275,15 @@ func (ch *statsChannel) ask(query url.Values) (int, protocol.StatsHistory, strin
 	limited := &io.LimitedReader{R: ch.reader, N: statsBodyLimit + statsHeaderLimit}
 	resp, err := http.ReadResponse(bufio.NewReader(limited), req)
 	if err != nil {
-		return 0, history, "", err
+		return 0, nil, "", err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, history, "", err
+		return 0, nil, "", err
 	}
 	if limited.N <= 0 {
-		return 0, history, "", errors.New("stats response too large")
+		return 0, nil, "", errors.New("stats response too large")
 	}
 	_ = ch.conn.SetDeadline(time.Time{})
 	if resp.StatusCode != 200 {
@@ -274,12 +291,58 @@ func (ch *statsChannel) ask(query url.Values) (int, protocol.StatsHistory, strin
 			Error string `json:"error"`
 		}
 		json.Unmarshal(body, &refused)
-		return resp.StatusCode, history, refused.Error, nil
+		return resp.StatusCode, nil, refused.Error, nil
 	}
-	if json.Unmarshal(body, &history) != nil {
-		return 502, history, "", nil
+	return 200, body, "", nil
+}
+
+// hostHardware relays one live hardware observation from the host. It is read on request and
+// stored nowhere: the host is the only record of the machine it runs on.
+func (c *Controller) hostHardware(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	id := r.PathValue("id")
+	var revoked bool
+	switch err := c.db.QueryRow("SELECT revoked FROM hosts WHERE id=?", id).Scan(&revoked); {
+	case err == sql.ErrNoRows:
+		fail(w, 404, "host not found")
+		return
+	case err != nil:
+		fail(w, 500, "storage failed")
+		return
 	}
-	return 200, history, "", nil
+	fresh, capable := c.hostAgent(id, protocol.HostHardwareCapability, revoked)
+	if !fresh {
+		fail(w, 409, "the host is not freshly connected; its hardware cannot be read now")
+		return
+	}
+	if !capable {
+		fail(w, 409, "the host agent does not report its hardware; upgrade Nex Core")
+		return
+	}
+	status, body, _, ok := c.askAgent(w, r, id, "/hardware", nil, "hardware query")
+	if !ok {
+		return
+	}
+	var hw protocol.HostHardware
+	if status != 200 {
+		fail(w, 502, "the host could not read its hardware")
+		return
+	}
+	if json.Unmarshal(body, &hw) != nil || !validHardware(hw) {
+		fail(w, 502, "the host returned a malformed hardware report")
+		return
+	}
+	hw.HostID = id
+	write(w, 200, hw)
+}
+
+// validHardware re-checks the bounds the host enforces, so a misbehaving host cannot hand a
+// browser an unbounded document.
+func validHardware(hw protocol.HostHardware) bool {
+	return !hw.ObservedAt.IsZero() &&
+		len(hw.Memory.Modules) <= protocol.HardwareMaxMemoryModules &&
+		len(hw.Disks.Devices) <= protocol.HardwareMaxDisks &&
+		len(hw.PCI.Devices) <= protocol.HardwareMaxPCIDevices &&
+		len(hw.Sensors.Temperatures) <= protocol.HardwareMaxSensors
 }
 
 func validHistory(h protocol.StatsHistory, object, id, rng string, tier protocol.StatsTier) bool {

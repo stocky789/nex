@@ -208,6 +208,17 @@ option as approval. These instructions cannot enable a question UI the client la
   comments, or defensive code for cases that cannot happen. No speculative
   abstractions, plugin frameworks, empty scaffolding, or parallel sources of truth. Never simplify away
   validation, accessibility, security, or data safety.
+- Delete before you add. Do not fix code by layering more code on top of it: before writing a
+  guard, flag, wrapper, fallback, or special case, find the code that causes the problem and ask
+  whether removing or simplifying it fixes the root cause. Prefer the fix that leaves the codebase
+  smaller, and treat a bug fix that only adds lines as a prompt to look again. "Smallest diff"
+  measures what is left behind, not lines touched: a larger diff that deletes is better than a
+  small one that adds. In the same change, remove what your work makes dead or redundant — unused
+  functions, parameters, fields, branches, flags, tests of removed behavior, superseded
+  workarounds, compatibility paths with no remaining caller, and stale docs. Confirm code is
+  unused by tracing its callers rather than assuming, and never keep it "just in case": Git
+  history is the archive. Report unrelated dead code you find instead of widening the change,
+  and state the net line change in the hand-off.
 - Authenticate and authorize control operations and consoles at the API boundary. Validate host identity,
   scope credentials narrowly, and keep secrets out of logs, source control, images, and diagnostic bundles.
 - Disk erase, overwrite restore, VM/disk deletion, and management-network changes need explicit target

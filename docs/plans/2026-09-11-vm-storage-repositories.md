@@ -383,16 +383,15 @@ Use native Debian packages and existing Go/process integration. Assess `nfs-comm
 `open-iscsi` and `zfsutils-linux`/`zfs-dkms` plus matching headers against the actual Nex package,
 ISO and systemd sandbox rules. The installer package list and Core package dependencies now
 include `nfs-common`, `cifs-utils`, `open-iscsi`, `zfsutils-linux` and `zfs-dkms` with matching
-kernel headers. OpenZFS is bundled for the internal ZFS delivery slice; its installed-host and
-kernel-upgrade paths have bounded disposable-lab evidence. External distribution remains blocked
-by the licensing and Secure Boot evidence below.
+kernel headers. OpenZFS is bundled for the ZFS delivery slice; its installed-host and
+kernel-upgrade paths have bounded disposable-lab evidence.
 Do not assume service permissions allow mounting/device discovery just because tools exist.
 
-OpenZFS adds a specific kernel-module delivery gate: exact Debian package/source licenses,
+OpenZFS adds kernel-module delivery requirements: exact Debian package/source licenses,
 CDDL/GPL redistribution review, DKMS build against supported kernels, Secure Boot signing/key
 handling where enabled, offline dependencies, upgrade failure and known-good boot recovery.
-Do not distribute a new ZFS-enabled artifact until [licensing/source requirements](../LICENSING.md)
-and this review have evidence. This plan is not a licensing clearance or a Secure Boot claim.
+Record evidence under [licensing/source requirements](../LICENSING.md). This plan is not a
+licensing clearance or a Secure Boot claim.
 No ZFS root installer conversion or custom kernel is required by the proposed dataset integration.
 
 For every backend, retain exact tested Nex/kernel/libvirt/QEMU/client/server versions, lab scope,

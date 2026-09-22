@@ -1,0 +1,37 @@
+{
+  "summary": "Forge Release assets are ISO, source bundle and compliance manifest only; standalone nex-core-local and nex-controller .deb files are no longer attached. Packages still build for the ISO and the signed APT update feed. API impact: none.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "docs/guide/publish-a-release.md",
+    "tests/test_ci_security.py",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-release-no-standalone-debs.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md"
+    ],
+    "reason": "Release asset list and publication wording no longer describe standalone .deb downloads."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI release asset policy only; no Controller/Core API contract change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Publication packaging only; no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state; forge release assets and docs only."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_security.BrowserArtifactTests.test_forge_release_does_not_attach_standalone_debs tests.test_ci_security.ReleaseDeployCredentialTests tests.test_controller_package_smoke tests.test_release_reachability; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Both release.yml copies omit .deb from the gitea-release.py asset list while still building and APT-publishing packages.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

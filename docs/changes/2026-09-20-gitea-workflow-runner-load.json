@@ -1,5 +1,5 @@
 {
-  "summary": "Stagger Gitea Controller foundation CI so the browser lane runs alone before Go race, harden stalled-probe eventually budgets, fix release deploy ZFS gate ordering, keep private-forge ZFS publishes with fail-closed manifest parse, and record BUG-0394/0395/0396.",
+  "summary": "Stagger Gitea Controller foundation CI so the browser lane runs alone before Go race, harden stalled-probe eventually budgets, fix release deploy credential ordering, keep fail-closed compliance-manifest parse, and record BUG-0394/0395/0396.",
   "paths": [
     ".github/workflows/phase1.yml",
     ".github/workflows/installer.yml",
@@ -21,7 +21,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "CI runner scheduling and release-publish gates only; operator install and GUI steps are unchanged.",
+    "reason": "CI runner scheduling and release deploy checks only; operator install and GUI steps are unchanged.",
     "pages": []
   },
   "api": {

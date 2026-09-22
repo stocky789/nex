@@ -1,0 +1,27 @@
+{
+  "summary": "Contributor contract: delete before adding. Fix root causes by removing or simplifying the code at fault rather than layering guards, flags or wrappers on top; prefer the fix that leaves the codebase smaller; remove code, tests and docs a change makes dead in the same change, after tracing callers; report unrelated dead code instead of widening the change. Decision: project owner, 2026-09-22. API impact: none.",
+  "paths": [
+    "AGENTS.md",
+    "docs/changes/2026-09-22-delete-before-add-rule.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor working rule only; no operator-visible behavior changes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Contributor instructions only; no Controller or Core contract is involved."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Working-rule clarification; no phase scope change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation-only change with no product state."
+  },
+  "verification": {
+    "method": "Scope review of the single AGENTS.md bullet against the adjacent minimal-change rule; CLAUDE.md imports AGENTS.md, so no second copy was added. python3 scripts/check_docs.py --worktree and the repository privacy test were run.",
+    "evidence": ["AGENTS.md"]
+  }
+}

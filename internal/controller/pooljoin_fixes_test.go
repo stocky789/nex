@@ -183,6 +183,29 @@ func TestPoolJoinInvitationScrubbedOnControllerStart(t *testing.T) {
 	}
 }
 
+// TestPoolJoinWithoutMasterURLLetsTheMasterChoose: the operator is never asked for the master's
+// address. With none recorded or supplied the Controller relays an empty master_url and hands the
+// joining host whatever address the master put in its invitation.
+func TestPoolJoinWithoutMasterURLLetsTheMasterChoose(t *testing.T) {
+	l := newJoinLab(t)
+	request := l.joinRequest("derived")
+	delete(request, "master_url")
+	w := l.addMember(request, func(r protocol.PoolRequest) protocol.PoolResult {
+		if r.MasterURL != "" {
+			t.Errorf("master_url relayed = %q, want empty", r.MasterURL)
+		}
+		r.MasterURL = "https://192.0.2.11:9444"
+		return labInvitation(r)
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("join without master_url refused: %d %s", w.Code, w.Body.String())
+	}
+	commands := l.send(&l.member, nil).Commands
+	if len(commands) != 1 || commands[0].Pool == nil || commands[0].Pool.MasterURL != "https://192.0.2.11:9444" {
+		t.Fatalf("joining host was not given the master's own address: %+v", commands)
+	}
+}
+
 // TestPoolJoinOriginAcceptsTrailingSlashLikeTheHostLocalAPI: internal/localcore/handoff.go's
 // validHTTPSOrigin accepts a single trailing "/", so the Controller must too; it normalises
 // it away, which also makes the two spellings one request for an exact retry.

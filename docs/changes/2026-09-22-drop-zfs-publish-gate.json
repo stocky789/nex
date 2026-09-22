@@ -1,0 +1,62 @@
+{
+  "summary": "Remove the OpenZFS CI publish gate and purge manifest-based publish policy from workflows, release scripts, tests, operator docs, plans, QA and historical change wording. Release publish depends on deploy secrets only. API impact: none.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "scripts/release-publish.py",
+    "scripts/gitea-release.py",
+    "tests/test_ci_security.py",
+    "tests/test_release_publish.py",
+    "tests/test_gitea_release.py",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "docs/LICENSING.md",
+    "installer/README.md",
+    "docs/plans/2026-09-09-package-updates.md",
+    "docs/plans/2026-09-09-fresh-local-install.md",
+    "docs/plans/2026-09-11-vm-storage-repositories.md",
+    "docs/plans/2026-09-18-iso-packaging-efficiency.md",
+    "docs/plans/2026-09-19-zfs-repository-provisioning.md",
+    "docs/qa/2026-09-19-zfs-provisioning.md",
+    "docs/qa/2026-09-19-documentation-sweep.md",
+    "docs/qa/storage-repositories/checks.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-19-zfs-private-forge-release.json",
+    "docs/changes/2026-09-20-gitea-workflow-runner-load.json",
+    "docs/changes/2026-09-22-release-no-standalone-debs.json",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-drop-zfs-publish-gate.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md"
+    ],
+    "reason": "Release and verification docs no longer describe OpenZFS as a publish gate."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "CI publish policy and documentation only; no Controller/Core API contract change."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Publication policy cleanup; no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state; release publish behaviour and docs only."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_ci_security tests.test_release_publish tests.test_gitea_release tests.test_release_reachability; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. rg for check-zfs-blocked, NEX_PUBLISH_WITH_ZFS, ZFS-enabled ISO, ZFS-containing manifest, and publication scripts reject in workflows, scripts, guide, and installer README returns no matches.",
+    "evidence": [
+      "tests/test_ci_security.py",
+      "tests/test_release_publish.py",
+      "docs/guide/publish-a-release.md"
+    ]
+  }
+}

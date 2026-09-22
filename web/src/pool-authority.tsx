@@ -199,11 +199,10 @@ export function ejectBlock(report: AuthorityReport, member: AuthorityMember) {
   return "";
 }
 
-// One compact disclosure per row instead of two more columns: the members table is already
-// the widest in the app, and a disclosure expands in flow rather than being clipped by the
-// table's own scroll container.
-// `extra` is where later slices add their own row actions (S6's promotion and fence device),
-// so one row keeps one disclosure instead of growing a second.
+// One compact disclosure per row, in the table's trailing column: it expands in flow rather
+// than being clipped by the table's own scroll container.
+// `extra` carries the row's other actions (maintenance, promotion and fence device), so one
+// row keeps one disclosure instead of growing a second.
 export function MemberActions({ report, member, onMasterChange, onEject, extra, blockedReason }: {
   report: AuthorityReport; member: AuthorityMember; onMasterChange: () => void; onEject: () => void; extra?: ReactNode; blockedReason?: string;
 }) {
@@ -211,14 +210,17 @@ export function MemberActions({ report, member, onMasterChange, onEject, extra, 
   const eject = ejectBlock(report, member);
   const reasonID = useId();
   const describedBy = (reason: string, suffix: string) => [blockedReason ? "pool-actions-blocked" : "", reason ? `${reasonID}-${suffix}` : ""].filter(Boolean).join(" ") || undefined;
+  // The master can never be made master or ejected, so its row does not offer either.
   return <details className="pool-row-actions">
-    <summary>Actions</summary>
+    <summary>Actions<span className="sr-only"> for {member.name || member.host_id}</span></summary>
     <div>
-      <button type="button" aria-describedby={describedBy(promote, "promote")} disabled={Boolean(promote)} onClick={onMasterChange}>Make pool master</button>
-      {promote && <small id={`${reasonID}-promote`}>{promote}</small>}
-      <button type="button" className="danger" aria-describedby={describedBy(eject, "eject")} disabled={Boolean(eject)} onClick={onEject}>Eject from pool</button>
-      {eject && <small id={`${reasonID}-eject`}>{eject}</small>}
       {extra}
+      {member.role !== "master" && <>
+        <button type="button" aria-describedby={describedBy(promote, "promote")} disabled={Boolean(promote)} onClick={onMasterChange}>Make pool master</button>
+        {promote && <small id={`${reasonID}-promote`}>{promote}</small>}
+        <button type="button" className="danger" aria-describedby={describedBy(eject, "eject")} disabled={Boolean(eject)} onClick={onEject}>Eject from pool</button>
+        {eject && <small id={`${reasonID}-eject`}>{eject}</small>}
+      </>}
     </div>
   </details>;
 }

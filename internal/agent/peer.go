@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 	"strings"
 	"time"
 )
@@ -168,16 +169,39 @@ func PoolPeerHandler(s *Store) http.Handler {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
+			// A member advertises five things about itself: where it listens, which
+			// machine it is, what its own Core found on its management controller, the
+			// watchdog that machine has, and whether it has armed it. Each is sent
+			// whenever it is out of date and each is recorded on its own, so an old
+			// member that reports none of the later ones still advertises its origin
+			// exactly as before.
 			var v struct {
-				Origin string `json:"origin"`
+				Origin        string                      `json:"origin,omitempty"`
+				SystemUUID    string                      `json:"system_uuid,omitempty"`
+				BMC           *protocol.PoolHostBMC       `json:"bmc,omitempty"`
+				Watchdog      *protocol.PoolHostWatchdog  `json:"watchdog,omitempty"`
+				WatchdogArmed *protocol.PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
 			}
 			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&v) != nil {
 				http.Error(w, "invalid peer origin", 400)
 				return
 			}
 			origin, err := peerOrigin(v.Origin)
-			if err != nil {
+			uuid := vmhost.NormalizedSystemUUID(v.SystemUUID)
+			if err != nil && (v.Origin != "" || uuid == "" && v.BMC == nil && v.Watchdog == nil && v.WatchdogArmed == nil) {
 				http.Error(w, "invalid peer origin", 400)
+				return
+			}
+			if v.BMC != nil && v.BMC.Valid() != nil {
+				http.Error(w, "invalid management controller report", 400)
+				return
+			}
+			if v.Watchdog != nil && v.Watchdog.Valid() != nil {
+				http.Error(w, "invalid watchdog report", 400)
+				return
+			}
+			if v.WatchdogArmed != nil && v.WatchdogArmed.Valid() != nil {
+				http.Error(w, "invalid watchdog arming report", 400)
 				return
 			}
 			poolPeerMu.Lock()
@@ -192,14 +216,51 @@ func PoolPeerHandler(s *Store) http.Handler {
 			}
 			if e == nil {
 				for i := range state.Membership.Members {
-					if state.Membership.Members[i].HostID == member.HostID {
-						if state.Membership.Members[i].PeerOrigin == origin.String() {
-							break
-						}
-						state.Membership.Members[i].PeerOrigin = origin.String()
-						e = savePoolPeer(s, state)
-						break
+					if state.Membership.Members[i].HostID != member.HostID {
+						continue
 					}
+					record := &state.Membership.Members[i]
+					changed := false
+					if err == nil && record.PeerOrigin != origin.String() {
+						record.PeerOrigin, changed = origin.String(), true
+					}
+					if uuid != "" && record.SystemUUID != uuid {
+						accepted, holder := acceptPoolSystemUUID(state.Membership, *record, uuid)
+						if accepted {
+							record.SystemUUID, changed = uuid, true
+						}
+						if record.SystemUUIDConflictHostID != holder {
+							record.SystemUUIDConflictHostID, changed = holder, true
+						}
+					}
+					if v.BMC != nil {
+						// An observation about this host's own controller, and
+						// nothing more: it cannot change what the pool decided about
+						// this host. applyPoolBMCReport saves the state itself, and
+						// saves nothing when the finding has not changed — so
+						// `changed` is deliberately left alone here: an origin or
+						// identity change sent in the same request must still be
+						// saved by the caller below.
+						e = applyPoolBMCReport(s, &state, member.HostID, *v.BMC)
+					}
+					if v.Watchdog != nil && e == nil {
+						// The same door and the same rule: a host describes its own
+						// hardware and decides nothing. applyPoolWatchdogReport saves
+						// the state itself and saves nothing when the capability has
+						// not changed, so `changed` is left alone here too.
+						e = applyPoolWatchdogReport(s, &state, member.HostID, *v.Watchdog)
+					}
+					if v.WatchdogArmed != nil && e == nil {
+						// A host is the only thing that can say whether it armed its
+						// own device, and it still decides nothing: the pool decided
+						// that it should arm, and this is the host reporting that it
+						// did. Saved by the same rule, on change only.
+						e = applyPoolWatchdogArmedReport(s, &state, member.HostID, *v.WatchdogArmed)
+					}
+					if changed && e == nil {
+						e = savePoolPeer(s, state)
+					}
+					break
 				}
 			}
 			poolPeerMu.Unlock()
@@ -208,6 +269,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == poolFenceProvisionPath {
+			PoolFenceProvisionHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolFenceCheckPath {
+			PoolFenceCheckHandler(s).ServeHTTP(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, poolCPUPath) {
@@ -492,6 +561,24 @@ func AdvertisePoolPeerOrigin(ctx context.Context, s *Store, origin string) error
 	if err != nil {
 		return err
 	}
+	// The host's own machine identity rides along, so a member that is advertising anyway
+	// never needs a second round trip for it.
+	uuid, _ := localSystemUUID(s)
+	if err = postPoolAdvertise(ctx, s, map[string]any{"origin": origin, "system_uuid": uuid}); err != nil {
+		return err
+	}
+	poolPeerMu.Lock()
+	state, err = loadPoolPeer(s)
+	if err == nil {
+		state.PendingPeerOrigin = ""
+		err = savePoolPeer(s, state)
+	}
+	poolPeerMu.Unlock()
+	return nil
+}
+
+// postPoolAdvertise sends one member-to-master advertisement over the pool's own mTLS.
+func postPoolAdvertise(ctx context.Context, s *Store, body map[string]any) error {
 	master, err := PoolMasterURL(s)
 	if err != nil {
 		return err
@@ -501,7 +588,7 @@ func AdvertisePoolPeerOrigin(ctx context.Context, s *Store, origin string) error
 		return err
 	}
 	defer c.CloseIdleConnections()
-	b, _ := json.Marshal(map[string]string{"origin": origin})
+	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+"/api/v1/pool/advertise", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -513,16 +600,90 @@ func AdvertisePoolPeerOrigin(ctx context.Context, s *Store, origin string) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return errors.New("pool master rejected peer origin")
+		return errors.New("pool master rejected peer advertisement")
+	}
+	return nil
+}
+
+// acceptPoolSystemUUID decides whether the master may write a member's reported machine
+// identity into its row. The certificate proves which *host* is calling; it says nothing
+// about which machine that host is running on, so two refusals stand between a host and its
+// own fencing record:
+//
+//   - a host may not replace a machine identity it already reported while a management
+//     controller is recorded against it. Otherwise a member that a promotion must exclude
+//     could advertise a random identity and make every BMC proof for itself fail for ever,
+//     vetoing its own fencing — which is exactly what fencing exists to prevent. Replacing a
+//     motherboard is the same operator action either way: clear the fence device, let the
+//     host report, record the new controller's access.
+//   - an identity another member already holds is not an identity. Firmware placeholders
+//     ship identical across whole batches, and two hosts reporting the same UUID each
+//     satisfy the other's identity check, so a mistyped controller address between them
+//     would power off the wrong machine with a passing proof. An ejected row is not a
+//     member: the machine it named may be the one re-imaged and re-enrolled under a new
+//     host ID, and nothing would ever release the identity for it.
+//
+// The second refusal also returns the member that already holds the identity. An operator
+// who sees only "this host does not report a unique hardware identity" has nowhere to go;
+// one who is told which host claims it can decide whether that host is theirs and eject it.
+func acceptPoolSystemUUID(membership protocol.PoolMembership, record protocol.PoolMember, uuid string) (bool, string) {
+	if record.SystemUUID != "" && record.Fence != nil &&
+		(record.Fence.Kind == protocol.FenceRedfish || record.Fence.Kind == protocol.FenceIPMI) {
+		return false, ""
+	}
+	for _, other := range membership.Members {
+		if other.HostID != record.HostID && other.Status != "ejected" && other.SystemUUID == uuid {
+			return false, other.HostID
+		}
+	}
+	return true, ""
+}
+
+// localSystemUUID is this host's own machine identity. It takes the store so a lab can run
+// several hosts in one process; production has exactly one machine to ask.
+var localSystemUUID = func(*Store) (string, error) { return vmhost.LocalSystemUUID() }
+
+// ReportPoolSystemUUID keeps this host's own SMBIOS system UUID in the master's membership
+// record, which is where another host later reads it to prove a management controller really
+// belongs to this machine before it powers it off. The master writes its own record; a member
+// advertises to the master. It runs on every reconcile pass, so a pool formed before this
+// existed gains the identity of every host that is still alive, without re-joining anything.
+func ReportPoolSystemUUID(ctx context.Context, s *Store) error {
+	uuid, err := localSystemUUID(s)
+	if err != nil {
+		return err
 	}
 	poolPeerMu.Lock()
-	state, err = loadPoolPeer(s)
-	if err == nil {
-		state.PendingPeerOrigin = ""
-		err = savePoolPeer(s, state)
+	state, err := loadPoolPeer(s)
+	master, recorded := "", ""
+	if err == nil && state.Membership.Valid() == nil {
+		master = state.Membership.MasterHostID
+		if member, ok := poolMemberByID(state.Membership, s.State.HostID); ok {
+			recorded = member.SystemUUID
+		}
+		if member, ok := poolMemberByID(state.Membership, s.State.HostID); master == s.State.HostID && recorded != uuid && ok {
+			accepted, holder := acceptPoolSystemUUID(state.Membership, member, uuid)
+			// Like a peer origin this is a recorded observation, not a membership change,
+			// so it bumps no generation and waits out a handover rather than writing into
+			// one.
+			if err = poolAuthorityWritable(state); err == nil && (accepted || member.SystemUUIDConflictHostID != holder) {
+				for i := range state.Membership.Members {
+					if state.Membership.Members[i].HostID == s.State.HostID {
+						if accepted {
+							state.Membership.Members[i].SystemUUID = uuid
+						}
+						state.Membership.Members[i].SystemUUIDConflictHostID = holder
+						err = savePoolPeer(s, state)
+					}
+				}
+			}
+		}
 	}
 	poolPeerMu.Unlock()
-	return nil
+	if err != nil || master == "" || master == s.State.HostID || recorded == uuid {
+		return err
+	}
+	return postPoolAdvertise(ctx, s, map[string]any{"system_uuid": uuid})
 }
 
 func RetryPoolPeerOrigin(ctx context.Context, s *Store) error {

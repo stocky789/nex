@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -47,6 +48,54 @@ type PoolMember struct {
 	// outside the generation equality rule, so recording a fence profile never invalidates
 	// an in-flight placement or a published inventory.
 	Fence *StorageClusterFence `json:"fence,omitempty"`
+	// SystemUUID is this host's own SMBIOS system UUID, reported by the host itself while
+	// it was alive and kept here so another host can prove, before it powers anything off,
+	// that the BMC it is talking to belongs to this machine and not to some other one that
+	// answers at the same address.  Like the fields above it is outside the generation
+	// equality rule: learning a host's UUID is an observation, not a membership change.  A
+	// member too old to report one stays empty and simply cannot get a BMC fence proof.
+	SystemUUID string `json:"system_uuid,omitempty"`
+	// SystemUUIDConflictHostID names the member that already reported the identity this
+	// host reports, when the master refused this host's report because of it.  Without it
+	// the refusal is a dead end: an operator is told their host has no unique identity and
+	// has nothing to act on.  With it they can see which host claims the identity and
+	// eject it if it is not theirs.  It is cleared the moment the identity is accepted.
+	SystemUUIDConflictHostID string `json:"system_uuid_conflict_host_id,omitempty"`
+	// BMC is what this host's own Core found and did about its own management controller,
+	// in-band, and reported to the master.  It is an observation and a result, never a
+	// credential: the account's password goes to the master's fence-credential store and
+	// nowhere else.  A member too old to report one stays empty.
+	BMC *PoolHostBMC `json:"bmc,omitempty"`
+	// BMCProvisioningDisabled is the operator's own decision, recorded by the master, that
+	// this host must not configure its management controller for fencing.  Clearing a fence
+	// device Nex Core provisioned sets it — one operator action with one meaning — and the
+	// host removes the account it created when it sees it.  It is a decision, not an
+	// observation, so it belongs with the fence profile in the replicated membership and a
+	// host cannot set or clear it by reporting about itself.
+	BMCProvisioningDisabled bool `json:"bmc_provisioning_disabled,omitempty"`
+	// Watchdog is this host's own report of the watchdog device it has, read from sysfs
+	// while it was alive and kept here because the watchdog method has to be answered for
+	// a host that is gone.  Like SystemUUID it is a slow-changing capability rather than a
+	// running observation: it is written only when the finding changes, and it carries no
+	// timestamp because nothing decides anything from how long ago a host last said it.
+	// A member too old to report one stays nil, which is "not reported" and never counts.
+	Watchdog *PoolHostWatchdog `json:"watchdog,omitempty"`
+	// WatchdogArmed is this host's own report that it has armed that device, kept durably
+	// and replicated because it is the first of the three conditions of a watchdog
+	// exclusion proof, and the host that needs to read it is a candidate whose master has
+	// gone.  It is separate from the capability above because it has different rules: it
+	// carries the pool's fencing generation, and a report from an older one is not
+	// evidence about the pool as it is now.  A member too old to report one stays nil.
+	WatchdogArmed *PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
+	// FenceReadiness is the master's own answer to "could this host be shut out right
+	// now", per method, with the reason when it could not.  It is derived from the
+	// membership above and from the continuous non-destructive checks other hosts report,
+	// so like ReplicaGeneration it is a memory-only observation overlaid on the reported
+	// copy of this record and never part of the durable membership: a master that has just
+	// restarted reports "not checked yet" until the next pass, honestly, rather than
+	// keeping a durable store of something it can re-establish in one interval.  A master
+	// too old to report one leaves it nil, which is "not reported" and never ready.
+	FenceReadiness *PoolFenceReadiness `json:"fence_readiness,omitempty"`
 	// FenceCredentialVersion is the master's counter for the private material behind that
 	// profile.  The material itself is never here, never in inventory and never in a
 	// Controller: only the master's own private digest of it decides when this number
@@ -65,6 +114,18 @@ type PoolMembership struct {
 	MasterHostID string       `json:"master_host_id"`
 	Generation   uint64       `json:"generation"`
 	Members      []PoolMember `json:"members"`
+	// HostFencingDisabled is the pool's Host fencing setting, recorded the way it is
+	// decided: fencing is on for a pool that has never been told otherwise, so an absent
+	// field is "on" and a record written before the setting existed keeps the default
+	// without migrating anything.  It is a decision, so unlike the observations below it
+	// is durable, replicated and only ever written by the master.
+	HostFencingDisabled bool `json:"host_fencing_disabled,omitempty"`
+	// FenceSummary is the master's own count, the setting above and Core's prerequisite
+	// checklist, computed over this membership when it is reported.  Like the readiness on
+	// each member row it is a memory-only observation overlaid on the reported copy and is
+	// never part of the durable record: a master that has just restarted reports "not
+	// checked yet" until its next pass rather than keeping a store of it.
+	FenceSummary *PoolFenceSummary `json:"fence_summary,omitempty"`
 }
 
 // PoolJoinCapability gates the Controller-driven join: the brokered invitation envelope
@@ -287,7 +348,16 @@ type PoolPromotionHost struct {
 	FenceRecorded       bool   `json:"fence_recorded"`
 	FenceUsable         bool   `json:"fence_usable"`
 	FenceUnusableReason string `json:"fence_unusable_reason,omitempty"`
-	Error               string `json:"error,omitempty"`
+	// FenceKind names the method this promotion would shut this host out with — the
+	// recorded profile's kind — so the operator sees what is about to happen rather than
+	// only that something will.
+	FenceKind string `json:"fence_kind,omitempty"`
+	// FenceCheckWarning is advisory and nothing else: what this candidate's own last
+	// non-destructive check of that fence device found, when it was failing or stale. The
+	// promotion's proof is unchanged and still decides; this exists so an operator is not
+	// surprised by a fence that was already known to be unreachable.
+	FenceCheckWarning string `json:"fence_check_warning,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // PoolPromotionVM is one VM record of the replica, classified: confirmed by its reachable
@@ -384,11 +454,16 @@ func PoolPromotionFenceDigest(poolID, oldMasterHostID, operationID string, gener
 // profile, and an observation inside the freshness window.  A fence request that returned
 // success, a timeout, a missed heartbeat and an operator assurance all fail here, because
 // none of them can produce this record.
-func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, fence *StorageClusterFence, poolID, oldMasterHostID, operationID string, generation uint64, now time.Time) error {
+func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, member PoolMember, poolID, oldMasterHostID, operationID string, generation uint64, now time.Time) error {
 	if proof == nil {
 		return errors.New("this promotion has no fence proof for the old pool master")
 	}
-	if fence == nil || fence.Valid() != nil {
+	fence := member.Fence
+	if proof.Method == PoolFenceMethodWatchdogProof {
+		if err := poolWatchdogProofVerified(proof, member); err != nil {
+			return err
+		}
+	} else if fence == nil || fence.Valid() != nil {
 		return errors.New("the old pool master has no usable fence profile")
 	}
 	if proof.Status != "passed" || !proof.ExclusionVerified {
@@ -398,7 +473,7 @@ func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, fence *Storage
 		}
 		return errors.New(reason)
 	}
-	if proof.HostID != oldMasterHostID || proof.TargetID != fence.TargetID {
+	if proof.HostID != oldMasterHostID || proof.Method != PoolFenceMethodWatchdogProof && proof.TargetID != fence.TargetID {
 		return errors.New("this fence proof excludes another host")
 	}
 	if proof.RequestID != operationID || proof.ConfigGeneration != generation {
@@ -409,6 +484,52 @@ func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, fence *Storage
 	}
 	if !PoolPromotionFenceProofFresh(proof.ObservedAt, now) {
 		return errors.New("this fence proof is older than " + PoolPromotionFenceWindow.String() + "; fence the old pool master again")
+	}
+	return nil
+}
+
+// poolWatchdogProofVerified re-checks the three conditions of the rule change against the
+// record the proof carries, at the moment the proof is used rather than only when it was made.
+// A proof is a claim about what a host observed; this is what makes it evidence.
+func poolWatchdogProofVerified(proof *StorageClusterFenceStatus, member PoolMember) error {
+	// The generation is read off the member record rather than taken from a caller:
+	// PoolMembership.Valid pins every member's Generation equal to the membership's, so
+	// this cannot be handed the authority generation by mistake.  It was, and readiness and
+	// the promotion path silently disagreed.
+	generation := member.Generation
+	w := proof.Watchdog
+	if w == nil {
+		return errors.New("this watchdog exclusion proof carries no evidence")
+	}
+	// (a) the target's own armed report, in the durable record, at this generation.
+	armed := member.WatchdogArmed
+	if armed == nil || !armed.Armed {
+		return errors.New("pool host " + proof.HostID + " never reported that it armed a watchdog, so it cannot be shut out by one")
+	}
+	if !PoolWatchdogArmable(armed.Kind) || !PoolWatchdogArmable(w.Kind) || armed.Kind != w.Kind {
+		return errors.New("pool host " + proof.HostID + " reports no watchdog that could reset it independently of its kernel")
+	}
+	if armed.FencingGeneration != generation || w.ArmedGeneration != generation {
+		return errors.New("pool host " + proof.HostID + " armed its watchdog under an earlier record of this pool, so that report is not evidence about the pool as it is now")
+	}
+	if armed.TimeoutSeconds == 0 || w.TimeoutSeconds != armed.TimeoutSeconds {
+		return errors.New("this watchdog exclusion proof was measured against a different timeout than " + proof.HostID + " reports")
+	}
+	// (c) the bound, which must be at least twice the target's own timeout, and must have
+	// been held. (b), the quorate partition excluding the target, is what the proving host
+	// measured; the partition it recorded must not name the target.
+	bound := int(PoolWatchdogBound(armed.TimeoutSeconds) / time.Second)
+	if w.BoundSeconds < bound || w.HeldSeconds < w.BoundSeconds {
+		return errors.New("this pool has not been quorate without " + proof.HostID + " for the " +
+			PoolWatchdogBound(armed.TimeoutSeconds).String() + " a watchdog exclusion needs")
+	}
+	if len(w.Partition) < 2 {
+		return errors.New("a watchdog exclusion needs a majority partition, which needs three or more hosts")
+	}
+	for _, host := range w.Partition {
+		if host == proof.HostID {
+			return errors.New("this watchdog exclusion proof names " + proof.HostID + " in the partition it claims excludes it")
+		}
 	}
 	return nil
 }
@@ -624,8 +745,9 @@ type PoolCommand struct {
 	// For action "maintenance" it names the host being drained, which is not the target:
 	// that command goes to the master, addressed by Membership.MasterHostID.
 	MemberHostID string `json:"member_host_id,omitempty"`
-	// Enabled is the desired maintenance state for MemberHostID.  It is a desired state,
-	// not a transition, so re-sending it is a success and never a conflict.
+	// Enabled is the desired maintenance state for MemberHostID, and for action
+	// "host-fencing" the desired Host fencing state for the whole pool.  It is a desired
+	// state, not a transition, so re-sending it is a success and never a conflict.
 	Enabled bool `json:"enabled,omitempty"`
 	// MasterURL, PoolCAPEM and Invitation are the master-issued join credential the
 	// joining Core redeems by itself.  The invitation is single-use and short-lived; the
@@ -650,8 +772,20 @@ type PoolCommand struct {
 }
 
 func (c PoolCommand) Valid() error {
-	if c.RequestID == "" || c.Action != "member-join" && c.Action != "storage-reconcile" && c.Action != "join" && c.Action != "maintenance" && c.Action != "master-change" && c.Action != "eject" && c.Action != "transfer-cancel" && c.Action != "promote" && c.Action != "fence-profile" {
+	if c.RequestID == "" || c.Action != "member-join" && c.Action != "storage-reconcile" && c.Action != "join" && c.Action != "maintenance" && c.Action != "master-change" && c.Action != "eject" && c.Action != "transfer-cancel" && c.Action != "promote" && c.Action != "fence-profile" && c.Action != "bmc-provisioning" && c.Action != "host-fencing" {
 		return errors.New("invalid pool command action")
+	}
+	// Host fencing is one pool-wide setting, so unlike every other action here it names no
+	// member: only the master, which keeps it.  Enabled is a desired state, so re-sending
+	// it is a success and never a conflict.
+	if c.Action == "host-fencing" {
+		return requireNonEmptyBoundedID(c.Membership.MasterHostID, "a host fencing setting requires the pool master")
+	}
+	// Whether a host may configure its own management controller is a master-owned
+	// membership field, so this one routes to the master and names the host it is about.
+	// It says one thing — allow it again — and re-sending it is a success.
+	if c.Action == "bmc-provisioning" {
+		return requirePoolCommandTargets(c.Membership.MasterHostID, c.MemberHostID, "a management controller request requires the pool master", "a management controller request requires a member host")
 	}
 	// A promotion is the one transfer action addressed to a host that is not the master:
 	// the old master is gone, so the operator's chosen candidate performs it.  No
@@ -709,6 +843,447 @@ func (c PoolCommand) Valid() error {
 	}
 	return nil
 }
+
+// PoolHostBMC is one host's own report about its own management controller: what Nex Core
+// found over the local IPMI interface and what it was able to do there. It is a Core
+// observation kept in the master's membership record, so a fresh Controller recovers it with
+// the rest of the membership and never derives or remembers it itself.
+type PoolHostBMC struct {
+	// State is the closed set the UI switches on; Detail is Core's own sentence for it,
+	// shown verbatim.  Every state but "provisioned" means this host has no automatically
+	// provisioned fence device, and the host row offers Set BMC access… instead.
+	State   string `json:"state"`
+	Detail  string `json:"detail,omitempty"`
+	Address string `json:"address,omitempty"` // The controller's own LAN address, as it reports it.
+	Channel uint8  `json:"channel,omitempty"`
+	Account string `json:"account,omitempty"` // Not a secret: the password never leaves Core.
+	// ObservedAt is when this finding last *changed*, not when it was last confirmed: an
+	// unchanged finding is deliberately not re-reported, because the membership is signed
+	// and replicated and a moving timestamp would re-sign and re-push the pool's whole
+	// authority every reconcile pass.  It therefore says nothing about whether the host is
+	// still reporting — liveness comes from that host's own connection, and the freshness
+	// of a fence device comes from PoolFenceCheck below, which the master timestamps on
+	// its own clock every time it is confirmed.
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// PoolHostWatchdog is one host's own report of the watchdog device it has.  A watchdog is how
+// a host shuts *itself* out when it loses the pool's quorum, so unlike a management controller
+// it is read on the host it is about — from sysfs only.  Nex Core never opens /dev/watchdog to
+// find out: on most drivers opening the device starts the timer, and a host that has not been
+// told to arm one must not be reset by having been inspected.
+type PoolHostWatchdog struct {
+	// Kind is the closed classification the pool acts on.  Only "hardware" can ever count:
+	// the kernel's software watchdog is a timer inside the kernel that is supposed to
+	// reset the machine, and a hung kernel does not run it.  A driver Nex Core does not
+	// recognise is "unknown" and counts as nothing until it is classified.
+	Kind string `json:"kind"`
+	// Device is the sysfs name, watchdog0 and so on — not a path under /dev, because
+	// nothing here opens one.  Driver is the kernel module behind it, reported so an
+	// operator can see why a device was classified as it was.
+	Device string `json:"device,omitempty"`
+	Driver string `json:"driver,omitempty"`
+	// TimeoutSeconds is the device's configured timeout, which is the bound a watchdog
+	// fencing proof is measured against.  Zero means the kernel did not say.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// NoWayOut is the kernel's own setting that closing the device does not stop the
+	// timer, and InUse that something already holds the device open.  Both are read from
+	// sysfs; a device already in use is reported, not taken.  NoWayOut decides whether
+	// Nex Core can disarm this host without rebooting it.
+	NoWayOut bool `json:"nowayout,omitempty"`
+	InUse    bool `json:"in_use,omitempty"`
+}
+
+// The watchdog classifications.  Closed: the Controller and the UI switch on them.
+const (
+	PoolWatchdogHardware = "hardware"
+	PoolWatchdogSoftware = "software"
+	PoolWatchdogUnknown  = "unknown"
+	PoolWatchdogNone     = "none"
+	// PoolWatchdogEmulated is a device a hypervisor presents to a host that is itself a
+	// virtual machine.  It really does reset that machine, so Nex Core arms it and a
+	// nested lab can exercise the whole path; it is its own kind because a reset a
+	// hypervisor performs is not evidence about physical hardware, and every proof, row
+	// and guide sentence that rests on one says so.  A physical host never reports it.
+	PoolWatchdogEmulated = "emulated"
+)
+
+// PoolWatchdogArmable is whether a reported device is one Nex Core will feed.  Only a device
+// that resets the machine independently of the kernel counts, which is hardware and the
+// emulated device a hypervisor gives a virtual host.
+func PoolWatchdogArmable(kind string) bool {
+	return kind == PoolWatchdogHardware || kind == PoolWatchdogEmulated
+}
+
+// Valid bounds what a host may report about its own watchdog.
+func (w PoolHostWatchdog) Valid() error {
+	switch w.Kind {
+	case PoolWatchdogHardware, PoolWatchdogEmulated, PoolWatchdogSoftware, PoolWatchdogUnknown, PoolWatchdogNone:
+	default:
+		return errors.New("unsupported watchdog kind")
+	}
+	if len(w.Device) > 64 || len(w.Driver) > 128 ||
+		strings.ContainsAny(w.Device+w.Driver, "\x00\r\n") ||
+		w.TimeoutSeconds < 0 || w.TimeoutSeconds > 86400 {
+		return errors.New("invalid watchdog report")
+	}
+	return nil
+}
+
+// PoolWatchdogArmed is a host's own report that its watchdog is armed: something outside the
+// kernel is now being fed and will reset this machine if it stops.  It is deliberately a
+// separate record from the capability above, with different rules.
+//
+// A capability changes when hardware changes.  This changes when the pool's decision changes,
+// and a proof rests on it, so it carries its own freshness — the master's clock when the
+// report arrived — and the pool's fencing generation at the moment the host armed.  A report
+// from an earlier generation is not evidence about the pool as it is now.
+type PoolWatchdogArmed struct {
+	// Armed is the host's answer.  A host that is not armed reports why in Detail, and a
+	// host that could not be disarmed cleanly says so there too.
+	Armed bool `json:"armed"`
+	// Kind is the device class this host armed: hardware, or emulated where the host is
+	// itself a virtual machine.  It is repeated here rather than read from the capability
+	// because a proof records what was armed, not what the host has.
+	Kind           string `json:"kind,omitempty"`
+	Device         string `json:"device,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	// FencingGeneration is the pool *membership* generation this host armed at — the
+	// counter that moves when the set of hosts that makes a majority changes, which is
+	// exactly what invalidates an armed report.  It is deliberately not the authority
+	// generation, which moves on every content change and would expire a perfectly good
+	// report every few seconds.  A proof is refused unless this equals the generation of
+	// the member record it is read from, so a host that armed under an older record of
+	// this pool cannot be shut out on the strength of it.
+	FencingGeneration uint64 `json:"fencing_generation,omitempty"`
+	Detail            string `json:"detail,omitempty"`
+	// Feeding is whether this host's watchdog device is still being fed, which is not the
+	// same question as Armed and is why it is a field of its own.  Armed is what the pool
+	// may rest a proof on, and it goes false the moment the pool decides this host should
+	// stop; the device itself is only released when that host's cluster next stops, which
+	// can be a pass or two later.  Every other host needs to know the difference: a host
+	// that leaves the pool's cluster while a peer is still feeding can take that peer below
+	// quorum, and the peer resets with nothing wrong.
+	Feeding bool `json:"feeding,omitempty"`
+	// ArmedAt is the host's own clock when it *started* feeding this device, carried over
+	// unchanged while it goes on feeding the same one.  Nothing compares it with another
+	// host's clock.  It exists so that a host which stops and starts its watchdog — a
+	// reboot, a cluster restart — produces a record that is *different* from the one
+	// before, because an identical record is never written, never replicated, and would
+	// leave a survivor unable to tell "still armed since before" from "armed again since".
+	ArmedAt time.Time `json:"armed_at"`
+	// ObservedAt is when this finding last *changed*, in the manner of PoolHostBMC — not
+	// when it was last confirmed.  Nothing decides anything from it: a proof's staleness
+	// rule is the fencing generation above, which is durable, replicated and therefore
+	// still readable by a candidate whose master is gone.  A wall clock could not be.
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// Valid bounds what a host may report about its own arming.
+func (a PoolWatchdogArmed) Valid() error {
+	if a.Armed && !PoolWatchdogArmable(a.Kind) {
+		return errors.New("only a hardware or emulated watchdog can be armed")
+	}
+	if len(a.Device) > 64 || len(a.Detail) > 200 || strings.ContainsAny(a.Device+a.Detail, "\x00\r\n") ||
+		a.TimeoutSeconds < 0 || a.TimeoutSeconds > 86400 || a.Armed && a.TimeoutSeconds == 0 {
+		return errors.New("invalid watchdog arming report")
+	}
+	// ArmedAt is a host's own clock and nothing compares it with another host's, but it is
+	// still an untrusted field that the master records and replicates, so it is bounded like
+	// every field beside it: a host cannot claim to have armed in the future.
+	if a.ArmedAt.After(time.Now().Add(time.Hour)) {
+		return errors.New("invalid watchdog arming report")
+	}
+	return nil
+}
+
+// PoolWatchdogBound is how long the quorate side must have held a partition without the target
+// before that target counts as reset. It is at least twice the target's own watchdog timeout,
+// which is the rule change's third condition, and never less than a minute.
+//
+// The floor is the number that matters and it comes from a measurement, not from arithmetic on
+// the watchdog timeout. In a nested lab a partitioned host left the quorate partition 8.6 s
+// after its cluster link went down and had reset and rebooted by 15.7 s; twice a 5 s watchdog
+// timeout is 10 s, which is *shorter* than that, so the doubling alone would promise a reset
+// that had not happened. A minute is roughly four times the measured worst case, which leaves
+// room for a loaded physical host that Corosync takes longer to declare lost — and it is still
+// only nested-lab evidence, so the margin is deliberately generous.
+func PoolWatchdogBound(timeoutSeconds int) time.Duration {
+	bound := 2 * time.Duration(timeoutSeconds) * time.Second
+	if bound < time.Minute {
+		return time.Minute
+	}
+	return bound
+}
+
+// PoolHostFencingCapability gates the pool's Host fencing setting: the command that changes
+// it, the watchdog each host reports about itself and the prerequisite checklist the master
+// reports with its membership.  A Controller talking to a master without it offers no switch,
+// because the setting that means anything is the master's.
+const PoolHostFencingCapability = "pool-host-fencing-v1"
+
+// PoolFenceCheck is one host's non-destructive read of another host's fence device: the
+// management controller's own report of which machine it manages and whether that machine is
+// powered on, over the recorded profile and the replicated credential.  Nothing on this path
+// can power anything off.
+//
+// It is an observation, so it never enters the durable membership and never moves the pool's
+// authority generation.  The master keeps the checks it has been told about in memory and
+// stamps each one with its own clock when it arrives, which is why freshness here does not
+// depend on two hosts agreeing about the time.
+type PoolFenceCheck struct {
+	// HostID is the other host of the pair.  A member reports it as the host it checked;
+	// the master reports it back as the host that did the checking, because the checks are
+	// then listed on the row of the host they are about.
+	HostID string `json:"host_id"`
+	Result string `json:"result"`
+	Detail string `json:"detail,omitempty"`
+	Power  string `json:"power,omitempty"` // on, off or empty when the controller did not say.
+	// Profile binds this result to the fence device it was taken against, so a profile
+	// that was replaced between a check and a reading of it cannot inherit that check's
+	// success.  The master drops every result whose stamp is not the one its membership
+	// records now, which reads as "not checked yet" until the next pass.
+	Profile string `json:"profile,omitempty"`
+	// ObservedAt is when the master last had this result confirmed, on the master's own
+	// clock, and Stale says that is longer ago than the master is willing to vouch for.
+	// A stale check is never readiness.
+	ObservedAt time.Time `json:"observed_at"`
+	Stale      bool      `json:"stale,omitempty"`
+}
+
+// The results of one non-destructive check.  The set is closed: the Controller and the UI
+// switch on it, and Detail is Core's own sentence for it.
+const (
+	PoolFenceCheckOK          = "ok"
+	PoolFenceCheckUnreachable = "unreachable"
+	PoolFenceCheckRejected    = "credentials_rejected"
+	PoolFenceCheckIdentity    = "identity_mismatch"
+	PoolFenceCheckCertificate = "certificate_changed"
+	PoolFenceCheckToolMissing = "tool_missing"
+	PoolFenceCheckNoProfile   = "no_profile"
+	PoolFenceCheckUnusable    = "unusable"
+)
+
+// PoolFenceCheckRequest is what a member sends its master after one checking pass: one
+// result per host it looked at.  The checks a member sends are about other hosts, never
+// about itself — a host does not get to say whether it can be shut out — and the master
+// drops any entry naming the caller.
+type PoolFenceCheckRequest struct {
+	Checks []PoolFenceCheck `json:"checks"`
+}
+
+// PoolFenceCheckLimit bounds one report.  A pool is a handful of hosts; this is generous.
+const PoolFenceCheckLimit = 64
+
+// PoolFenceProfileStamp names the exact fence device a check was taken against: everything a
+// check actually exercises, plus the identity it compares against.  It is not a secret and
+// not a signature — it exists so a replaced profile immediately invalidates the results taken
+// against the old one, rather than looking ready for another check interval.
+func PoolFenceProfileStamp(member PoolMember) string {
+	if member.Fence == nil {
+		return ""
+	}
+	f := member.Fence
+	// The credential is in the stamp because rotating only the password leaves every other
+	// field identical: without it a check taken with the previous password would go on
+	// reading as ready for a credential no host has used yet.
+	sum := sha256.Sum256([]byte(strings.Join([]string{f.Kind, f.Endpoint, f.TargetID, f.Username,
+		f.TLSFingerprint, strconv.Itoa(int(f.Cipher)), member.SystemUUID,
+		f.CredentialRef, strconv.FormatUint(member.FenceCredentialVersion, 10)}, "\x00")))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (r PoolFenceCheckRequest) Valid() error {
+	if len(r.Checks) > PoolFenceCheckLimit {
+		return errors.New("too many fence checks in one report")
+	}
+	for _, check := range r.Checks {
+		if check.HostID == "" || len(check.HostID) > 128 {
+			return errors.New("invalid fence check target")
+		}
+		switch check.Result {
+		case PoolFenceCheckOK, PoolFenceCheckUnreachable, PoolFenceCheckRejected, PoolFenceCheckIdentity,
+			PoolFenceCheckCertificate, PoolFenceCheckToolMissing, PoolFenceCheckNoProfile, PoolFenceCheckUnusable:
+		default:
+			return errors.New("unsupported fence check result")
+		}
+		if len(check.Detail) > 1024 || strings.ContainsAny(check.Detail, "\x00\r\n") ||
+			(check.Power != "" && check.Power != "on" && check.Power != "off") {
+			return errors.New("invalid fence check")
+		}
+		// An unstamped result is accepted and then dropped by the master, which keeps no
+		// result whose stamp is not the profile it records now.  Refusing the request
+		// instead would make one member running an older Core lose its whole pass — and
+		// with it every other host's result in it — rather than only the field it omits.
+		if check.Profile == "" {
+			continue
+		}
+		if profile, err := hex.DecodeString(check.Profile); err != nil || len(profile) != 8 {
+			return errors.New("invalid fence check profile")
+		}
+	}
+	return nil
+}
+
+// PoolFenceReadiness is the master's per-host answer to "could this host be shut out right
+// now", one entry per fencing method.  Today there is one method, the recorded fence device;
+// watchdog self-fencing becomes a second entry beside it without changing this shape.
+type PoolFenceReadiness struct {
+	Ready   bool              `json:"ready"`
+	Methods []PoolFenceMethod `json:"methods"`
+}
+
+// PoolFenceSummary is the pool's own fencing answer: the master's count of how many of this
+// pool's ready hosts another host could shut out, which ones it could not, the pool's Host
+// fencing setting and Core's prerequisite checklist for arming watchdogs.  A client displays
+// it; it does not add up rows of its own and does not decide what the prerequisites are.
+type PoolFenceSummary struct {
+	Ready   int      `json:"ready"`
+	Total   int      `json:"total"`
+	Unready []string `json:"unready,omitempty"`
+	// HostFencing is the pool's durable setting, reported so a client shows the switch in
+	// the state the master records rather than the state it last sent.
+	HostFencing bool `json:"host_fencing"`
+	// Prerequisites is what must hold before Nex Core arms anything, computed by the
+	// master.  The names are a closed set and the sentences are Core's own.
+	Prerequisites []PoolFencePrerequisite `json:"prerequisites,omitempty"`
+	// Cluster is what the pool's own Corosync/Pacemaker cluster is doing: whether Nex Core
+	// forms one for this pool at all, and how far through arming it is.  Like the counts
+	// above it is the master's memory-only observation over the membership it owns, never
+	// durable: the durable facts are the membership and each host's own armed report, and
+	// this is derived from them on every report.
+	Cluster *PoolFenceCluster `json:"cluster,omitempty"`
+}
+
+// PoolFenceCluster is the pool's own watchdog cluster, as the master sees it.  Nex Core forms
+// one Corosync/Pacemaker cluster per pool, with no resources on it, purely so that diskless sbd
+// has a quorum to lose; clustered storage owns that cluster instead where a pool has one, and
+// such a pool is not armed at all in this release.
+type PoolFenceCluster struct {
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+	// Armed and Total are how many of this pool's ready hosts are feeding a watchdog, and
+	// how many should be.  ArmingHostID is the host whose turn it is: arming means a
+	// controlled cluster restart, and exactly one host at a time may take one.
+	Armed        int    `json:"armed"`
+	Total        int    `json:"total"`
+	ArmingHostID string `json:"arming_host_id,omitempty"`
+}
+
+// The states a pool's watchdog cluster can be in.  Closed: the Controller and the UI switch on
+// them.  "off", "not_available" and "degraded" are all "nothing is armed", kept apart because
+// an operator acts on them differently: off is their own setting, not_available is this pool
+// (clustered storage, too few hosts, too many hosts, no watchdog), degraded is a pool that was
+// armed and is not now.
+const (
+	PoolClusterOff          = "off"
+	PoolClusterNotAvailable = "not_available"
+	PoolClusterForming      = "forming"
+	PoolClusterArming       = "arming"
+	PoolClusterArmed        = "armed"
+	PoolClusterDegraded     = "degraded"
+)
+
+// PoolWatchdogClusterCapability gates the pool-owned Corosync/Pacemaker cluster: Core forming
+// it, the arming rollout across its hosts and the cluster state reported above.  A master
+// without it forms no cluster, so a Controller shows the setting without the cluster line
+// rather than inventing one.
+const PoolWatchdogClusterCapability = "pool-watchdog-cluster-v1"
+
+// PoolWatchdogClusterHosts is the largest pool Nex Core forms a watchdog cluster for.  It is
+// not a votequorum limit — votequorum scales far past this — but the largest cluster this code
+// has been exercised on.  A pool above it is reported and left unarmed; no host is ever
+// silently left out of a cluster the rest of the pool makes quorum decisions with.
+const PoolWatchdogClusterHosts = 5
+
+// PoolFencePrerequisite is one line of that checklist.
+type PoolFencePrerequisite struct {
+	Name   string `json:"name"` // hosts, watchdogs, bmc or quorum.
+	State  string `json:"state"`
+	Detail string `json:"detail"`
+	// Hosts is which hosts the sentence above is about, as host IDs, when it is about
+	// particular ones.  Core ends Detail before naming them and puts them here, because a
+	// host ID is an opaque durable identifier and every other line on the page shows the
+	// host's display name; only a client knows the names, so only a client can write them.
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+// The names of the prerequisite lines, and the states one can be in.  "unknown" is Nex Core
+// saying it cannot observe this yet, and is never read as met.
+const (
+	PoolFencePrerequisiteHosts     = "hosts"
+	PoolFencePrerequisiteWatchdogs = "watchdogs"
+	PoolFencePrerequisiteBMC       = "bmc"
+	PoolFencePrerequisiteQuorum    = "quorum"
+
+	PoolFencePrerequisiteMet     = "met"
+	PoolFencePrerequisiteUnmet   = "unmet"
+	PoolFencePrerequisiteUnknown = "unknown"
+)
+
+// PoolFenceMethod is one way this host could be shut out, and whether it would work.  State
+// is ready, not_ready or unknown; unknown is "Nex Core could not observe this", which stops a
+// promotion exactly as not_ready does and is never read as fine.
+type PoolFenceMethod struct {
+	Kind   string `json:"kind"` // The fence profile's kind: ipmilan, redfish or virsh.
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// Checks is every other host's last non-destructive read of this method against this
+	// host, so an operator sees which host could not reach it rather than only that
+	// something could not.
+	Checks []PoolFenceCheck `json:"checks,omitempty"`
+}
+
+// The states one fencing method can be in.
+const (
+	PoolFenceMethodReady    = "ready"
+	PoolFenceMethodNotReady = "not_ready"
+	PoolFenceMethodUnknown  = "unknown"
+	// PoolFenceMethodNoPeer is its own state because it is not a wait: a pool with one
+	// ready host has nobody to be checked from, ever, and telling an operator to wait for
+	// a check that cannot happen would be untrue.  A single-host pool also has nothing to
+	// promote over, so it needs no fencing at all.
+	PoolFenceMethodNoPeer = "no_peer"
+	// PoolFenceMethodNotApplicable is a method this pool cannot use at all, as a watchdog
+	// cannot be used below three hosts: a two-host pool has no majority, so no host may
+	// ever conclude from losing contact that it is the side that should keep running.  It
+	// is not a wait either, and a pool that will never have a third host must not be shown
+	// one more thing to fix.
+	PoolFenceMethodNotApplicable = "not_applicable"
+)
+
+// PoolFenceWatchdog is the method kind a host's own watchdog is reported under, beside the
+// fence profile's kind.
+const PoolFenceWatchdog = "watchdog"
+
+// Valid bounds what a member may advertise about itself. The state is closed, because the
+// Controller and the UI act on it; the sentence is Core's own and is only bounded in length.
+func (b PoolHostBMC) Valid() error {
+	switch b.State {
+	case PoolBMCProvisioned, PoolBMCNoInterface, PoolBMCUserRefused, PoolBMCLANDisabled,
+		PoolBMCNameConflict, PoolBMCManualProfile, PoolBMCRemoved, PoolBMCPendingMaster:
+	default:
+		return errors.New("unsupported management controller state")
+	}
+	if len(b.Detail) > 1024 || strings.ContainsAny(b.Detail, "\x00\r\n") ||
+		(b.Address != "" && !storageServer(b.Address)) || b.Channel > 15 ||
+		(b.Account != "" && !storageOpaqueID.MatchString(b.Account)) {
+		return errors.New("invalid management controller report")
+	}
+	return nil
+}
+
+// The states a host reports about its own management controller.
+const (
+	PoolBMCProvisioned   = "provisioned"
+	PoolBMCNoInterface   = "no_local_interface"
+	PoolBMCUserRefused   = "user_management_refused"
+	PoolBMCLANDisabled   = "lan_disabled"
+	PoolBMCNameConflict  = "name_conflict"
+	PoolBMCManualProfile = "manual_profile"
+	PoolBMCRemoved       = "removed"
+	PoolBMCPendingMaster = "pending_master"
+)
 
 func (m PoolMembership) Valid() error {
 	if m.PoolID == "" || m.MasterHostID == "" || m.Generation == 0 {

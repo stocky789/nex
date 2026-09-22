@@ -234,15 +234,15 @@ func TestTransientStorageDiscoveryResultsDoNotLoseConcurrentCompletions(t *testi
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			appendStorageDiscoveries(s, []protocol.StorageDiscoveryResult{{RequestID: fmt.Sprintf("discover-%d", i)}})
+			transientStorageDiscoveries.append(s, []protocol.StorageDiscoveryResult{{RequestID: fmt.Sprintf("discover-%d", i)}})
 		}(i)
 	}
 	wg.Wait()
-	got := drainStorageDiscoveries(s)
+	got := transientStorageDiscoveries.drain(s)
 	if len(got) != 2 {
 		t.Fatalf("discovery results = %+v", got)
 	}
-	if more := drainStorageDiscoveries(s); len(more) != 0 {
+	if more := transientStorageDiscoveries.drain(s); len(more) != 0 {
 		t.Fatalf("drain retained results: %+v", more)
 	}
 }

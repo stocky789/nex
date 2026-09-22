@@ -3,6 +3,7 @@ package controller
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -191,9 +192,9 @@ type poolTransferRoute struct {
 }
 
 var poolTransferRoutes = map[string]poolTransferRoute{
-	"eject":            {required: "pool, host and a stable request_id are required", purpose: "eject a member"},
-	"transfer-cancel":  {required: "pool, stable request_id and the transfer target host_id are required", purpose: "cancel a master change"},
-	"master-change":    {required: "pool, stable request_id and the new master host_id are required", purpose: "change the pool master"},
+	"eject":           {required: "pool, host and a stable request_id are required", purpose: "eject a member"},
+	"transfer-cancel": {required: "pool, stable request_id and the transfer target host_id are required", purpose: "cancel a master change"},
+	"master-change":   {required: "pool, stable request_id and the new master host_id are required", purpose: "change the pool master"},
 }
 
 func poolTransferRequired(action string) string {
@@ -416,15 +417,17 @@ func memberTransfer(host hostRow) *protocol.PoolTransferStatus {
 //
 // A pool whose recorded master has never reported a membership is not a dead end. It is what
 // a replacement Controller has when a member reconnects first: the member creates the pool
-// row with itself recorded as master and then reports the membership naming the real master,
-// which is the record coreReportedPoolMember lets that master enroll on. Its own report is
-// then adopted here by the second arm above.
+// row with itself recorded as master and then reports the membership naming the real master.
+// That report disclaims the mastery this Controller assumed, so the row follows it at once,
+// even to a master that has not enrolled here — it may be the host that is gone. Until that
+// master enrolls, the evidence for it is the pool's own record as its enrolled hosts reported
+// it (poolRecordNaming).
 func (c *Controller) adoptReportedMaster(tx *sql.Tx, host string, inventory *protocol.Inventory) error {
 	if inventory == nil || inventory.Managed == nil || inventory.Managed.Membership == nil {
 		return nil
 	}
 	claim := inventory.Managed.Membership
-	if claim.Valid() != nil || claim.MasterHostID != host {
+	if claim.Valid() != nil {
 		return nil
 	}
 	var site, current, master string
@@ -435,44 +438,129 @@ func (c *Controller) adoptReportedMaster(tx *sql.Tx, host string, inventory *pro
 	if err != nil {
 		return err
 	}
+	if claim.MasterHostID != host {
+		// Only the recorded master can give the row away, and only within its own pool.
+		if claim.PoolID != current || master != host {
+			return nil
+		}
+		return c.moveRecordedMaster(tx, host, current, claim.MasterHostID)
+	}
 	if claim.PoolID != current {
 		return c.adoptReinitializedPool(tx, host, site, master, claim)
 	}
 	if master == host {
 		return nil
 	}
+	var mirrored *protocol.PoolMembership
 	inv, invErr := hostInventory(tx, master)
-	if invErr != nil {
+	switch {
+	case invErr == sql.ErrNoRows:
+		if mirrored, invErr = poolRecordNaming(tx, current, master); invErr != nil {
+			return invErr
+		}
+	case invErr != nil:
 		return invErr
+	default:
+		mirrored = reportedMembership(inv)
 	}
-	mirrored := reportedMembership(inv)
 	if mirrored == nil || mirrored.PoolID != current {
 		return nil
 	}
 	if claim.Generation <= mirrored.Generation && mirrored.MasterHostID != host {
 		return nil
 	}
-	if _, err = tx.Exec("UPDATE pools SET master_host_id=? WHERE id=?", host, current); err != nil {
+	return c.moveRecordedMaster(tx, host, current, host)
+}
+
+// moveRecordedMaster records the master the pool names and, when that host is enrolled here,
+// moves the pool's mirror rows to it. A master that is not enrolled cannot hold them; they
+// move when it enrolls or when the pool names an enrolled master. The name comes out of a
+// report its reporter fully controls, so a host enrolled in another pool is refused: it
+// would take this pool's row and mirrors to a host that never refreshes them.
+func (c *Controller) moveRecordedMaster(tx *sql.Tx, reporter, pool, master string) error {
+	var enrolled string
+	err := tx.QueryRow("SELECT pool_id FROM hosts WHERE id=?", master).Scan(&enrolled)
+	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	if err = rekeyPoolMirrors(tx, current, master, host); err != nil {
+	if err == nil && enrolled != pool {
+		return nil
+	}
+	if _, err = tx.Exec("UPDATE pools SET master_host_id=? WHERE id=?", master, pool); err != nil {
 		return err
 	}
-	return c.audit(tx, "host:"+host, "pool.master.adopt", current)
+	if enrolled == pool {
+		if err = rekeyPoolMirrors(tx, pool, master); err != nil {
+			return err
+		}
+	}
+	return c.audit(tx, "host:"+reporter, "pool.master.adopt", pool)
+}
+
+// poolRecordNaming is the pool's record naming master, as the pool's enrolled hosts reported
+// it. It stands in for the mirrored membership of a recorded master that has never enrolled
+// with this Controller: a replacement Controller whose old master is gone. Each report is a
+// payload its member controls, so the record is the conservative combination of them: the
+// highest generation any of them claims, which a promotion must exceed, and only the hosts
+// every one of them lists with the same status, so no single member can admit a host of its
+// choosing.
+func poolRecordNaming(tx *sql.Tx, pool, master string) (*protocol.PoolMembership, error) {
+	rows, err := tx.Query("SELECT inventory FROM hosts WHERE pool_id=? AND revoked=0 AND inventory IS NOT NULL", pool)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []*protocol.PoolMembership
+	for rows.Next() {
+		var raw string
+		var inv protocol.Inventory
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(raw), &inv) != nil {
+			continue
+		}
+		if m := reportedMembership(inv); m != nil && m.Valid() == nil && m.PoolID == pool && m.MasterHostID == master {
+			records = append(records, m)
+		}
+	}
+	if err = rows.Err(); err != nil || len(records) == 0 {
+		return nil, err
+	}
+	newest := records[0]
+	for _, record := range records {
+		if record.Generation > newest.Generation {
+			newest = record
+		}
+	}
+	combined := *newest
+	combined.Members = nil
+	for _, member := range newest.Members {
+		agreed := true
+		for _, record := range records {
+			if other := maintenanceMember(record, member.HostID); other == nil || other.Status != member.Status {
+				agreed = false
+			}
+		}
+		if agreed {
+			combined.Members = append(combined.Members, member)
+		}
+	}
+	return &combined, nil
 }
 
 // rekeyPoolMirrors points the pool's shared storage, network and media mirror rows at the
-// new master, because those rows are refreshed and tombstoned only by the recorded master
-// and would otherwise go stale on the host that no longer owns them. It moves no content:
-// every field is still replaced by the new master's next report.
-func rekeyPoolMirrors(tx *sql.Tx, pool, from, to string) error {
+// recorded master, because those rows are refreshed and tombstoned only by the recorded master
+// and would otherwise go stale on a host that does not own them. It moves no content: every
+// field is still replaced by the master's next report.
+func rekeyPoolMirrors(tx *sql.Tx, pool, to string) error {
 	resources, err := poolResources(tx, pool)
 	if err != nil {
 		return err
 	}
 	kinds := map[string]string{"storage": "storage-register", "network": "network-register", "media": "iso-import"}
 	for _, resource := range resources {
-		if _, err = tx.Exec("UPDATE managed_resources SET host_id=? WHERE id=? AND kind=? AND pool_id=? AND host_id=?", to, resource.id, kinds[resource.kind], pool, from); err != nil {
+		if _, err = tx.Exec("UPDATE managed_resources SET host_id=? WHERE id=? AND kind=? AND pool_id=?", to, resource.id, kinds[resource.kind], pool); err != nil {
 			return err
 		}
 	}

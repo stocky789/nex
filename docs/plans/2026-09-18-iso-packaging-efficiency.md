@@ -28,8 +28,7 @@ All driver content and the requested installation package list are retained.
 No live infrastructure changes, publication, Git history changes, guest driver
 selection changes or reduced hardware support are authorized by this work.
 
-This plan does not establish the status of the later working `0.3.5` tree or a
-ZFS-enabled image. Its external release remains blocked by the current licensing gate.
+This plan does not establish the status of the later working `0.3.5` tree.
 
 ## Acceptance
 

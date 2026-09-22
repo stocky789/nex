@@ -497,7 +497,7 @@
             }
           },
           "500": {
-            "description": "Controller storage or lookup failure before any projection was built (\"storage unavailable\", \"host lookup failed\", \"resource lookup failed\", \"operation lookup failed\"). Safe to retry.",
+            "description": "Controller storage or lookup failure before any projection was built (\"storage unavailable\", \"host lookup failed\", \"resource lookup failed\", \"operation lookup failed\", \"membership lookup failed\"). Safe to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -511,7 +511,7 @@
       "post": {
         "operationId": "addPoolMember",
         "summary": "Add an enrolled host to this pool",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. Both hosts must advertise pool-join-v1. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master's and is relayed verbatim. master_url is optional: the master's own reported peer_origin wins when it has one, and Core records the supplied master_url as the master's own peer_origin the first time it issues an invitation, so only the first join in a pool's life needs the operator to supply it. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. Both hosts must advertise pool-join-v1. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master's and is relayed verbatim. master_url is an optional override that the web UI never sends: the master's own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://<its default-route source address>:9444), as the master's own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -616,7 +616,7 @@
             }
           },
           "409": {
-            "description": "Refused without starting anything. Controller-visible refusals: \"this host already belongs to the selected pool\", \"pool master must be fresh and active before a host can join\", \"the joining host must be fresh and active\", \"adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts\", \"only the master of its own single-host pool can join another pool\", \"joining a pool with managed VMs is not supported; migrate or remove workloads first\", \"joining a pool with existing remote storage is not supported; detach it first\", \"the joining host must belong to the same site as the target pool\", \"the pool master has not advertised a peer origin; supply master_url\", \"pool request is already active\", \"request_id already used with another payload\" and \"request_id already used for another operation\". A refusal the master itself decided is relayed verbatim in the same shape. A failed master result that carries no message becomes \"the pool master refused to issue a join invitation\", so a terse Core refusal is never an empty body.",
+            "description": "Refused without starting anything. Controller-visible refusals: \"this host already belongs to the selected pool\", \"pool master must be fresh and active before a host can join\", \"the joining host must be fresh and active\", \"adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts\", \"only the master of its own single-host pool can join another pool\", \"joining a pool with managed VMs is not supported; migrate or remove workloads first\", \"joining a pool with existing remote storage is not supported; detach it first\", \"the joining host must belong to the same site as the target pool\", \"pool request is already active\", \"request_id already used with another payload\" and \"request_id already used for another operation\". A refusal the master itself decided is relayed verbatim in the same shape. A failed master result that carries no message becomes \"the pool master refused to issue a join invitation\", so a terse Core refusal is never an empty body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7098,7 +7098,7 @@
         "x-audience": "client",
         "operationId": "setPoolFenceProfile",
         "summary": "Record or clear how a member of this pool would be power-fenced",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The profile is a field of the durable membership record the pool master owns, so this is the one promotion route relayed to the master and the one that needs a fresh one. One durable pool-fence-profile command is journaled; a null fence clears the profile. An optional credential is never stored by this Controller: it is handed to Core over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command \u2014 nothing reaches SQLite, the audit trail, the response or any log, and the stored replay payload is the profile as sent, so an exact retry stays byte-identical. Core then refuses asynchronously to record a profile whose material it does not hold, and refuses at record time any profile this build cannot verify: only virsh profiles can be recorded, so a physical pool cannot be fence-promoted by this build and no client may imply otherwise. Recording a usable profile for the pool master itself is what opts a pool into fence-verified promotion, and with it into the restart rule a restricted master follows. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The profile is a field of the durable membership record the pool master owns, so this is the one promotion route relayed to the master and the one that needs a fresh one. One durable pool-fence-profile command is journaled; a null fence clears the profile. An optional credential is never stored by this Controller: it is handed to Core over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command \u2014 nothing reaches SQLite, the audit trail, the response or any log, and the stored replay payload is the profile as sent, so an exact retry stays byte-identical. Core then refuses asynchronously to record a profile whose material it does not hold, and refuses at record time any profile it could not verify. Recording a redfish profile is a live operation on Core: it connects to the controller, pins the certificate it presents, and proves the machine before the profile enters the membership, so an unreachable or wrong controller is refused now rather than during a promotion. Before any power-off Nex Core asks the management controller which machine it manages \u2014 IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. A management controller is therefore recordable for a host that has reported its system UUID, which is how a physical pool is fenced; the virsh profile remains for a Nex Core running as a virtual machine in a disposable lab. Recording a usable profile for the pool master itself is what opts a pool into fence-verified promotion, and with it into the restart rule a restricted master follows. Implemented in development product 0.1.0.",
         "parameters": [
           {
             "name": "id",
@@ -7334,6 +7334,367 @@
           },
           "500": {
             "description": "Controller storage failure (\"storage unavailable\", \"discarding the failed registration failed\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/hardware": {
+      "get": {
+        "operationId": "hostHardware",
+        "summary": "Read a host's hardware",
+        "description": "Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. Requires the host to be fresh, not revoked and to report host-hardware-v1.",
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.3",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The host's hardware as it was just read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostHardware"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or expired administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Host revoked or not freshly connected (\"the host is not freshly connected; its hardware cannot be read now\"), or its Nex Core does not report hardware (\"the host agent does not report its hardware; upgrade Nex Core\"); the UI hides the panel for the second.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The host could not read its hardware, or its reply was outside the contract or over the bounds (at most 64 memory modules, 128 disks, 256 PCI devices, 24 sensors); the channel is closed and the next query reopens it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Host did not open a stats connection within 20 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Host did not answer within 10 seconds; the channel is closed. Retry is safe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{id}/members/{host_id}/bmc-provisioning": {
+      "post": {
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.2",
+        "x-audience": "client",
+        "operationId": "setPoolBMCProvisioning",
+        "summary": "Let a host configure its own management controller for fencing again",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Whether a host may configure its own management controller is a field of the durable membership record the pool master owns, so this is relayed to the master and takes the same membership and capability check a fence profile does. One durable pool-bmc-provisioning command is journaled for the master, which clears the host's bmc_provisioning_disabled flag and drops its last management-controller report; the host reads the decision from the pool records it already holds and creates the account on its next reconcile pass, because reporting a fence device before it exists would claim one that is not there. It is a desired state, not a transition: a host that is already allowed answers succeeded. There is no request to turn it off \u2014 clearing the host's fence device through POST /api/v1/pools/{id}/members/{host_id}/fence-profile with a null fence is what withdraws a Core-provisioned device, removes the account from the controller and stops this host configuring it again, so one operator action has one meaning. Nex Controller stores nothing of its own: the decision lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "host_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The host whose own management controller this is about. It must be a member of the named pool."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolBMCProvisioningRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The durable pool-bmc-provisioning command was journaled for that host. Acceptance is not the result: Core decides, and an asynchronous refusal is visible on the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTransferAccepted"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Exact replay of the same request_id and payload: the original operation, and no second command.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTransferAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or \"pool, host and a stable request_id are required\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or missing/invalid X-CSRF-Token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "\"pool not found\" or \"host not found\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused without queueing anything: \"request_id already used for another operation\", \"request_id already used with another payload\", \"the pool master must be fresh and active to record a fence profile\", \"recording a fence profile needs pool-authority-transfer-v1 on the pool master; upgrade <host>\", \"the pool master has not reported its membership; a fence profile cannot be recorded yet\", \"no such member of this pool\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller storage failure (\"storage unavailable\", \"inventory unavailable\", \"management controller request storage failed\"). Nothing was queued; the same request_id is safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{id}/host-fencing": {
+      "post": {
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.2",
+        "x-audience": "client",
+        "operationId": "setPoolHostFencing",
+        "summary": "Turn this pool's host fencing on or off",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does, plus pool-host-fencing-v1 on the master. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool's records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself \u2014 Nex Core arms a host's watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolHostFencingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The durable pool-host-fencing command was journaled for the pool master. Acceptance is not the result: Core decides, and an asynchronous refusal is visible on the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTransferAccepted"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Exact replay of the same request_id and payload: the original operation, and no second command.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTransferAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or \"pool and a stable request_id are required\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No administrator session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request or missing/invalid X-CSRF-Token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "\"pool not found\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused without queueing anything: \"request_id already used for another operation\", \"request_id already used with another payload\", \"the pool master must be fresh and active to change host fencing\", \"changing host fencing needs pool-host-fencing-v1 on the pool master; upgrade <host>\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller storage failure (\"storage unavailable\", \"host fencing request storage failed\"). Nothing was queued; the same request_id is safe to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8044,7 +8405,9 @@
               "management-network",
               "pool-transfer",
               "pool-promote",
-              "pool-fence-profile"
+              "pool-fence-profile",
+              "pool-bmc-provisioning",
+              "pool-host-fencing"
             ]
           },
           "storage": {
@@ -9276,7 +9639,9 @@
               "management-network",
               "pool-transfer",
               "pool-promote",
-              "pool-fence-profile"
+              "pool-fence-profile",
+              "pool-bmc-provisioning",
+              "pool-host-fencing"
             ]
           },
           "request_id": {
@@ -9496,7 +9861,7 @@
         ],
         "additionalProperties": false,
         "example": {
-          "address": "10.0.0.5"
+          "address": "192.0.2.15"
         }
       },
       "HostProbeResponse": {
@@ -9527,7 +9892,7 @@
         ],
         "additionalProperties": false,
         "example": {
-          "address": "10.0.0.5:9443",
+          "address": "192.0.2.15:9443",
           "fingerprint": "sha256:abababababababababababababababababababababababababababababababab",
           "subject": "CN=nex-core-local",
           "not_after": "2027-09-08T10:10:00Z"
@@ -9565,7 +9930,7 @@
         ],
         "additionalProperties": false,
         "example": {
-          "address": "10.0.0.5",
+          "address": "192.0.2.15",
           "fingerprint": "sha256:abababababababababababababababababababababababababababababababab",
           "root_password": "<root-password>",
           "controller_url": "https://controller.example:8443"
@@ -10281,6 +10646,15 @@
           "target_id": {
             "type": "string"
           },
+          "username": {
+            "type": "string",
+            "description": "Management-controller account for redfish and ipmilan, with power control only. It is not a secret and is reported back; its password is the credential. Absent on virsh and scsi_pr profiles, and a BMC profile without one can never produce a proof."
+          },
+          "tls_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Core captures the certificate the controller presents when the profile is recorded, keeps its leaf SHA-256 here and holds every later connection to exactly it: a factory management controller is self-signed with no usable name, so this pin, not a chain, identifies the endpoint the password is sent to and the power-off is issued through. A changed certificate refuses the fence with its own sentence rather than as a network fault. Reported so an operator can compare it with the controller's own page; it is not a secret and a client never supplies one. Absent on ipmilan, which authenticates its RMCP+ session and presents no certificate, and on virsh and scsi_pr."
+          },
           "credential_ref": {
             "type": "string",
             "writeOnly": true
@@ -10302,13 +10676,25 @@
           "ssh_host_key_ref": {
             "type": "string",
             "writeOnly": true
+          },
+          "cipher": {
+            "type": "integer",
+            "enum": [
+              3,
+              17
+            ],
+            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself \u2014 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement \u2014 either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
+          },
+          "provisioned_by_core": {
+            "type": "boolean",
+            "description": "The account behind this profile is one Nex Core created on the host's own management controller in-band. It is how a host knows, after a reboot or a master change, that the account under the Nex name is its own to replace rather than somebody else's to leave alone, and it is why an operator-entered profile is never overwritten by automatic provisioning. Written only by the pool master when the host's own Core reports the account it created; a client never supplies it, and a request that does is refused with 400."
           }
         },
         "required": [
           "kind"
         ],
         "x-go-type": "protocol.StorageClusterFence",
-        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. virsh is development-only and remains unaccepted for native production use."
+        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection \u2014 identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read \u2014 rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
       },
       "StorageClusterNode": {
         "type": "object",
@@ -10373,6 +10759,24 @@
           },
           "config_digest": {
             "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "watchdog"
+            ],
+            "description": "How the exclusion was proved. Absent is a fence device Nex Core powered the host off through and independently observed off, which is every proof there was before watchdog fencing. watchdog is the host resetting itself, whose evidence is the record beside it. A clustered-storage fence only ever produces the absent one."
+          },
+          "watchdog": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWatchdogExclusion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The evidence of a watchdog exclusion, present only when method says so."
           }
         },
         "required": [
@@ -11704,7 +12108,11 @@
           },
           "peer_origin": {
             "type": "string",
-            "description": "Bare HTTPS origin this member advertised to the master for peer traffic. Recorded from the member's own advertisement, or, for the master's own row, from the master_url an operator supplied with the first Controller-driven join; never inferred from Controller connectivity."
+            "description": "Bare HTTPS origin this member advertised to the master for peer traffic. Recorded from the member's own advertisement, or, for the master's own row, from the master_url of the first Controller-driven join, which the master works out itself when none is supplied; never inferred from Controller connectivity."
+          },
+          "system_uuid": {
+            "type": "string",
+            "description": "This host's own SMBIOS system UUID, 32 lower-case hex digits without separators, reported by the host itself while it was alive: at join, and on every reconcile pass, so a pool formed before this existed gains it without re-joining. It is what proves a management controller belongs to this machine before it is powered off. Like peer_origin it is a recorded observation and moves no generation. A host too old to report one stays empty and simply cannot be given a BMC fence device."
           },
           "maintenance": {
             "type": "boolean"
@@ -11747,6 +12155,58 @@
             "type": "integer",
             "minimum": 0,
             "description": "The master's counter for the private fence credential material behind this host's profile. The material itself is never in the membership; only this number is, so rotating it changes the replicated content and therefore advances the pool authority generation, while re-recording identical material moves nothing."
+          },
+          "fence_readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool master's own answer to whether this host could be shut out, per method. Reported only by the master, only for the membership it owns, and never written into the durable record. Absent from a Core too old to report it, which a Controller shows as \"not reported\" and never as ready."
+          },
+          "system_uuid_conflict_host_id": {
+            "type": "string",
+            "description": "The member that already reported the hardware identity this host reports, when the master refused this host's report because of it. Without it the refusal is a dead end: an operator is told their host has no unique identity with nothing to act on. Cleared the moment the identity is accepted."
+          },
+          "bmc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolHostBMC"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this host's own Core found and did about its own management controller, reported to the master over the existing advertise peer route. It is an observation and a result, never a credential."
+          },
+          "bmc_provisioning_disabled": {
+            "type": "boolean",
+            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it \u2014 one operator action with one meaning \u2014 and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
+          },
+          "watchdog": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolHostWatchdog"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This host's own watchdog capability, reported by the host and recorded by the master. A member too old to report one leaves it null, which is never counted."
+          },
+          "watchdog_armed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWatchdogArmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That host's own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof."
           }
         },
         "required": [
@@ -11781,6 +12241,21 @@
             "items": {
               "$ref": "#/components/schemas/PoolMember"
             }
+          },
+          "host_fencing_disabled": {
+            "type": "boolean",
+            "description": "The pool's Host fencing setting, recorded the way it is decided: fencing is on for a pool that has never been told otherwise, so an absent field is on and a record written before the setting existed keeps the default. It is a decision, so it is durable, replicated and only ever written by the master."
+          },
+          "fence_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool's fencing count, setting and prerequisite checklist, computed by the master over this membership when it reports it. Like the readiness on each member row it is a memory-only observation overlaid on the reported copy and never part of the durable record."
           }
         },
         "required": [
@@ -11901,7 +12376,7 @@
           "master_url": {
             "type": "string",
             "maxLength": 512,
-            "description": "Optional bare https origin of the master's pool-peer listener. Ignored when the master has already advertised its own peer origin; required by the first join in a pool's life, which otherwise conflicts with \"the pool master has not advertised a peer origin; supply master_url\". At most one trailing \"/\" is accepted and normalised away, exactly as the host-local join route accepts it; the normalised slash-less form is stored and forwarded, so the two spellings are the same request for exact-retry replay rather than a changed payload."
+            "description": "Optional bare https origin of the master's pool-peer listener. Ignored when the master has already advertised its own peer origin. When omitted the master works out its own origin from its configured pool-peer listener (the listener's port, and its address when bound to one; the default-route source address for a wildcard bind), and refuses the join if it has no default route; masters built before this rule refuse an omitted master_url. At most one trailing \"/\" is accepted and normalised away, exactly as the host-local join route accepts it; the normalised slash-less form is stored and forwarded, so the two spellings are the same request for exact-retry replay rather than a changed payload."
           }
         },
         "required": [
@@ -12051,6 +12526,21 @@
             "items": {
               "$ref": "#/components/schemas/PoolMemberView"
             }
+          },
+          "host_fencing_supported": {
+            "type": "boolean",
+            "description": "The pool master advertises pool-host-fencing-v1. Without it there is no Host fencing switch, because the setting that means anything is the master's."
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool's own fencing answer as the master reported it with its membership. Mirrored verbatim and stored nowhere; null when the master is not fresh or is too old to report one, which reads as not reported and never as ready."
           }
         },
         "required": [
@@ -12070,7 +12560,9 @@
           "master_conflict",
           "promotion",
           "last_promotion",
-          "members"
+          "members",
+          "host_fencing_supported",
+          "fence"
         ]
       },
       "PoolMemberView": {
@@ -14641,7 +15133,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "Stable series key, e.g. cpu.total, cpu.vcpu.0, cpu.core.3, memory.assigned, memory.host, memory.guest_used, memory.used, memory.total, disk.vda.read_bytes, disk.vda.write_iops, net.0.rx, net.eno1.tx, load.1. Keys ending .total are aggregates."
+            "description": "Stable series key, e.g. cpu.total, cpu.vcpu.0, cpu.core.3, memory.assigned, memory.host, memory.guest_used, memory.used, memory.total, disk.vda.read_bytes, disk.vda.write_iops, net.0.rx, net.eno1.tx, load.1. Keys ending .total are aggregates. Host temperature keys are temp.<chip>-<device>.<n>, built from the hwmon chip name and the sensor device, never the kernel's hwmon index."
           },
           "group": {
             "type": "string",
@@ -14650,7 +15142,8 @@
               "memory",
               "network",
               "disk",
-              "load"
+              "load",
+              "temperature"
             ]
           },
           "label": {
@@ -14664,7 +15157,8 @@
               "bytes",
               "bytes_per_second",
               "iops",
-              "load"
+              "load",
+              "celsius"
             ]
           },
           "values": {
@@ -16364,6 +16858,14 @@
             "maxLength": 200,
             "description": "Core's own short sentence when it could not."
           },
+          "fence_kind": {
+            "type": "string",
+            "description": "The recorded fence profile's kind, so a caller can show which method this promotion would shut this host out with. Empty when no profile is recorded."
+          },
+          "fence_check_warning": {
+            "type": "string",
+            "description": "Advisory only: what this candidate's own last non-destructive check of that fence device found, when it was failing or stale. The promotion's proof path is unchanged and still decides; this exists so an operator is not surprised by a fence device that was already known to be unreachable."
+          },
           "error": {
             "type": "string",
             "description": "The probe's own bounded failure text."
@@ -16457,7 +16959,7 @@
           "fence_unusable_reason": {
             "type": "string",
             "maxLength": 200,
-            "description": "Core's own short single-line sentence when it could not: \"no fence profile is recorded for <host>\", \"this host holds no fence credential for <host>\", or vmhost.PoolFenceUsable's own sentence such as \"BMC fencing identity verification is not implemented\"."
+            "description": "Core's own short single-line sentence when it could not: \"no fence profile is recorded for <host>\", \"this host holds no fence credential for <host>\", or vmhost.PoolFenceUsable's own sentence such as \"this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own\"."
           },
           "fence_host_ids": {
             "type": [
@@ -16633,7 +17135,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "description": "The recorded profile kind. Only virsh can be recorded by this build."
+            "description": "The recorded profile kind: redfish, ipmilan or virsh. virsh is for a Nex Core running as a virtual machine in a disposable lab. Empty when no profile is recorded and the object carries only a management-controller report or an identity conflict."
           },
           "endpoint": {
             "type": "string",
@@ -16641,16 +17143,79 @@
           },
           "configured": {
             "type": "boolean",
-            "description": "Always true when the object is present; the object is null when no profile is recorded."
+            "description": "True when a fence profile is recorded. False when this object carries only the host's management-controller report or an identity conflict."
           },
           "credential_version": {
             "type": "integer",
             "minimum": 0,
             "description": "The pool master's own counter for the private material behind this profile, mirrored verbatim from PoolMember.fence_credential_version; 0 means no material is recorded. The material itself never reaches this Controller \u2014 the number is only what tells an operator that a rotation has actually been replicated."
+          },
+          "username": {
+            "type": "string",
+            "description": "The management-controller account the master recorded, mirrored verbatim so an operator can see which account a fence would use. Absent on a virsh profile. The password behind it never reaches this Controller."
+          },
+          "tls_fingerprint": {
+            "type": "string",
+            "description": "The certificate the pool master pinned when the profile was recorded, mirrored verbatim so an operator can compare it with the controller's own page. Absent on ipmilan and virsh profiles."
+          },
+          "bmc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolHostBMC"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The host's own report about its own management controller, mirrored verbatim from the master's membership record. It is present on a host that has no profile at all \u2014 which is exactly the host whose row offers Set BMC access\u2026 instead \u2014 so this object is non-null whenever there is a profile, a controller report or an identity conflict to show."
+          },
+          "system_uuid_conflict_host_id": {
+            "type": "string",
+            "description": "The member that already reported the hardware identity this host reports, when the master refused this host's report because of it. Mirrored verbatim; this Controller records nothing."
+          },
+          "provisioned_by_core": {
+            "type": "boolean",
+            "description": "The account behind this profile is one the host's own Nex Core created on its controller, so clearing the profile also removes that account and stops this host configuring it again. Mirrored verbatim."
+          },
+          "provisioning_disabled": {
+            "type": "boolean",
+            "description": "The pool master's own recorded decision that this host must not configure its management controller for fencing, mirrored verbatim. Clearing a fence device Nex Core provisioned sets it. It is what the host row's actions are decided from, because a host that is down after its device was cleared has echoed nothing and the master's decision is the one that is true."
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool master's own answer to whether this host could be shut out, per method. Reported only by the master, only for the membership it owns, and never written into the durable record. Absent from a Core too old to report it, which a Controller shows as \"not reported\" and never as ready."
+          },
+          "watchdog": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolHostWatchdog"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The host's own watchdog report, mirrored verbatim from the master's membership record. Null when the host never reported one, which is never counted."
+          },
+          "watchdog_armed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWatchdogArmed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That host's own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof."
           }
         },
         "required": [
-          "kind",
           "configured",
           "credential_version"
         ],
@@ -16802,7 +17367,7 @@
                 "type": "null"
               }
             ],
-            "description": "The profile to record; null clears it. Only a virsh profile can be recorded by this build: Core refuses a Redfish, IPMI or SCSI-PR profile at record time, because it cannot verify one."
+            "description": "The profile to record; null clears it. redfish and ipmilan take {endpoint, target_id, username}; virsh takes the pinned SSH fields. A client never supplies tls_fingerprint: for a redfish profile Core connects when it records it, captures the certificate the controller presents, writes that fingerprint into the profile itself and proves over that pinned connection that the controller manages this host's machine before recording anything. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. Core refuses a BMC profile whose host reports no unique hardware identity or which names no username, and refuses SCSI-PR outright. A refused profile's delivered password is released from the master's credential store."
           },
           "credential": {
             "anyOf": [
@@ -16813,7 +17378,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional material for the profile, never stored by the Controller. It is delivered over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command. Nothing reaches SQLite, the audit trail, the response or any log. A virsh profile takes {ssh_private_key, ssh_known_hosts}; redfish and ipmilan take {username, secret}; a scsi_pr profile takes none. Omitting it means the profile must already name a credential_ref Core knows."
+            "description": "Optional material for the profile, never stored by the Controller. It is delivered over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command. Nothing reaches SQLite, the audit trail, the response or any log. A virsh profile takes {ssh_private_key, ssh_known_hosts}; redfish and ipmilan take {secret}, the password of the account named in the profile; a scsi_pr profile takes none. Omitting it means the profile must already name a credential_ref Core knows."
           }
         },
         "required": [
@@ -16839,6 +17404,917 @@
           }
         },
         "description": "A durable operation as the listing reports it: the operation itself, plus advisory placement warnings recomputed on read for a VM create that is still dispatched."
+      },
+      "HostHardware": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "Host this report describes; set by the Controller relay."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the host read itself. Nothing is cached: every field is observed on request."
+          },
+          "system": {
+            "$ref": "#/components/schemas/HardwareSystem"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/HardwareCPU"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/HardwareMemory"
+          },
+          "disks": {
+            "$ref": "#/components/schemas/HardwareDisks"
+          },
+          "pci": {
+            "$ref": "#/components/schemas/HardwarePCI"
+          },
+          "sensors": {
+            "$ref": "#/components/schemas/HardwareSensors"
+          }
+        },
+        "required": [
+          "observed_at",
+          "system",
+          "cpu",
+          "memory",
+          "disks",
+          "pci",
+          "sensors"
+        ],
+        "x-go-type": "protocol.HostHardware",
+        "description": "What a host reads about itself on request. State owner: Nex Core. Nothing here is cached, persisted or reported in a heartbeat, so a fresh Controller sees the same report as the one it replaced."
+      },
+      "HardwareSystem": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string",
+            "description": "Returned to authenticated administrators only; never logged or written to a diagnostic bundle."
+          },
+          "board_vendor": {
+            "type": "string"
+          },
+          "board_name": {
+            "type": "string"
+          },
+          "board_version": {
+            "type": "string"
+          },
+          "board_serial": {
+            "type": "string",
+            "description": "Returned to authenticated administrators only; never logged."
+          },
+          "chassis_vendor": {
+            "type": "string"
+          },
+          "chassis_type": {
+            "type": "string"
+          },
+          "bios_vendor": {
+            "type": "string"
+          },
+          "bios_version": {
+            "type": "string"
+          },
+          "bios_date": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "x-go-type": "protocol.HardwareSystem",
+        "description": "The machine, its board, chassis and firmware, read from /sys/class/dmi/id."
+      },
+      "HardwareCPU": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "model": {
+            "type": "string"
+          },
+          "sockets": {
+            "type": "integer"
+          },
+          "cores": {
+            "type": "integer",
+            "description": "Physical cores across all sockets."
+          },
+          "threads": {
+            "type": "integer",
+            "description": "Logical CPUs the kernel presents."
+          }
+        },
+        "required": [],
+        "x-go-type": "protocol.HardwareCPU",
+        "description": "Processor model and topology from /proc/cpuinfo and the CPU topology sysfs."
+      },
+      "HardwareMemory": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Installed total from the kernel. Still reported when the module table is unavailable: only the modules come from dmidecode."
+          },
+          "modules": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MemoryModule"
+            }
+          }
+        },
+        "required": [
+          "modules"
+        ],
+        "x-go-type": "protocol.HardwareMemory",
+        "description": "Installed memory and, where dmidecode can be run, the module in each slot. At most 64 modules; a longer reply is refused as malformed."
+      },
+      "MemoryModule": {
+        "type": "object",
+        "properties": {
+          "slot": {
+            "type": "string",
+            "description": "Locator, e.g. DIMM_A1."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 for an empty slot."
+          },
+          "type": {
+            "type": "string"
+          },
+          "speed_mts": {
+            "type": "integer"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "size_bytes"
+        ],
+        "x-go-type": "protocol.MemoryModule",
+        "description": "One DIMM slot; an empty slot reports its locator and a zero size."
+      },
+      "HardwareDisks": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "devices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/HardwareDisk"
+            }
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "x-go-type": "protocol.HardwareDisks",
+        "description": "Whole block devices from lsblk. At most 128 devices; a longer reply is refused as malformed."
+      },
+      "HardwareDisk": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Device path, e.g. /dev/sda."
+          },
+          "model": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string",
+            "description": "Returned to authenticated administrators only; never logged."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rotational": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "string",
+            "description": "nvme, sata, sas or usb."
+          }
+        },
+        "required": [
+          "name",
+          "size_bytes",
+          "rotational"
+        ],
+        "x-go-type": "protocol.HardwareDisk",
+        "description": "One whole disk. Partitions and device-mapper devices are not reported here."
+      },
+      "HardwarePCI": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "devices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PCIDevice"
+            }
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "x-go-type": "protocol.HardwarePCI",
+        "description": "PCI devices from lspci. At most 256 devices; a longer reply is refused as malformed."
+      },
+      "PCIDevice": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Domain:bus:device.function, e.g. 0000:01:00.0. Temperature sensor labels name the same address."
+          },
+          "class": {
+            "type": "string"
+          },
+          "class_id": {
+            "type": "string",
+            "description": "Numeric class, for grouping GPUs, NICs and storage controllers without matching translated text."
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "vendor_id": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "device_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "class",
+          "class_id",
+          "vendor",
+          "vendor_id",
+          "device",
+          "device_id"
+        ],
+        "x-go-type": "protocol.PCIDevice",
+        "description": "One PCI device, with the numeric ids beside their names."
+      },
+      "HardwareSensors": {
+        "type": "object",
+        "properties": {
+          "unavailable": {
+            "type": "boolean",
+            "description": "The source for this section is missing or failed; the rest of the report is still returned."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Which source could not be read, e.g. \"dmidecode failed\". The tool's own error text is never relayed: it can name paths."
+          },
+          "temperatures": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TemperatureSensor"
+            }
+          }
+        },
+        "required": [
+          "temperatures"
+        ],
+        "x-go-type": "protocol.HardwareSensors",
+        "description": "The temperature inputs the host's usage-history sampler records, at most 24. A host with no sensors reports an empty list, which is a normal state and not an error."
+      },
+      "TemperatureSensor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Identical to the StatsSeries key of this sensor's temperature series, so a gauge joins the two."
+          },
+          "chip": {
+            "type": "string",
+            "description": "hwmon chip name, e.g. coretemp, k10temp, drivetemp, nvme."
+          },
+          "label": {
+            "type": "string",
+            "description": "The component, e.g. \"CPU 0 package\"."
+          },
+          "max_celsius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The chip's own tempN_max. Absent when the chip publishes no threshold; a gauge then shows a plain value with no warning band."
+          },
+          "crit_celsius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The chip's own tempN_crit, used as the end of a gauge's scale. Absent when the chip publishes none."
+          }
+        },
+        "required": [
+          "key",
+          "chip",
+          "label"
+        ],
+        "x-go-type": "protocol.TemperatureSensor",
+        "description": "One temperature input with the chip's own thresholds, so a gauge takes its scale and warning band from the hardware rather than a number invented in the UI."
+      },
+      "PoolFenceCheck": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string",
+            "description": "The other host of the pair. A member reports it as the host it checked; the pool master reports it back as the host that did the checking, because the checks are listed on the row of the host they are about."
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unreachable",
+              "credentials_rejected",
+              "identity_mismatch",
+              "certificate_changed",
+              "tool_missing",
+              "no_profile",
+              "unusable"
+            ],
+            "description": "ok: the controller answered, accepted the recorded account and named this host's own machine. unreachable: it did not answer, or did not report the machine it manages. credentials_rejected: it refused the recorded account. identity_mismatch: it named a different machine, which is not a network fault and never a pass. certificate_changed: it presented a certificate other than the one the profile is pinned to. tool_missing: this Nex Core has no ipmitool. no_profile: no fence device is recorded for that host. unusable: the profile could never produce a proof, for example a host with no unique hardware identity."
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Core's own sentence for that result, shown verbatim. Never a credential."
+          },
+          "power": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off"
+            ],
+            "description": "The machine's power state as the controller reported it; absent when the controller did not say. Reported, never acted on."
+          },
+          "profile": {
+            "type": "string",
+            "description": "Binds this result to the fence device it was taken against: 16 hex characters over the profile's kind, address, target, account, pinned certificate and cipher, plus the hardware identity it is compared with. The pool master drops every result whose stamp is not the one its membership records now, so a replaced profile cannot inherit the checks taken against the one before it and reads as not checked yet until the next pass."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the pool master last had this result confirmed, on the master's own clock, so freshness never depends on two hosts agreeing about the time. Set by the master; a member does not send it."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The master has not had this result confirmed for longer than it vouches for (three check intervals). A stale check is shown as stale and is never readiness."
+          }
+        },
+        "required": [
+          "host_id",
+          "result",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.PoolFenceCheck",
+        "description": "One host's non-destructive read of another host's fence device: the management controller's own report of which machine it manages, and whether that machine is powered on, over the recorded profile and the replicated credential. Nothing on that path can power anything off. It is a Core observation and never enters the master's durable membership record."
+      },
+      "PoolFenceCheckRequest": {
+        "type": "object",
+        "properties": {
+          "checks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/PoolFenceCheck"
+            },
+            "description": "At most 64 results, one per host the caller looked at. An entry naming the caller itself is dropped: a host does not get to say whether it can be shut out."
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "x-go-type": "protocol.PoolFenceCheckRequest",
+        "description": "One checking pass, as a member sends it to its pool master."
+      },
+      "PoolFenceSummary": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many of this pool's ready hosts another host could shut out."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many ready hosts this pool has. An ejected host is a tombstone in the membership, not one of this pool's hosts, and a host that has not finished joining is not one either; neither is counted."
+          },
+          "unready": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The ready hosts no other host could shut out, by host ID."
+          },
+          "host_fencing": {
+            "type": "boolean",
+            "description": "The pool's Host fencing setting as the master records it. It is on for a pool that has never been told otherwise. On by itself arms nothing: Nex Core arms a host's watchdog only where every prerequisite below holds."
+          },
+          "prerequisites": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolFencePrerequisite"
+            },
+            "description": "Core's own checklist for arming watchdogs, computed on the master over the membership it owns. A client displays it and decides no line of it."
+          },
+          "cluster": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceCluster"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this pool's own watchdog cluster is doing. Absent from a master too old to form one, which a client shows as no cluster line rather than as a cluster that is off."
+          }
+        },
+        "required": [
+          "ready",
+          "total",
+          "host_fencing"
+        ],
+        "x-go-type": "protocol.PoolFenceSummary",
+        "description": "The pool's own fencing answer, reported by the master with its membership: how many of this pool's hosts another host could shut out, which ones it could not, the Host fencing setting and Core's prerequisite checklist. A client displays it; it does not add up the rows it is about to render, which would count ejected tombstones and hosts that are still joining."
+      },
+      "PoolFenceMethod": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "The recorded fence profile's kind (ipmilan, redfish or virsh), or watchdog for the host's own self-fencing method. A host's row carries one entry per method."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not_ready",
+              "unknown",
+              "no_peer",
+              "not_applicable"
+            ],
+            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait \u2014 a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Core's own sentence for a method that is not ready, shown verbatim. It names the host that found the problem, for example \"this management controller did not answer (from host-b)\"."
+          },
+          "checks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolFenceCheck"
+            },
+            "description": "Every other ready host's last non-destructive read of this method against this host."
+          }
+        },
+        "required": [
+          "kind",
+          "state"
+        ],
+        "x-go-type": "protocol.PoolFenceMethod",
+        "description": "One way a host could be shut out, and whether it would work."
+      },
+      "PoolFenceReadiness": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "At least one method is ready. No readiness at all, and readiness with no ready method, are both never treated as protected."
+          },
+          "methods": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolFenceMethod"
+            }
+          }
+        },
+        "required": [
+          "ready",
+          "methods"
+        ],
+        "x-go-type": "protocol.PoolFenceReadiness",
+        "description": "The pool master's own per-method answer to whether this host could be shut out right now. It is derived from the membership the master owns and from the continuous non-destructive checks other hosts report, and is a memory-only observation overlaid on the membership copy the master reports, never part of the durable record. A master that has just restarted reports its methods as unknown until the next check pass rather than keeping a durable store of something one interval re-establishes."
+      },
+      "PoolHostBMC": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "provisioned",
+              "no_local_interface",
+              "user_management_refused",
+              "lan_disabled",
+              "name_conflict",
+              "manual_profile",
+              "removed",
+              "pending_master"
+            ],
+            "description": "What this host's own Nex Core found on its own management controller. provisioned: Core created its fence account and the master recorded the profile. no_local_interface: no /dev/ipmi0, so there is nothing to configure from the inside. user_management_refused: the controller refused in-band account management, or has no free user slot. lan_disabled: the controller reports no LAN address on any channel, or offers no authenticated RMCP+ cipher suite. name_conflict: an account under the Nex name exists that Core did not create, and nothing was changed. manual_profile: an operator entered a profile, which always wins. removed: an operator removed the account and automatic provisioning stays off for this host. pending_master: the account exists but the master has not recorded the profile yet, so this host has no usable fence device and is never shown as having one."
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Core's own sentence for that state, shown verbatim. Never a credential."
+          },
+          "address": {
+            "type": "string",
+            "description": "The controller's own LAN address as it reports it in-band."
+          },
+          "channel": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15,
+            "description": "The controller's LAN channel the account was created on."
+          },
+          "account": {
+            "type": "string",
+            "description": "The account name Core created; not a secret. Its password goes to the master's private fence-credential store and nowhere else."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this finding last *changed*, not when it was last confirmed. An unchanged finding is deliberately not re-reported: the membership is signed and replicated, so a moving timestamp would re-sign and re-push the pool's whole authority every reconcile pass. It therefore says nothing about whether the host is still reporting. Liveness is that host's own connection, and the freshness of a fence device is PoolFenceCheck.observed_at, which the pool master stamps on its own clock every time a check is confirmed."
+          }
+        },
+        "required": [
+          "state",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.PoolHostBMC",
+        "description": "One host's own report about its own management controller, kept in the pool master's membership record. It is a Core observation: a fresh Controller recovers it with the rest of the membership and stores nothing of its own. A member too old to report one is absent."
+      },
+      "PoolBMCProvisioningRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Stable client request ID. An exact retry answers with the same operation and never makes a second one."
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "additionalProperties": false,
+        "description": "Let this host configure its own management controller for fencing again. There is no \u201coff\u201d here: clearing the fence device is what turns it off, through the one route that clears a profile."
+      },
+      "PoolFencePrerequisite": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "hosts",
+              "watchdogs",
+              "bmc",
+              "quorum"
+            ],
+            "description": "Which line of the checklist this is: enough hosts for a majority side, a hardware watchdog on every host, a confirmed fence device on every host, and the pool's quorum."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "met",
+              "unmet",
+              "unknown"
+            ],
+            "description": "unknown is Nex Core saying it cannot observe this yet and is never read as met. Quorum is unknown until this pool runs a quorum service."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Core's own sentence for this line, shown verbatim, naming the hosts a line is unmet for."
+          },
+          "hosts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Which hosts the sentence is about, as host IDs. Nex Core ends detail before naming them and puts them here, because only a client knows their display names."
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "detail"
+        ],
+        "x-go-type": "protocol.PoolFencePrerequisite",
+        "description": "One line of the prerequisite checklist Nex Core reports for arming watchdogs."
+      },
+      "PoolHostWatchdog": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hardware",
+              "emulated",
+              "software",
+              "unknown",
+              "none"
+            ],
+            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software \u2014 a hung kernel does not run it \u2014 so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
+          },
+          "device": {
+            "type": "string",
+            "description": "The sysfs device name, for example watchdog0. Not a path under /dev: Nex Core never opens the device node, because on most drivers opening it arms the timer."
+          },
+          "driver": {
+            "type": "string",
+            "description": "The kernel driver behind the device, which is what the classification is made on."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The device's configured timeout. Zero means the kernel did not say."
+          },
+          "nowayout": {
+            "type": "boolean",
+            "description": "The kernel's setting that closing the device does not stop the timer. Where it is set, Nex Core cannot disarm this host without rebooting it, and reports that rather than resetting the host to get out of it."
+          },
+          "in_use": {
+            "type": "boolean",
+            "description": "Something already holds the device open, read from sysfs rather than by opening it."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "x-go-type": "protocol.PoolHostWatchdog",
+        "description": "One host's own report of the watchdog device it has, read from sysfs on the host it is about and recorded by the pool master. A watchdog is how a host shuts itself out, so it has to have been reported while the host was alive. It is a slow-changing capability: it is written only when the finding changes and carries no timestamp, because nothing decides anything from how long ago a host last said it."
+      },
+      "PoolHostFencingRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Stable client request ID. An exact retry answers with the same operation and never makes a second one."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "The desired Host fencing state for the whole pool. A desired state, not a transition: re-sending the state the master already records answers succeeded."
+          }
+        },
+        "required": [
+          "request_id",
+          "enabled"
+        ],
+        "additionalProperties": false,
+        "description": "Whether Nex Core may arm this pool's hosts to shut themselves out."
+      },
+      "PoolWatchdogArmed": {
+        "type": "object",
+        "properties": {
+          "armed": {
+            "type": "boolean",
+            "description": "Whether this host is feeding a watchdog that will reset it if it stops. A host that is not armed says why in detail."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hardware",
+              "emulated"
+            ],
+            "description": "The device class this host armed. emulated is a device a hypervisor presents to a host that is itself a virtual machine: it really does reset that machine, so Nex Core arms it, and every proof and row resting on one says so because a hypervisor reset is not evidence about hardware. A physical host never reports it."
+          },
+          "device": {
+            "type": "string",
+            "description": "The sysfs device name sbd was given."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How long after sbd stops feeding the device this host resets. A watchdog exclusion proof needs at least twice this."
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The pool membership generation this host armed at. A watchdog exclusion proof is refused unless this is the generation being promoted, so a host that armed under an earlier record of the pool cannot be shut out on the strength of it."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Nex Core's own sentence for why this host is not armed, or why it could not be disarmed cleanly."
+          },
+          "feeding": {
+            "type": "boolean",
+            "description": "Whether this host's watchdog device is still being fed, which is not the same question as armed. armed is what the pool may rest a proof on and goes false the moment the pool decides this host should stop; the device itself is released only when that host's cluster next stops, which can be a pass or two later. Every other host needs the difference: a host that leaves the pool's cluster while a peer is still feeding can take that peer below quorum, and that peer resets with nothing wrong."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at \u2014 not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
+          },
+          "armed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog \u2014 a reboot, a cluster restart \u2014 produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
+          }
+        },
+        "required": [
+          "armed",
+          "armed_at",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.PoolWatchdogArmed",
+        "description": "A host's own report that it has armed its watchdog, kept in the pool master's durable membership and replicated. It is the first of the three conditions of a watchdog exclusion proof, and the host that has to read it is a promotion candidate whose master has gone, which is why it is durable rather than an observation."
+      },
+      "PoolWatchdogExclusion": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hardware",
+              "emulated"
+            ],
+            "description": "The device class the target armed, copied from its armed report. emulated means the target is itself a virtual machine, so this proof is evidence about a hypervisor and not about hardware."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The target's own watchdog timeout, as its armed report gave it."
+          },
+          "armed_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The pool membership generation the target armed at, which must be the generation being promoted."
+          },
+          "held_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How long this host has continuously been in a quorate partition without the target, on a monotonic clock. Any flap \u2014 the target reappearing, quorum lost, or this agent restarting \u2014 restarts it from zero."
+          },
+          "bound_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How long that had to hold: at least twice the target's own timeout, and never less than a minute."
+          },
+          "partition": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The hosts Corosync reports in this host's partition at the moment of the proof, by the pool's own votequorum. It must not name the target and must be more than one host."
+          }
+        },
+        "required": [
+          "kind",
+          "timeout_seconds",
+          "armed_generation",
+          "held_seconds",
+          "bound_seconds"
+        ],
+        "x-go-type": "protocol.PoolWatchdogExclusion",
+        "description": "The whole evidence of a watchdog exclusion, one field per condition of the rule, so a proof can be read back later and judged rather than believed. Nobody performed this fence: the target reset itself, and the proving host only established that it must have."
+      },
+      "PoolFenceCluster": {
+        "type": "object",
+        "description": "The pool's own Corosync/Pacemaker cluster, which carries no resources and exists only so that a diskless sbd has a quorum to lose. Nex Core forms one for a pool of three or more ready hosts with Host fencing on and no clustered-storage repository; a pool that has clustered storage keeps the cluster clustered storage already owns and is not armed at all in this release. Like the counts beside it, this is the master's memory-only observation over the membership it owns, derived on every report and never stored: the durable facts are the membership and each host's own armed report.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "off",
+              "not_available",
+              "forming",
+              "arming",
+              "armed",
+              "degraded"
+            ],
+            "description": "off is the pool's own Host fencing setting. not_available is this pool: clustered storage, fewer than three hosts, more hosts than Nex Core has exercised, or no usable watchdog. forming is a cluster Nex Core has started and is waiting to see quorate. arming is the one-host-at-a-time rollout. degraded is a cluster whose hosts are not all armed."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Core's own sentence for the state. A client shows it as written."
+          },
+          "armed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many hosts of this pool's cluster are feeding a watchdog."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many hosts are in this pool's cluster. Every ready host that is not in maintenance is in it: a host is never silently left out of the quorum the rest of the pool makes its decisions with."
+          },
+          "arming_host_id": {
+            "type": "string",
+            "description": "The host whose turn it is to arm, by host ID. Arming means restarting that host's cluster services, so exactly one host in a pool does it at a time, and whose turn it is is derived from the membership rather than granted. A host that cannot arm holds the turn and the rollout stops there with that host's own reason, which is the safe direction: fewer armed hosts is less protection, never a false proof."
+          }
+        },
+        "required": [
+          "state",
+          "armed",
+          "total"
+        ],
+        "x-go-type": "protocol.PoolFenceCluster"
       }
     }
   },
@@ -17125,7 +18601,7 @@
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the promotion candidate. S6 adds no new capability string.",
-      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting, and note that BMC fencing identity verification is not implemented\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". There is no automatic succession, no election and no quorum here, and no force, override, \"declare host lost\" or timeout-based path exists or may be added."
+      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". There is no automatic succession, no election and no quorum here, and no force, override, \"declare host lost\" or timeout-based path exists or may be added."
     },
     "pool-fence-profile": {
       "summary": "Record or clear how a member of this pool would be power-fenced",
@@ -17134,7 +18610,25 @@
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the pool master.",
-      "semantics": "Payload: PoolCommand{request_id, action: fence-profile, membership.master_host_id, member_host_id, fence}. A null fence clears the profile. The profile is written into the master's durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it from the master's reported inventory. No credential material travels on this command: credential_ref names a file the existing one-time encrypted fence-credential handoff has already delivered to the master, and Core refuses to record a profile whose material it does not hold \u2014 \"this host holds no fence credential for <host>; deliver it to this host before recording the profile\" and \"this host's fence credential material for <host> is larger than this pool replicates; shorten it before recording the profile\". Core also refuses at record time any profile this build cannot verify: \"this fence profile cannot be verified by this host: BMC fencing identity verification is not implemented\" and the same shape for \"SCSI persistent-reservation fencing is unsupported\". Only virsh profiles can therefore be recorded by this build, so only a disposable lab pool can be fence-promoted; a physical pool cannot be, and nothing in the product may imply otherwise. Other refusals: \"only the pool master records a fence profile\", \"no such member of this pool\", \"an ejected host has no fence profile\". Recording a usable profile for the master itself is what opts a pool into fence-verified promotion, and therefore into the boot rule of a restarted master; clearing it is durable and is only released once every ready member has acknowledged a replica built without it."
+      "semantics": "Payload: PoolCommand{request_id, action: fence-profile, membership.master_host_id, member_host_id, fence}. A null fence clears the profile. The profile is written into the master's durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it from the master's reported inventory. No credential material travels on this command: credential_ref names a file the existing one-time encrypted fence-credential handoff has already delivered to the master, and Core refuses to record a profile whose material it does not hold \u2014 \"this host holds no fence credential for <host>; deliver it to this host before recording the profile\" and \"this host's fence credential material for <host> is larger than this pool replicates; shorten it before recording the profile\". Core also refuses at record time any profile it could not verify, in the shape \"this fence profile cannot be verified by this host: <reason>\", releasing the delivered credential when it does: \"this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own\", \"this management controller did not answer, so the machine behind it could not be identified\", \"this management controller rejected the recorded account, so the machine behind it could not be identified\", \"the management controller at this address reports a different machine than the host it is recorded for; nothing was powered off\", \"a management controller fence device needs the account Nex Core signs in with\", \"virsh fencing needs an immutable domain UUID target\" and \"SCSI persistent-reservation fencing is unsupported\". Before any power-off Nex Core asks the management controller which machine it manages \u2014 IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. Other refusals: \"only the pool master records a fence profile\", \"no such member of this pool\", \"an ejected host has no fence profile\". Recording a usable profile for the master itself is what opts a pool into fence-verified promotion, and therefore into the boot rule of a restarted master; clearing it is durable and is only released once every ready member has acknowledged a replica built without it."
+    },
+    "pool-bmc-provisioning": {
+      "summary": "Let a host configure its own management controller for fencing again",
+      "target": "The pool master, which owns the durable membership record this decision lives in.",
+      "payload": {
+        "$ref": "#/components/schemas/PoolCommand"
+      },
+      "capability": "pool-authority-transfer-v1 on the pool master.",
+      "semantics": "Payload: PoolCommand{request_id, action: bmc-provisioning, membership.master_host_id, member_host_id}. It says one thing \u2014 this host may configure its own management controller again \u2014 and re-sending it is a success, because it is a desired state and not a transition. The master clears PoolMember.bmc_provisioning_disabled and the host's last management-controller report, and the host creates the account on its own next pass. The opposite direction is not a command: clearing a Core-provisioned fence profile sets the flag, removes the account and stops provisioning, in the one path that clears a profile. Refusals: \"this command carries no management controller request\", \"only the pool master records whether a host configures its own management controller\", \"pool membership is unavailable\", \"no such member of this pool\", and the authority-write refusals a fence profile takes while a master change is in flight."
+    },
+    "pool-host-fencing": {
+      "summary": "Turn this pool's host fencing on or off",
+      "target": "The pool master, which owns the durable membership record this setting lives in.",
+      "payload": {
+        "$ref": "#/components/schemas/PoolCommand"
+      },
+      "capability": "pool-host-fencing-v1 on the pool master.",
+      "semantics": "Payload: PoolCommand{request_id, action: host-fencing, membership.master_host_id, enabled}. It names no member, because the setting is the pool's. The master records PoolMembership.host_fencing_disabled as the negative of enabled and replicates it with the pool's records; every host reads it from the copy it already holds. It is a desired state and not a transition, so re-sending the state already recorded answers succeeded. Turning it on arms nothing by itself: Nex Core arms a host's watchdog only where every prerequisite in PoolFenceSummary.prerequisites holds, and the quorum line is unknown until this pool runs a quorum service. Refusals: \"this command carries no host fencing request\", \"only the pool master records whether host fencing is on\", \"pool membership is unavailable\", and the authority-write refusals a fence profile takes while a master change is in flight."
     }
   }
 }

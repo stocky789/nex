@@ -1,0 +1,43 @@
+{
+  "summary": "A replaced Controller can recover a pool whose master is gone: the recorded master's own report naming another master moves the pool row to it (even one not enrolled here), and while that master has never enrolled, the pool's own record as its enrolled hosts reported it is the evidence for member enrollment, master adoption and the Hosts view. API impact: existing contract — the same enrollment, report and GET /api/v1/pools/{id}/members contracts, with the adoption rule gaining a disclaim arm (BUG-0414).",
+  "paths": [
+    "internal/controller/pooltransfer.go",
+    "internal/controller/identity.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pool_evidence_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/changes/2026-09-22-replaced-controller-dead-master.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The promotion steps say how a replaced Controller shows a pool whose master is gone and that survivors must be enrolled first.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No request or response shape changes; docs/API.md records the disclaim arm of the adoption rule and the never-enrolled-master evidence for enrollment and the members view.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fix inside the existing pool authority recovery slice."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The pool master is whatever the hosts' own membership records name; the Controller row only mirrors it and is rebuilt from host reports.",
+    "record": "Pool membership on each host (inventory.managed.membership); a fresh Controller rebuilds pools.master_host_id from the reported memberships."
+  },
+  "verification": {
+    "method": "go test ./internal/controller/ ; TestReplacementControllerWithTheMasterGoneCanPromote fails before the fix and passes after; TestAMemberCannotAdmitAHostThroughAGoneMastersRecord and TestAReturningMasterTakesItsMirrorsBack each fail with their part of the fix disabled. Independent review found the forged-evidence and orphaned-mirror gaps, now fixed. No disposable multi-host lab run.",
+    "evidence": [
+      "internal/controller/pool_evidence_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

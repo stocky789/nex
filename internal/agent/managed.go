@@ -23,7 +23,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network":
 		return true
 	}
 	return false
@@ -190,6 +190,14 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 						// A fence-verified promotion, driven by the candidate itself:
 						// the same durable, resumable machine, proved before it moves.
 						result = ExecutePoolPromotion(ctx, &Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-host-fencing" {
+						// One master-owned pool setting: whether Nex Core may arm
+						// this pool's hosts to shut themselves out.
+						result = ExecutePoolHostFencing(&Store{dir: dir, State: identity}, cmd)
+					} else if cmd.Kind == "pool-bmc-provisioning" {
+						// One master-owned membership field: whether this host may
+						// configure its own management controller for fencing.
+						result = ExecutePoolBMCProvisioning(&Store{dir: dir, State: identity}, cmd)
 					} else if cmd.Kind == "pool-fence-profile" {
 						// One master-owned membership field: how this pool would exclude
 						// a host, recorded before it has to be excluded.
@@ -213,7 +221,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					// Maintenance and a transfer already produced their own definite
 					// result; every other pool command reports success by returning no
 					// error.
-					if err == nil && cmd.Kind != "pool-maintenance" && cmd.Kind != "pool-transfer" && cmd.Kind != "pool-promote" && cmd.Kind != "pool-fence-profile" {
+					if err == nil && cmd.Kind != "pool-maintenance" && cmd.Kind != "pool-transfer" && cmd.Kind != "pool-promote" && cmd.Kind != "pool-fence-profile" && cmd.Kind != "pool-bmc-provisioning" && cmd.Kind != "pool-host-fencing" {
 						result = protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 					}
 				} else if cmd.Kind == "management-network" {
@@ -347,14 +355,18 @@ func ExecuteManagementNetwork(ctx context.Context, dir string, cmd protocol.Comm
 	// are the same; every later step names the change the host itself recorded and reported.
 	switch v.Action {
 	case "stage":
-		_, err = vmhost.StageManagementNetwork(dir, v.Spec, v.OperationID, v.ExpectedRevision, time.Duration(v.WindowSeconds)*time.Second)
+		if err = managementNetworkUnarmed(ctx); err == nil {
+			_, err = vmhost.StageManagementNetwork(dir, v.Spec, v.OperationID, v.ExpectedRevision, time.Duration(v.WindowSeconds)*time.Second)
+		}
 	case "apply":
 		// The one edit that can strand a host names its target explicitly, and the host
 		// itself checks the name: a Controller mirror can be stale, the hostname cannot.
-		if err = confirmsThisHost(v.Confirmation); err == nil {
-			var rec *vmhost.ManagementNetworkRecord
-			if rec, err = vmhost.ApplyManagementNetwork(ctx, dir, v.ChangeID); err == nil {
-				armManagementRollback(dir, rec.Deadline)
+		if err = managementNetworkUnarmed(ctx); err == nil {
+			if err = confirmsThisHost(v.Confirmation); err == nil {
+				var rec *vmhost.ManagementNetworkRecord
+				if rec, err = vmhost.ApplyManagementNetwork(ctx, dir, v.ChangeID); err == nil {
+					armManagementRollback(dir, rec.Deadline)
+				}
 			}
 		}
 	case "confirm":
@@ -372,6 +384,26 @@ func ExecuteManagementNetwork(ctx context.Context, dir string, cmd protocol.Comm
 	}
 	result.Status = "succeeded"
 	return result
+}
+
+// managementNetworkUnarmed refuses a management-network edit on a host that is feeding a
+// watchdog. The pool's Corosync ring runs on the management network, because that is where the
+// pool's own traffic runs, so bouncing that interface is a partition — and an armed host on the
+// minority side of a partition resets itself. That is planned work resetting a healthy host,
+// which is the one thing watchdog fencing must never do.
+//
+// It asks systemd whether sbd is running rather than reading the pool's record, because the
+// question is about this machine at this moment: a record can be stale, a running daemon
+// holding a watchdog device cannot.
+func managementNetworkUnarmed(ctx context.Context) error {
+	armed, err := localWatchdogArmed(ctx)
+	if err != nil {
+		return errors.New("Nex Core could not read whether this host is feeding a watchdog, so it will not change the network its pool's cluster runs on")
+	}
+	if armed {
+		return errors.New("this host is feeding a watchdog that resets it if it loses this pool's quorum, and this pool's cluster runs on the management network. Turn Host fencing off for this pool, or put this host in maintenance, before changing its management network")
+	}
+	return nil
 }
 
 func confirmsThisHost(confirmation string) error {
@@ -577,7 +609,7 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.CredentialRetire != nil {
 			return cmd.CredentialRetire.HostID
 		}
-	case "pool-member-join", "pool-storage-reconcile", "pool-maintenance", "pool-transfer", "pool-fence-profile":
+	case "pool-member-join", "pool-storage-reconcile", "pool-maintenance", "pool-transfer", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing":
 		// Maintenance, a master change, an eject and a fence profile are all performed by
 		// the master about another host, so the command's target is the master, not that
 		// host.

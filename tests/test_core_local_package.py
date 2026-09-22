@@ -337,12 +337,11 @@ class CoreLocalPackageTests(unittest.TestCase):
         # The prerm removes the generated source so removal leaves no source with a missing key.
         self.assertIn('/etc/apt/sources.list.d/nex.sources', (ROOT / 'packaging/core-local/prerm').read_text())
 
-    def test_depends_cover_what_core_networking_runs(self):
+    def test_depends_cover_what_core_runs(self):
         """A host that installs this package on its own must get the tools Core execs.
 
-        The ISO installs ifupdown and bridge-utils from installer/packages.txt, so the
-        gap is invisible there; a standalone install had neither, and the first pool VLAN
-        registration or management network edit failed on the host.
+        The ISO can mask a missing package dependency, but hosts upgraded through
+        the package must receive every command the agent invokes.
         """
         import re
         build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
@@ -351,6 +350,7 @@ class CoreLocalPackageTests(unittest.TestCase):
         depends = {field.strip().split()[0] for field in line.group(1).split(',')}
         vlan = (ROOT / 'internal/vmhost/vlan.go').read_text()
         management = (ROOT / 'internal/vmhost/management_network.go').read_text()
+        hardware = (ROOT / 'internal/agent/hardware.go').read_text()
         # Each entry is (package, the thing in Core that needs it, where that thing is).
         required = [
             ('iproute2', '"ip", "link"', vlan),
@@ -358,6 +358,8 @@ class CoreLocalPackageTests(unittest.TestCase):
             ('bridge-utils', 'bridge_ports', vlan),
             ('bridge-utils', 'bridge_ports', management),
             ('vlan', 'vlan-raw-device', management),
+            ('dmidecode', '"dmidecode", "-t", "memory"', hardware),
+            ('pciutils', '"lspci", "-mm", "-nn", "-D"', hardware),
         ]
         for package, needed, source in required:
             with self.subTest(package=package, needs=needed):

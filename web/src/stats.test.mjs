@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Usage history helpers: stacking keeps gaps as gaps, totals leave a stack, units scale.
 // run with: node src/stats.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/stats.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./stats.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime"], loader: { ".css": "empty" },
-});
-const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, stackedPercentMax, timestamps, statsFailure } = await import(`file://${outfile}`);
+const moduleURL = bundleTestModule(new URL("./stats.tsx", import.meta.url), "stats", true);
+const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, stackedPercentMax, timestamps, statsFailure, lastValue, gaugeState, gauges, hardwareSummary, sectionNote, sensorThresholds } = await import(moduleURL);
 
 const s = (key, group, unit, values) => ({ key, group, label: key, unit, values });
 const history = { object: "vm", id: "vm-1", range: "10m", step_seconds: 5, start: "2026-09-16T00:00:00Z", series: [
@@ -31,7 +23,7 @@ assert.deepEqual(stacked.map(c => c.group), ["cpu", "memory", "network", "disk"]
 assert.deepEqual(stacked[0].series.map(x => x.key), ["cpu.vcpu.0", "cpu.vcpu.1"], "a total leaves the stack");
 assert.equal(stacked[1].stacked, false, "memory never stacks");
 assert.equal(charts(history, false)[0].series.length, 3, "unstacked keeps the total");
-assert.equal(charts({ ...history, object: "host" }, false).at(-1).group, "load");
+assert.equal(charts({ ...history, object: "host" }, false).map(c => c.group).includes("load"), true);
 assert.deepEqual(plotValues(stacked[0].series, true), [[4, null, 10], [10, 2, 30]], "per-vCPU percent stacks raw so N busy vCPUs read N×100%; unknown is a gap, not zero");
 assert.equal(stackedPercentMax(stacked[0].series), 200, "two vCPUs give a 200% axis");
 assert.equal(stackedPercentMax(stacked[0].series, new Set(["cpu.vcpu.0"])), 100, "a hidden vCPU leaves the axis");
@@ -83,4 +75,92 @@ const failure = (message, status) => Object.assign(new Error(message), { status 
 assert.deepEqual(statsFailure(failure("the host agent does not keep usage history; upgrade Nex Core", 409)), { kind: "capability", message: "the host agent does not keep usage history; upgrade Nex Core" }, "an older Core gets the upgrade state, not a retry error");
 assert.deepEqual(statsFailure(failure("the host is not freshly connected; its usage history cannot be read now", 409)), { kind: "stale", message: "the host is not freshly connected; its usage history cannot be read now" }, "a stale host keeps its distinct state so existing charts can be labelled stale");
 assert.equal(statsFailure(failure("the host did not answer", 504)).kind, "error");
+
+// Temperatures: a host-only sixth chart that never stacks, and gauges read from the same history.
+assert.equal(formatValue("celsius", 47.4), "47 °C");
+assert.equal(formatValue("celsius", null), "—");
+assert.deepEqual(formatTicks("celsius", [0, 40, 80], 40), ["0 °C", "40 °C", "80 °C"]);
+const host = { ...history, object: "host", series: [
+  s("cpu.total", "cpu", "percent", [10, 20, 30, null]),
+  s("memory.used", "memory", "bytes", [50, 50, 50, 50]),
+  s("memory.total", "memory", "bytes", [200, 200, 200, 200]),
+  s("temp.coretemp-0000:00:18.3.1", "temperature", "celsius", [40, 41, 42, 42]),
+  s("temp.nvme-0000:01:00.0.1", "temperature", "celsius", [60, null, null, null]),
+] };
+const hostCharts = charts(host, true);
+assert.deepEqual(hostCharts.map(c => c.group), ["cpu", "memory", "network", "disk", "load", "temperature"], "temperature is the sixth host chart");
+assert.equal(hostCharts.at(-1).stacked, false, "temperatures never stack");
+assert.deepEqual(hostCharts.at(-1).series.map(x => x.key), ["temp.coretemp-0000:00:18.3.1", "temp.nvme-0000:01:00.0.1"]);
+assert.deepEqual(charts({ ...host, object: "vm" }, false).map(c => c.group), ["cpu", "memory", "network", "disk"], "a VM has no temperature chart");
+
+assert.equal(lastValue([1, null, null]), 1, "two steps back is still current");
+assert.equal(lastValue([1, null, null, null]), null, "older than three steps is unknown, not a frozen number");
+assert.equal(lastValue([]), null);
+const band = { max: 80, crit: 100 };
+assert.equal(gaugeState(42, band), "normal");
+assert.equal(gaugeState(80, band), "warm", "at max is already warm");
+assert.equal(gaugeState(100, band), "critical");
+assert.equal(gaugeState(120, {}), "normal", "no thresholds means no band");
+assert.equal(gaugeState(null, band), "normal");
+
+const row = gauges(host, { "temp.coretemp-0000:00:18.3.1": band });
+assert.deepEqual(row.map(g => g.key), ["cpu.total", "memory", "temp.coretemp-0000:00:18.3.1", "temp.nvme-0000:01:00.0.1"], "CPU, memory, then each sensor in series order");
+assert.deepEqual(row[0], { key: "cpu.total", label: "CPU", unit: "percent", value: 30, scale: 100, state: "normal" });
+assert.equal(row[1].value, 25, "memory is used over total");
+assert.deepEqual([row[2].scale, row[2].state], [100, "normal"], "a sensor scales to its crit");
+assert.deepEqual([row[3].value, row[3].scale, row[3].state], [null, null, "normal"], "a stale sensor without thresholds shows a plain unknown");
+assert.deepEqual(gauges({ ...host, object: "vm" }), [], "a VM has no hardware to gauge");
+
+// Hardware panel: the summary line, what a section shows instead of a table, and the thresholds the
+// gauges above join to the history by series key. Every value here is a fictional fixture.
+const hw = {
+  observed_at: "2026-09-22T10:00:00Z",
+  system: { vendor: "Example Systems", model: "EX-2200", bios_version: "2.1.4" },
+  cpu: { model: "Example CPU E-16", sockets: 2, cores: 32, threads: 64 },
+  memory: { total_bytes: 8 * 1024 ** 3, modules: [{ slot: "DIMM_A1", size_bytes: 8 * 1024 ** 3 }] },
+  disks: { devices: [] },
+  pci: { unavailable: true, reason: "lspci is not installed" },
+  sensors: { temperatures: [
+    { key: "temp.coretemp-0000:00:18.3.1", chip: "coretemp", label: "CPU 0 package", max_celsius: 80, crit_celsius: 100 },
+    { key: "temp.acpitz-0.1", chip: "acpitz", label: "acpitz" },
+  ] },
+};
+assert.deepEqual(hardwareSummary(hw), ["Example Systems EX-2200", "2 × Example CPU E-16", "32 cores / 64 threads", "8.0 GiB memory", "BIOS 2.1.4"]);
+assert.deepEqual(hardwareSummary({ system: {}, cpu: { model: "Example CPU E-4", cores: 4 }, memory: {} }), ["Example CPU E-4", "4 cores / 4 threads"], "a report without dmidecode still names the CPU");
+
+assert.equal(sectionNote(hw.system, 3), null, "a section with rows draws its table");
+assert.equal(sectionNote(hw.pci, 0), "lspci is not installed", "an unavailable section shows the host's reason");
+assert.equal(sectionNote({ unavailable: true }, 0), "This section is not available on this host.");
+assert.equal(sectionNote(hw.disks, 0), "None reported.", "available but empty is not an error");
+assert.equal(sectionNote(undefined, 0), "Not reported by this host.", "an older reply missing a section says so");
+
+assert.deepEqual(sensorThresholds(hw), {
+  "temp.coretemp-0000:00:18.3.1": { max: 80, crit: 100 },
+  "temp.acpitz-0.1": { max: undefined, crit: undefined },
+}, "thresholds are keyed by the series key, so a gauge scales from the host's own sensor");
+assert.deepEqual(sensorThresholds(null), {}, "no hardware report means no invented bands");
+assert.deepEqual(gauges(host, sensorThresholds(hw))[2].scale, 100, "the CPU sensor gauge ends at its crit");
+assert.equal(statsFailure(failure("the host agent does not report hardware; upgrade Nex Core", 409)).kind, "capability", "the hardware relay's 409 hides the panel rather than offering a retry");
+// WCAG 1.4.11: a plotted line is non-text content, so every series colour needs 3:1 against the
+// card it is drawn on — the card tints itself with 6% of its accent, so the darkest of those wins.
+{
+  const css = readFileSync(new URL("./stats.css", import.meta.url), "utf8");
+  const token = name => {
+    const value = css.match(new RegExp(`--${name}: ([^;]+);`))[1];
+    return value.startsWith("#") ? value : token(value.replace(/var\(--|\)/g, ""));
+  };
+  const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const luminance = hex => rgb(hex).map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  const surface = rgb(token("stats-card"));
+  const tint = hex => "#" + rgb(hex).map((v, i) => Math.round(v * 0.06 + surface[i] * 0.94).toString(16).padStart(2, "0")).join("");
+  const accents = [...css.matchAll(/--accent-[a-z]+: (#[0-9a-f]{6});/g)].map(m => tint(m[1]));
+  const card = accents.reduce((darkest, hex) => luminance(hex) < luminance(darkest) ? hex : darkest);
+  for (let i = 1; i <= 8; i++) {
+    const colour = token(`series-${i}`);
+    assert.ok(contrast(colour, card) >= 3, `--series-${i} ${colour} is ${contrast(colour, card).toFixed(2)}:1 on ${card}, below 3:1`);
+  }
+}
+
 console.log("stats helpers ok");

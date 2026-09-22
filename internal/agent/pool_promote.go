@@ -158,35 +158,44 @@ func EnsurePoolBootRestriction(s *Store) error {
 	}
 	if !poolSelfFencePromotable(state, s.State.HostID) {
 		// Durable evidence, not an assumption: a promotion over this host is only possible
-		// with a fence proof, a proof is only possible from a fence profile for this host
-		// that some member holds in its replica, and this host has never had one. Nothing
-		// could have taken its authority while it was down, so it comes back as the master
-		// it was and its guests start. A planned hand-off would have left HandedOff behind
-		// and is refused separately.
+		// with a fence proof, a proof needs either a fence profile for this host that some
+		// member holds in its replica or an armed watchdog of its own, and this host has
+		// never had either. Nothing could have taken its authority while it was down, so it
+		// comes back as the master it was and its guests start. A planned hand-off would
+		// have left HandedOff behind and is refused separately.
 		return nil
 	}
 	state.Restricted = &poolRestrictedRecord{Kind: poolRestrictedUnconfirmed, Reason: poolUnconfirmedReason, Since: time.Now().UTC()}
 	return savePoolPeer(s, state)
 }
 
-// poolSelfFencePromotable answers whether any host could still hold a usable fence profile
-// for this host, from this host's own durable record alone. It is true while such a profile
-// is recorded, and stays true after it is cleared until every ready member has acknowledged
-// a replica built after the clearing: a member whose latest replica predates it still holds
-// the profile that replica carried, and could still fence-promote with it.
+// poolSelfFencePromotable answers whether any host could still fence-promote over this host,
+// from this host's own durable record alone. It is true while an exposure is recorded, and
+// stays true after it is cleared until every ready member has acknowledged a replica built
+// after the clearing: a member whose latest replica predates it still holds the record that
+// replica carried, and could still fence-promote with it.
 func poolSelfFencePromotable(state poolPeerState, self string) bool {
 	if state.SelfFence != nil {
 		return true
 	}
 	member, ok := poolMemberByID(state.Membership, self)
-	return ok && vmhost.PoolFenceUsable(member.Fence) == nil
+	return ok && poolSelfFenceExposed(member)
 }
 
-// recordPoolSelfFenceExposure is called under the peer lock by the one place that changes a
-// fence profile. The caller passes the membership it is about to write.
+// poolSelfFenceExposed is the whole list of ways a member could be fence-promoted over: a
+// usable fence profile some peer holds in its replica, or its own armed watchdog, which
+// needs no profile and no credential on the promoting host at all.
+func poolSelfFenceExposed(member protocol.PoolMember) bool {
+	return vmhost.PoolFenceUsable(member.Fence, member.SystemUUID) == nil ||
+		member.WatchdogArmed != nil && member.WatchdogArmed.Armed
+}
+
+// recordPoolSelfFenceExposure is called under the peer lock by the places that change what
+// could fence this host — its fence profile and its own arming. The caller passes the
+// membership it is about to write.
 func recordPoolSelfFenceExposure(state *poolPeerState, self string, wasPromotable bool) error {
 	member, ok := poolMemberByID(state.Membership, self)
-	usable := ok && vmhost.PoolFenceUsable(member.Fence) == nil
+	usable := ok && poolSelfFenceExposed(member)
 	switch {
 	case usable:
 		state.SelfFence = &poolSelfFenceExposure{}
@@ -226,7 +235,7 @@ func ReleasePoolSelfFenceExposure(s *Store) {
 	if state.Membership.Valid() != nil || state.Membership.MasterHostID != s.State.HostID {
 		return
 	}
-	if member, ok := poolMemberByID(state.Membership, s.State.HostID); ok && vmhost.PoolFenceUsable(member.Fence) == nil {
+	if member, ok := poolMemberByID(state.Membership, s.State.HostID); ok && vmhost.PoolFenceUsable(member.Fence, member.SystemUUID) == nil {
 		return
 	}
 	poolReplicaMu.Lock()
@@ -345,11 +354,11 @@ func poolRestartUnreachableExcluded(state poolPeerState, unreachable []string) b
 	now := time.Now().UTC()
 	for _, hostID := range unreachable {
 		member, ok := poolMemberByID(state.Membership, hostID)
-		if !ok || member.Fence == nil {
+		if !ok {
 			return false
 		}
 		proof := poolPromotionProofFor(record.Fences, hostID)
-		if protocol.PoolPromotionFenceVerified(proof, member.Fence, state.Membership.PoolID, hostID, record.OperationID, state.AuthorityGeneration, now) != nil {
+		if protocol.PoolPromotionFenceVerified(proof, member, state.Membership.PoolID, hostID, record.OperationID, state.AuthorityGeneration, now) != nil {
 			return false
 		}
 	}
@@ -631,7 +640,7 @@ func evaluatePoolPromotion(ctx context.Context, s *Store, operationID string, pr
 	}
 	verdict.AuthorityGeneration, verdict.OldMasterHostID = replica.Generation, replica.MasterHostID
 	oldMaster, _ := poolMemberByID(replica.Membership, replica.MasterHostID)
-	verdict.FenceRecorded, verdict.FenceUsable, verdict.FenceUnusableReason = poolPromotionFenceReadiness(s, state, *replica, oldMaster)
+	verdict.FenceRecorded, verdict.FenceUsable, _, verdict.FenceUnusableReason = poolPromotionFenceReadiness(s, state, *replica, oldMaster)
 	if verdict.Fence = poolPromotionProofFor(proofs, replica.MasterHostID); verdict.Fence == nil && len(proofs) != 0 {
 		verdict.Fence = &proofs[0]
 	}
@@ -641,10 +650,10 @@ func evaluatePoolPromotion(ctx context.Context, s *Store, operationID string, pr
 	excluded := map[string]bool{}
 	for i := range proofs {
 		member, ok := poolMemberByID(replica.Membership, proofs[i].HostID)
-		if !ok || member.Fence == nil {
+		if !ok {
 			continue
 		}
-		if protocol.PoolPromotionFenceVerified(&proofs[i], member.Fence, replica.PoolID, proofs[i].HostID, operationID, replica.Generation, time.Now().UTC()) == nil {
+		if protocol.PoolPromotionFenceVerified(&proofs[i], member, replica.PoolID, proofs[i].HostID, operationID, replica.Generation, time.Now().UTC()) == nil {
 			excluded[proofs[i].HostID] = true
 		}
 	}
@@ -691,17 +700,31 @@ func poolPromotionProofFor(proofs []protocol.StorageClusterFenceStatus, hostID s
 // poolPromotionFenceReadiness answers, for one host, whether a profile is recorded and
 // whether this candidate could actually turn it into a proof: the right kind of profile and a
 // fence credential its own replica carried and it can open.
-func poolPromotionFenceReadiness(s *Store, state poolPeerState, replica protocol.PoolAuthorityReplica, member protocol.PoolMember) (recorded, usable bool, reason string) {
-	if member.Fence == nil {
-		return false, false, poolPromotionReason("no fence profile is recorded for " + member.HostID)
+// It answers for both methods, in the order the plan gives them: the fence device where this
+// host could use it, otherwise the target's own watchdog. kind names the method, so a caller
+// shows the operator what is about to happen rather than only that something will.
+func poolPromotionFenceReadiness(s *Store, state poolPeerState, replica protocol.PoolAuthorityReplica, member protocol.PoolMember) (recorded, usable bool, kind, reason string) {
+	device := ""
+	switch {
+	case member.Fence == nil:
+		device = "no fence profile is recorded for " + member.HostID
+	default:
+		kind = member.Fence.Kind
+		if err := vmhost.PoolFenceUsable(member.Fence, member.SystemUUID); err != nil {
+			device = err.Error()
+		} else if err = poolPromotionCredentialReady(s, state, replica, member); err != nil {
+			device = "this host holds no fence credential for " + member.HostID
+		} else {
+			return true, true, kind, ""
+		}
 	}
-	if err := vmhost.PoolFenceUsable(member.Fence); err != nil {
-		return true, false, poolPromotionReason(err.Error())
+	// The other method: the target shut itself out. It needs no device and no credential
+	// on this host — only the target's own armed report, in the durable record this host
+	// holds, at the generation being promoted.
+	if err := PoolWatchdogUsable(s.dir, member); err == nil {
+		return true, true, protocol.PoolFenceWatchdog, ""
 	}
-	if err := poolPromotionCredentialReady(s, state, replica, member); err != nil {
-		return true, false, poolPromotionReason("this host holds no fence credential for " + member.HostID)
-	}
-	return true, true, ""
+	return member.Fence != nil, false, kind, poolPromotionReason(device)
 }
 
 // checkPoolPromotionExclusion proves check 4 over every host this promotion must exclude: the
@@ -723,18 +746,18 @@ func checkPoolPromotionExclusion(s *Store, state poolPeerState, replica protocol
 	}
 	slices.Sort(required)
 	verdict.FenceHostIDs = slices.Compact(required)
-	unfenceable, unfenceableReasons, pending := []string{}, []string{}, []string{}
+	unfenceable, unfenceableReasons, pending, waits := []string{}, []string{}, []string{}, []string{}
 	for _, hostID := range verdict.FenceHostIDs {
 		member, ok := poolMemberByID(replica.Membership, hostID)
-		recorded, usable, reason := false, false, ""
+		recorded, usable, kind, reason := false, false, "", ""
 		if ok {
-			recorded, usable, reason = poolPromotionFenceReadiness(s, state, replica, member)
+			recorded, usable, kind, reason = poolPromotionFenceReadiness(s, state, replica, member)
 		}
 		if hostID == replica.MasterHostID {
 			verdict.FenceRecorded, verdict.FenceUsable, verdict.FenceUnusableReason = recorded, usable, reason
 		}
 		if !recorded {
-			poolPromotionBlocked(verdict, "old-master-exclusion", "blocked", "the pool master "+replica.MasterHostID+" has no recorded fence profile; record one before promoting, and note that BMC fencing identity verification is not implemented", []string{hostID}, nil)
+			poolPromotionBlocked(verdict, "old-master-exclusion", "blocked", "the pool master "+replica.MasterHostID+" has no recorded fence profile; record one before promoting", []string{hostID}, nil)
 			return
 		}
 		if !usable {
@@ -744,13 +767,22 @@ func checkPoolPromotionExclusion(s *Store, state poolPeerState, replica protocol
 		}
 		if !excluded[hostID] {
 			pending = append(pending, hostID)
+			if kind == protocol.PoolFenceWatchdog {
+				// Nobody powers this host off: it resets itself, and this host only
+				// establishes that it must have. What the operator needs is the wait.
+				waits = append(waits, hostID+": "+poolWatchdogWait(s, member))
+			}
 		}
 	}
 	switch {
 	case len(unfenceable) != 0:
 		poolPromotionBlocked(verdict, "old-master-exclusion", "blocked", "this host cannot fence "+strings.Join(unfenceableReasons, "; ")+", so it cannot be promoted while those hosts are unreachable", unfenceable, nil)
 	case len(pending) != 0:
-		poolPromotionBlocked(verdict, "old-master-exclusion", "unknown", "pool host "+strings.Join(pending, ", ")+" has not been fenced for this promotion; Core fences each of them and observes the power-off when the promotion is confirmed", pending, nil)
+		reason := "pool host " + strings.Join(pending, ", ") + " has not been fenced for this promotion; Core fences each of them and observes the power-off when the promotion is confirmed"
+		if len(waits) != 0 {
+			reason += ". " + strings.Join(waits, "; ")
+		}
+		poolPromotionBlocked(verdict, "old-master-exclusion", "unknown", reason, pending, nil)
 	default:
 		poolPromotionBlocked(verdict, "old-master-exclusion", "passed", "", verdict.FenceHostIDs, nil)
 	}
@@ -795,7 +827,7 @@ func materializePoolFenceCredential(s *Store, replica protocol.PoolAuthorityRepl
 	if err != nil {
 		return err
 	}
-	if err = vmhost.WritePoolFenceCredential(s.dir, member.Fence.CredentialRef, files); err != nil {
+	if err = vmhost.WritePoolFenceCredential(s.dir, *member.Fence, files); err != nil {
 		return err
 	}
 	if record != nil && !slices.Contains(record.Materialized, member.Fence.CredentialRef) {
@@ -888,7 +920,10 @@ func probePoolPromotionHosts(ctx context.Context, s *Store, state poolPeerState,
 			continue
 		}
 		host := protocol.PoolPromotionHost{HostID: member.HostID}
-		host.FenceRecorded, host.FenceUsable, host.FenceUnusableReason = poolPromotionFenceReadiness(s, state, replica, member)
+		host.FenceRecorded, host.FenceUsable, host.FenceKind, host.FenceUnusableReason = poolPromotionFenceReadiness(s, state, replica, member)
+		// Advisory only: this candidate's own last look at that fence device. It is
+		// never an input to any check — the proof path is unchanged.
+		host.FenceCheckWarning = poolFenceCheckWarning(s.dir, s.State.HostID, member.HostID)
 		var status protocol.PoolAuthorityStatus
 		err := errors.New("this host has never advertised a peer endpoint")
 		if member.PeerOrigin != "" {
@@ -1139,26 +1174,49 @@ func fencePoolExcludedHosts(ctx context.Context, s *Store, record *poolTransferR
 		return errors.New("this host holds no pool authority replica; it cannot be promoted")
 	}
 	generation := replica.Replica.Generation
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil {
+		return errors.New("pool peer state is unavailable")
+	}
 	verdict := evaluatePoolPromotion(ctx, s, record.OperationID, record.Fences, 20*time.Second)
 	if err = poolPromotionFenceListAgreed(verdict, record); err != nil {
 		return err
 	}
 	for _, hostID := range verdict.FenceHostIDs {
 		member, ok := poolMemberByID(replica.Replica.Membership, hostID)
-		if !ok || member.Fence == nil {
-			return errors.New("pool host " + hostID + " has no recorded fence profile; it cannot be excluded")
+		if !ok {
+			return errors.New("pool host " + hostID + " is not a member of this pool; it cannot be excluded")
+		}
+		// The same decider the operator's verdict was composed from, so the method that
+		// runs here is the method readiness promised. Recomputing it from the profile
+		// alone made a promotion the preflight approved by watchdog abort on the device
+		// path when this host could not open the credential.
+		recorded, usable, kind, reason := poolPromotionFenceReadiness(s, state, replica.Replica, member)
+		if !recorded || !usable {
+			return errors.New("pool host " + hostID + " cannot be excluded: " + reason)
 		}
 		digest := protocol.PoolPromotionFenceDigest(replica.Replica.PoolID, hostID, record.OperationID, generation)
 		if existing := poolPromotionProofFor(record.Fences, hostID); existing != nil &&
-			protocol.PoolPromotionFenceVerified(existing, member.Fence, replica.Replica.PoolID, hostID, record.OperationID, generation, time.Now().UTC()) == nil {
+			protocol.PoolPromotionFenceVerified(existing, member, replica.Replica.PoolID, hostID, record.OperationID, generation, time.Now().UTC()) == nil {
 			continue
 		}
-		// The material first: this host fences with the pool's own credential, sealed for it
-		// while the master it must now exclude was still there to seal it.
-		if err = materializePoolFenceCredential(s, replica.Replica, member, record); err != nil {
-			return err
+		var proof protocol.StorageClusterFenceStatus
+		var fenceErr error
+		if kind == protocol.PoolFenceWatchdog {
+			// The target shut itself out. Nothing is powered off here; this host
+			// establishes that the target's own watchdog must have reset it, and is
+			// refused — with the time remaining — until it certainly has.
+			proof, fenceErr = poolWatchdogFenceVerify(ctx, s, member, record.OperationID, digest, generation)
+		} else {
+			// The material first: this host fences with the pool's own credential, sealed
+			// for it while the master it must now exclude was still there to seal it.
+			if err = materializePoolFenceCredential(s, replica.Replica, member, record); err != nil {
+				return err
+			}
+			proof, fenceErr = poolFenceVerify(ctx, s.dir, member.Fence, member.SystemUUID, hostID, record.OperationID, digest, generation)
 		}
-		proof, fenceErr := poolFenceVerify(ctx, s.dir, member.Fence, hostID, record.OperationID, digest, generation)
 		record.Fences = append(poolPromotionProofsWithout(record.Fences, hostID), proof)
 		record.AuthorityGeneration = generation
 		if err = savePoolTransfer(s, record); err != nil {
@@ -1167,7 +1225,7 @@ func fencePoolExcludedHosts(ctx context.Context, s *Store, record *poolTransferR
 		if fenceErr != nil {
 			return errors.New(poolFenceRefusal(proof, fenceErr))
 		}
-		if err = protocol.PoolPromotionFenceVerified(&proof, member.Fence, replica.Replica.PoolID, hostID, record.OperationID, generation, time.Now().UTC()); err != nil {
+		if err = protocol.PoolPromotionFenceVerified(&proof, member, replica.Replica.PoolID, hostID, record.OperationID, generation, time.Now().UTC()); err != nil {
 			return errors.New("the fence of pool host " + hostID + " produced no usable proof: " + err.Error())
 		}
 	}
@@ -1281,15 +1339,15 @@ func promotionExpiredFenceOnly(s *Store, record *poolTransferRecord, verdict pro
 			return false
 		}
 		member, ok := poolMemberByID(replica.Replica.Membership, hostID)
-		if !ok || member.Fence == nil {
+		if !ok {
 			return false
 		}
 		proof := poolPromotionProofFor(record.Fences, hostID)
-		if protocol.PoolPromotionFenceVerified(proof, member.Fence, replica.Replica.PoolID, hostID, record.OperationID, replica.Replica.Generation, now) == nil {
+		if protocol.PoolPromotionFenceVerified(proof, member, replica.Replica.PoolID, hostID, record.OperationID, replica.Replica.Generation, now) == nil {
 			continue
 		}
 		if proof == nil || proof.ObservedAt.IsZero() || now.Sub(proof.ObservedAt) <= protocol.PoolPromotionFenceWindow ||
-			protocol.PoolPromotionFenceVerified(proof, member.Fence, replica.Replica.PoolID, hostID, record.OperationID, replica.Replica.Generation, proof.ObservedAt) != nil {
+			protocol.PoolPromotionFenceVerified(proof, member, replica.Replica.PoolID, hostID, record.OperationID, replica.Replica.Generation, proof.ObservedAt) != nil {
 			return false
 		}
 		expired = true
@@ -1302,7 +1360,7 @@ func promotionExpiredFenceOnly(s *Store, record *poolTransferRecord, verdict pro
 // material actually changed. The digest is kept in this master's own private state; neither
 // it nor the material is ever replicated, reported or logged.
 func recordPoolFenceCredential(s *Store, state *poolPeerState, hostID string, fence protocol.StorageClusterFence) error {
-	files, err := vmhost.ReadPoolFenceCredential(s.dir, fence.CredentialRef)
+	files, err := vmhost.ReadPoolFenceCredential(s.dir, fence)
 	if err != nil {
 		if strings.Contains(err.Error(), "too large") {
 			return errors.New("this host's fence credential material for " + hostID + " is larger than this pool replicates; shorten it before recording the profile")
@@ -1352,6 +1410,73 @@ func retirePoolFenceCredential(s *Store, state poolPeerState, previous *protocol
 	_ = vmhost.RetirePoolFenceCredential(s.dir, previous.CredentialRef)
 }
 
+// pinBMCFenceProfile captures the certificate the management controller presents now, pins
+// the profile to it, and then proves over that pinned connection that the controller really
+// manages this host's machine. Nothing is recorded unless both succeed, so a recorded BMC
+// profile has been used once, against the right machine, before anyone depends on it.
+func pinBMCFenceProfile(s *Store, fence protocol.StorageClusterFence, hostID string) (protocol.StorageClusterFence, error) {
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil {
+		return fence, errors.New("pool membership is unavailable")
+	}
+	// Only the master records a profile, so only the master has any business connecting to
+	// a management controller and sending it a password. The record path checks this again
+	// under the pool lock; checking it here is what keeps a host that is not the master
+	// from making the network call at all.
+	if state.Membership.MasterHostID != s.State.HostID {
+		return fence, errors.New("only the pool master records a fence profile")
+	}
+	member, ok := poolMemberByID(state.Membership, hostID)
+	if !ok {
+		return fence, errors.New("no such member of this pool")
+	}
+	// The same predicate the record path applies, asked first so a profile that could never
+	// work costs no network round trip and no operator wait.
+	if err = vmhost.PoolFenceUsable(&fence, member.SystemUUID); err != nil {
+		return fence, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if fence.Kind == protocol.FenceRedfish {
+		// IPMI authenticates its own session and presents no certificate, so only a
+		// Redfish controller has one to pin.
+		if fence.TLSFingerprint, err = vmhost.BMCCertificateFingerprint(ctx, fence.Endpoint); err != nil {
+			return fence, err
+		}
+	}
+	if fence.Kind == protocol.FenceIPMI && fence.Cipher == 0 {
+		// An operator is not asked which RMCP+ cipher suite their controller speaks, so
+		// Core finds out now, while it is connecting anyway, and records the answer: 17
+		// where the controller offers it, otherwise the suite every IPMI 2.0 controller
+		// must implement. Suite 0 — no authentication at all — is never among them.
+		for _, cipher := range []uint8{17, 3} {
+			fence.Cipher = cipher
+			if err = vmhost.VerifyBMCTargetIdentity(ctx, s.dir, fence, member.SystemUUID); err == nil {
+				return fence, nil
+			}
+		}
+		return fence, err
+	}
+	if err = vmhost.VerifyBMCTargetIdentity(ctx, s.dir, fence, member.SystemUUID); err != nil {
+		return fence, err
+	}
+	return fence, nil
+}
+
+// releaseRefusedFenceCredential drops the material the credential handoff delivered for a
+// profile this master then refused. Without it every refusal — and a refusal is the normal
+// answer for a host that never reported its machine identity — would leave an orphan
+// password in the private store with no profile naming it.
+func releaseRefusedFenceCredential(s *Store, fence *protocol.StorageClusterFence) {
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	if state, err := loadPoolPeer(s); err == nil {
+		retirePoolFenceCredential(s, state, fence)
+	}
+}
+
 // ExecutePoolFenceProfile records one host's fence profile in the master's membership. Like
 // maintenance it is deliberately outside the generation equality rule: recording how a host
 // would be excluded is not a membership change, and bumping the generation for it would
@@ -1366,6 +1491,19 @@ func ExecutePoolFenceProfile(s *Store, cmd protocol.Command) protocol.Result {
 	if err := v.Valid(); err != nil {
 		result.Error = err.Error()
 		return result
+	}
+	// A management controller is pinned and proved before it is recorded, which needs the
+	// network and must not happen under the pool lock. Refusing here rather than at the
+	// moment somebody is about to power a host off is the whole point: an operator learns
+	// now, while the master is still there to record a corrected profile.
+	if v.Fence != nil && (v.Fence.Kind == protocol.FenceRedfish || v.Fence.Kind == protocol.FenceIPMI) {
+		pinned, err := pinBMCFenceProfile(s, *v.Fence, v.MemberHostID)
+		if err != nil {
+			releaseRefusedFenceCredential(s, v.Fence)
+			result.Error = "this fence profile cannot be verified by this host: " + err.Error()
+			return result
+		}
+		v.Fence = &pinned
 	}
 	poolPeerMu.Lock()
 	defer poolPeerMu.Unlock()
@@ -1398,11 +1536,25 @@ func ExecutePoolFenceProfile(s *Store, cmd protocol.Command) protocol.Result {
 	}
 	previous := state.Membership.Members[index].Fence
 	wasSelfFencePromotable := v.MemberHostID == s.State.HostID && poolSelfFencePromotable(state, s.State.HostID)
+	// What an operator entered by hand is what the operator meant. A host that configures
+	// its own controller offers its profile on every pass, and without this it would take
+	// over a device somebody chose deliberately.
+	if v.Fence != nil && v.Fence.ProvisionedByCore && previous != nil && !previous.ProvisionedByCore {
+		retirePoolFenceCredential(s, state, v.Fence)
+		result.Error = "this host already has a fence device an operator set, so the one it configured for itself was not recorded"
+		return result
+	}
+	if v.Fence != nil && v.Fence.ProvisionedByCore && state.Membership.Members[index].BMCProvisioningDisabled {
+		retirePoolFenceCredential(s, state, v.Fence)
+		result.Error = "an operator turned automatic provisioning off for this host, so the fence device it configured for itself was not recorded"
+		return result
+	}
 	if v.Fence != nil {
 		// A profile this build could never turn into a proof is refused rather than
 		// recorded: recording it would promise a recovery path that does not exist, and
 		// would restrict this master after every restart for nothing.
-		if err = vmhost.PoolFenceUsable(v.Fence); err != nil {
+		if err = vmhost.PoolFenceUsable(v.Fence, state.Membership.Members[index].SystemUUID); err != nil {
+			retirePoolFenceCredential(s, state, v.Fence)
 			result.Error = "this fence profile cannot be verified by this host: " + err.Error()
 			return result
 		}
@@ -1410,6 +1562,7 @@ func ExecutePoolFenceProfile(s *Store, cmd protocol.Command) protocol.Result {
 		// recovery that depends on it: they receive it sealed in the next replica, and the
 		// candidate that one day fences with it can get it from nowhere else.
 		if err = recordPoolFenceCredential(s, &state, v.MemberHostID, *v.Fence); err != nil {
+			retirePoolFenceCredential(s, state, v.Fence)
 			result.Error = err.Error()
 			return result
 		}
@@ -1422,6 +1575,14 @@ func ExecutePoolFenceProfile(s *Store, cmd protocol.Command) protocol.Result {
 		delete(state.FenceCredentials, v.MemberHostID)
 		state.Membership.Members[index].FenceCredentialVersion = 0
 		retirePoolFenceCredential(s, state, previous)
+		// Clearing a device Nex Core configured is one operator action with one meaning:
+		// the account on that host's controller goes too, and the host stops creating
+		// another, until the operator says otherwise. The host reads this from the
+		// membership it already holds and removes the account itself; nothing else in the
+		// pool may write it, so a host cannot withdraw its own fence device.
+		if previous != nil && previous.ProvisionedByCore {
+			state.Membership.Members[index].BMCProvisioningDisabled = true
+		}
 	} else {
 		state.Membership.Members[index].FenceCredentialVersion = state.FenceCredentials[v.MemberHostID].Version
 		if previous != nil && previous.CredentialRef != v.Fence.CredentialRef {

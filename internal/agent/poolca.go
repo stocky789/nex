@@ -70,6 +70,12 @@ type poolPeerState struct {
 	// exists so the master can tell rotated material from the same material re-recorded,
 	// and move the replicated credential version only when the material actually changed.
 	FenceCredentials map[string]poolFenceCredentialRecord
+	// LocalBMC is this host's own memory of the fence account it created on its own
+	// management controller: which slot holds it, that Nex Core is the one that put it
+	// there, and whether an operator has removed it. It is host-local because the account
+	// is: it survives a reboot and a master change, and it is what stops a second pass
+	// creating a second account or taking over an account somebody else made.
+	LocalBMC *poolLocalBMCRecord
 }
 
 // poolFenceCredentialRecord is a digest and a counter, never material.

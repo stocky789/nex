@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./stats.css";
@@ -11,7 +11,7 @@ export type StatsHistory = { object: string; id: string; host_id?: string; range
 export const ranges = [["10m", "Last 10 minutes"], ["24h", "Last 24 hours"], ["30d", "Last 30 days"], ["1y", "Last year"]] as const;
 // Live refresh only where new points arrive often enough to matter; longer ranges refresh on demand.
 export const refreshMS: Record<string, number> = { "10m": 5000, "24h": 60000 };
-const titles: Record<string, string> = { cpu: "CPU usage", memory: "Memory usage", network: "Network throughput", disk: "Disk throughput", load: "Load average" };
+const titles: Record<string, string> = { cpu: "CPU usage", memory: "Memory usage", network: "Network throughput", disk: "Disk throughput", load: "Load average", temperature: "Temperature" };
 const stackable = new Set(["cpu", "network", "disk"]);
 const PALETTE_SIZE = 8;
 
@@ -20,6 +20,7 @@ export function formatValue(unit: string, v: number | null | undefined): string 
   if (unit === "percent") return `${v.toFixed(v < 10 ? 1 : 0)}%`;
   if (unit === "iops") return `${v.toFixed(v < 10 ? 1 : 0)} IOPS`;
   if (unit === "load") return v.toFixed(2);
+  if (unit === "celsius") return `${v.toFixed(0)} °C`;
   const suffix = unit === "bytes_per_second" ? "/s" : "";
   const names = ["B", "KiB", "MiB", "GiB", "TiB"];
   let i = 0, n = Math.abs(v);
@@ -30,7 +31,7 @@ export function formatValue(unit: string, v: number | null | undefined): string 
 // Axis labels share one unit and enough decimals for the tick step, so a near-zero rate axis reads
 // "0.5 B/s, 1.0 B/s" instead of repeating a rounded "1 B/s".
 export function formatTicks(unit: string, ticks: number[], incr: number): string[] {
-  const suffix = { percent: "%", iops: " IOPS", bytes: " B", bytes_per_second: " B/s" }[unit] ?? "";
+  const suffix = { percent: "%", iops: " IOPS", bytes: " B", bytes_per_second: " B/s", celsius: " °C" }[unit] ?? "";
   let divisor = 1, name = suffix;
   if (unit === "bytes" || unit === "bytes_per_second") {
     const names = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -60,7 +61,7 @@ const isTotal = (s: StatsSeries) => s.key.split(".").pop() === "total";
 
 export type Chart = { group: string; title: string; series: StatsSeries[]; stacked: boolean };
 export function charts(history: StatsHistory, stacked: boolean): Chart[] {
-  const groups = history.object === "host" ? ["cpu", "memory", "network", "disk", "load"] : ["cpu", "memory", "network", "disk"];
+  const groups = history.object === "host" ? ["cpu", "memory", "network", "disk", "load", "temperature"] : ["cpu", "memory", "network", "disk"];
   return groups.map(group => {
     const stack = stacked && stackable.has(group);
     const series = history.series.filter(s => s.group === group && !(stack && isTotal(s)));
@@ -122,6 +123,67 @@ export function updatedAgo(at: number, now: number): string {
   return seconds < 1 ? "Updated just now" : `Updated ${seconds}s ago`;
 }
 
+// Gauge thresholds come from the host's hardware report, keyed by series key; a sensor the host
+// reports no max/crit for is drawn as a plain value with no band.
+export type Thresholds = Record<string, { max?: number; crit?: number }>;
+export type GaugeState = "normal" | "warm" | "critical";
+export type Gauge = { key: string; label: string; unit: string; value: number | null; scale: number | null; state: GaugeState };
+
+// Gauges read the history the tab already polls, so they cost no request. A value older than three
+// steps is no longer current: showing the frozen number would read as a live one.
+export function lastValue(values: (number | null)[], within = 3): number | null {
+  for (let i = values.length - 1; i >= 0 && i > values.length - 1 - within; i--) if (values[i] != null) return values[i];
+  return null;
+}
+
+export function gaugeState(value: number | null, t?: { max?: number; crit?: number }): GaugeState {
+  if (value == null) return "normal";
+  if (t?.crit != null && value >= t.crit) return "critical";
+  if (t?.max != null && value >= t.max) return "warm";
+  return "normal";
+}
+
+export function gauges(history: StatsHistory, thresholds: Thresholds = {}): Gauge[] {
+  if (history.object !== "host") return [];
+  const value = (key: string) => {
+    const s = history.series.find(s => s.key === key);
+    return s ? lastValue(s.values) : null;
+  };
+  const used = value("memory.used"), total = value("memory.total");
+  const out: Gauge[] = [
+    { key: "cpu.total", label: "CPU", unit: "percent", value: value("cpu.total"), scale: 100, state: "normal" },
+    { key: "memory", label: "Memory", unit: "percent", value: used != null && total ? (100 * used) / total : null, scale: 100, state: "normal" },
+  ];
+  for (const s of history.series.filter(s => s.group === "temperature")) {
+    const t = thresholds[s.key];
+    const reading = lastValue(s.values);
+    out.push({ key: s.key, label: s.label, unit: s.unit, value: reading, scale: t?.crit ?? t?.max ?? null, state: gaugeState(reading, t) });
+  }
+  return out;
+}
+
+// A half-circle drawn with pathLength 100, so the filled share is the percentage itself.
+const GAUGE_ARC = "M8 40 A32 32 0 0 1 72 40";
+
+function GaugeArc({ gauge }: { gauge: Gauge }) {
+  const text = formatValue(gauge.unit, gauge.value);
+  const percent = gauge.value != null && gauge.scale ? Math.max(0, Math.min(100, (100 * gauge.value) / gauge.scale)) : null;
+  const meter = gauge.value != null && gauge.scale != null;
+  // A gauge with no current reading is drawn in the track grey: the green accent means "inside its
+  // normal range", which is not something an unknown value can claim.
+  const accent = gauge.value == null ? "var(--stats-track)"
+    : `var(--accent-${{ "cpu.total": "blue", memory: "teal" }[gauge.key] ?? { normal: "green", warm: "yellow", critical: "rose" }[gauge.state]})`;
+  return <div className={`stats-gauge stats-gauge-${gauge.state}`} style={{ "--gauge-accent": accent } as CSSProperties}>
+    <svg className="stats-gauge-arc" viewBox="0 0 80 48" aria-hidden="true" focusable="false">
+      <path className="stats-gauge-track" d={GAUGE_ARC} pathLength={100} />
+      {percent != null && <path className="stats-gauge-fill" d={GAUGE_ARC} pathLength={100} strokeDasharray={`${percent} 100`} />}
+    </svg>
+    <div className="stats-gauge-value" {...(meter ? { role: "meter", "aria-valuenow": gauge.value!, "aria-valuemin": 0, "aria-valuemax": Math.max(gauge.scale!, gauge.value!), "aria-valuetext": text, "aria-label": gauge.label } : {})}>{text}</div>
+    {gauge.state !== "normal" && <span className="stats-gauge-pill">{gauge.state === "critical" ? "Critical" : "Warm"}</span>}
+    <div className="stats-gauge-label">{gauge.label}</div>
+  </div>;
+}
+
 export type StatsFailure = { kind: "capability" | "stale" | "error"; message: string };
 
 // The stats relay uses 409 for both a stale host and an older Core. Keep the distinction the
@@ -129,9 +191,143 @@ export type StatsFailure = { kind: "capability" | "stale" | "error"; message: st
 export function statsFailure(error: unknown): StatsFailure {
   const message = error instanceof Error ? error.message : String(error);
   const status = (error as { status?: number })?.status;
-  if (status === 409 && /does not keep usage history/i.test(message)) return { kind: "capability", message };
+  if (status === 409 && /does not keep usage history|upgrade nex core/i.test(message)) return { kind: "capability", message };
   if (status === 409 && /not freshly connected/i.test(message)) return { kind: "stale", message };
   return { kind: "error", message };
+}
+
+// The host reads its hardware live on request; nothing is cached here. Every section may come back
+// unavailable on its own, so a missing tool costs one section rather than the whole report.
+export const HARDWARE_CAPABILITY = "host-hardware-v1";
+export type Unavailable = { unavailable?: boolean; reason?: string };
+export type MemoryModule = { slot: string; size_bytes: number; type?: string; speed_mts?: number; manufacturer?: string; part?: string };
+export type HardwareDisk = { name: string; model?: string; serial?: string; size_bytes: number; rotational: boolean; transport?: string };
+export type PCIDevice = { address: string; class: string; class_id: string; vendor: string; vendor_id: string; device: string; device_id: string };
+export type TemperatureSensor = { key: string; chip: string; label: string; max_celsius?: number; crit_celsius?: number };
+export type HostHardware = {
+  host_id?: string;
+  observed_at: string;
+  system: Unavailable & { vendor?: string; model?: string; version?: string; serial?: string; board_vendor?: string; board_name?: string; board_version?: string; board_serial?: string; chassis_vendor?: string; chassis_type?: string; bios_vendor?: string; bios_version?: string; bios_date?: string };
+  cpu: Unavailable & { model?: string; sockets?: number; cores?: number; threads?: number };
+  memory: Unavailable & { total_bytes?: number; modules?: MemoryModule[] };
+  disks: Unavailable & { devices?: HardwareDisk[] };
+  pci: Unavailable & { devices?: PCIDevice[] };
+  sensors: Unavailable & { temperatures?: TemperatureSensor[] };
+};
+
+const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(" ");
+
+// One line answering "what is this server": vendor and model, CPU, memory, BIOS version.
+export function hardwareSummary(hw: HostHardware): string[] {
+  const out = [join(hw.system?.vendor, hw.system?.model)];
+  const cpu = hw.cpu ?? {};
+  if (cpu.model) out.push(cpu.sockets && cpu.sockets > 1 ? `${cpu.sockets} × ${cpu.model}` : cpu.model);
+  if (cpu.cores) out.push(`${cpu.cores} cores / ${cpu.threads ?? cpu.cores} threads`);
+  if (hw.memory?.total_bytes) out.push(`${formatValue("bytes", hw.memory.total_bytes)} memory`);
+  if (hw.system?.bios_version) out.push(`BIOS ${hw.system.bios_version}`);
+  return out.filter(Boolean);
+}
+
+// What a section shows instead of its table: the host's reason when it could not be read, a plain
+// note when it read nothing, and null when there are rows to draw.
+export function sectionNote(section: Unavailable | undefined, rows: number): string | null {
+  if (!section) return "Not reported by this host.";
+  if (section.unavailable) return section.reason || "This section is not available on this host.";
+  return rows ? null : "None reported.";
+}
+
+// Gauge scale and warning band come from the host's own sensor thresholds, joined to the history by
+// series key, so no number is invented in the UI.
+export function sensorThresholds(hw: HostHardware | null): Thresholds {
+  const out: Thresholds = {};
+  for (const s of hw?.sensors?.temperatures ?? []) out[s.key] = { max: s.max_celsius, crit: s.crit_celsius };
+  return out;
+}
+
+const pill = (v?: string) => v ? <span className="stats-pill">{v}</span> : null;
+
+function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
+  return <table className="stats-hw-table"><tbody>
+    {rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => <tr key={k}><th scope="row">{k}</th><td>{v}</td></tr>)}
+  </tbody></table>;
+}
+
+function Section({ title, note, children }: { title: string; note: string | null; children: ReactNode }) {
+  return <details className="stats-hw-section">
+    <summary>{title}</summary>
+    {note ? <p className="empty">{note}</p> : children}
+  </details>;
+}
+
+function HardwareSections({ hw }: { hw: HostHardware }) {
+  const sys = hw.system ?? {}, cpu = hw.cpu ?? {};
+  const modules = hw.memory?.modules ?? [], disks = hw.disks?.devices ?? [], pci = hw.pci?.devices ?? [], sensors = hw.sensors?.temperatures ?? [];
+  return <>
+    <Section title="System" note={sectionNote(hw.system, Object.values(sys).filter(v => typeof v === "string" && v).length)}>
+      <KeyValues rows={[
+        ["Vendor", sys.vendor],
+        ["Model", join(sys.model, sys.version)],
+        ["Serial", pill(sys.serial)],
+        ["Board", join(sys.board_vendor, sys.board_name, sys.board_version)],
+        ["Board serial", pill(sys.board_serial)],
+        ["Chassis", join(sys.chassis_vendor, sys.chassis_type)],
+        ["BIOS", sys.bios_version ? <>{pill(sys.bios_version)} {join(sys.bios_vendor, sys.bios_date)}</> : null],
+      ]} />
+    </Section>
+    <Section title="CPU" note={sectionNote(hw.cpu, cpu.model ? 1 : 0)}>
+      <KeyValues rows={[["Model", cpu.model], ["Sockets", cpu.sockets], ["Cores", cpu.cores], ["Threads", cpu.threads]]} />
+    </Section>
+    <Section title="Memory" note={sectionNote(hw.memory, modules.length)}>
+      <table className="stats-hw-table">
+        <thead><tr><th>Slot</th><th>Size</th><th>Type</th><th>Speed</th><th>Manufacturer</th><th>Part</th></tr></thead>
+        <tbody>{modules.map(m => <tr key={m.slot}>
+          <td>{m.slot}</td><td>{m.size_bytes ? formatValue("bytes", m.size_bytes) : "Empty"}</td><td>{m.type}</td>
+          <td>{m.speed_mts ? `${m.speed_mts} MT/s` : ""}</td><td>{m.manufacturer}</td><td>{pill(m.part)}</td>
+        </tr>)}</tbody>
+      </table>
+    </Section>
+    <Section title="Disks" note={sectionNote(hw.disks, disks.length)}>
+      <table className="stats-hw-table">
+        <thead><tr><th>Device</th><th>Model</th><th>Size</th><th>Type</th><th>Transport</th><th>Serial</th></tr></thead>
+        <tbody>{disks.map(d => <tr key={d.name}>
+          <td>{d.name}</td><td>{d.model}</td><td>{formatValue("bytes", d.size_bytes)}</td>
+          <td>{d.rotational ? "Rotational" : "Solid state"}</td><td>{d.transport}</td><td>{pill(d.serial)}</td>
+        </tr>)}</tbody>
+      </table>
+    </Section>
+    <Section title="PCI devices" note={sectionNote(hw.pci, pci.length)}>
+      <table className="stats-hw-table">
+        <thead><tr><th>Address</th><th>Class</th><th>Device</th><th>IDs</th></tr></thead>
+        <tbody>{pci.map(d => <tr key={d.address}>
+          <td>{d.address}</td><td>{d.class}</td><td>{join(d.vendor, d.device)}</td><td>{pill(`${d.vendor_id}:${d.device_id}`)}</td>
+        </tr>)}</tbody>
+      </table>
+    </Section>
+    <Section title="Temperature sensors" note={sectionNote(hw.sensors, sensors.length)}>
+      <table className="stats-hw-table">
+        <thead><tr><th>Sensor</th><th>Chip</th><th>Warns at</th><th>Critical at</th><th>Series</th></tr></thead>
+        <tbody>{sensors.map(s => <tr key={s.key}>
+          <td>{s.label}</td><td>{s.chip}</td><td>{formatValue("celsius", s.max_celsius)}</td>
+          <td>{formatValue("celsius", s.crit_celsius)}</td><td>{pill(s.key)}</td>
+        </tr>)}</tbody>
+      </table>
+    </Section>
+  </>;
+}
+
+function HardwarePanel({ hardware, loading, failure, onRetry }: { hardware: HostHardware | null; loading: boolean; failure: StatsFailure | null; onRetry: () => void }) {
+  // Hardware is read once when the tab opens, so Retry is the only way to reread it — including
+  // after a report loaded and the host has since changed or gone stale.
+  return <section className="panel stats stats-hardware" aria-label="Hardware">
+    <div className="section-heading"><h2>Hardware</h2>
+      <div className="stats-controls"><button type="button" disabled={loading} onClick={onRetry}>Retry</button></div>
+    </div>
+    {hardware && <p className="stats-hw-summary">{hardwareSummary(hardware).join(" · ")}</p>}
+    {failure?.kind === "stale" && <div className="stats-stale" role="status">{hardware ? "The host connection is stale. Showing the last loaded hardware; it may be out of date." : "The host connection is stale. Reconnect Nex Core, then retry."}</div>}
+    {failure?.kind === "error" && <div className="alert" role="alert">{hardware ? `Could not reread the hardware; showing the last loaded report. ${failure.message}` : failure.message}</div>}
+    {!hardware && !failure && <p className="empty" role="status">Reading hardware from the host…</p>}
+    {hardware && <div className="stats-hw-sections"><HardwareSections hw={hardware} /></div>}
+  </section>;
 }
 
 export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; stacked?: boolean; limitMS?: number }) {
@@ -231,7 +427,7 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
   </div>;
 }
 
-export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; realtimeLimitMS?: number }) {
+export function Stats({ kind, id, api, capabilities, realtimeLimitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; realtimeLimitMS?: number }) {
   const [range, setRange] = useState("10m");
   const [stacked, setStacked] = useState(false);
   const [history, setHistory] = useState<StatsHistory | null>(null);
@@ -241,6 +437,25 @@ export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { 
   const hidden = useRef(new Set<string>());
   const plots = useRef(new Set<uPlot>());
   const shown = useRef("");
+  // Hardware is static, so it is read once when the tab opens and on an explicit Retry. An older
+  // Core that does not report the capability is not asked at all.
+  const hardwareSupported = kind === "host" && !!capabilities?.includes(HARDWARE_CAPABILITY);
+  const [hardware, setHardware] = useState<HostHardware | null>(null);
+  const [hardwareFailure, setHardwareFailure] = useState<StatsFailure | null>(null);
+  const [hardwareLoading, setHardwareLoading] = useState(false);
+  const [hardwareAttempt, setHardwareAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!hardwareSupported) return;
+    let stopped = false;
+    setHardwareLoading(true);
+    api<HostHardware>(`hosts/${encodeURIComponent(id)}/hardware`)
+      .then(next => { if (!stopped) { setHardware(next); setHardwareFailure(null); } })
+      // The last loaded report stays on screen, marked stale, rather than blanking the panel.
+      .catch(e => { if (!stopped) setHardwareFailure(statsFailure(e)); })
+      .finally(() => { if (!stopped) setHardwareLoading(false); });
+    return () => { stopped = true; };
+  }, [id, hardwareSupported, hardwareAttempt]);
 
   useEffect(() => {
     let stopped = false, inFlight = false;
@@ -277,7 +492,10 @@ export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { 
   }, [kind, id, range, attempt]);
 
   const hasData = history?.series.some(s => s.values.some(v => v != null));
-  return <section className="panel stats" aria-label="Usage history">
+  return <>
+    {hardwareSupported && hardwareFailure?.kind !== "capability" &&
+      <HardwarePanel hardware={hardware} loading={hardwareLoading} failure={hardwareFailure} onRetry={() => setHardwareAttempt(a => a + 1)} />}
+    <section className="panel stats" aria-label="Usage history">
     <div className="section-heading">
       <h2>Usage history</h2>
       <div className="stats-controls">
@@ -286,6 +504,9 @@ export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { 
         {!refreshMS[range] && <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Refresh</button>}
       </div>
     </div>
+    {/* Gauges read the 10-minute history only. A longer range stores averages of up to a day,
+        which would be painted as the current reading, band and all. */}
+    {kind === "host" && range === "10m" && history && <div className="stats-gauges">{gauges(history, sensorThresholds(hardware)).map(g => <GaugeArc key={g.key} gauge={g} />)}</div>}
     {kind === "host" && <RealtimeStats kind={kind} id={id} api={api} stacked={stacked} limitMS={realtimeLimitMS} />}
     {failure?.kind === "capability" && <p className="stats-state" role="status">Upgrade Nex Core to see usage history.</p>}
     {failure?.kind === "stale" && <div className="stats-stale" role="status">{history ? "The host connection is stale. Showing last loaded usage history; it may be out of date." : "The host connection is stale. Reconnect Nex Core, then retry."} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}
@@ -296,7 +517,8 @@ export function Stats({ kind, id, api, realtimeLimitMS = REALTIME_LIMIT_MS }: { 
       {charts(history, stacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`stats-${kind}-${id}`} hidden={hidden.current} plots={plots.current} />)}
     </div>}
     <p className="panel-note">Gaps mean no sample: the {kind === "vm" ? "VM was stopped" : "agent was not running"} or the host could not read the value. Hover a chart to read its values. Drag across a chart to zoom; double-click to reset. Select a series below a chart to hide or show it.</p>
-  </section>;
+    </section>
+  </>;
 }
 
 let syncingScale = false;
@@ -401,7 +623,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
         scale: s.unit,
         show: !hidden.has(s.key),
         stroke: color(i),
-        width: 1.5,
+        width: 2,
         // Only the left-axis unit fills, so a second-axis series (IOPS beside bytes/s) never muddies the stack.
         fill: (chart.stacked && s.unit === units[0]) || chart.series.length === 1 ? color(i) + "40" : undefined,
         spanGaps: false,
@@ -436,7 +658,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
     return () => { observer.disconnect(); if (plot.current) { plots.delete(plot.current); plot.current.destroy(); plot.current = null; } };
   }, []);
 
-  return <figure className="stats-chart">
+  return <figure className={`stats-chart stats-chart-${chart.group}`}>
     <figcaption>{chart.title}</figcaption>
     <div ref={box} hidden={!chart.series.length} />
     {chart.series.length > 0 && <div className="stats-legend">
@@ -446,6 +668,6 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
         <span className="stats-swatch" style={{ background: `var(--series-${i % PALETTE_SIZE + 1})` }} />{s.label}
       </button>)}
     </div>}
-    {!chart.series.length && <p className="empty">No samples reported for this chart.</p>}
+    {!chart.series.length && <p className="empty">{chart.group === "temperature" ? "No temperature sensors detected on this host." : "No samples reported for this chart."}</p>}
   </figure>;
 }

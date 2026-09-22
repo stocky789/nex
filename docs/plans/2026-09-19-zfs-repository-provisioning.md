@@ -15,11 +15,9 @@ Decision: project owner, 2026-09-19.
 - The wizard offers blank devices directly and devices holding old data only behind a typed
   erase confirmation. System, mounted and in-use devices are never offered.
 - **OpenZFS is built into the Nex Core distribution.** This supersedes "OpenZFS remains an
-  optional host prerequisite" in the storage plan. It does not waive
-  [licensing](../LICENSING.md): external ISO distribution, including alphas, stays blocked
-  until the OpenZFS package/source licence review and Secure Boot signing evidence exist.
-  DKMS build, offline installation and known-good retained-kernel boot evidence passed in
-  disposable VMs; ZFS-enabled images remain for internal disposable labs only.
+  optional host prerequisite" in the storage plan. [Licensing](../LICENSING.md) still records
+  exact-package notices and source for OpenZFS components. DKMS build, offline installation
+  and known-good retained-kernel boot evidence passed in disposable VMs.
 
 ## Problem
 
@@ -189,8 +187,7 @@ acceptance check remain outstanding.
 
 Acceptance must distinguish runnable simulated command/transport checks, browser checks,
 native disposable-host checks and exact-image delivery checks. No real disks or existing
-operator hosts are targets of this rollout. External ZFS-enabled image distribution
-remains blocked by the licensing and delivery evidence gate above.
+operator hosts are targets of this rollout.
 
 Native implementation clarification, 2026-09-19: OpenZFS user properties belong to
 filesystem datasets, not zpool properties. Create the repository marker atomically with

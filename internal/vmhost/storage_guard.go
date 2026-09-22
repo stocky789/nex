@@ -204,7 +204,7 @@ func poolHostRestricted(stateDir string) error {
 			readyPeer = true
 		}
 	}
-	if !readyPeer || (state.SelfFence == nil && (self == nil || PoolFenceUsable(self.Fence) != nil)) {
+	if !readyPeer || (state.SelfFence == nil && (self == nil || PoolFenceUsable(self.Fence, self.SystemUUID) != nil)) {
 		return nil
 	}
 	bootID, bootErr := poolHostBootID()

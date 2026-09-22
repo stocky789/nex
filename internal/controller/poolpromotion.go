@@ -329,6 +329,124 @@ func (c *Controller) setPoolFenceProfile(w http.ResponseWriter, r *http.Request,
 	c.commandFenceProfile(w, user, pool, master, host, payload, fence)
 }
 
+// poolHostFencingPayload is the replay record of the pool's Host fencing setting. The setting
+// itself is the pool master's and is never kept here; this is the record of one relayed
+// request, exactly as every other pool operation has one.
+type poolHostFencingPayload struct {
+	PoolID    string `json:"pool_id"`
+	Enabled   bool   `json:"enabled"`
+	RequestID string `json:"request_id"`
+}
+
+// setPoolHostFencing implements POST /api/v1/pools/{id}/host-fencing: whether Nex Core may arm
+// this pool's hosts to shut themselves out. It is one field of the membership record the pool
+// master owns, so it is relayed to the master exactly as a fence profile is; the Controller
+// keeps nothing but the command and its audit entry, and every host reads the setting from the
+// pool records it already holds. Re-sending the same state is a success, not a conflict.
+func (c *Controller) setPoolHostFencing(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool := r.PathValue("id")
+	var body struct {
+		RequestID string `json:"request_id"`
+		Enabled   bool   `json:"enabled"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !nameValid(pool) || !nameValid(body.RequestID) {
+		fail(w, http.StatusBadRequest, "pool and a stable request_id are required")
+		return
+	}
+	payload := poolHostFencingPayload{PoolID: pool, Enabled: body.Enabled, RequestID: body.RequestID}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if c.replayResource(w, tx, body.RequestID, "pool-host-fencing", payload) {
+		return
+	}
+	master, status, err := c.freshPoolMaster(tx, pool, "change host fencing")
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	if !hostSupportsCapability(tx, master, protocol.PoolHostFencingCapability) {
+		fail(w, http.StatusConflict, fmt.Sprintf("changing host fencing needs %s on the pool master; upgrade %s", protocol.PoolHostFencingCapability, master))
+		return
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "pool-host-fencing", Pool: &protocol.PoolCommand{
+		RequestID:  body.RequestID,
+		Action:     "host-fencing",
+		Membership: protocol.PoolMembership{MasterHostID: master},
+		Enabled:    body.Enabled,
+	}}
+	op, err := c.saveResource(tx, user, body.RequestID, pool, master, master, "pool-host-fencing:"+pool+":"+opID, cmd, payload)
+	if err != nil || c.audit(tx, user, "pool.host-fencing", pool) != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "host fencing request storage failed")
+		return
+	}
+	write(w, http.StatusAccepted, resourceResponse(cmd, op))
+}
+
+// poolBMCProvisioningPayload is the replay record of the one switch an operator has over a
+// host's automatically provisioned fence account. There is no "off" here: clearing the fence
+// device is what turns it off, through the one route that clears a profile.
+type poolBMCProvisioningPayload struct {
+	PoolID    string `json:"pool_id"`
+	HostID    string `json:"host_id"`
+	RequestID string `json:"request_id"`
+}
+
+// setPoolBMCProvisioning implements POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning:
+// let this host configure its own management controller for fencing again, after an operator
+// cleared the fence device Nex Core had provisioned. It is a field of the membership record
+// the pool master owns, so it is relayed to the master exactly as a fence profile is, and it
+// takes the same membership check. The Controller keeps nothing but the command and its audit
+// entry; the host reads the decision from the pool records it already holds.
+func (c *Controller) setPoolBMCProvisioning(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, host := r.PathValue("id"), r.PathValue("host_id")
+	var body struct {
+		RequestID string `json:"request_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !nameValid(pool) || !nameValid(host) || !nameValid(body.RequestID) {
+		fail(w, http.StatusBadRequest, "pool, host and a stable request_id are required")
+		return
+	}
+	payload := poolBMCProvisioningPayload{PoolID: pool, HostID: host, RequestID: body.RequestID}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	if c.replayResource(w, tx, body.RequestID, "pool-bmc-provisioning", payload) {
+		return
+	}
+	master, status, err := c.poolFenceProfileTarget(tx, pool, host)
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	opID := random()
+	cmd := protocol.Command{OperationID: opID, Kind: "pool-bmc-provisioning", Pool: &protocol.PoolCommand{
+		RequestID:    body.RequestID,
+		Action:       "bmc-provisioning",
+		Membership:   protocol.PoolMembership{MasterHostID: master},
+		MemberHostID: host,
+	}}
+	op, err := c.saveResource(tx, user, body.RequestID, pool, master, host, "pool-bmc-provisioning:"+host+":"+opID, cmd, payload)
+	if err != nil || c.audit(tx, user, "pool.bmc-provisioning", pool) != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "management controller request storage failed")
+		return
+	}
+	write(w, http.StatusAccepted, resourceResponse(cmd, op))
+}
+
 // fenceProfileCredentialKind validates the submitted profile and names the credential kind
 // its material would be delivered as, or "" when no credential accompanies it.
 func fenceProfileCredentialKind(body poolFenceProfileAPIRequest) (string, int, error) {
@@ -346,7 +464,10 @@ func fenceProfileCredentialKind(body poolFenceProfileAPIRequest) (string, int, e
 		case protocol.FenceRedfish, protocol.FenceIPMI:
 			kind = "fence_bmc"
 		}
-		if kind == "" || body.Fence.CredentialRef != "" || body.Fence.SSHHostKeyRef != "" {
+		// Nothing Nex Core decides for itself is accepted from a client: the credential
+		// references Core allocates, the cipher suite it selects from the controller's own
+		// LAN channel, and the mark that says Core created the account behind the profile.
+		if kind == "" || body.Fence.CredentialRef != "" || body.Fence.SSHHostKeyRef != "" || body.Fence.Cipher != 0 || body.Fence.ProvisionedByCore {
 			return "", http.StatusBadRequest, fmt.Errorf("a fence credential is delivered only with a fence profile that takes one and names no reference of its own")
 		}
 		if !scopedCredentialValid(kind, *body.Credential) {
@@ -478,20 +599,70 @@ func memberRestricted(host hostRow) *protocol.PoolRestrictedStatus {
 // excluded. The credential reference is never projected, and neither is anything it names.
 // There is no "usable" field: no host reports whether a profile can be turned into a proof.
 type poolMemberFence struct {
-	Kind       string `json:"kind"`
-	Endpoint   string `json:"endpoint,omitempty"`
-	Configured bool   `json:"configured"`
+	// Kind is empty when no profile is recorded and this object carries only the host's
+	// management-controller report or an identity conflict.
+	Kind     string `json:"kind,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	// Username is the management-controller account the master recorded. It is not a
+	// secret and naming it is how an operator sees which account a fence would use; the
+	// password behind it never leaves Core.
+	Username string `json:"username,omitempty"`
+	// TLSFingerprint is the certificate the pool master pinned when the profile was
+	// recorded, mirrored verbatim so an operator can compare it with what the controller's
+	// own page shows. It is not a secret and it is not this Controller's record.
+	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
+	Configured     bool   `json:"configured"`
+	// ProvisionedByCore says the account behind this profile is one the host's own Nex Core
+	// created on its controller, so clearing the profile also removes that account. It is
+	// mirrored verbatim; this Controller decides nothing from it.
+	ProvisionedByCore bool `json:"provisioned_by_core,omitempty"`
+	// BMC is the host's own report about its own management controller, mirrored verbatim
+	// from the master's membership record. It is what says whether Nex Core could
+	// configure the controller in-band, and it is present on a host that has no profile at
+	// all — that is exactly the host whose row must offer Set BMC access… instead.
+	BMC *protocol.PoolHostBMC `json:"bmc,omitempty"`
+	// ProvisioningDisabled is the master's own decision, mirrored: this host must not
+	// configure its management controller for fencing. It is what the row's actions are
+	// decided from — a host that is down after the operator cleared its device has not
+	// echoed anything, and the master's decision is the one that is true.
+	ProvisioningDisabled bool `json:"provisioning_disabled,omitempty"`
+	// Readiness is the master's own per-method answer to "could this host be shut out
+	// right now", with the reason and each other host's last non-destructive check.
+	// Mirrored verbatim; nil means the master did not report one, which is not ready.
+	Readiness *protocol.PoolFenceReadiness `json:"readiness,omitempty"`
+	// Watchdog is this host's own report of the watchdog it has, mirrored verbatim from
+	// the master's membership record. Nil means the host never reported one.
+	Watchdog *protocol.PoolHostWatchdog `json:"watchdog,omitempty"`
+	// WatchdogArmed is that host's own report that it has armed the device, mirrored
+	// verbatim from the master's durable membership. It is the first of the three
+	// conditions of a watchdog exclusion proof, so it is shown rather than summarised.
+	WatchdogArmed *protocol.PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
+	// SystemUUIDConflictHostID is the master's refusal, mirrored: the member that already
+	// reported the hardware identity this host reports. Without it an operator is told
+	// their host has no unique identity with nothing to act on.
+	SystemUUIDConflictHostID string `json:"system_uuid_conflict_host_id,omitempty"`
 	// CredentialVersion is the master's own counter for the private material behind the
 	// profile, mirrored verbatim. The material itself never reaches this Controller; the
 	// number is what tells an operator that a rotation has actually been replicated.
 	CredentialVersion uint64 `json:"credential_version"`
 }
 
+// memberFence mirrors everything the master's membership records about how a host would be
+// excluded — the profile if it has one, and the host's own report about its management
+// controller either way. A host with neither and no identity conflict has nothing to mirror.
 func memberFence(member protocol.PoolMember) *poolMemberFence {
-	if member.Fence == nil {
+	out := poolMemberFence{BMC: member.BMC, SystemUUIDConflictHostID: member.SystemUUIDConflictHostID,
+		ProvisioningDisabled: member.BMCProvisioningDisabled, Readiness: member.FenceReadiness,
+		Watchdog: member.Watchdog, WatchdogArmed: member.WatchdogArmed}
+	if member.Fence != nil {
+		out.Kind, out.Endpoint, out.Username = member.Fence.Kind, member.Fence.Endpoint, member.Fence.Username
+		out.TLSFingerprint, out.Configured = member.Fence.TLSFingerprint, true
+		out.ProvisionedByCore, out.CredentialVersion = member.Fence.ProvisionedByCore, member.FenceCredentialVersion
+	}
+	if !out.Configured && out.BMC == nil && out.SystemUUIDConflictHostID == "" && !out.ProvisioningDisabled && out.Readiness == nil && out.Watchdog == nil && out.WatchdogArmed == nil {
 		return nil
 	}
-	return &poolMemberFence{Kind: member.Fence.Kind, Endpoint: member.Fence.Endpoint, Configured: true, CredentialVersion: member.FenceCredentialVersion}
+	return &out
 }
 
 // hostSupportsTransfer reports one host's own advertised transfer capability, so the UI can

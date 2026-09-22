@@ -2,33 +2,19 @@
 // S3 "staged management-network edits": the same harness as pool-members.test.mjs — bundle the
 // real module with the already-installed esbuild and render it with react-dom/server.
 // Run with: node src/host-network.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/host-network.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./host-network.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
+const moduleURL = bundleTestModule(new URL("./host-network.tsx", import.meta.url), "host-network");
 const src = readFileSync(new URL("./host-network.tsx", import.meta.url), "utf8");
 const {
   HostNetworkPanel, ApplyDialog, windowError, diffRows, describeNIC,
   manageableNICs, countdownText, stagedWindowText, stageLabel, rowsFromHost, specFromRows,
-} = await import(`file://${outfile}`);
-const managedOutfile = `${outdir}/managed-held.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./managed.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile: managedOutfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"],
-});
-const { heldRequestID } = await import(`file://${managedOutfile}`);
+} = await import(moduleURL);
+const { heldRequestID } = await import(bundleTestModule(new URL("./managed.tsx", import.meta.url), "managed-held"));
 
 const nics = [
   { name: "nex0", mac: "52:54:00:12:34:56", kind: "physical", master: "br0", addresses: ["192.0.2.10/24"], state: "up" },

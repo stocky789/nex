@@ -50,7 +50,7 @@ func fenceProfileCommand(operationID, master, member string, fence *protocol.Sto
 func fakeFence(t *testing.T, answer func(hostID, operationID, digest string, generation uint64) (protocol.StorageClusterFenceStatus, error)) {
 	t.Helper()
 	previous := poolFenceVerify
-	poolFenceVerify = func(_ context.Context, _ string, _ *protocol.StorageClusterFence, hostID, operationID, digest string, generation uint64) (protocol.StorageClusterFenceStatus, error) {
+	poolFenceVerify = func(_ context.Context, _ string, _ *protocol.StorageClusterFence, _, hostID, operationID, digest string, generation uint64) (protocol.StorageClusterFenceStatus, error) {
 		return answer(hostID, operationID, digest, generation)
 	}
 	t.Cleanup(func() { poolFenceVerify = previous })
@@ -544,7 +544,7 @@ func TestPoolPromotionRefencesExpiredProofBeforeActivation(t *testing.T) {
 	}
 	proof := poolPromotionProofFor(updated.Fences, "master-1")
 	member, ok := poolMemberByID(replica.Replica.Membership, "master-1")
-	if !ok || protocol.PoolPromotionFenceVerified(proof, member.Fence, replica.Replica.PoolID, "master-1", operationID, replica.Replica.Generation, time.Now().UTC()) != nil {
+	if !ok || protocol.PoolPromotionFenceVerified(proof, member, replica.Replica.PoolID, "master-1", operationID, replica.Replica.Generation, time.Now().UTC()) != nil {
 		t.Fatalf("updated proof is not a fresh bound exclusion proof: %#v", proof)
 	}
 }
@@ -1097,9 +1097,11 @@ func TestBootRestrictionFollowsTheFenceEvidence(t *testing.T) {
 	t.Run("a profile this build can never prove anything with is refused, not recorded", func(t *testing.T) {
 		lab := newTransferLab(t, 1)
 		master := lab.host("master-1")
-		bmc := &protocol.StorageClusterFence{Kind: protocol.FenceRedfish, Endpoint: "bmc.example.test", TargetID: "system-1", CredentialRef: "cred-1"}
+		// This host reports no unique hardware identity, so no management controller could
+		// ever be proved to be its own and the profile is refused rather than recorded.
+		bmc := &protocol.StorageClusterFence{Kind: protocol.FenceRedfish, Endpoint: "bmc.example.test", TargetID: "system-1", Username: "nex-fence", CredentialRef: "cred-1"}
 		result := ExecutePoolFenceProfile(master, fenceProfileCommand("fp-bmc", "master-1", "master-1", bmc))
-		if result.Status == "succeeded" || !strings.Contains(result.Error, "BMC fencing identity verification is not implemented") {
+		if result.Status == "succeeded" || !strings.Contains(result.Error, "does not report a unique hardware identity") {
 			t.Fatalf("recording an unverifiable fence profile = %#v", result)
 		}
 		if peerState(t, master).SelfFence != nil {

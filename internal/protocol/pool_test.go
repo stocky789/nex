@@ -64,3 +64,39 @@ func TestPoolTransferStatusAlwaysReportsHandedOff(t *testing.T) {
 		t.Fatalf("handed_off true did not reach the wire: %s (%v)", body, err)
 	}
 }
+
+// A member running an older Core stamps no profile on its results. Refusing the whole report
+// would lose every other host's result in it for the sake of one field the master would drop
+// anyway, so an unstamped result is accepted and dropped where stamps are compared.
+// (Reported by independent review.)
+func TestAnUnstampedFenceCheckIsAcceptedAndAMalformedOneIsNot(t *testing.T) {
+	older := PoolFenceCheckRequest{Checks: []PoolFenceCheck{
+		{HostID: "host-a", Result: PoolFenceCheckOK},
+		{HostID: "host-b", Result: PoolFenceCheckUnreachable, Detail: "no route"},
+	}}
+	if err := older.Valid(); err != nil {
+		t.Fatalf("a pass from a Core that does not stamp was refused: %v", err)
+	}
+	malformed := PoolFenceCheckRequest{Checks: []PoolFenceCheck{{HostID: "host-a", Result: PoolFenceCheckOK, Profile: "zz"}}}
+	if malformed.Valid() == nil {
+		t.Fatal("a malformed profile stamp was accepted")
+	}
+}
+
+// Every host's watchdog report crosses the pool's own mTLS, so the master bounds it before it
+// records it: the classification is a closed set and the strings are bounded.
+func TestAWatchdogReportIsBounded(t *testing.T) {
+	if err := (PoolHostWatchdog{Kind: PoolWatchdogHardware, Device: "watchdog0", TimeoutSeconds: 30}).Valid(); err != nil {
+		t.Fatalf("a valid watchdog report was refused: %v", err)
+	}
+	for name, report := range map[string]PoolHostWatchdog{
+		"an unsupported kind":  {Kind: "titanium"},
+		"an empty kind":        {},
+		"a newline in a field": {Kind: PoolWatchdogHardware, Driver: "iTCO\nwdt"},
+		"an absurd timeout":    {Kind: PoolWatchdogHardware, TimeoutSeconds: 99999},
+	} {
+		if report.Valid() == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+}

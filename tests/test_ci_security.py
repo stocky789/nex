@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Catch a missing runtime artifact before either runner starts browser QA."""
 from pathlib import Path
-import json
 import re
 import subprocess
 import tempfile
@@ -99,13 +98,26 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertIn('group: nex-shared-runner', release)
                 self.assertIn('cancel-in-progress: true', release)
 
+    def test_forge_release_does_not_attach_standalone_debs(self):
+        # Operators install Core from the ISO; bare .deb downloads are not a
+        # supported release channel. Packages still build for the ISO and APT.
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                text = (ROOT / provider / 'workflows/release.yml').read_text()
+                create = text.split('- name: Create or replace the release\n', 1)[1]
+                step = create.split('\n      - name:', 1)[0]
+                self.assertIn('scripts/gitea-release.py', step)
+                self.assertNotIn('.deb', step)
+                self.assertIn('nex-core-${NEX_VERSION}-amd64.iso', step)
+                self.assertIn('nex-core-${NEX_VERSION}-source.tar.gz', step)
+                self.assertIn('nex-core-${NEX_VERSION}-compliance-manifest.json', step)
+
 
 class ReleaseDeployCredentialTests(unittest.TestCase):
     """BUG-0075: a half-configured deploy skipped the website while the run stayed green.
 
-    The tag and the Gitea release are created before this step, so a silent skip left a
-    passing release whose ISO never reached the download page. These run the workflow's
-    own script, so the check cannot drift away from what CI executes.
+    A silent skip left a passing release whose ISO never reached the download page. These
+    run the workflow's own script, so the check cannot drift away from what CI executes.
     """
 
     def run_step(self, provider, secrets):
@@ -122,36 +134,28 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 capture_output=True, text=True, env=env, cwd=ROOT)
             return done, output.read_text()
 
-    def _with_manifest(self, version, components):
-        dist = ROOT / 'dist'
-        dist.mkdir(exist_ok=True)
-        path = dist / f'nex-core-{version}-compliance-manifest.json'
-        path.write_text(json.dumps({"version": version, "components": components}) + '\n')
-        self.addCleanup(path.unlink, missing_ok=True)
-        return path
-
     def test_every_secret_present_enables_publishing(self):
-        version = '0.0.0-ci-clear'
-        self._with_manifest(version, [])
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 secrets = {name: 'value' for name in DEPLOY_SECRETS}
-                secrets['NEX_VERSION'] = version
                 done, output = self.run_step(provider, secrets)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn('enabled=true', output)
 
-    def test_zfs_manifest_skips_public_website_when_secrets_are_set(self):
-        version = '0.0.0-ci-zfs'
-        self._with_manifest(version, [{"package": "zfs-dkms"}])
+    def test_release_workflow_has_no_manifest_component_publish_gate(self):
+        forbidden = (
+            'check-zfs-blocked',
+            'NEX_PUBLISH_WITH_ZFS',
+            'ZFS-enabled ISO',
+            'publish_downloads=',
+            'allow_zfs=',
+            'zfs_gate=',
+        )
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
-                secrets = {name: 'value' for name in DEPLOY_SECRETS}
-                secrets['NEX_VERSION'] = version
-                done, output = self.run_step(provider, secrets)
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertIn('enabled=false', output)
-                self.assertIn('ZFS-enabled ISO', done.stdout)
+                text = (ROOT / provider / 'workflows/release.yml').read_text()
+                for token in forbidden:
+                    self.assertNotIn(token, text, msg=f'{provider} still references {token!r}')
 
     def test_no_secrets_skips_quietly_for_a_fork(self):
         for provider in PROVIDERS:
@@ -177,11 +181,32 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 text = (ROOT / provider / 'workflows/release.yml').read_text()
                 # Publishing and its reachability check must share one gate; verifying
                 # behind a different condition would let an unpublished release pass.
-                self.assertEqual(text.count("if: steps.deploy.outputs.enabled == 'true'"), 2)
-                self.assertLess(text.index('- name: Create or replace the release'),
-                                text.index('- name: Check for deploy credentials'),
-                                'tagging happens first, which is why a silent skip is invisible')
+                # Node setup, website build, APT/downloads/site publish, and reachability.
+                self.assertEqual(text.count("if: steps.deploy.outputs.enabled == 'true'"), 4)
+                self.assertIn('scripts/website-ci-deploy.sh', text)
+                self.assertIn('npm --prefix website run build', text)
                 self.assertIn('NEX_VERSION: ${{ steps.version.outputs.version }}', text)
+
+    def test_deploy_checks_and_website_build_run_before_the_tag_moves(self):
+        # BUG-0413: a half-set secret or a broken website build used to abort the run
+        # after the tag had moved and the forge release existed, leaving APT and the
+        # download tree behind on the previous version.
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                text = (ROOT / provider / 'workflows/release.yml').read_text()
+                release = text.index('- name: Create or replace the release')
+                for earlier in ('- name: Check for deploy credentials',
+                                '- name: Set up Node.js for the website',
+                                '- name: Build the static website'):
+                    self.assertLess(text.index(earlier), release, earlier)
+
+    def test_website_release_id_is_left_to_the_deploy_script(self):
+        # BUG-0414: pinning it to the package version made a second push at the same
+        # version, or any prerelease '~' version, fail after APT and downloads published.
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                text = (ROOT / provider / 'workflows/release.yml').read_text()
+                self.assertNotIn('NEX_WEBSITE_RELEASE_ID', text)
 
 
 class GitHubMinuteBudgetTests(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.2. Add an enrolled Nex Core host to another host's pool from Nex
+Development product 0.4.3. Add an enrolled Nex Core host to another host's pool from Nex
 Controller: pool detail → **Hosts** → **Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared
 repositories); the joining host performs the join itself and reports its own progress, and
@@ -50,9 +50,11 @@ Known limits in this release:
    [Put a pool host into maintenance](host-maintenance-mode.md); the authority copy each member
    holds is covered in [Pool authority and recovery](pool-authority-and-recovery.md). Both read
    *unknown* while the pool master is not fresh.
-2. Select **Add host to pool**. The dialog lists the hosts at this site that are masters of their
-   own single-host pool. A host that cannot join is shown as **cannot join** and cannot be
-   selected.
+2. Select **Add host to pool**. The dialog lists the other enrolled hosts at this site; each is
+   the master of its own single-host pool until it joins. A host that cannot join is shown as
+   **cannot join** and cannot be selected. A host that has not enrolled yet is not listed: the
+   dialog says *There is no other enrolled host at this site to add*. Enroll it first with
+   **Add host** in the toolbar, then return here once it reports.
 3. Select a host and read its compatibility preview. Each row is a check (connection, version,
    capability, membership, VMs, storage, uplink, CPU) with a result:
    - **compatible** — nothing to do.
@@ -64,16 +66,15 @@ Known limits in this release:
    checks every refusal again when the request is submitted.
 4. Enter the **Peer address** of the joining host: the bare `https` address, with port and no
    path, that the pool master will use to reach it — for example `https://192.0.2.12:9444`.
-5. Enter the **Pool master peer address** the joining host will dial, for example
-   `https://192.0.2.11:9444`. Once the master has recorded its own address, this field is filled
-   in and read-only; only the first join in a pool's life asks for it.
-6. Select **Add host to pool** to confirm. Controller asks the master for a single-use invitation
-   and hands it to the joining host as one durable command.
-7. Watch the joining host's own reported progress in the members table: *Joining · next step: …*,
+5. Select **Add host to pool** to confirm. Controller asks the master for a single-use invitation
+   and hands it to the joining host as one durable command. You are not asked for the pool
+   master's address: the master records its own peer address, taken from the address its pool-peer
+   listener is bound to, the first time a host joins, and every later join reuses it.
+6. Watch the joining host's own reported progress in the members table: *Joining · next step: …*,
    then **Join complete**, **Needs attention** with the host's message, or **Join failed** with
    the reason. The page refreshes itself while a join is in progress. Closing the browser, or
    losing Controller entirely, does not stop or change the join.
-8. Confirm per-member convergence before placing a VM on the new member. Pool-wide configuration
+7. Confirm per-member convergence before placing a VM on the new member. Pool-wide configuration
    already on the master is pulled by the member after join: NFS/SMB (and eligible clustered
    iSCSI) storage, VLAN guest networks, and ISO library entries on those shared repositories. The
    member materializes each locally, verifies access, then reports per-host status. Register
@@ -110,8 +111,12 @@ Messages below are the exact text the interface shows.
 - **“pool master must be fresh and active before a host can join”** / **“the joining host must be
   fresh and active”** — wait for the host to report, or fix its connection. An unreachable host is
   never treated as proof that its VMs have stopped.
-- **“the pool master has not advertised a peer origin; supply master_url”** — fill in the pool
-  master peer address field.
+- **“the pool master cannot work out its own peer address because it has no default route”** —
+  the master's pool-peer listener is bound to every address, so it finds the address other hosts
+  reach it on from its default route. Give the master's management network a gateway, then retry.
+- **“the pool master's peer listen address is not an address and port”** — the master was started
+  with a `--pool-peer-listen` value that is not `host:port`. Correct the flag on the master and
+  restart its Nex Core service, then retry.
 - **“the pool master did not return a join invitation before the deadline; retry with the same
   request_id”** — the master did not answer within 45 seconds. Nothing was created and no
   membership changed. Select **Add host to pool** again with the same host and addresses: the
@@ -242,7 +247,10 @@ exchange; the operator handles the CSR and the one-use offer instead of the Cont
   coverage unwalked. The implementation is also covered by Go unit
   tests (master invitation and CSR binding at redemption, staged join resumed from every stage,
   precheck refusals, concurrent joins under race detection, broker round trip and deadline, refusal
-  matrix, both projections), UI component tests and offline contract checks. Network convergence,
+  matrix, both projections), UI component tests and offline contract checks. The 0.4.2 Hosts-tab
+  layout (row actions in a trailing **Actions** column, no master-only-impossible actions on the
+  master's row, and the enroll-first empty state) was checked with component tests and simulated
+  headless-browser captures of rendered markup, not against a live Controller. Network convergence,
   keyboard operation and hardware remain to be walked through.
 - **The invitation at rest.** The single-use invitation and the pool certificate authority are
   scrubbed from the Controller database as soon as the joining host collects the command, and

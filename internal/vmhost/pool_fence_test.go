@@ -21,12 +21,12 @@ func TestVerifyPoolHostFenceRefusesUnsupportedAndUnconfiguredProfiles(t *testing
 		want  string
 	}{
 		{"no recorded profile", nil, "no recorded fence profile"},
-		{"BMC identity verification is not implemented", &protocol.StorageClusterFence{
+		{"a BMC profile with no account to sign in with", &protocol.StorageClusterFence{
 			Kind: protocol.FenceRedfish, Endpoint: "bmc.example.test", TargetID: "system-1", CredentialRef: "cred-1",
-		}, "BMC fencing identity verification is not implemented"},
-		{"IPMI is refused for the same reason", &protocol.StorageClusterFence{
-			Kind: protocol.FenceIPMI, Endpoint: "bmc.example.test", TargetID: "plug-1", CredentialRef: "cred-1",
-		}, "BMC fencing identity verification is not implemented"},
+		}, "needs the account Nex Core signs in with"},
+		{"a BMC profile for a host with no unique hardware identity", &protocol.StorageClusterFence{
+			Kind: protocol.FenceIPMI, Endpoint: "bmc.example.test", TargetID: "plug-1", Username: "nex-fence", CredentialRef: "cred-1",
+		}, "does not report a unique hardware identity"},
 		{"SCSI persistent reservations are unsupported", &protocol.StorageClusterFence{
 			Kind: protocol.FenceSCSIPR, DevicePath: "/dev/disk/by-id/scsi-lab",
 		}, "SCSI persistent-reservation fencing is unsupported"},
@@ -34,7 +34,7 @@ func TestVerifyPoolHostFenceRefusesUnsupportedAndUnconfiguredProfiles(t *testing
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			proof, err := VerifyPoolHostFence(context.Background(), t.TempDir(), tc.fence, "master-1", "op-1", "digest-1", 3)
+			proof, err := VerifyPoolHostFence(context.Background(), t.TempDir(), tc.fence, "", "master-1", "op-1", "digest-1", 3)
 			if err == nil {
 				t.Fatal("an unsupported or unconfigured fence profile produced a proof")
 			}
@@ -55,10 +55,10 @@ func TestVerifyPoolHostFenceRequiresItsBinding(t *testing.T) {
 		Kind: protocol.FenceVirsh, Endpoint: "fence.example.test", TargetID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		CredentialRef: "cred-1", VirshURI: "qemu:///system", SSHLogin: "fence", SSHPort: 22, SSHHostKeyRef: "key-1",
 	}
-	if _, err := VerifyPoolHostFence(context.Background(), t.TempDir(), fence, "master-1", "", "digest-1", 3); err == nil {
+	if _, err := VerifyPoolHostFence(context.Background(), t.TempDir(), fence, "", "master-1", "", "digest-1", 3); err == nil {
 		t.Fatal("an unbound fence proof was produced")
 	}
-	if _, err := VerifyPoolHostFence(context.Background(), t.TempDir(), fence, "master-1", "op-1", "digest-1", 0); err == nil {
+	if _, err := VerifyPoolHostFence(context.Background(), t.TempDir(), fence, "", "master-1", "op-1", "digest-1", 0); err == nil {
 		t.Fatal("a fence proof was produced for no authority generation")
 	}
 }
@@ -94,5 +94,62 @@ func TestPoolHostRestrictedRefusesManagedSharedStart(t *testing.T) {
 	}
 	if err = poolHostRestricted(dir); err != nil {
 		t.Fatalf("an unrestricted host was refused: %v", err)
+	}
+}
+
+// F1. The file this writes is mode 0700 and both fence_ipmilan (--password-script=) and
+// Pacemaker (password_script) execute it as root. The bytes arrive unsealed from another
+// host's authority replica, so a compromised or malicious pool master could otherwise seal
+// arbitrary shell into a member and have it run during a promotion. Only bytes the one
+// producer wrote may reach that path.
+// (Reported by independent review of slice 4a; regression added after slice 4b's review.)
+func TestOnlyProducerFormatFenceCredentialBytesAreWritten(t *testing.T) {
+	dir := t.TempDir()
+	fence := protocol.StorageClusterFence{Kind: protocol.FenceIPMI, CredentialRef: "cred-1"}
+	path := filepath.Join(dir, "storage-cluster", "fence-credentials", "cred-1")
+	for name, payload := range map[string][]byte{
+		"a shell script somebody else wrote": []byte("#!/bin/sh\nid > /tmp/pwned\n"),
+		"a command before the printf":        []byte("#!/bin/sh\nid\nprintf '%s\\n' 'hunter2'\n"),
+		"an unterminated value":              []byte("#!/bin/sh\nprintf '%s\\n' 'hunter2\n"),
+		"an empty file":                      {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := WritePoolFenceCredential(dir, fence, map[string][]byte{"": payload})
+			if err == nil {
+				t.Fatal("bytes that are not what Nex Core writes were accepted into an executable file")
+			}
+			if !strings.Contains(err.Error(), "not in the format Nex Core writes") {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+			if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("a refused credential was written anyway: %v", statErr)
+			}
+		})
+	}
+	// What the one producer wrote is accepted, so the refusal is about the format and not
+	// about refusing everything.
+	if err := WritePoolFenceCredential(dir, fence, map[string][]byte{"": FencePasswordScript("hunter2")}); err != nil {
+		t.Fatalf("a credential Nex Core produced was refused: %v", err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("an accepted credential was not written: %v", err)
+	}
+}
+
+// F2. fence_ipmilan runs the password script and strips the whitespace around what it printed,
+// so a password with a leading or trailing space authenticates every check Nex Core makes
+// itself — the host reads "checked from 2 hosts" — and fails the one power-off that matters.
+// Core refuses it while the operator is still there to correct it.
+// (Reported by independent review of slice 4a; regression added after slice 4b's review.)
+func TestAFencePasswordAFenceAgentWouldAlterIsRefused(t *testing.T) {
+	for _, secret := range []string{"hunter2 ", " hunter2", "hunter2\t", "\thunter2", "hunter2\v", ""} {
+		if err := FenceSecretUsable(secret); err == nil {
+			t.Fatalf("a password a fence agent would alter was accepted: %q", secret)
+		}
+	}
+	for _, secret := range []string{"hunter2", "hun ter2", "p@ss'w\"ord", "a"} {
+		if err := FenceSecretUsable(secret); err != nil {
+			t.Fatalf("a usable password was refused: %q: %v", secret, err)
+		}
 	}
 }

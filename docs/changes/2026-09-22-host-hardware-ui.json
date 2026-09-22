@@ -1,0 +1,44 @@
+{
+  "summary": "The host Stats tab presents what the host reports about itself. A Hardware panel above Usage history shows a summary line (vendor and model, CPU, memory, BIOS version) and six collapsible sections - System, CPU, Memory, Disks, PCI devices, Temperature sensors - each carrying the host's own reason when its section came back unavailable. The panel fetches GET hosts/{id}/hardware once when the tab opens and on Retry; it is hidden, with no request at all, on a host that does not advertise host-hardware-v1. A gauge row shows CPU %, memory % and one gauge per temperature sensor as an SVG arc with role=meter, with Warm and Critical states taken from the sensor's own max and crit in the hardware report rather than from a number invented here. Gauges read the 10-minute history only, so a longer range cannot present a stored average as the current reading, and a reading older than three steps shows a dash. A sixth Temperature chart group joins the existing five, with celsius formatting. Stats-scoped design tokens give the two Stats tabs a light surface with accent-tinted white cards; the tokens are scoped to .stats and the surface itself to the Stats panels, so the realtime view inside the VM Console tab is not restyled. VM Stats tabs get no panel and no gauges. API impact: existing contract - the UI consumes GET /api/v1/hosts/{id}/hardware and the temperature series of the existing host stats route; both are documented by the Core slices of the same plan.",
+  "paths": [
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs",
+    "web/src/main.tsx",
+    "docs/guide/usage-history.md",
+    "docs/guide/README.md",
+    "docs/changes/2026-09-22-host-hardware-ui.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Stats tab gained operator-visible features: the Hardware panel and its sections, the gauge row with its Warm and Critical states, and the Temperature chart. docs/guide/usage-history.md now covers them in its status, prerequisites, steps and troubleshooting, and records that the hardware and temperature steps have automated checks only.",
+    "pages": [
+      "docs/guide/usage-history.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No contract changes here. The panel calls the admin route GET /api/v1/hosts/{id}/hardware added by the hardware slice and reads the temperature group of the existing host stats route; both are in docs/API.md and the OpenAPI contract already. The capability list already on the host inventory decides whether the panel renders, so an older Core costs no request.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The Controller UI section of docs/plans/2026-09-22-host-hardware-and-sensors.md, for slices 1 and 2, as planned."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The Controller stores nothing for this feature. Every value on screen is read from the host on request or from the host's own usage history; the thresholds behind the warm and critical bands are the chip's, relayed unchanged.",
+    "record": "Temperature series in <state-dir>/usage/host.rrd on the host; the hardware report has no record at all and is observed when it is asked for.",
+    "recovery": "Nothing to recover. A fresh Controller renders the same panel, gauges and chart as soon as the host reconnects and reports the capabilities."
+  },
+  "verification": {
+    "method": "node src/stats.test.mjs and npx tsc --noEmit in web/. The checks cover the hardware summary (a full report and one without firmware module data), the per-section note for rows, unavailable with and without a reason, an empty section and a missing section, sensor thresholds keyed by series key including a sensor that publishes none, a gauge taking its scale from a sensor's crit, the warm and critical band selection, the three-step staleness window, celsius formatting and the temperature group's ordering and non-stacking, VM exclusion, and a 409 'upgrade Nex Core' treated as the capability state. The bundle was built to a scratch outDir; web/dist was not written. A Chromium review against mocked host replies then covered loading, a sensorless host, an unavailable section, an older Core, stale and failed reads, warm and critical gauges, an unknown reading, keyboard operation, the gauge row's accessibility tree and a 390 px layout; it found five render-level defects, which were fixed and recaptured. Those fixes are CSS- and render-level and have no unit check. The harness and captures are untracked scratch, so the QA record is the only tracked evidence of that review. No hardware: every vendor, model, serial, sensor key and threshold in the checks is a fictional fixture value, and the project owner's bare-metal walkthrough is outstanding.",
+    "evidence": [
+      "web/src/stats.test.mjs",
+      "docs/qa/2026-09-22-host-hardware-and-sensors.md"
+    ]
+  }
+}

@@ -3,8 +3,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { heldRequestID } from "./managed";
 import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
 import {
-  FenceProfileDialog, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
-  promotionInProgress, type FenceCredentialInput, type FenceProfileInput, type LastPromotion,
+  FenceProfileDialog, FencingCell, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
+  promotionInProgress, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
 
@@ -19,7 +19,7 @@ export type Guests = { known: boolean; total: number; running: number; names?: s
 export type ReplicaState = "current" | "behind" | "unverified" | "refused" | "awaiting" | "unsupported" | "unknown";
 export type Replica = { generation: number; digest?: string; verified: boolean; received_at?: string; acknowledged_generation: number; acknowledged_at?: string; error?: string; state: ReplicaState };
 export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null };
-export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
+export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; host_fencing_supported?: boolean; fence?: FenceSummary | null; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
 type CandidateRow = { check: string; subject: string; result: "compatible" | "will_not_converge" | "refuses_join"; detail?: string };
 export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[] };
 
@@ -95,12 +95,6 @@ export function peerOriginOf(value: string) {
 
 export function membershipVersionReady(report: Pick<Report, "authoritative" | "generation"> | null) {
   return Boolean(report?.authoritative && report.generation > 0);
-}
-
-// The master's own peer address, as the master itself records it. A master of a single-host pool
-// has never had one, so the first join must collect it; afterwards it is shown, not re-asked.
-export function masterOriginOf(report: Report | null) {
-  return (report?.members || []).find(member => member.host_id === report?.master_host_id)?.peer_origin || "";
 }
 
 // Maintenance is the master's durable flag. The GET sends null for it whenever the master is not
@@ -186,10 +180,106 @@ export function recoveryText(report: Report, now = Date.now()) {
   return `The pool master ${hostName(report, report.master_host_id)} ${seen}; it is ${report.master_connection}. Its state is unknown — this does not mean its VMs have stopped.`;
 }
 
-export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, blockedReason }: {
+// The pool's own line about fencing. The count is the pool master's, reported with its
+// membership; this only puts words around it. The reasons are in the Fencing column of the
+// rows it counts.
+export function fencingSummaryText(report: Report) {
+  if (!(report.members || []).length) return "";
+  if (!report.authoritative) return "Fencing: unknown — the pool master keeps this record and is not reporting. This does not mean these hosts cannot be shut out; it means nothing here knows.";
+  const summary = report.fence || null;
+  if (!summary) return "Fencing: not reported — this pool master does not report fencing readiness. Upgrade it.";
+  if (summary.total <= 1) return "Fencing: this pool has one host. There is nothing to promote it over and no other host to shut it out, so it needs no fence device until a second host joins.";
+  const unready = (summary.unready || []).map(id => hostName(report, id));
+  const line = `Fencing: ready for ${summary.ready} of ${summary.total} hosts.`;
+  if (!unready.length) return `${line} Every host in this pool can be shut out — by another host, or by its own watchdog — so a surviving member can be promoted if the pool master is lost.`;
+  return `${line} ${unready.join(", ")} cannot be shut out — the Fencing column on ${unready.length === 1 ? "that row" : "those rows"} says why.`;
+}
+
+// The names of Core's prerequisite lines. The sentence beside each one is Core's own and is
+// shown as written; this only says which line it is.
+const prerequisiteNames: Record<string, string> = {
+  hosts: "Hosts",
+  watchdogs: "Hardware watchdogs",
+  bmc: "Fence devices",
+  quorum: "Pool quorum",
+};
+// Text carries the state; the badge colour only repeats it.
+const prerequisiteBadges: Record<string, string> = { met: "ok", unmet: "warning", unknown: "unknown" };
+
+// Core ends its sentence before naming hosts and puts their IDs beside it, because only a
+// client knows their display names — and a host ID is an opaque durable identifier an
+// operator would have to look up while the rows above show the name.
+export function prerequisiteDetail(report: Report, prerequisite: FencePrerequisite) {
+  if (!prerequisite.hosts?.length) return prerequisite.detail;
+  return `${prerequisite.detail}: ${prerequisite.hosts.map(id => hostName(report, id)).join(", ")}`;
+}
+
+// The pool's own cluster, in the operator's words. Core writes the sentence; this names the
+// state and puts the host whose turn it is in the operator's terms rather than as a host ID.
+const clusterStateNames: Record<string, string> = {
+  off: "off", not_available: "not available", forming: "forming", arming: "arming",
+  armed: "armed", degraded: "degraded",
+};
+const clusterBadges: Record<string, string> = {
+  armed: "ok", arming: "pending", forming: "pending", degraded: "warning",
+  not_available: "unknown", off: "unknown",
+};
+export function clusterText(report: Report, cluster: FenceCluster) {
+  const counted = `${cluster.armed} of ${cluster.total} hosts armed.`;
+  const detail = cluster.detail ? ` ${cluster.detail}` : "";
+  if (cluster.state === "arming" && cluster.arming_host_id) {
+    return `${counted}${detail} Waiting for ${hostName(report, cluster.arming_host_id)}.`;
+  }
+  if (cluster.state === "off" || cluster.state === "not_available") return cluster.detail || "No host in this pool is armed.";
+  return `${counted}${detail}`;
+}
+
+// The Host fencing setting. It is on for every pool that has never been told otherwise, so an
+// operator meets the consequence here whether or not they ever touch the switch: a host that
+// is armed and loses quorum resets itself, and a switch failure that splits a pool reboots the
+// minority side. The checklist under it is the pool master's, not this page's.
+export function HostFencingSetting({ report, onChange, busy }: {
+  report: Report; onChange?: (enabled: boolean) => void; busy?: boolean;
+}) {
+  const summary = report.fence || null;
+  if (!report.authoritative) {
+    return <section className="pool-host-fencing"><h3>Host fencing</h3>
+      <p className="help">The pool master keeps this setting and is not reporting, so it is unknown. This does not mean these hosts cannot be shut out; it means nothing here knows.</p>
+    </section>;
+  }
+  if (report.host_fencing_supported === false || !summary) {
+    return <section className="pool-host-fencing"><h3>Host fencing</h3>
+      <p className="help">This pool master is too old to report the host fencing setting. Upgrade it to see and change it.</p>
+    </section>;
+  }
+  return <section className="pool-host-fencing"><h3>Host fencing</h3>
+    <label className="pool-host-fencing-switch">
+      <input type="checkbox" checked={summary.host_fencing} disabled={busy || !onChange}
+        onChange={event => onChange?.(event.currentTarget.checked)} />
+      Let Nex Core arm this pool's hosts to shut themselves out
+    </label>
+    <p className="help">Turning this on does not arm anything by itself. Nex Core arms a host's watchdog only where every prerequisite below holds.</p>
+    <p className="warning" role="note">Once watchdogs are armed, a host that loses this pool's quorum resets itself and its running virtual machines stop. A switch failure that splits a pool therefore reboots the minority side. This pool's cluster runs on the management network, so changing a host's management network, or any work that interrupts it, is refused while that host is armed — put the host in maintenance first. In a three-host pool a second failure while one host is already down reboots the remaining two, because two of three are a minority: for planned work on more than one host, put the first in maintenance mode, which disarms the whole pool.</p>
+    {summary.cluster ? <p className={`help pool-host-fencing-cluster ${clusterBadges[summary.cluster.state] || "unknown"}`} role="status">
+      <span className={`badge ${clusterBadges[summary.cluster.state] || "unknown"}`}>{clusterStateNames[summary.cluster.state] || summary.cluster.state}</span>
+      {clusterText(report, summary.cluster)}
+    </p> : null}
+    <ul className="pool-host-fencing-checklist">{(summary.prerequisites || []).map(prerequisite =>
+      <li key={prerequisite.name}>
+        <span className={`badge ${prerequisiteBadges[prerequisite.state] || "unknown"}`}>{prerequisite.state}</span>
+        <strong>{prerequisiteNames[prerequisite.name] || prerequisite.name}</strong>
+        <small>{prerequisiteDetail(report, prerequisite)}</small>
+      </li>)}
+    </ul>
+  </section>;
+}
+
+export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy, blockedReason, onHostFencing, hostFencingBusy }: {
   report: Report; onMaintenance?: (member: Member) => void; busyHost?: string;
   onMasterChange?: (member: Member) => void; onEject?: (member: Member) => void;
-  onPromote?: (member: Member) => void; onFenceProfile?: (member: Member) => void; blockedReason?: string;
+  onPromote?: (member: Member) => void; onFenceProfile?: (member: Member) => void;
+  onBMCProvisioning?: (member: Member) => void; bmcBusy?: string; blockedReason?: string;
+  onHostFencing?: (enabled: boolean) => void; hostFencingBusy?: boolean;
 }) {
   const authoritative = report.authoritative;
   const supported = Boolean(report.maintenance_supported);
@@ -197,8 +287,9 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
   const replicas = report.replica_supported !== false;
   const members = report.members || [];
   if (!members.length) return <p className="empty">The pool master reports no hosts yet. A host that has just enrolled appears here once its master reports the membership.</p>;
-  return <><div className="table-scroll"><table>
-    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th>Convergence</th></tr></thead>
+  const actions = Boolean(onMasterChange && onEject);
+  return <><div className="table-scroll"><table className="pool-members-table">
+    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th className="pool-convergence-cell">Convergence</th><th className="pool-fencing-cell">Fencing</th>{actions && <th><span className="sr-only">Actions</span></th>}</tr></thead>
     <tbody>{members.map(member => {
       // The join stage and the connection are this host's own report, so they survive a
       // master that is gone; the membership status and every observation of it do not.
@@ -210,12 +301,8 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
         <td>
           <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
           {member.peer_origin && <small className="mono">{member.peer_origin}</small>}
-          {onMasterChange && onEject && <MemberActions report={report} member={member} onMasterChange={() => onMasterChange(member)} onEject={() => onEject(member)}
-            blockedReason={blockedReason}
-            extra={<PromotionActions report={report} member={member} authoritative={authoritative}
-              onPromote={onPromote && (() => onPromote(member))} onFenceProfile={onFenceProfile && (() => onFenceProfile(member))} />} />}
         </td>
-        <td><span className="badge">{member.role === "master" ? "Pool master" : "Member"}</span></td>
+        <td><span className={`badge ${member.role}`}>{member.role === "master" ? "Pool master" : "Member"}</span></td>
         <td><span className={`badge ${member.connection}`}>{member.connection}</span></td>
         <td>
           <span className={`badge ${authoritative ? member.status : "unknown"}`}>{authoritative ? member.status || "unknown" : "unknown"}</span>
@@ -228,12 +315,10 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
           {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
           <small>{guestsText(member)}</small>
           {outcome && <small className={member.last_maintenance?.status === "failed" ? "task-error" : undefined} role={member.last_maintenance?.conflict ? "alert" : undefined}>{outcome}</small>}
-          {onMaintenance && (supported
-            ? <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>
-            : <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>)}
+          {onMaintenance && !supported && <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>}
         </td>
         {replicas && <td className="pool-replica-cell">
-          {member.role === "master" ? <small>Holds the pool authority; there is nothing to copy to it.</small> : <>
+          {member.role === "master" ? <small>Holds the pool records</small> : <>
             <span className={`badge ${replicaText(member).badge}`}>{replicaText(member).label}</span>
             {member.replica && <>
               {behindText(member, report) && <small>{behindText(member, report)}</small>}
@@ -243,7 +328,7 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
             </>}
           </>}
         </td>}
-        <td>
+        <td className="pool-convergence-cell">
           <small>{convergenceSummary(member, authoritative)}</small>
           {/* The checks are the host's own report and stay readable without a fresh master.
               pool-restricted is left out here: its reason is rendered in full on the
@@ -251,36 +336,46 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
           {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || check.name}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
           {failures.map(failure => <small key={`${failure.kind}:${failure.id}`} className="task-error">{failure.kind} {failure.name || failure.id}: {failure.error}</small>)}
         </td>
+        {/* How this host would be shut out if it were lost. Every word of it is the pool
+            master's own answer; the checks behind it never power anything off. */}
+        <td className="pool-fencing-cell"><FencingCell member={member} authoritative={authoritative} /></td>
+        {actions && <td className="pool-actions-cell">
+          <MemberActions report={report} member={member} onMasterChange={() => onMasterChange!(member)} onEject={() => onEject!(member)} blockedReason={blockedReason}
+            extra={<>
+              {onMaintenance && supported && <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>}
+              <PromotionActions report={report} member={member} authoritative={authoritative}
+                onPromote={onPromote && (() => onPromote(member))} onFenceProfile={onFenceProfile && (() => onFenceProfile(member))}
+                onBMCProvisioning={onBMCProvisioning && (() => onBMCProvisioning(member))} bmcBusy={bmcBusy === member.host_id} />
+            </>} />
+        </td>}
       </tr>;
     })}</tbody>
   </table></div>
+  <p className="help pool-fencing-summary" role="status">{fencingSummaryText(report)}</p>
+  <HostFencingSetting report={report} onChange={onHostFencing} busy={hostFencingBusy} />
   {replicas
     ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
     : <p className="help">The pool master does not support authority copies, so no member holds one. Upgrade the pool master to give the pool a copy of its records that survives losing the master.</p>}
   </>;
 }
 
-export function AddHostDialog({ candidates, loading, error, busy, submitError, masterOrigin, onConfirm, onClose, onRetryCandidates }: {
-  candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string; masterOrigin: string;
-  onConfirm: (hostID: string, peerOrigin: string, masterURL: string) => void; onClose: () => void; onRetryCandidates: () => void;
+export function AddHostDialog({ candidates, loading, error, busy, submitError, onConfirm, onClose, onRetryCandidates }: {
+  candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string;
+  onConfirm: (hostID: string, peerOrigin: string) => void; onClose: () => void; onRetryCandidates: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const [hostID, setHostID] = useState("");
   const [origin, setOrigin] = useState("");
-  const [master, setMaster] = useState("");
   const [showOriginError, setShowOriginError] = useState(false);
   useEffect(() => { if (!dialog.current?.open) dialog.current?.showModal(); heading.current?.focus(); }, []);
   const selected = candidates.find(candidate => candidate.host_id === hostID);
   const peer = peerOriginOf(origin);
-  // The master's own address is a membership record: once the master has one it is shown and never
-  // re-sent, and the first join is the one that must supply it.
-  const masterPeer = masterOrigin ? { origin: "", error: "" } : peerOriginOf(master);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setShowOriginError(true);
-    if (!selected || !selected.eligible || peer.error || masterPeer.error) return;
-    onConfirm(selected.host_id, peer.origin, masterPeer.origin);
+    if (!selected || !selected.eligible || peer.error) return;
+    onConfirm(selected.host_id, peer.origin);
   }
   return <dialog ref={dialog} className="confirm-dialog pool-join-dialog" aria-labelledby="add-host-title"
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
@@ -292,7 +387,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, m
       <fieldset disabled={busy}>
         <legend>Host to add</legend>
         {loading && !candidates.length ? <p role="status">Asking the hosts for their current state…</p>
-          : !candidates.length ? <p className="empty">No other host at this site is the master of its own single-host pool, so there is nothing to add.</p>
+          : !candidates.length ? <p className="empty">There is no other enrolled host at this site to add. Enroll the new host first with <strong>Add host</strong> in the toolbar; once it reports, it appears here.</p>
             : <ul className="pool-candidates">{candidates.map(candidate => {
               const refusals = (candidate.rows || []).filter(row => row.result === "refuses_join");
               return <li key={candidate.host_id}>
@@ -318,16 +413,9 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, m
         <p className="help" id="peer-origin-help">The https address the pool master uses to reach this host, with its port and no path. The master connects to the host at this address, so it must be reachable from the master, not only from this browser.</p>
         {showOriginError && peer.error && <p className="alert" role="alert">{peer.error}</p>}
       </fieldset>
-      <fieldset disabled={busy}>
-        <legend>Address of the pool master</legend>
-        <label htmlFor="master-url">Pool master peer address</label>
-        <input id="master-url" required={!masterOrigin} readOnly={Boolean(masterOrigin)} inputMode="url" autoComplete="off" placeholder="https://192.0.2.11:9444" aria-describedby="master-url-help" value={masterOrigin || master} onChange={event => { setMaster(event.target.value); setShowOriginError(false); }} />
-        <p className="help" id="master-url-help">The address other hosts in the pool use to reach the pool master's peer port, for example https://192.0.2.11:9444.{masterOrigin ? " The master already has this address on record, so it is not asked for again." : ""}</p>
-        {showOriginError && masterPeer.error && <p className="alert" role="alert">{masterPeer.error}</p>}
-      </fieldset>
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || !selected?.eligible || !origin.trim() || (!masterOrigin && !master.trim())}>{busy ? "Submitting…" : "Add host to pool"}</button>
+        <button className="primary" disabled={busy || !selected?.eligible || !origin.trim()}>{busy ? "Submitting…" : "Add host to pool"}</button>
       </div>
     </form>
   </dialog>;
@@ -398,6 +486,11 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
   const [fenceBusy, setFenceBusy] = useState(false);
   const [fenceError, setFenceError] = useState("");
   const heldFence = useRef({ id: "", signature: "" });
+  const heldBMC = useRef({ id: "", signature: "" });
+  const [bmcBusy, setBMCBusy] = useState("");
+  const [hostFencingBusy, setHostFencingBusy] = useState(false);
+  const heldHostFencing = useRef({ id: "", signature: "" });
+  const [actionError, setActionError] = useState("");
   async function refresh() {
     setLoading(true); setError("");
     try { setReport(await api<Report>(`pools/${encodeURIComponent(poolID)}/members`)); }
@@ -428,11 +521,11 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
     const timer = window.setInterval(() => void refresh(), 10_000);
     return () => window.clearInterval(timer);
   }, [joining, transferring, promoting, unavailable, poolID]);
-  async function confirm(hostID: string, peerOrigin: string, masterURL: string) {
+  async function confirm(hostID: string, peerOrigin: string) {
     setBusy(true); setSubmitError("");
-    const request_id = heldRequestID(held.current, `${poolID}\n${hostID}\n${peerOrigin}\n${masterURL}`);
+    const request_id = heldRequestID(held.current, `${poolID}\n${hostID}\n${peerOrigin}`);
     try {
-      await api(`pools/${encodeURIComponent(poolID)}/members`, "POST", masterURL ? { request_id, host_id: hostID, peer_origin: peerOrigin, master_url: masterURL } : { request_id, host_id: hostID, peer_origin: peerOrigin });
+      await api(`pools/${encodeURIComponent(poolID)}/members`, "POST", { request_id, host_id: hostID, peer_origin: peerOrigin });
       setOpen(false);
       setNotice("Nex Core accepted the request. The joining host performs the join itself and reports its progress below; closing this page does not stop it.");
       await refresh();
@@ -552,6 +645,36 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
       setFenceError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
     } finally { setFenceBusy(false); }
   }
+  // Host fencing is one pool setting, and the pool master keeps it. Turning it off needs no
+  // confirmation: it only stops Nex Core arming anything, and the consequence of leaving it on
+  // is on the page beside the switch.
+  async function setHostFencing(enabled: boolean) {
+    setActionError(""); setNotice(""); setHostFencingBusy(true);
+    const request_id = heldRequestID(heldHostFencing.current, `${poolID}\nhost-fencing\n${enabled}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/host-fencing`, "POST", { request_id, enabled });
+      setNotice(enabled
+        ? "Nex Core accepted the request. The pool master records host fencing as on; it arms a host's watchdog only where every prerequisite holds."
+        : "Nex Core accepted the request. The pool master records host fencing as off, so no host is armed to reset itself.");
+      await refresh();
+    } catch (e) {
+      setActionError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
+    } finally { setHostFencingBusy(false); }
+  }
+  // Whether a host may configure its own management controller is a field of the membership
+  // the pool master owns, so this one goes to the master. There is no "off" request: clearing
+  // the fence device is what turns it off.
+  async function setBMCProvisioning(member: Member) {
+    setActionError(""); setNotice(""); setBMCBusy(member.host_id);
+    const request_id = heldRequestID(heldBMC.current, `${poolID}\nbmc-provisioning\n${member.host_id}`);
+    try {
+      await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}/bmc-provisioning`, "POST", { request_id });
+      setNotice("Nex Core accepted the request. That host configures its management controller again on its next pass and reports what it finds.");
+      await refresh();
+    } catch (e) {
+      setActionError(`${(e as Error).message} Submitting again repeats the same request; it never makes a second change.`);
+    } finally { setBMCBusy(""); }
+  }
   const authoritative = Boolean(report?.authoritative);
   return <section className="panel pool-members" aria-label="Pool hosts">
     <div className="section-heading"><h2>Hosts</h2><span className="muted">{report ? `${(report.members || []).length} reported${authoritative ? "" : " · not current"}` : loading ? "Loading…" : "Unavailable"}</span></div>
@@ -561,6 +684,8 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
     </div>
     {blockedReason && <p className="warning" id="pool-actions-blocked" role="status">{blockedReason}</p>}
     {notice && <p className="notice" role="status">{notice}</p>}
+    {/* A row or panel action has no dialog to show its refusal in, so Core's sentence lands here. */}
+    {actionError && <p className="alert" role="alert">{actionError}</p>}
     {error ? <p className="alert" role="alert">The pool master could not be asked for its membership: {error}</p>
       : report && !authoritative ? <div className="warning pool-recovery" role="status">
         <p>{recoveryText(report)}</p>
@@ -576,7 +701,9 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
       onMasterChange={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
       onEject={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}
       onPromote={unavailable ? undefined : member => { setPromotionError(""); setVerdictError(""); setVerdict(null); setNotice(""); setPromotionTarget(member); void preflight(member); }}
-      onFenceProfile={unavailable ? undefined : member => { setFenceError(""); setNotice(""); setFenceTarget(member); }} /> : loading ? <p className="empty" role="status">Asking the pool master for its membership…</p> : <p className="empty">The pool master has not reported a membership.</p>}
+      onFenceProfile={unavailable ? undefined : member => { setFenceError(""); setNotice(""); setFenceTarget(member); }}
+      onBMCProvisioning={unavailable ? undefined : member => void setBMCProvisioning(member)} bmcBusy={bmcBusy}
+      onHostFencing={unavailable ? undefined : enabled => void setHostFencing(enabled)} hostFencingBusy={hostFencingBusy} /> : loading ? <p className="empty" role="status">Asking the pool master for its membership…</p> : <p className="empty">The pool master has not reported a membership.</p>}
     {drainTarget && <MaintenanceDialog member={drainTarget} busy={drainBusy} submitError={drainError} submitReady={membershipVersionReady(report)} onConfirm={() => void setMaintenance(drainTarget)} onClose={() => { if (!drainBusy) setDrainTarget(null); }} />}
     {report && promoteTarget && <MasterChangeDialog report={report} member={promoteTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void changeMaster(promoteTarget, confirmation)} onClose={() => { if (!transferBusy) setPromoteTarget(null); }} />}
     {report && ejectTarget && <EjectDialog report={report} member={ejectTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void eject(ejectTarget, confirmation)} onClose={() => { if (!transferBusy) setEjectTarget(null); }} />}
@@ -588,6 +715,6 @@ export function PoolMembers({ poolID, api, unavailable }: { poolID: string; api:
     {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError}
       onConfirm={(fence, credential) => void setFenceProfile(fenceTarget, fence, credential)}
       onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }} />}
-    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} masterOrigin={masterOriginOf(report)} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()} />}
+    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()} />}
   </section>;
 }

@@ -43,7 +43,7 @@ and correct any instructions contradicted by that walkthrough.
 
 This is disposable virtual-machine verification, not physical hardware testing,
 external release certification, or completion of the remaining Phase 2 lifecycle.
-It does not cover the later ZFS-enabled `0.3.5` internal QA image.
+It does not cover the later `0.3.5` internal QA image that bundled OpenZFS.
 
 ## Executed evidence
 

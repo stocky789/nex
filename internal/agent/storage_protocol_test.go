@@ -218,7 +218,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	s.State.StorageProtocolReady = true
 	s.State.StorageClusterProtocolReady = true // persisted acknowledgement from a replaced Controller
 	result.PoolID, result.HostID = s.State.PoolID, s.State.HostID
-	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
 	if err := resetStorageClusterProtocol(s); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	if err := resetStorageClusterProtocol(s); err != nil {
 		t.Fatal(err)
 	}
-	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
 	matchingReports := 0
 	_, matchingIdentity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request protocol.ReportRequest
@@ -281,7 +281,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	if !s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
 		t.Fatalf("base acknowledgement did not clear extension state: %+v", s.State)
 	}
-	appendStorageClusters(s, []protocol.StorageClusterResult{result})
+	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
 	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
 		t.Fatal(err)
 	}

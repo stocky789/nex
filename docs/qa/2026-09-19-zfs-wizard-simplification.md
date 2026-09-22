@@ -13,7 +13,7 @@ host, a tick per spare disk, the resulting layout shown inline) and **Review and
 only host of a one-host pool, submit pool scope; one ticked host of several submits host scope.
 Unavailable disks are listed with Core's reason behind a disclosure and cannot be ticked.
 On the **Storage** page the repository list comes first, **ZFS storage by host** follows,
-and **Clustered iSCSI / GFS2** and **Unused storage credentials** fold away until they hold
+and **Clustered iSCSI / GFS2** fold away until they hold
 a configuration, a problem, or the operator opens them.
 
 ## Executed checks

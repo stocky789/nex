@@ -830,6 +830,17 @@ func ExecuteStorageClusterRequest(_ context.Context, s *Store, request protocol.
 	}
 	rawDigest := clusterDigest(request)
 	if request.Action == "apply" {
+		// Both halves of one interlock. Clustered storage owns this host's one
+		// corosync.conf and writes no-quorum-policy=freeze on it, which is measurably a
+		// cluster that keeps an inquorate host running — so it must never land underneath
+		// hosts that are feeding watchdogs on the strength of suicide. A pool that runs
+		// clustered storage never gets a pool-owned watchdog cluster (poolClusterIntent),
+		// and this is the other direction. Turning Host fencing off is the way out: it
+		// disarms every host through the recorded path and dissolves the pool's cluster.
+		if err := poolWatchdogClusterFree(s); err != nil {
+			result.Status, result.Error = "failed", err.Error()
+			return result
+		}
 		if len(request.Config.FenceProofs) != 0 {
 			result.Status, result.Error = "failed", "fence evidence is recorded only by Core verification"
 			return result

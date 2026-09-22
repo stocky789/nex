@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -20,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"nex.local/nex/internal/version"
 )
@@ -38,6 +36,7 @@ const aptKeyringPath = "/usr/share/keyrings/nex-archive-keyring.gpg"
 // Check while an update applies, so refreshing on every call would re-fetch the
 // index for nothing and contend with the running install for the archive lock.
 const indexMaxAge = 5 * time.Minute
+const versionCompareTimeout = 5 * time.Second
 
 type Status struct {
 	Package          string `json:"package"`
@@ -235,10 +234,12 @@ func MergeProgress(st *Status, stateDir string) {
 	// version to Check before the apply has finished its own work.
 	if !applying() &&
 		(p.Phase == "downloading" || p.Phase == "installing" || p.Phase == "restarting") &&
-		!st.UpdateAvailable && st.InstalledVersion != "" && st.AvailableVersion != "" &&
-		CompareVersions(st.InstalledVersion, st.AvailableVersion) >= 0 {
-		p = Progress{Phase: "done", Percent: 100, Message: "Update complete"}
-		_ = WriteProgress(stateDir, p)
+		!st.UpdateAvailable && st.InstalledVersion != "" && st.AvailableVersion != "" {
+		compare, err := CompareVersions(context.Background(), st.InstalledVersion, st.AvailableVersion)
+		if err == nil && compare >= 0 {
+			p = Progress{Phase: "done", Percent: 100, Message: "Update complete"}
+			_ = WriteProgress(stateDir, p)
+		}
 	}
 	st.Phase = p.Phase
 	pct := p.Percent
@@ -251,114 +252,29 @@ func MergeProgress(st *Status, stateDir string) {
 	}
 }
 
-func CompareVersions(a, b string) int {
-	ea, ua, da := splitDebVersion(a)
-	eb, ub, db := splitDebVersion(b)
-	if ea != eb {
-		if ea < eb {
-			return -1
+func CompareVersions(ctx context.Context, a, b string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, versionCompareTimeout)
+	defer cancel()
+	for _, comparison := range []struct {
+		operator string
+		result   int
+	}{
+		{"lt", -1},
+		{"gt", 1},
+	} {
+		err := Command(ctx, "dpkg", "--compare-versions", a, comparison.operator, b).Run()
+		if err == nil {
+			return comparison.result, nil
 		}
-		return 1
-	}
-	if c := compareDebPart(ua, ub); c != 0 {
-		return c
-	}
-	if da == "" && db == "" {
-		return 0
-	}
-	if da == "" {
-		return 1
-	}
-	if db == "" {
-		return -1
-	}
-	return compareDebPart(da, db)
-}
-
-func splitDebVersion(v string) (epoch int, upstream, debian string) {
-	v = strings.TrimSpace(v)
-	if i := strings.IndexByte(v, ':'); i >= 0 {
-		fmt.Sscanf(v[:i], "%d", &epoch)
-		v = v[i+1:]
-	}
-	if i := strings.IndexByte(v, '-'); i >= 0 {
-		return epoch, v[:i], v[i+1:]
-	}
-	return epoch, v, ""
-}
-
-func compareDebPart(a, b string) int {
-	for a != "" || b != "" {
-		for len(a) > 0 && len(b) > 0 && !isDigit(a[0]) && !isDigit(b[0]) {
-			ca, cb := orderChar(a[0]), orderChar(b[0])
-			if ca != cb {
-				if ca < cb {
-					return -1
-				}
-				return 1
-			}
-			a, b = a[1:], b[1:]
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
 		}
-		for len(a) > 0 && !isDigit(a[0]) {
-			if b == "" {
-				if a[0] == '~' {
-					return -1
-				}
-				return 1
-			}
-			if orderChar(a[0]) != 0 {
-				return -1
-			}
-			a = a[1:]
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return 0, err
 		}
-		for len(b) > 0 && !isDigit(b[0]) {
-			if a == "" {
-				if b[0] == '~' {
-					return 1
-				}
-				return -1
-			}
-			if orderChar(b[0]) != 0 {
-				return 1
-			}
-			b = b[1:]
-		}
-		na, ra := takeDigits(a)
-		nb, rb := takeDigits(b)
-		if na != nb {
-			if na < nb {
-				return -1
-			}
-			return 1
-		}
-		a, b = ra, rb
 	}
-	return 0
-}
-
-func isDigit(c byte) bool { return c >= '0' && c <= '9' }
-
-func orderChar(c byte) int {
-	if unicode.IsLetter(rune(c)) {
-		return int(c)
-	}
-	if c == '~' {
-		return -1
-	}
-	return int(c) + 256
-}
-
-func takeDigits(s string) (int, string) {
-	i := 0
-	for i < len(s) && isDigit(s[i]) {
-		i++
-	}
-	if i == 0 {
-		return 0, s
-	}
-	n := 0
-	fmt.Sscanf(s[:i], "%d", &n)
-	return n, s[i:]
+	return 0, nil
 }
 
 // apt runs apt-get non-interactively, keeping existing config files on upgrade and
@@ -493,7 +409,12 @@ func CheckWithCache(ctx context.Context, repoURL, packageName, cacheDir string) 
 		}
 		if candidate := strings.TrimSpace(rest); candidate != "" && candidate != "(none)" {
 			st.AvailableVersion = candidate
-			st.UpdateAvailable = CompareVersions(st.InstalledVersion, candidate) < 0
+			compare, err := CompareVersions(ctx, st.InstalledVersion, candidate)
+			if err != nil {
+				st.Error = "could not compare package versions"
+				return st, nil
+			}
+			st.UpdateAvailable = compare < 0
 			return st, nil
 		}
 	}
@@ -520,7 +441,12 @@ func Check(ctx context.Context, repoURL, packageName string) (Status, error) {
 		return st, nil
 	}
 	st.AvailableVersion = candidate
-	st.UpdateAvailable = CompareVersions(st.InstalledVersion, candidate) < 0
+	compare, err := CompareVersions(ctx, st.InstalledVersion, candidate)
+	if err != nil {
+		st.Error = "could not compare package versions"
+		return st, nil
+	}
+	st.UpdateAvailable = compare < 0
 	return st, nil
 }
 
@@ -557,7 +483,13 @@ func ApplyLocal(ctx context.Context, repoURL, packageName, stateDir string) (App
 	}
 	// apt exits 0 when the installed version is already the candidate, so compare
 	// rather than trusting the exit status to mean an upgrade happened.
-	if CompareVersions(before, InstalledVersion(packageName)) >= 0 {
+	compare, err := CompareVersions(ctx, before, InstalledVersion(packageName))
+	if err != nil {
+		msg := "could not compare package versions"
+		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 50, Error: msg})
+		return ApplyResult{Status: "failed", Message: msg}, err
+	}
+	if compare >= 0 {
 		msg := "no newer " + packageName + " available from " + repoURL
 		_ = WriteProgress(stateDir, Progress{Phase: "failed", Percent: 50, Error: msg})
 		return ApplyResult{Status: "failed", Message: msg}, errors.New(msg)

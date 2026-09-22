@@ -252,6 +252,10 @@ disk, load) always fit the 128-series cap. On a larger host the stacked CPU char
 64 cores and does not reach total CPU use; `cpu.total` is still recorded and charted. The limit is
 documented in the guide. Decision: project owner delegated the choice; kept as the smallest change.
 
+Amended 2026-09-22: host temperature series share the same 128-series cap. Up to 24 of them are
+registered ahead of the per-core CPU series, so a large host drops cores rather than sensors. See
+the [hardware and sensors plan](2026-09-22-host-hardware-and-sensors.md).
+
 ## Remaining work
 
 - Walk the [guide](../guide/usage-history.md) through as written on a Nex Core host with the default

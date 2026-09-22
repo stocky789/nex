@@ -2962,7 +2962,14 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			if err := storageDetachRefusal(js, current.ID); err != nil {
 				return err
 			}
-			return storageDetachAt(ctx, current, filepath.Join(filepath.Dir(e.stateDir), credentialDirectory))
+			credentialRoot := filepath.Join(filepath.Dir(e.stateDir), credentialDirectory)
+			if err := storageDetachAt(ctx, current, credentialRoot); err != nil {
+				return err
+			}
+			// Same lifecycle as registering a password with a repository: detach removes the
+			// Core-local secret for that repository. Mid-flight leftovers with no repository
+			// are left alone.
+			return releaseStorageCredential(filepath.Dir(e.stateDir), current)
 		case "update":
 			if protocol.IsClusteredISCSI(current) {
 				return errors.New("clustered iSCSI updates require a coordinated Core cluster operation")
@@ -3027,6 +3034,11 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			next.Capabilities = storageCapabilities(next)
 			next.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
 			j.AppliedStorage = &next
+			if credentialChanged && current.CredentialReceipt != "" && current.CredentialReceipt != next.CredentialReceipt {
+				if err := releaseStorageCredential(filepath.Dir(e.stateDir), protocol.StorageRegistration{CredentialReceipt: current.CredentialReceipt, PoolID: current.PoolID, HostID: current.HostID}); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 	case "network-remove", "network-update":

@@ -2,20 +2,10 @@
 // VMEDIT-2: changing a UEFI VM to BIOS makes Core delete the VM's UEFI variable store, which
 // cannot be undone. The editor must say so and hold Save until the operator acknowledges it.
 // run with: node src/vm-edit.test.mjs
-import { buildSync } from "esbuild";
-import { mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 
-const outdir = fileURLToPath(new URL("../node_modules/.cache/nex", import.meta.url));
-mkdirSync(outdir, { recursive: true });
-const outfile = `${outdir}/vm-edit.test-bundle.mjs`;
-buildSync({
-  entryPoints: [fileURLToPath(new URL("./vm-edit.tsx", import.meta.url))],
-  bundle: true, format: "esm", jsx: "automatic", target: "es2022", outfile,
-  external: ["react", "react/jsx-runtime", "react-dom", "react-dom/server"], loader: { ".css": "empty" },
-});
-const { firmwareIssue, editBlocker, VMEditor } = await import(`file://${outfile}`);
+const { firmwareIssue, editBlocker, VMEditor } = await import(bundleTestModule(new URL("./vm-edit.tsx", import.meta.url), "vm-edit", true));
 const { createElement } = await import("react");
 const { renderToStaticMarkup } = await import("react-dom/server");
 

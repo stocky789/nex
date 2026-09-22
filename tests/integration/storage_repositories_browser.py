@@ -43,9 +43,8 @@ def main():
     data = {"session": {"username": "operator", "csrf_token": "fixture-csrf"}, "sites": [{"id": "site-qa", "name": "QA site"}],
             "pools": [{"id": "pool-qa", "site_id": "site-qa", "name": "QA pool", "master_host_id": "core-qa"}], "hosts": [host],
             "storage": [], "vms": [], "networks": [], "media": [], "operations": [], "audit": []}
-    receipts = [{"receipt": "core-unused-receipt", "host_id": "core-qa", "status": "ready", "created_at": "2026-09-11T00:00:00Z", "retire_eligible": True}]
     submissions, errors, checks = [], [], []
-    mode = {"fail_recheck": True, "unauthorized": False, "fail_retire": True, "fail_discovery": False,
+    mode = {"fail_recheck": True, "unauthorized": False, "fail_discovery": False,
             "browser_empty": False, "browser_error": False, "browser_failed": False, "browser_deferred": False}
     deferred_browser_replies = []
 
@@ -73,9 +72,6 @@ def main():
             route.fulfill(json=data["session"])
             return
         if request.method == "GET":
-            if path == "storage/credentials":
-                route.fulfill(json=receipts)
-                return
             route.fulfill(json=data.get(path, []))
             return
         body = request.post_data_json
@@ -118,12 +114,6 @@ def main():
         elif path.endswith("/detach"):
             data["storage"] = []
             route.fulfill(status=202, json={"operation_id": "storage-detach-core"})
-        elif path.startswith("storage/credentials/") and path.endswith("/retire"):
-            if mode["fail_retire"]:
-                route.fulfill(status=409, json={"error": "Credential is still in use"})
-            else:
-                receipts.clear()
-                route.fulfill(status=202, json={"operation_id": "credential-retire-core"})
         else:
             route.fulfill(status=204)
 
@@ -390,24 +380,6 @@ def main():
             dialog.get_by_role("button", name="Detach storage", exact=True).click()
             expect(page.get_by_text("No storage repositories reported.", exact=False)).to_be_visible()
             checks.append("Detach requires a focused typed-name confirmation and does not erase data")
-
-            cleanup = page.get_by_role("region", name="Unused storage credentials", exact=True)
-            cleanup.get_by_role("heading", name="Unused storage credentials", exact=True).click()
-            cleanup.get_by_label("Host", exact=True).select_option("core-qa")
-            cleanup.get_by_role("button", name="Find unused credentials", exact=True).click()
-            receipt_row = cleanup.get_by_role("row").filter(has_text="core-unused-receipt")
-            expect(receipt_row).to_be_visible()
-            receipt_row.get_by_role("button", name="Retire unused credentials", exact=True).click()
-            retire = page.get_by_role("dialog")
-            expect(retire.get_by_role("heading", name="Retire unused credentials?", exact=True)).to_be_visible()
-            retire.get_by_role("button", name="Retire unused credentials", exact=True).click()
-            expect(page.get_by_role("alert")).to_contain_text("Credential is still in use")
-            expect(retire).to_be_visible()
-            mode["fail_retire"] = False
-            retire.get_by_role("button", name="Retire unused credentials", exact=True).click()
-            expect(page.get_by_text("Credential retirement queued", exact=False)).to_be_visible()
-            expect(cleanup.get_by_text("core-unused-receipt", exact=True)).to_have_count(0)
-            checks.append("Core-only unused credential receipts can be found and retired with a confirmation; an in-use refusal stays actionable")
 
             # VM placement only receives repositories Core currently reports writable and capable.
             synthetic = {**healthy, "id": "synthetic-core-id", "name": "Synthetic repository", "generation": 0}

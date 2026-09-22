@@ -20,6 +20,7 @@ import (
 )
 
 var storageFenceRun = runFenceAgent
+var storageFenceEnvRun = runFenceAgentEnv
 var storageFenceNow = time.Now
 var virshDOMInfoUUID = regexp.MustCompile(`(?im)^\s*UUID\s*:\s*([0-9a-f-]+)\s*$`)
 
@@ -29,10 +30,21 @@ const fenceVirshPromptOption = `-t '/bin/bash -c "PS1=\\[EXPECT\\]# /bin/bash --
 // a non-zero status exit code. Its caller parses only the power state and never
 // returns output or stderr to an API, journal, or error.
 func runFenceAgent(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return runFenceAgentEnv(ctx, nil, "", name, args...)
+}
+
+// runFenceAgentEnv is the same run with extra environment and standard input. Only IPMI
+// needs either: the environment hands ipmitool a session password no process list can read,
+// and standard input answers its password prompt when it sets one on the controller, which
+// is the only way to give it a password that never appears in a command argument.
+func runFenceAgentEnv(ctx context.Context, env []string, stdin, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Env = append(append(os.Environ(), "LC_ALL=C"), env...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	cmd.WaitDelay = time.Second
 	var out, stderr cappedOutput
 	cmd.Stdout, cmd.Stderr = &out, &stderr
@@ -56,7 +68,11 @@ func VerifyStorageClusterFence(ctx context.Context, stateDir string, c protocol.
 	// A configured storage cluster node must be found powered on first: that is what
 	// distinguishes a fence device that actually controls this node from one reporting
 	// "off" for a target that was never there.
-	err = verifyFence(ctx, stateDir, node.Fence, &proof, true)
+	//
+	// A clustered-storage node carries no recorded system UUID, so a BMC profile is refused
+	// here: identity comes from the pool master's membership record, which this
+	// configuration is not.
+	err = verifyFence(ctx, stateDir, node.Fence, "", &proof, true)
 	return proof, err
 }
 
@@ -65,18 +81,35 @@ func VerifyStorageClusterFence(ctx context.Context, stateDir string, c protocol.
 // and exclusion, performs the power-off, and then confirms the power-off by a separate
 // observation. It never accepts a caller-supplied result, and its caller must persist the
 // proof it fills in before acting on it.
-func verifyFence(ctx context.Context, stateDir string, f protocol.StorageClusterFence, proof *protocol.StorageClusterFenceStatus, requirePoweredOn bool) error {
+func verifyFence(ctx context.Context, stateDir string, f protocol.StorageClusterFence, systemUUID string, proof *protocol.StorageClusterFenceStatus, requirePoweredOn bool) error {
 	proof.TargetID = f.TargetID
 	// One predicate decides which profiles this build can ever prove anything with, so a
 	// host cannot record a profile that would silently never work, and a restarted master
 	// can ask the same question about itself without running a fence.
-	if err := PoolFenceUsable(&f); err != nil {
+	if err := PoolFenceUsable(&f, systemUUID); err != nil {
 		proof.Status, proof.Error = "failed", err.Error()
 		return err
 	}
-	if f.Kind == protocol.FenceVirsh && !virshTargetIdentity(ctx, stateDir, f) {
-		proof.Status, proof.Error = "failed", "virsh target identity was not independently confirmed"
-		return errors.New(proof.Error)
+	// One management controller, one conversation: the identity read, the power-off and
+	// the settle poll share this session's password and its pinned connection.
+	var bmc *bmcSession
+	if f.Kind == protocol.FenceVirsh {
+		if !virshTargetIdentity(ctx, stateDir, f) {
+			proof.Status, proof.Error = "failed", "virsh target identity was not independently confirmed"
+			return errors.New(proof.Error)
+		}
+	} else {
+		session, err := newBMCSession(stateDir, f)
+		if err != nil {
+			proof.Status, proof.Error = "failed", err.Error()
+			return err
+		}
+		defer session.close()
+		bmc = session
+		if err = bmc.targetIdentity(ctx, systemUUID); err != nil {
+			proof.Status, proof.Error = "failed", err.Error()
+			return err
+		}
 	}
 	if requirePoweredOn {
 		if err := fenceTargetOn(ctx, stateDir, f); err != nil {
@@ -84,11 +117,11 @@ func verifyFence(ctx context.Context, stateDir string, f protocol.StorageCluster
 			return errors.New(proof.Error)
 		}
 	}
-	if err := fenceTargetOff(ctx, stateDir, f); err != nil {
+	if err := fenceTargetOff(ctx, stateDir, f, bmc); err != nil {
 		proof.Status, proof.Error = "failed", "native fence action did not complete"
 		return errors.New(proof.Error)
 	}
-	if err := fenceTargetExcluded(ctx, stateDir, f); err != nil {
+	if err := fenceTargetExcluded(ctx, stateDir, f, bmc); err != nil {
 		proof.Status, proof.Error = "uncertain", "target exclusion was not independently confirmed"
 		return errors.New(proof.Error)
 	}
@@ -134,7 +167,14 @@ func configuredFenceNode(c protocol.StorageClusterConfig, hostID string) (protoc
 	return found, nil
 }
 
-func fenceTargetOff(ctx context.Context, stateDir string, f protocol.StorageClusterFence) error {
+func fenceTargetOff(ctx context.Context, stateDir string, f protocol.StorageClusterFence, bmc *bmcSession) error {
+	// Redfish runs through this host's own pinned connection rather than fence_redfish: the
+	// agent cannot be bound to the certificate Core recorded, and the only way to make it
+	// talk to a factory controller at all would be to disable verification, which sends the
+	// password to whoever answers. Everything else is the shipped agent.
+	if f.Kind == protocol.FenceRedfish {
+		return bmc.forceOff(ctx)
+	}
 	name, args, err := fenceAgentArgs(stateDir, f, "off")
 	if err != nil {
 		return err
@@ -146,9 +186,15 @@ func fenceTargetOff(ctx context.Context, stateDir string, f protocol.StorageClus
 	return nil
 }
 
-func fenceTargetExcluded(ctx context.Context, stateDir string, f protocol.StorageClusterFence) error {
+func fenceTargetExcluded(ctx context.Context, stateDir string, f protocol.StorageClusterFence, bmc *bmcSession) error {
+	if f.Kind == protocol.FenceRedfish {
+		// The same pinned resource the identity came from, read again until the machine
+		// is off: this is the separate observation, not the power-off's own answer about
+		// itself.
+		return bmc.settled(ctx)
+	}
 	switch f.Kind {
-	case protocol.FenceVirsh, protocol.FenceRedfish, protocol.FenceIPMI:
+	case protocol.FenceVirsh, protocol.FenceIPMI:
 		name, args, err := fenceAgentArgs(stateDir, f, "status")
 		if err != nil {
 			return err
@@ -167,13 +213,28 @@ func fenceAgentArgs(stateDir string, f protocol.StorageClusterFence, action stri
 	if action != "off" && action != "status" {
 		return "", nil, errors.New("invalid fence action")
 	}
+	// A profile recorded before BMC fencing carried an account has no username; it can
+	// never produce a proof, and leaving the option out keeps its Pacemaker rendering the
+	// same rather than emitting an empty one.
+	bmcUsername := []string{}
+	if f.Username != "" {
+		bmcUsername = []string{"--username=" + f.Username}
+	}
 	switch f.Kind {
 	case protocol.FenceRedfish:
 		secret, err := fenceCredentialScript(stateDir, f.CredentialRef)
-		return "fence_redfish", []string{"--ipaddr=" + f.Endpoint, "--system-id=" + f.TargetID, "--password-script=" + secret, "--action=" + action}, err
+		return "fence_redfish", append([]string{"--ipaddr=" + f.Endpoint, "--system-id=" + f.TargetID}, append(bmcUsername, "--password-script="+secret, "--action="+action)...), err
 	case protocol.FenceIPMI:
 		secret, err := fenceCredentialScript(stateDir, f.CredentialRef)
-		return "fence_ipmilan", []string{"--ipaddr=" + f.Endpoint, "--plug=" + f.TargetID, "--password-script=" + secret, "--action=" + action}, err
+		// RMCP+ (IPMI 2.0), the session every identity read and readiness check Core
+		// makes already uses: fence_ipmilan defaults to IPMI 1.5, which a controller
+		// with 2.0 in use often refuses, and the cipher suite Core selected from the
+		// controller's own LAN channel only applies to lanplus.
+		cipher := []string{"--lanplus"}
+		if f.Cipher != 0 {
+			cipher = append(cipher, "--cipher="+strconv.Itoa(int(f.Cipher)))
+		}
+		return "fence_ipmilan", append([]string{"--ipaddr=" + f.Endpoint, "--plug=" + f.TargetID}, append(append(bmcUsername, cipher...), "--password-script="+secret, "--action="+action)...), err
 	case protocol.FenceVirsh:
 		identity, err := fenceIdentityFile(stateDir, f.CredentialRef)
 		knownHosts, hostErr := fenceKnownHostsFile(stateDir, f.SSHHostKeyRef)

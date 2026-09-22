@@ -29,10 +29,14 @@ verification limits that apply to its workflow.
    and guests that would start themselves after a reboot; running guests are untouched).
 11. [Pool authority and recovery](pool-authority-and-recovery.md)
    (read the copy of the pool master's authority each member holds; change which host is the pool
-   master; eject a host from a pool; record a fence device and promote a surviving member when the
-   pool master is lost; resume a master change whose target died; what a restricted host is and how
-   it clears. No automatic succession, a promotion may power off more than one host, and
-   fence-verified promotion needs a `virsh` fence device recorded in advance).
+   master; eject a host from a pool; let each host's own Nex Core configure its management
+   controller for fencing, or set BMC access by hand where it cannot; remove that account again;
+   read the **Fencing** column, which says whether each host could be shut out and by which other
+   hosts — the hosts check each other's controllers continuously and never power anything off;
+   promote a surviving member when the pool master is lost; resume a master change whose target
+   died; what a restricted host is and how it clears. No automatic succession, a promotion may
+   power off more than one host, and fence-verified promotion needs a fence device, or an armed
+   watchdog in a pool of three or more hosts, in place before the master is lost).
 12. [Change a host's management network](change-management-network.md)
    (stage, apply and confirm a host's own addressing, with the timed rollback the host performs
    itself; console recovery and native verification limits apply).
@@ -52,8 +56,9 @@ verification limits that apply to its workflow.
    CD/DVD insert/eject on VMs, and a Console tab on hosts).
 19. [Install guest tools and read guest information](guest-tools.md)
    (QEMU guest agent and spice-vdagent; OS, hostname, addresses and clipboard readiness).
-20. [Read VM and host usage history](usage-history.md)
-   (Stats tab charts up to a year back, with Stacked, zoom and legend toggles).
+20. [Read VM and host usage history, hardware and temperatures](usage-history.md)
+   (Stats tab charts up to a year back, with Stacked, zoom and legend toggles, and a host's
+   Hardware panel, gauges and temperature chart).
 21. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
 22. [Publish a Nex Core release](publish-a-release.md)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -24,15 +25,36 @@ const (
 // names a root-only Core secret and never carries a password or arbitrary agent
 // arguments from a Controller request.
 type StorageClusterFence struct {
-	Kind          string `json:"kind"`
-	Endpoint      string `json:"endpoint,omitempty"`
-	TargetID      string `json:"target_id,omitempty"` // BMC chassis/system or lab-domain identity
-	CredentialRef string `json:"credential_ref,omitempty"`
-	DevicePath    string `json:"device_path,omitempty"`
-	VirshURI      string `json:"virsh_uri,omitempty"`
-	SSHLogin      string `json:"ssh_login,omitempty"`
-	SSHPort       uint16 `json:"ssh_port,omitempty"`
-	SSHHostKeyRef string `json:"ssh_host_key_ref,omitempty"`
+	Kind     string `json:"kind"`
+	Endpoint string `json:"endpoint,omitempty"`
+	TargetID string `json:"target_id,omitempty"` // BMC chassis/system or lab-domain identity
+	Username string `json:"username,omitempty"`  // BMC account name; its password is the credential
+	// TLSFingerprint pins the exact certificate a Redfish controller must present, as 64
+	// lower-case hex digits of its leaf SHA-256.  Core captures it itself when the profile
+	// is recorded and reports it so an operator can compare it with the controller's own
+	// page; it is not a secret and a client never supplies one.  A factory BMC certificate
+	// is self-signed with no usable name, so this pin, not a chain, is the identity of the
+	// endpoint the password is sent to and the power-off is issued through.
+	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
+	// Cipher is the RMCP+ cipher suite an IPMI fence must use, as the controller's own
+	// LAN channel offers it.  Zero means none was recorded and Core picks one itself;
+	// suite 0 — no authentication, no integrity, no confidentiality — is never selected
+	// and never accepted here, so the value is only ever absent, 17 or 3.
+	Cipher uint8 `json:"cipher,omitempty"`
+	// ProvisionedByCore marks the account behind this profile as one Nex Core created on
+	// the host's own management controller in-band.  It is how a host knows, after a
+	// reboot or a master change, that the account under its name is its own to replace
+	// rather than somebody else's to leave alone, and it is why an operator-entered
+	// profile is never overwritten by automatic provisioning.  A Controller never sets
+	// it: it is written by the pool master when a host's own Core reports the account it
+	// created.
+	ProvisionedByCore bool   `json:"provisioned_by_core,omitempty"`
+	CredentialRef     string `json:"credential_ref,omitempty"`
+	DevicePath        string `json:"device_path,omitempty"`
+	VirshURI          string `json:"virsh_uri,omitempty"`
+	SSHLogin          string `json:"ssh_login,omitempty"`
+	SSHPort           uint16 `json:"ssh_port,omitempty"`
+	SSHHostKeyRef     string `json:"ssh_host_key_ref,omitempty"`
 }
 
 type StorageClusterNode struct {
@@ -69,6 +91,38 @@ type StorageClusterFenceStatus struct {
 	Error             string    `json:"error,omitempty"`
 	ConfigGeneration  uint64    `json:"config_generation"`
 	ConfigDigest      string    `json:"config_digest"`
+	// Method names how the exclusion was proved.  Empty is a fence device Core powered the
+	// host off through and independently observed off, which is every proof there was
+	// before watchdog fencing; "watchdog" is the host resetting itself, whose evidence is
+	// the record below.  A clustered-storage fence only ever produces the empty one.
+	Method string `json:"method,omitempty"`
+	// Watchdog is the whole evidence of a watchdog exclusion, so that a proof can be read
+	// back later and judged rather than believed.  It is present only when Method says so.
+	Watchdog *PoolWatchdogExclusion `json:"watchdog,omitempty"`
+}
+
+// PoolFenceMethodWatchdog is the Method value of a watchdog exclusion proof.
+const PoolFenceMethodWatchdogProof = "watchdog"
+
+// PoolWatchdogExclusion is what a proving host observed, one field per condition of the rule
+// change, so nothing about a proof has to be reconstructed from the code that made it.
+type PoolWatchdogExclusion struct {
+	// Kind and TimeoutSeconds are the target's own armed report: the device class it armed
+	// and the timeout it armed with.  An emulated kind says the target is itself a virtual
+	// machine, so this proof is evidence about a hypervisor and not about hardware.
+	Kind           string `json:"kind"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	// ArmedGeneration is the pool's fencing generation the target armed at, which must be
+	// the generation being promoted.
+	ArmedGeneration uint64 `json:"armed_generation"`
+	// HeldSeconds is how long this host has continuously been in a quorate partition
+	// without the target, on a monotonic clock, and BoundSeconds is how long it had to be.
+	// Any flap restarts the clock, so this is elapsed time and not an average.
+	HeldSeconds  int `json:"held_seconds"`
+	BoundSeconds int `json:"bound_seconds"`
+	// Partition is the hosts Corosync reports in this host's partition at the moment of the
+	// proof — the majority side, by the pool's own quorum service.
+	Partition []string `json:"partition,omitempty"`
 }
 
 type StorageClusterStatus struct {
@@ -116,21 +170,27 @@ func (c StorageClusterConfig) ValidFor(s StorageRegistration) error {
 	return nil
 }
 
+// certificateFingerprint is a SHA-256 leaf digest: 64 lower-case hex digits.
+var certificateFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 func (f StorageClusterFence) Valid() error {
 	if f.CredentialRef != "" && !storageOpaqueID.MatchString(f.CredentialRef) {
 		return errors.New("invalid fence credential reference")
 	}
 	switch f.Kind {
 	case FenceRedfish, FenceIPMI:
-		if !storageServer(f.Endpoint) || !storageOpaqueID.MatchString(f.TargetID) || f.CredentialRef == "" || f.DevicePath != "" || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" {
+		if !storageServer(f.Endpoint) || !storageOpaqueID.MatchString(f.TargetID) || (f.Username != "" && !storageOpaqueID.MatchString(f.Username)) || (f.TLSFingerprint != "" && !certificateFingerprint.MatchString(f.TLSFingerprint)) || f.CredentialRef == "" || f.DevicePath != "" || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" {
+			return errors.New("invalid BMC fence profile")
+		}
+		if f.Cipher != 0 && f.Cipher != 3 && f.Cipher != 17 || f.Cipher != 0 && f.Kind != FenceIPMI {
 			return errors.New("invalid BMC fence profile")
 		}
 	case FenceVirsh:
-		if !storageServer(f.Endpoint) || !storageOpaqueID.MatchString(f.TargetID) || !storageOpaqueID.MatchString(f.SSHLogin) || f.SSHPort == 0 || f.CredentialRef == "" || !storageOpaqueID.MatchString(f.SSHHostKeyRef) || f.DevicePath != "" || !validVirshURI(f) {
+		if !storageServer(f.Endpoint) || !storageOpaqueID.MatchString(f.TargetID) || !storageOpaqueID.MatchString(f.SSHLogin) || f.SSHPort == 0 || f.CredentialRef == "" || !storageOpaqueID.MatchString(f.SSHHostKeyRef) || f.DevicePath != "" || f.Username != "" || f.TLSFingerprint != "" || f.Cipher != 0 || f.ProvisionedByCore || !validVirshURI(f) {
 			return errors.New("invalid virsh fence profile")
 		}
 	case FenceSCSIPR:
-		if f.Endpoint != "" || f.CredentialRef != "" || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" || !storageSCSIDevice(f.DevicePath) {
+		if f.Endpoint != "" || f.CredentialRef != "" || f.Username != "" || f.TLSFingerprint != "" || f.Cipher != 0 || f.ProvisionedByCore || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" || !storageSCSIDevice(f.DevicePath) {
 			return errors.New("invalid SCSI persistent-reservation fence profile")
 		}
 	default:

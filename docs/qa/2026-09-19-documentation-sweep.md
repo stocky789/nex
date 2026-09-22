@@ -40,7 +40,7 @@ for local-file existence. This scan does not validate external URLs or every pro
 - Corrected old handoffs and feature-plan status paragraphs that sounded current despite
   later implementations or Phase 2 closure. Preserved original dated tests and limitations.
 - Updated delivery/version guidance: the current working-tree version is 0.3.5; internal
-  ZFS image/kernel evidence does not establish publication or external-release clearance.
+  image/kernel evidence does not by itself establish publication or external-release clearance.
   Removed stale package-source and private-site-role wording where scripts/evidence differed.
 - Corrected website copy that still presented VM lifecycle as future work or made an
   unsupported blanket statement about public-build availability. The roadmap now distinguishes

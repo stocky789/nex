@@ -154,7 +154,6 @@ aside nav { padding: 6px 4px; }
 aside nav a { display: flex; align-items: center; gap: 5px; min-height: 25px; padding: 3px 6px; color: #242424; overflow-wrap: anywhere; border: 1px solid transparent; }
 aside nav a:hover { background: #e8f0ff; text-decoration: none; }
 aside nav a.selected { background: #d4e3ff; border-color: #7ea6ff; color: #10306b; }
-.tree-root { font-weight: 600; }
 .resource-search { padding: 7px 6px 0; }
 .resource-search input { padding: 4px 6px; font-size: 12px; font-weight: 400; }
 .connection-dot { width: 6px; height: 6px; flex-shrink: 0; margin-left: auto; border-radius: 50%; background: #94a3b8; box-shadow: 0 0 0 1px #fff; }
@@ -370,9 +369,6 @@ select option { padding: 5px 8px; }
 select option:hover, select option:focus-visible { background: #d4e3ff; }
 select option:checked { font-weight: 600; }
 .managed-actions { margin-bottom: 12px; }
-.cluster-credential { max-width: 500px; margin: 12px 10px; padding: 10px 12px; border: 1px solid #d8c28d; background: #fffdf5; }
-.cluster-credential h3 { margin: 0 0 6px; }
-.cluster-credential .notice { margin: 0; }
 .cluster-setup { margin: 12px 10px; padding: 10px 12px; border: 1px solid #d8c28d; background: #fffdf5; }
 .cluster-setup h3 { margin: 0 0 6px; }
 .cluster-source, .cluster-nodes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
@@ -424,7 +420,7 @@ progress { width: 100%; accent-color: var(--blue); }
 .fold-actions { margin: 8px 10px 0; }
 .storage-add { align-items: center; flex-wrap: wrap; }
 .storage-add small { flex-basis: 100%; }
-.dialog-wide, .zfs-dialog, .pool-join-dialog, .pool-maintenance-dialog, .host-network-dialog, .pool-promotion-dialog, .pool-fence-dialog {
+.zfs-dialog, .pool-join-dialog, .pool-maintenance-dialog, .host-network-dialog, .pool-promotion-dialog, .pool-fence-dialog {
   width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto;
 }
 .zfs-dialog .section-heading, .zfs-dialog .steps { margin: 0 -16px 10px; }
@@ -452,7 +448,6 @@ progress { width: 100%; accent-color: var(--blue); }
 .pool-candidates label { display: block; font-weight: 400; }
 
 /* Maintenance mode (pool Hosts tab) and the host management-network panel. */
-.pool-maintenance-cell button { margin-top: 4px; }
 .pool-guests { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 .pool-maintenance-dialog .section-heading, .host-network-dialog .section-heading { margin: -14px -16px 10px; }
 .host-network-dialog caption, .host-network-panel caption { padding: 4px 8px; text-align: left; color: var(--muted); font-size: 11px; }
@@ -462,10 +457,47 @@ progress { width: 100%; accent-color: var(--blue); }
 .host-network-form th[scope="row"] { white-space: nowrap; text-align: left; }
 .host-network-countdown, .host-network-staged { display: grid; gap: 8px; }
 
-/* Planned master change and member eject (pool Hosts tab). Row actions are a disclosure in
-   the host cell, not extra columns: the members table is already the widest in the app. */
-.pool-row-actions > summary { margin-top: 4px; cursor: pointer; font-size: 12px; }
-.pool-row-actions > div { display: grid; gap: 4px; justify-items: start; margin-top: 4px; }
+/* Planned master change and member eject (pool Hosts tab). */
+/* Every column but Convergence shrinks to its content, so spare width gathers at the end of
+   the row instead of spreading the columns apart; actions sit in the trailing column. */
+.pool-members-table th, .pool-members-table td { width: 1%; }
+.pool-members-table .pool-convergence-cell { width: auto; }
+.pool-members-table td > a { font-weight: 600; white-space: nowrap; }
+.pool-members-table td > small { min-width: 22ch; max-width: 44ch; }
+.pool-members-table td > .mono { min-width: 0; white-space: nowrap; }
+.pool-members-table .pool-actions-cell { color: inherit; text-align: right; }
+.badge.master { color: #1d4ed8; background: #dbeafe; }
+.pool-maintenance-cell { white-space: nowrap; }
+.pool-maintenance-cell small { white-space: normal; min-width: 28ch; }
+/* Fencing: how this host would be shut out, with Core's reasons under it and each other
+   host's last look at its fence device behind a disclosure. */
+.pool-members-table .pool-fencing-cell { width: 38ch; max-width: 38ch; }
+.pool-fencing-cell > .badge { white-space: normal; text-align: left; }
+/* A pinned certificate fingerprint is 64 unbroken characters and would otherwise run out
+   of the column; it is one value, so it breaks anywhere rather than scrolling the row. */
+.pool-fencing-cell small { overflow-wrap: anywhere; }
+.pool-fence-checks > summary { cursor: pointer; font-size: 12px; }
+.pool-fence-checks ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.pool-fencing-summary { font-weight: 600; }
+/* The promotion verdict's advisory line sits inside a table cell, so it is emphasis on one
+   line rather than the block callout .warning renders. */
+.pool-fence-advisory { color: #8a5300; }
+/* The Host fencing setting sits under the members table with its own checklist. It defaults
+   to on, so the consequence beside it has to be readable without opening anything. */
+.pool-host-fencing { margin: 8px 10px; }
+.pool-host-fencing > h3 { margin: 0 0 4px; font-size: 14px; }
+.pool-host-fencing-switch { display: flex; gap: 6px; align-items: baseline; }
+.pool-host-fencing-checklist { margin: 6px 0 0; padding: 0; list-style: none; }
+.pool-host-fencing-checklist > li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; margin-bottom: 2px; }
+.pool-host-fencing-checklist > li > .badge { flex: 0 0 auto; min-width: 72px; text-align: center; }
+.pool-host-fencing-checklist small { color: #4a4f55; }
+.pool-members > p.help { margin: 8px 10px; }
+.pool-row-actions > summary { display: inline-block; padding: 2px 10px; border: 1px solid #aeb5bd; background: linear-gradient(#fff, #ececec); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.pool-row-actions > summary::after { content: " ▾"; }
+.pool-row-actions[open] > summary { border-color: #3478ff; background: #dbe7ff; }
+.pool-row-actions > div { display: grid; gap: 4px; justify-items: stretch; width: 30ch; margin-top: 6px; padding: 8px; text-align: left; background: #f7f7f7; border: 1px solid #c1c6cc; }
+.pool-row-actions > div > button { text-align: left; }
+.pool-row-actions > div > small { margin: -2px 0 4px; }
 .pool-transfer-strip { display: grid; gap: 8px; }
 .pool-transfer-participants { margin: 0; padding-left: 18px; font-size: 12px; }
 .pool-transfer-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
@@ -477,9 +509,13 @@ progress { width: 100%; accent-color: var(--blue); }
 .pool-restricted { justify-items: start; gap: 4px; margin-top: 4px; }
 .pool-promotion-checks, .pool-promotion-blocking { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12px; }
 .pool-promotion-dialog .section-heading, .pool-fence-dialog .section-heading { margin: -14px -16px 10px; }
-.pool-promotion-dialog input:not([type="checkbox"]), .pool-fence-dialog input, .pool-fence-dialog textarea { width: 100%; }
-.pool-promotion-dialog label.checkbox { display: flex; gap: 8px; align-items: center; }
+.pool-promotion-dialog input:not([type="checkbox"]), .pool-fence-dialog input:not([type="radio"]), .pool-fence-dialog textarea { width: 100%; }
+.pool-promotion-dialog label.checkbox, .pool-fence-dialog label.checkbox { display: flex; gap: 8px; align-items: center; }
 .pool-fence-dialog textarea.secret { font-size: 12px; }
+.pool-fence-kind { display: flex; gap: 16px; align-items: center; border: 0; padding: 0; margin: 0 0 8px; }
+.pool-fence-kind legend { float: left; margin-right: 12px; }
+/* The lab fence device is one link, not a second form competing with the normal path. */
+.pool-fence-lab button { min-height: 0; padding: 0; border: 0; background: none; color: var(--blue); text-decoration: underline; }
 .pool-fence-clear { flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 /* A restriction on the host's own page: the same note, given the weight of a page-level
@@ -487,8 +523,6 @@ progress { width: 100%; accent-color: var(--blue); }
 .pool-host-restricted { border-left: 3px solid var(--danger); }
 .pool-host-restricted .pool-restricted { margin-top: 0; }
 
-/* Every host a promotion powers off, listed by name where it is confirmed, and Core's prompt
-   to resume a hand-off whose target never answered. Both are destructive, so they sit apart
-   from the surrounding text rather than reading as one more paragraph. */
-.pool-promotion-fenced { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+/* Core's prompt to resume a hand-off whose target never answered sits apart from the
+   surrounding text because the action is destructive. */
 .pool-transfer-resume { display: grid; gap: 8px; margin-top: 12px; border-left: 3px solid var(--danger); padding-left: 10px; }

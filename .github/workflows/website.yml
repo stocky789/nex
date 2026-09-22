@@ -80,6 +80,4 @@ jobs:
           NEX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NEX_DEPLOY_KNOWN_HOSTS }}
           NEX_DEPLOY_USER: ${{ secrets.NEX_DEPLOY_USER }}
           GITHUB_SHA: ${{ github.sha }}
-        run: |
-          chmod +x scripts/website-ci-deploy.sh
-          scripts/website-ci-deploy.sh
+        run: scripts/website-ci-deploy.sh

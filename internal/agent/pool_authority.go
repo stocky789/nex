@@ -576,7 +576,7 @@ func poolFenceCredentialMaterial(s *Store, membership protocol.PoolMembership) m
 		if member.Fence == nil || member.Fence.CredentialRef == "" || member.Status == "ejected" {
 			continue
 		}
-		files, err := vmhost.ReadPoolFenceCredential(s.dir, member.Fence.CredentialRef)
+		files, err := vmhost.ReadPoolFenceCredential(s.dir, *member.Fence)
 		if err != nil {
 			continue
 		}

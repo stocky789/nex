@@ -1,0 +1,87 @@
+{
+  "summary": "Automatic host fencing slice 1: each host's SMBIOS system UUID is recorded in the pool master's membership, a Redfish fence profile is pinned to the exact certificate its management controller presents and proved against that host's machine before it is recorded, both BMC proof paths confirm the target machine before any power-off, and the host row offers Set BMC access instead of the SSH-key fence dialog on the normal path. Core performs the Redfish fence itself over the pinned connection because fence_redfish cannot be bound to that certificate. API impact: changed contract, implemented both sides.",
+  "paths": [
+    "internal/protocol/cluster.go",
+    "internal/protocol/cluster_test.go",
+    "internal/protocol/pool.go",
+    "internal/vmhost/bmc_identity.go",
+    "internal/vmhost/bmc_identity_test.go",
+    "internal/vmhost/pool_fence.go",
+    "internal/vmhost/pool_fence_test.go",
+    "internal/vmhost/storage_fence.go",
+    "internal/vmhost/storage_guard.go",
+    "internal/agent/peer.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_promote_test.go",
+    "internal/agent/pool_system_uuid_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/run.go",
+    "internal/controller/poolpromotion.go",
+    "internal/controller/pool_fence_bmc_test.go",
+    "internal/controller/pool_reported_fields_test.go",
+    "web/src/pool-promotion.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-members.test.mjs",
+    "web/src/style.css",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/api/local.html",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-22-automatic-host-fencing.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The operator workflow changed: the host row's action is Set BMC access instead of Record fence device, a physical pool can now be fenced, the host must have reported its own machine identity first, and the virsh device moved behind a link for laboratory hosts. docs/guide/pool-authority-and-recovery.md rewrites the prerequisites, the recording steps and the refusal list, including the wrong-machine, unreachable, rejected-account and missing-ipmitool refusals; docs/guide/README.md follows the renamed workflow.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "StorageClusterFence gains username (the management-controller account) and tls_fingerprint (the pinned leaf SHA-256 Core captures itself; a client never supplies one). Both are optional, so profiles recorded by an older build stay valid and simply remain unusable. PoolMember gains system_uuid, a recorded observation that moves no generation. The peer route POST /api/v1/pool/advertise gains system_uuid beside origin and records each independently, so an older member that sends only origin behaves exactly as before; the master refuses a system_uuid that would replace one under a recorded BMC profile or that another member already holds, and drops it silently rather than failing the origin. POST /api/v1/pools/{id}/members/{host_id}/fence-profile now accepts redfish and ipmilan profiles with a fence_bmc credential carrying only the password; recording a redfish profile is a live Core operation (connect, pin, prove) and its record-time refusals changed from 'BMC fencing identity verification is not implemented' to the unique-identity, missing-account, unreachable, rejected-account, wrong-machine, virsh-target and SCSI-PR sentences, each of which now also releases the delivered password. The pool-fence-profile Core command and the members projection's fence object (which gains username and tls_fingerprint) changed with them. Both sides are implemented; the Controller relays and displays only. docs/api/*.json and the generated reference are updated and generate_api.py --check passes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The published roadmap describes shipped capability at a coarser grain than one fencing slice; the plan records this slice's status and what it settled."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record is the pool master's. The Controller keeps nothing: it relays the form, never sees the password, and stores no UUID, profile or proof.",
+    "record": "The pool master's membership record in pool-peer.json holds PoolMember.system_uuid and PoolMember.fence (including the BMC account name); the password lives only in the Core fence-credential store and replicates sealed inside each member's signed authority replica. A fresh Controller recovers all of it from the master's reported inventory (inventory.managed.membership), which is the existing adoption path; hosts re-report their own system UUID on every reconcile pass, so an existing pool gains the identity without re-joining and a replaced Controller needs no operator input."
+  },
+  "verification": {
+    "method": "Go unit tests against fake Redfish endpoints (httptest TLS, pinned by the server's own certificate), a faked fence-agent command runner and a multi-host in-process pool lab over the real mutual-TLS peer transport; React unit tests (node src/*.test.mjs) and npx tsc --noEmit; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py' and -p 'test_api_contract.py'. RESULTS, not a claim of a clean run: go build, go vet, go test ./internal/..., the web typecheck and every web suite, generate_api.py --check and the privacy suite all PASS. check_docs.py --worktree FAILS, and test_api_contract.py has one FAILURE, both entirely on another session's uncommitted files - web/src/main.tsx and web/src/stats.* have no change record, and 'membership lookup failed' in internal/controller/pooljoin.go is undocumented. Every path in this record is covered and no slice-1 path causes either failure; independent review confirmed the same two. The acceptance evidence: internal/vmhost/bmc_identity_test.go proves a controller reporting another machine is refused with no fence agent invoked and no power-off issued, and the same for a rejected account, an unreachable controller, one that reports no machine, a host with no unique identity, a substituted or missing certificate, and a controller that redirects the identity read (the redirect case reproduces a bypass independent review demonstrated against the first implementation, and fails without the CheckRedirect fix); Redfish is matched exactly while IPMI accepts either documented byte order; the IPMI password travels in the environment, never in argv. internal/agent/pool_system_uuid_test.go proves the record-time pin-and-prove, that a refused profile leaves no password on the master, that a host cannot replace the machine identity its recorded controller depends on, that a duplicate identity is not recorded, and that a member cannot write another member's row. internal/controller/pool_fence_bmc_test.go proves a replacement Controller re-adopts the profile, its account, its pinned certificate and the system UUID from the master's reported inventory and never sees the credential reference. No physical management controller was contacted, no host was powered off, and no browser review was run.",
+    "evidence": [
+      "internal/vmhost/bmc_identity_test.go",
+      "internal/vmhost/pool_fence_test.go",
+      "internal/agent/pool_system_uuid_test.go",
+      "internal/agent/pool_promote_test.go",
+      "internal/controller/pool_fence_bmc_test.go",
+      "internal/controller/pool_reported_fields_test.go",
+      "web/src/pool-promotion.test.mjs",
+      "web/src/pool-members.test.mjs",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/plans/2026-09-22-automatic-host-fencing.md"
+    ],
+    "untested": [
+      "No physical management controller was contacted. Redfish is exercised only against httptest servers and the IPMI path only against a stubbed command runner. Real firmware quirks, real certificate rotation, GUID byte order in the field, ComputerSystem.Reset acceptance and PowerState timing on real hardware are unproven, as is fence_ipmilan against a real controller.",
+      "ipmitool is not in installer/packages.txt, so the IPMI identity read cannot run on a shipped host at all and an IPMI profile always refuses; slice 2 packages it. Only the refusal path is exercised. Redfish is the only usable kind in this release and the guide says so.",
+      "fence_redfish is no longer used for a pool fence, but its rendering stays in fenceAgentArgs because the clustered-storage Pacemaker STONITH renderer still emits it for a configured redfish node. Whether that agent can verify a factory controller's certificate at all was not tested against the packaged agent; a clustered-storage redfish node cannot be activated either way, because its fence has no recorded system UUID and is refused.",
+      "No browser review was performed on the Set BMC access dialog: success, validation and Core-refusal states are covered by unit assertions on the rendered markup only.",
+      "No end-to-end promotion was run with a BMC profile; the promotion path is covered by the existing virsh-profile tests, which are unchanged.",
+      "Certificate pinning is trust-on-first-use over the pool network at the moment of recording. The operator comparing the reported fingerprint with the controller's own page is what closes that; slice 2's in-band provisioning should read the fingerprint locally instead."
+    ]
+  }
+}

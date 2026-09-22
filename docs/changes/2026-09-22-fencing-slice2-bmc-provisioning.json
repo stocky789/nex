@@ -1,0 +1,89 @@
+{
+  "summary": "Automatic host fencing slice 2: each host reads its own management controller in-band over /dev/ipmi0, records the user slot it is about to use before it writes anything, creates one power-control-only fence account there, and offers the profile and password to the pool master, which proves the controller before recording it; ipmitool and the kernel IPMI modules are packaged; the host row shows Core's own report, offers Set BMC access only where Core could not provision, and clearing a Core-provisioned device is the one action that withdraws it and removes the account. It also closes slice 1's verified-open findings: the Redfish power-off now polls PowerState until the machine is off, a refused ForceOff on an already-off target no longer fails the fence, a refused hardware identity names the member that holds it, one pinned transport serves a whole fence operation, and mastership is checked before any controller is contacted. API impact: changed contract, implemented both sides.",
+  "paths": [
+    "docs/API.md",
+    "docs/LICENSING.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/README.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/plans/2026-09-22-automatic-host-fencing.md",
+    "installer/packages.txt",
+    "internal/agent/managed.go",
+    "internal/agent/peer.go",
+    "internal/agent/pool_bmc.go",
+    "internal/agent/pool_bmc_test.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/poolca.go",
+    "internal/agent/run.go",
+    "internal/agent/storage_cluster_secrets.go",
+    "internal/controller/controller.go",
+    "internal/controller/pool_fence_bmc_test.go",
+    "internal/controller/poolpromotion.go",
+    "internal/protocol/cluster.go",
+    "internal/protocol/pool.go",
+    "internal/vmhost/bmc_identity.go",
+    "internal/vmhost/bmc_identity_test.go",
+    "internal/vmhost/bmc_inband.go",
+    "internal/vmhost/bmc_inband_test.go",
+    "internal/vmhost/storage_fence.go",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/nex-ipmi.conf",
+    "tests/test_api_contract.py",
+    "web/src/pool-members.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-promotion.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The normal operator workflow changed from typing a BMC address and password to doing nothing: each host configures its own controller. docs/guide/pool-authority-and-recovery.md gains 'Let Nex configure the management controller (the normal path)' with the account Nex creates, the privilege it takes and the channels it is confined to, the cipher suites it accepts, a table of every state a host can report and what to do about each, and the one action that withdraws a Core-provisioned device (Clear fence device, which also removes the account) with the separate permission to configure it again; it also records the hardware caveat that non-LAN channels are not constrained in-band. Set BMC access is re-framed as the fallback; the prerequisites now say both Redfish and IPMI are usable, because this slice packages ipmitool; and the refusal list gains the identity-conflict, manual-profile-wins and name-conflict sentences. docs/guide/README.md follows the changed workflow.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "StorageClusterFence gains cipher (3 or 17; a client supplying one is refused with 400) and provisioned_by_core (written only by the master when a host reports the account its own Core created; a client supplying it is refused with 400). Both are optional, so profiles recorded by an older build stay valid. PoolMember gains bmc (the new PoolHostBMC: state from a closed set, Core's detail sentence, address, channel, account, observed_at), bmc_provisioning_disabled (the operator's decision, master-owned) and system_uuid_conflict_host_id. The peer route POST /api/v1/pool/advertise gains bmc beside origin and system_uuid, records each independently and refuses an invalid report with 400, so an older member that sends only origin behaves exactly as before; the report is an observation only and cannot delete the fence device the pool recorded, and an unchanged report is not written at all so the pool's signed authority does not move because of a timestamp. New peer route POST /api/v1/pool/fence-provision: a member offers the master the profile its own Core configured plus the account password, over the existing pool mTLS; the master records it through the existing ExecutePoolFenceProfile path, including the live identity proof, and answers 409 with its own refusal sentence. A member talking to an older master gets 404 and reports 'this pool master is too old to record a fence device a host configured itself; upgrade it'. New client route POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning says one thing \u2014 let this host configure its controller again \u2014 and is relayed to the master with the same membership and capability check the fence-profile route takes; withdrawing is not a second operation, because clearing a Core-provisioned profile through the existing fence-profile route is what withdraws it. The members projection's fence object gains bmc, provisioned_by_core and system_uuid_conflict_host_id and is now present for a host that has a controller report but no profile, so its kind is omitempty and only configured and credential_version stay required. Both sides are implemented; the Controller relays and displays only. docs/api/*.json and the generated reference are updated and generate_api.py --check passes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The published roadmap describes shipped capability at a coarser grain than one fencing slice; the plan records this slice's status and what it settled."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Every durable record is Nex Core's. The Controller relays the operator's decisions and displays Core's reports; it stores no BMC address, account, password, provisioning state or operator opt-out of its own.",
+    "record": "The pool master's membership record in pool-peer.json holds PoolMember.fence (now including cipher and provisioned_by_core), PoolMember.bmc, PoolMember.bmc_provisioning_disabled and PoolMember.system_uuid_conflict_host_id; the account password lives only in the master's Core fence-credential store and replicates sealed inside each member's signed authority replica. Each host's own pool-peer.json holds poolPeerState.LocalBMC: the controller channel, the user slot, that Nex Core owns the account in it, and the profile it has offered but the master has not recorded yet \u2014 whose password sits in that host's own private fence-credential store with exactly the protection the master gives it, so the same account and password are offered again instead of being reset on every pass. That record is host-local because the account is, and it survives a reboot and a master change. A fresh Controller recovers everything from the master's reported inventory (inventory.managed.membership), which is the existing adoption path.",
+    "controller_owned": "none"
+  },
+  "verification": {
+    "method": "Go unit tests against a fake ipmitool command runner and a fake /dev/ipmi0 whose user-table fixture is ipmitool 1.8.19's own header string and row format, against fake Redfish endpoints (httptest TLS pinned by the server's own certificate), and against a multi-host in-process pool lab over the real mutual-TLS peer transport; React unit tests (node src/*.test.mjs) and npx tsc --noEmit; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests. RESULTS: go build, go vet ./internal/..., go test ./internal/... (all packages), the web typecheck, every web suite, generate_api.py --check, check_docs.py --worktree, and the whole tests/ suite (394 tests, including privacy, test_api_contract.py and test_core_local_package.py) all PASS. ARGUMENT-SYNTAX CHECK, not a hardware check: every ipmitool command form this slice issues (-I open lan print, user list, user set name, user set password with the password on standard input, user priv, channel setaccess, user enable, user disable) and the -C 17 cipher option were run against real ipmitool 1.8.19 on the development workstation and were accepted - each failed at 'Could not open device at /dev/ipmi0' or at the RMCP+ session, which is an interface failure, not a usage error; the user-table header and row formats in the test fixture were read out of that same binary. No management controller answered any of them. Independent review of the first implementation of this slice found fifteen items; every one is fixed, and the four it demonstrated are tracked regression tests.",
+    "evidence": [
+      "internal/vmhost/bmc_inband_test.go",
+      "internal/vmhost/bmc_identity_test.go",
+      "internal/agent/pool_bmc_test.go",
+      "internal/controller/pool_fence_bmc_test.go",
+      "web/src/pool-promotion.test.mjs",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/plans/2026-09-22-automatic-host-fencing.md"
+    ],
+    "untested": [
+      "No physical management controller was contacted and no host was powered off. Every ipmitool interaction, in-band and over the LAN, is exercised only against a fake command runner; real firmware differs in its user table contents, its acceptance of in-band user management, and which cipher suites it offers.",
+      "The provisioned account has never authenticated over RMCP+. A QEMU BMC simulator (ipmi-bmc-sim with isa-ipmi-kcs, available in this workstation's QEMU) would give a real /dev/ipmi0 and prove the in-band commands, but it has no LAN side at all, so it could not prove the half that matters most: that the account Core created can actually power a machine off over the network. It was not run: the existing lab images predate this slice and do not carry ipmitool, so exercising it would have meant building and installing a new Core image rather than running a lab. Recorded as outstanding.",
+      "Channels that are not LAN - serial, IPMB - are not constrained in-band, because which commands a controller accepts for them differs by firmware. The account is given Operator on the fencing LAN channel and no access on every other LAN channel the controller reports; the guide tells the operator to check the account's privilege on every channel when commissioning hardware.",
+      "The Redfish settle poll and the already-off case are proved against an httptest controller that answers 202 and 409 the way vendors describe; real ComputerSystem.Reset timing is unproven.",
+      "No browser review was performed. The host row's management-controller line, the single Set BMC access / Clear fence device entry point, the re-enable action and its failure line are covered by unit assertions on the rendered markup only.",
+      "The Debian binary package's own copyright file for ipmitool was not inspected, because no Debian system or package archive was available offline; docs/LICENSING.md records that as outstanding rather than guessing.",
+      "Certificate pinning for a Redfish profile is still trust-on-first-use over the pool network at the moment of recording. Reading the certificate in-band needs the Redfish Host Interface (SMBIOS type 42), which the plan keeps as a later addition and this slice deliberately does not build; the automatic profile is ipmilan, which has no certificate to pin."
+    ]
+  }
+}
