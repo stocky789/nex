@@ -48,7 +48,7 @@ required, and the installed driver ISO is unchanged.
    that still runs Debian's own installation questions rather than the Nex wizard.
 3. For **GUI install**, wait for **Begin setup** on **Welcome to Nex Core**. The wizard
    introduces Nex Core and its local web UI; deploy Nex Controller from that UI or
-   separately for central management. The wizard fills the available installer screen and follows display-resolution changes. The left
+   separately for central management. The wizard fills the available installer screen and follows display-resolution changes, including typical BMC/IPMI consoles at 1024×768 and 800×600. The left
    step list shows your position; the form and navigation buttons are on the right. Hardware
    detection enables inactive adapters only to check their link, without applying your
    saved IP settings, starting DHCP or erasing a disk. Use **Begin setup**,
@@ -63,7 +63,7 @@ required, and the installed driver ISO is unchanged.
    leave this page. Successful keyboard setup is silent; an application failure shows an error and blocks continuation.
    Changing the keyboard layout clears both passwords; enter them again
    using the selected layout. Use Tab/arrow keys or the mouse; **Back** revisits a page
-   before installation starts. Pages scroll when needed while navigation stays visible;
+   before installation starts. Long pages scroll vertically when needed while navigation stays visible;
    field tooltips provide additional input guidance.
 4. On **Connect your host**, you can also edit **Hostname**. It is the same value as on
    the Host page; edits in either place appear in the other and in the final review. Use
@@ -278,6 +278,11 @@ source; it may have no candidate until a compatible release is actually publishe
 
 The packaging efficiency checks and disposable offline-installation results are
 tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
+
+BMC/IPMI-sized layout (Disk step wrap, no sideways page scroll, denser chrome at
+≤1024×768) is covered by `tests/integration/installer-disk.py` and related installer
+harnesses in the working tree; a native QEMU capture at 800×600 / 1024×768 against a
+rebuilt ISO that includes this change remains outstanding.
 
 Mirrored system-disk installs (two or more disks): both wizards' Disk steps and two-disk
 installs have reached the base system in the lab, but no mirrored host has been booted,

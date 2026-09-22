@@ -34,6 +34,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Installer wizard fits BMC/IPMI consoles better at 800×600 and 1024×768: no clipped disk
+  summary, no nested sideways scrollbars, tighter chrome on small displays.
 - A ZFS repository whose pool is still serving after a disk failure stays readable and writable
   and shows as degraded, instead of being taken out of service until the disk is replaced
   (BUG-0443).

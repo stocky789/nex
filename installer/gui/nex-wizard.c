@@ -371,21 +371,53 @@ static gboolean disk_key(GtkWidget *widget, GdkEventKey *event, gpointer unused)
     gtk_tree_path_free(path);
     return TRUE;
 }
+/* Wide Model/Serial columns must ellipsize; otherwise the Disk page forces a
+ * horizontal scrollbar and clips the summary on BMC/IPMI consoles (800×600 /
+ * 1024×768). */
+static void disk_text_column(GtkTreeView *view, const gchar *title, gint col, gboolean expand, gint min_width)
+{
+    GtkCellRenderer *cell = gtk_cell_renderer_text_new();
+    GtkTreeViewColumn *column;
+    g_object_set(cell, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
+    column = gtk_tree_view_column_new_with_attributes(title, cell, "text", col, NULL);
+    gtk_tree_view_column_set_resizable(column, TRUE);
+    gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
+    if (min_width > 0) gtk_tree_view_column_set_min_width(column, min_width);
+    gtk_tree_view_column_set_expand(column, expand);
+    gtk_tree_view_append_column(view, column);
+}
 static GtkWidget *disk_list_widget(void)
 {
-    const gchar *titles[] = { "Use", "Device", "Capacity", "Type", "Model", "Serial", "Contents" };
     GtkListStore *store = gtk_list_store_new(DISK_COLUMNS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_STRING,
         G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
     GtkWidget *w = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
     GtkCellRenderer *toggle = gtk_cell_renderer_toggle_new();
-    gint column;
+    GtkTreeViewColumn *use;
     g_signal_connect(toggle, "toggled", G_CALLBACK(disk_toggled), NULL);
-    gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(w), -1, titles[DISK_SELECTED], toggle, "active", DISK_SELECTED, NULL);
-    for (column = DISK_NAME; column <= DISK_CONTENTS; column++)
-        gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(w), -1, titles[column],
-            gtk_cell_renderer_text_new(), "text", column, NULL);
+    use = gtk_tree_view_column_new_with_attributes("Use", toggle, "active", DISK_SELECTED, NULL);
+    gtk_tree_view_column_set_sizing(use, GTK_TREE_VIEW_COLUMN_FIXED);
+    gtk_tree_view_column_set_fixed_width(use, 40);
+    gtk_tree_view_append_column(GTK_TREE_VIEW(w), use);
+    disk_text_column(GTK_TREE_VIEW(w), "Device", DISK_NAME, FALSE, 72);
+    disk_text_column(GTK_TREE_VIEW(w), "Capacity", DISK_CAPACITY, FALSE, 72);
+    disk_text_column(GTK_TREE_VIEW(w), "Type", DISK_TYPE, FALSE, 48);
+    disk_text_column(GTK_TREE_VIEW(w), "Model", DISK_MODEL, TRUE, 64);
+    disk_text_column(GTK_TREE_VIEW(w), "Serial", DISK_SERIAL, TRUE, 64);
+    disk_text_column(GTK_TREE_VIEW(w), "Contents", DISK_CONTENTS, FALSE, 72);
+    gtk_tree_view_set_headers_clickable(GTK_TREE_VIEW(w), FALSE);
     g_signal_connect(w, "key-press-event", G_CALLBACK(disk_key), NULL);
     g_object_unref(store); return w;
+}
+/* GtkLabel wrap ignores the parent width unless we pin the request on allocate. */
+static void wrap_label_allocate(GtkWidget *widget, GtkAllocation *allocation, gpointer unused)
+{
+    gint previous;
+    (void)unused;
+    if (allocation->width <= 1) return;
+    previous = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "nex-wrap-width"));
+    if (previous == allocation->width) return;
+    g_object_set_data(G_OBJECT(widget), "nex-wrap-width", GINT_TO_POINTER(allocation->width));
+    gtk_widget_set_size_request(widget, allocation->width, -1);
 }
 static gboolean installation_media(const gchar *name)
 {
@@ -678,8 +710,9 @@ static void go(GtkButton *button, gpointer unused)
 }
 static GtkWidget *page_box(void)
 {
-    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL), *box = gtk_vbox_new(FALSE, 10);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    /* Never scroll sideways: BMC consoles are narrow; wrap/ellipsize instead. */
+    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL), *box = gtk_vbox_new(FALSE, 8);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_container_set_border_width(GTK_CONTAINER(box), 2);
     gtk_scrolled_window_add_with_viewport(GTK_SCROLLED_WINDOW(scroll), box);
     gtk_viewport_set_shadow_type(GTK_VIEWPORT(gtk_bin_get_child(GTK_BIN(scroll))), GTK_SHADOW_NONE);
@@ -695,29 +728,42 @@ int main(int argc, char **argv)
     gtk_rc_parse_string(
         "style \"nex\" { font_name=\"FreeSans 11\" bg[NORMAL]=\"#EFF3F8\" fg[NORMAL]=\"#17233B\" text[NORMAL]=\"#17233B\" base[NORMAL]=\"#FFFFFF\" base[SELECTED]=\"#2456D9\" text[SELECTED]=\"#FFFFFF\" GtkWidget::focus-line-width=1 GtkWidget::focus-padding=2 } class \"GtkWidget\" style \"nex\" "
         "style \"surface\" { bg[NORMAL]=\"#FFFFFF\" } widget \"*.form\" style \"surface\" widget \"*.form.*\" style \"surface\" "
-        "style \"control\" { xthickness=1 ythickness=1 bg[NORMAL]=\"#F2F5FA\" bg[PRELIGHT]=\"#E4EBF6\" bg[ACTIVE]=\"#D8E3F4\" GtkButton::inner-border={12,12,7,7} GtkEntry::inner-border={8,8,6,6} } class \"GtkEntry\" style \"control\" class \"GtkButton\" style \"control\" class \"GtkComboBox\" style \"control\" "
+        "style \"control\" { xthickness=1 ythickness=1 bg[NORMAL]=\"#F2F5FA\" bg[PRELIGHT]=\"#E4EBF6\" bg[ACTIVE]=\"#D8E3F4\" GtkButton::inner-border={10,10,5,5} GtkEntry::inner-border={6,6,4,4} } class \"GtkEntry\" style \"control\" class \"GtkButton\" style \"control\" class \"GtkComboBox\" style \"control\" "
         "style \"primary\" { xthickness=0 ythickness=0 bg[NORMAL]=\"#2456D9\" bg[PRELIGHT]=\"#1948BF\" bg[ACTIVE]=\"#133B9F\" fg[NORMAL]=\"#FFFFFF\" fg[PRELIGHT]=\"#FFFFFF\" fg[ACTIVE]=\"#FFFFFF\" } widget \"*.primary\" style \"primary\" widget \"*.primary.*\" style \"primary\" "
-        "style \"title\" { font_name=\"FreeSans Bold 20\" } widget \"*.heading\" style \"title\" "
+        "style \"title\" { font_name=\"FreeSans Bold 18\" } widget \"*.heading\" style \"title\" "
         "style \"error\" { fg[NORMAL]=\"#A02020\" } widget \"*.error\" style \"error\"");
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_title(GTK_WINDOW(window), "Install Nex Core"); gtk_window_set_decorated(GTK_WINDOW(window), FALSE); fit_screen(gtk_widget_get_screen(window), NULL); g_signal_connect(gtk_widget_get_screen(window), "size-changed", G_CALLBACK(fit_screen), NULL); g_signal_connect(window, "delete-event", G_CALLBACK(prevent_close), NULL);
-    root = gtk_vbox_new(FALSE, 10); gtk_container_set_border_width(GTK_CONTAINER(root), 18); gtk_container_add(GTK_CONTAINER(window), root);
-    header = gtk_hbox_new(FALSE, 12); gtk_box_pack_start(GTK_BOX(root), header, FALSE, FALSE, 0);
-    board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-core-lockup.png", NULL);
-    if (board && gdk_pixbuf_get_width(board) >= 2030 && gdk_pixbuf_get_height(board) >= 550) { crop = gdk_pixbuf_new_subpixbuf(board, 150, 190, 1880, 360); scaled = gdk_pixbuf_scale_simple(crop, 200, 38, GDK_INTERP_BILINEAR); brand = gtk_image_new_from_pixbuf(scaled); atk_object_set_name(gtk_widget_get_accessible(brand), "Nex Core"); g_object_unref(scaled); g_object_unref(crop); }
-    else brand = label("Nex Core");
-    if (board) g_object_unref(board);
-    gtk_widget_set_size_request(brand, 200, 48);
-    gtk_box_pack_start(GTK_BOX(header), brand, FALSE, FALSE, 0); gtk_box_pack_end(GTK_BOX(header), label("HOST INSTALLATION"), FALSE, FALSE, 0);
-    body = gtk_hbox_new(FALSE, 18); gtk_box_pack_start(GTK_BOX(root), body, TRUE, TRUE, 0);
-    steps = gtk_vbox_new(FALSE, 22); gtk_widget_set_size_request(steps, 108, -1); gtk_box_pack_start(GTK_BOX(body), steps, FALSE, FALSE, 0);
-    for (i = 0; i < 5; i++) {
-        const gchar *names[] = { "Welcome", "Host", "Network", "Disk", "Review" };
-        gchar *markup = g_markup_printf_escaped(i == 0 ? "<span foreground='#2456D9'><b>%d   %s</b></span>" : "<span foreground='#65738A'>%d   %s</span>", i + 1, names[i]);
-        step_labels[i] = label(""); gtk_label_set_line_wrap(GTK_LABEL(step_labels[i]), FALSE); gtk_label_set_markup(GTK_LABEL(step_labels[i]), markup); g_free(markup);
-        gtk_box_pack_start(GTK_BOX(steps), step_labels[i], FALSE, FALSE, 8);
+    {
+        GdkScreen *screen = gtk_widget_get_screen(window);
+        gboolean compact = gdk_screen_get_width(screen) <= 1024 || gdk_screen_get_height(screen) <= 768;
+        gint border = compact ? 8 : 14;
+        if (compact)
+            gtk_rc_parse_string(
+                "style \"nex\" { font_name=\"FreeSans 10\" } class \"GtkWidget\" style \"nex\" "
+                "style \"title\" { font_name=\"FreeSans Bold 14\" } widget \"*.heading\" style \"title\" "
+                "style \"control\" { GtkButton::inner-border={8,8,4,4} GtkEntry::inner-border={5,5,3,3} } class \"GtkEntry\" style \"control\" class \"GtkButton\" style \"control\" class \"GtkComboBox\" style \"control\"");
+        root = gtk_vbox_new(FALSE, compact ? 6 : 10); gtk_container_set_border_width(GTK_CONTAINER(root), border); gtk_container_add(GTK_CONTAINER(window), root);
+        header = gtk_hbox_new(FALSE, 8); gtk_box_pack_start(GTK_BOX(root), header, FALSE, FALSE, 0);
+        board = gdk_pixbuf_new_from_file("/usr/share/nex-installer/nex-core-lockup.png", NULL);
+        if (board && gdk_pixbuf_get_width(board) >= 2030 && gdk_pixbuf_get_height(board) >= 550) {
+            gint brand_w = compact ? 150 : 200, brand_h = compact ? 28 : 38;
+            crop = gdk_pixbuf_new_subpixbuf(board, 150, 190, 1880, 360); scaled = gdk_pixbuf_scale_simple(crop, brand_w, brand_h, GDK_INTERP_BILINEAR); brand = gtk_image_new_from_pixbuf(scaled); atk_object_set_name(gtk_widget_get_accessible(brand), "Nex Core"); g_object_unref(scaled); g_object_unref(crop);
+            gtk_widget_set_size_request(brand, brand_w, brand_h + (compact ? 4 : 10));
+        }
+        else { brand = label("Nex Core"); gtk_widget_set_size_request(brand, compact ? 120 : 200, compact ? 28 : 48); }
+        if (board) g_object_unref(board);
+        gtk_box_pack_start(GTK_BOX(header), brand, FALSE, FALSE, 0); gtk_box_pack_end(GTK_BOX(header), label("HOST INSTALLATION"), FALSE, FALSE, 0);
+        body = gtk_hbox_new(FALSE, compact ? 10 : 18); gtk_box_pack_start(GTK_BOX(root), body, TRUE, TRUE, 0);
+        steps = gtk_vbox_new(FALSE, compact ? 8 : 16); gtk_widget_set_size_request(steps, compact ? 88 : 108, -1); gtk_box_pack_start(GTK_BOX(body), steps, FALSE, FALSE, 0);
+        for (i = 0; i < 5; i++) {
+            const gchar *names[] = { "Welcome", "Host", "Network", "Disk", "Review" };
+            gchar *markup = g_markup_printf_escaped(i == 0 ? "<span foreground='#2456D9'><b>%d   %s</b></span>" : "<span foreground='#65738A'>%d   %s</span>", i + 1, names[i]);
+            step_labels[i] = label(""); gtk_label_set_line_wrap(GTK_LABEL(step_labels[i]), FALSE); gtk_label_set_markup(GTK_LABEL(step_labels[i]), markup); g_free(markup);
+            gtk_box_pack_start(GTK_BOX(steps), step_labels[i], FALSE, FALSE, compact ? 2 : 6);
+        }
+        panel = gtk_event_box_new(); gtk_widget_set_name(panel, "form"); gtk_box_pack_start(GTK_BOX(body), panel, TRUE, TRUE, 0);
+        content = gtk_vbox_new(FALSE, compact ? 8 : 12); gtk_container_set_border_width(GTK_CONTAINER(content), compact ? 10 : 16); gtk_container_add(GTK_CONTAINER(panel), content);
     }
-    panel = gtk_event_box_new(); gtk_widget_set_name(panel, "form"); gtk_box_pack_start(GTK_BOX(body), panel, TRUE, TRUE, 0);
-    content = gtk_vbox_new(FALSE, 12); gtk_container_set_border_width(GTK_CONTAINER(content), 18); gtk_container_add(GTK_CONTAINER(panel), content);
     heading = label(titles[0]); gtk_widget_set_name(heading, "heading"); gtk_label_set_line_wrap(GTK_LABEL(heading), FALSE); gtk_label_set_ellipsize(GTK_LABEL(heading), PANGO_ELLIPSIZE_END); gtk_box_pack_start(GTK_BOX(content), heading, FALSE, FALSE, 0);
     book = gtk_notebook_new(); gtk_notebook_set_show_tabs(GTK_NOTEBOOK(book), FALSE); gtk_notebook_set_show_border(GTK_NOTEBOOK(book), FALSE); gtk_box_pack_start(GTK_BOX(content), book, TRUE, TRUE, 0);
     box = page_box();
@@ -762,8 +808,20 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), label("Use IPv4/prefix, for example 192.168.1.20/24. Separate DNS addresses with spaces.\nVLAN 0 is untagged; use 1–4094 for a tagged connection.\nOnly the management adapter may have a default gateway."), FALSE, FALSE, 0);
     g_signal_connect(vlan, "value-changed", G_CALLBACK(dhcp_changed), NULL);
     g_signal_connect(mode, "changed", G_CALLBACK(mode_changed), NULL); g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), "changed", G_CALLBACK(nic_changed), NULL);
-    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Tick one disk, or two or more to mirror.\nEverything on the ticked disks is erased; other disks are left alone."), FALSE, FALSE, 0); disk_list = disk_list_widget(); gtk_widget_set_size_request(disk_list, -1, 140); gtk_box_pack_start(GTK_BOX(box), disk_list, TRUE, TRUE, 0); disk_summary = label("No disk selected."); gtk_box_pack_start(GTK_BOX(box), disk_summary, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(box), label("No disks listed? Check that the VM or host has a writable internal disk attached,\nthen restart the installer."), FALSE, FALSE, 0);
-    box = page_box(); scroll = gtk_scrolled_window_new(NULL, NULL); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); review = gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(review), GTK_WRAP_WORD_CHAR); gtk_container_add(GTK_CONTAINER(scroll), review); gtk_widget_set_size_request(scroll, -1, 255); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); confirmation = gtk_check_button_new_with_mnemonic("_Erase all data on the selected disks"); gtk_box_pack_start(GTK_BOX(box), confirmation, FALSE, FALSE, 0);
+    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Tick one disk, or two or more to mirror. Ticked disks are erased; others are left alone."), FALSE, FALSE, 0);
+    disk_list = disk_list_widget();
+    scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scroll), GTK_SHADOW_IN);
+    gtk_container_add(GTK_CONTAINER(scroll), disk_list);
+    gtk_widget_set_size_request(scroll, -1, 100);
+    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
+    disk_summary = label("No disk selected.");
+    gtk_label_set_max_width_chars(GTK_LABEL(disk_summary), -1);
+    g_signal_connect(disk_summary, "size-allocate", G_CALLBACK(wrap_label_allocate), NULL);
+    gtk_box_pack_start(GTK_BOX(box), disk_summary, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), label("No disks listed? Attach a writable internal disk and restart the installer."), FALSE, FALSE, 0);
+    box = page_box(); scroll = gtk_scrolled_window_new(NULL, NULL); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); review = gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(review), GTK_WRAP_WORD_CHAR); gtk_container_add(GTK_CONTAINER(scroll), review); gtk_widget_set_size_request(scroll, -1, 120); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); confirmation = gtk_check_button_new_with_mnemonic("_Erase all data on the selected disks"); gtk_box_pack_start(GTK_BOX(box), confirmation, FALSE, FALSE, 0);
     error_label = label(""); gtk_widget_set_name(error_label, "error"); gtk_label_set_line_wrap(GTK_LABEL(error_label), FALSE); gtk_label_set_ellipsize(GTK_LABEL(error_label), PANGO_ELLIPSIZE_END); gtk_box_pack_start(GTK_BOX(content), error_label, FALSE, FALSE, 0);
     buttons = gtk_hbox_new(FALSE, 12); back = gtk_button_new_with_mnemonic("_Back"); next = gtk_button_new_with_label("Preparing Nex Core…"); gtk_widget_set_name(next, "primary"); gtk_button_set_relief(GTK_BUTTON(back), GTK_RELIEF_NONE); gtk_widget_set_sensitive(back, FALSE); gtk_box_pack_start(GTK_BOX(buttons), back, FALSE, FALSE, 0); gtk_box_pack_end(GTK_BOX(buttons), next, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(content), buttons, FALSE, FALSE, 0); g_signal_connect(back, "clicked", G_CALLBACK(go), NULL); g_signal_connect(next, "clicked", G_CALLBACK(go), NULL);
     gtk_widget_show_all(window); fit_screen(gtk_widget_get_screen(window), NULL); gtk_window_present(GTK_WINDOW(window)); keyboard_changed(GTK_COMBO_BOX(keymap), NULL); prepare(); g_timeout_add_seconds(2, refresh_nic_details, NULL); gtk_main();

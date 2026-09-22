@@ -7292,3 +7292,13 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: delete .zfs-layout label; scope inherit to last-child:not(.muted):not(.zfs-old).
 - Regression: `node web/src/zfs.test.mjs`.
 - Avoid: last-child colour overrides that cancel intentional muted/state classes.
+
+## BUG-0528 — Installer Disk step clipped on small BMC consoles
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found from operator BMC screenshot.
+- Symptom: On ~1024×768 IPMI/iDRAC consoles the Disk step showed nested scrollbars, a horizontally scrolling disk table, and a vertically clipped RAID summary line.
+- Root cause: The page scrolled both axes while the bare GtkTreeView requested full column widths; the summary label did not wrap to the allocated width.
+- Fix: Page scroll is vertical-only; the disk list sits in its own scrolled window with ellipsized fixed columns; summary labels pin wrap width on allocate; chrome densifies at ≤1024×768.
+- Regression: `python3 tests/integration/installer-disk.py` (plus installer-qol/keyboard/hostname/link). Native 800×600/1024×768 wizard capture against a rebuilt ISO remains outstanding.
+- Avoid: packing an unconstrained tree view into a dual-axis scrolled viewport on the installer.
+

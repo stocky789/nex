@@ -1,0 +1,38 @@
+{
+  "summary": "Installer Disk step and chrome densify for BMC/IPMI consoles so summaries wrap and disk columns ellipsize instead of clipping or sideways-scrolling.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "tests/integration/installer-disk.py",
+    "docs/guide/install-nex-core.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-installer-bmc-layout.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "GUI install notes that the wizard targets typical BMC resolutions and scrolls vertically only.",
+    "pages": ["docs/guide/install-nex-core.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local Debian installer GUI only; no Controller/Core API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "python3 tests/integration/installer-disk.py; python3 tests/integration/installer-qol.py; python3 tests/integration/installer-keyboard.py; python3 tests/integration/installer-hostname.py; python3 tests/integration/installer-link.py — all PASS. Native QEMU wizard-review at 800x600/1024x768 against a rebuilt ISO not re-run.",
+    "evidence": [
+      "tests/integration/installer-disk.py",
+      "tests/integration/installer-qol.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

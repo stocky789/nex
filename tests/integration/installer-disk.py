@@ -13,7 +13,14 @@ import tempfile
 
 source = Path(os.environ.get('NEX_DISK_VALIDATOR_SOURCE', 'installer/gui/nex-config.c')).read_text()
 wizard = Path('installer/gui/nex-wizard.c').read_text()
-assert 'Tick one disk, or two or more to mirror.\\nEverything on the ticked disks is erased; other disks are left alone.' in wizard, 'Disk warning must retain its visible continuation line at 800x600'
+assert 'Tick one disk, or two or more to mirror.' in wizard
+assert 'Ticked disks are erased; others are left alone.' in wizard
+# Nested page+tree scrollbars and unwrapped summaries clipped BMC consoles; pin wrap width
+# and keep the disk list in its own scrolled window with ellipsized columns.
+assert 'GTK_POLICY_NEVER' in wizard and 'wrap_label_allocate' in wizard
+assert 'PANGO_ELLIPSIZE_END' in wizard and 'disk_text_column' in wizard
+assert 'gtk_scrolled_window_set_shadow_type' in wizard
+assert 'compact' in wizard and 'gdk_screen_get_height' in wizard
 # The tick list, its keyboard toggle and the live summary are what make a mirror discoverable.
 assert 'gtk_cell_renderer_toggle_new()' in wizard and 'disk_toggled' in wizard
 assert 'GDK_space' in wizard and 'GDK_Return' in wizard, 'the tick list must be usable from the keyboard'
@@ -26,7 +33,7 @@ assert 'Tip: tick two disks of similar size' in wizard
 assert "foreground='#B3261E'" in wizard, 'selection problems must be reported as the operator ticks'
 assert 'if (disks->len == 1)' in wizard, 'a single eligible disk is preselected; a mirror never is'
 assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in wizard, 'GTK discover must skip disks below 16 GiB like the text frontend'
-assert 'writable internal disk attached,\\nthen restart the installer.' in wizard, 'No-disk help must retain a visible continuation line at 800x600'
+assert 'Attach a writable internal disk and restart the installer.' in wizard
 validator = source.split('static void fail(', 1)[1].split('static void protected_write(', 1)[0]
 summary = wizard[wizard.index('static gchar *disk_summary_text('):wizard.index('static void disks_changed(')]
 harness = r'''
