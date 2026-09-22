@@ -142,7 +142,50 @@ type ZFSHostAccess struct {
 	AvailableBytes *uint64   `json:"available_bytes,omitempty"`
 	ObservedAt     time.Time `json:"observed_at,omitempty"`
 	Error          string    `json:"error,omitempty"`
+	// Pool is Core's `zpool status` observation for this host's pool, passed
+	// through by the Controller and stored nowhere.
+	Pool *ZFSPoolStatus `json:"pool,omitempty"`
 }
+
+// ZFSPoolStatus is a transient Core observation of one imported pool: its state, the
+// sentences ZFS itself prints, the running scan, and each leaf device. Nothing durable
+// is derived from it; a fresh Controller sees it again on the next report.
+type ZFSPoolStatus struct {
+	Name    string          `json:"name,omitempty"`
+	State   string          `json:"state"`
+	Status  string          `json:"status,omitempty"`
+	Action  string          `json:"action,omitempty"`
+	Scan    *ZFSPoolScan    `json:"scan,omitempty"`
+	Devices []ZFSPoolDevice `json:"devices,omitempty"`
+}
+
+// ZFSPoolScan is a scrub or resilver. ZFS reports its sizes already formatted, so they
+// are carried as the strings it produced rather than re-derived here.
+type ZFSPoolScan struct {
+	Function  string `json:"function"`
+	State     string `json:"state"`
+	StartTime string `json:"start_time,omitempty"`
+	EndTime   string `json:"end_time,omitempty"`
+	ToExamine string `json:"to_examine,omitempty"`
+	Examined  string `json:"examined,omitempty"`
+	Issued    string `json:"issued,omitempty"`
+	Errors    string `json:"errors,omitempty"`
+}
+
+// ZFSPoolDevice is one leaf of the vdev tree, named as the pool was created: the
+// /dev/disk/by-id path for a provisioned repository.
+type ZFSPoolDevice struct {
+	Name           string `json:"name"`
+	Path           string `json:"path,omitempty"`
+	State          string `json:"state"`
+	// Parent is "replacing" or "spare" when this leaf sits under an in-flight
+	// replacement or activated-spare vdev; empty for an ordinary data leaf.
+	Parent         string `json:"parent,omitempty"`
+	ReadErrors     string `json:"read_errors,omitempty"`
+	WriteErrors    string `json:"write_errors,omitempty"`
+	ChecksumErrors string `json:"checksum_errors,omitempty"`
+}
+
 type NetworkRegistration struct {
 	ID     string `json:"id"`
 	PoolID string `json:"pool_id"`

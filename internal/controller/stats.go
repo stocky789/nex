@@ -342,7 +342,9 @@ func validHardware(hw protocol.HostHardware) bool {
 		len(hw.Memory.Modules) <= protocol.HardwareMaxMemoryModules &&
 		len(hw.Disks.Devices) <= protocol.HardwareMaxDisks &&
 		len(hw.PCI.Devices) <= protocol.HardwareMaxPCIDevices &&
-		len(hw.Sensors.Temperatures) <= protocol.HardwareMaxSensors
+		len(hw.Sensors.Temperatures) <= protocol.HardwareMaxSensors &&
+		len(hw.MDArrays.Arrays) <= protocol.HardwareMaxMDArrays &&
+		!slices.ContainsFunc(hw.MDArrays.Arrays, func(a protocol.MDArray) bool { return len(a.Members) > protocol.HardwareMaxMDMembers })
 }
 
 func validHistory(h protocol.StatsHistory, object, id, rng string, tier protocol.StatsTier) bool {

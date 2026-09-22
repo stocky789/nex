@@ -389,6 +389,10 @@ func CheckWithCache(ctx context.Context, repoURL, packageName, cacheDir string) 
 	if fi, err := os.Stat(stamp); err != nil || time.Since(fi.ModTime()) >= indexMaxAge {
 		if out, err := apt(ctx, append([]string{"update"}, extra...)...).CombinedOutput(); err != nil {
 			st.Error = "could not refresh package index: " + strings.TrimSpace(string(out))
+			// Stamp the attempt either way so a second CheckWithCache in the same request
+			// (Controller then nex-core-local) does not run the same failing apt-get update
+			// again. The stamp ages out after indexMaxAge like a successful refresh.
+			_ = os.WriteFile(stamp, nil, 0600)
 			return st, nil
 		}
 		if err := os.WriteFile(stamp, nil, 0600); err != nil {

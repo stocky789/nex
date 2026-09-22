@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -31,7 +32,23 @@ type storageAccess struct {
 	Total, Available uint64
 	ReadOnly         bool
 	Health           string
+	ZFSPool          *protocol.ZFSPoolStatus
 }
+
+// observedStorageAccess is the transient result every report, placement check and monitor
+// pass publishes from one native inspection.
+func observedStorageAccess(a storageAccess, at time.Time) protocol.StorageAccess {
+	available := a.Available
+	status := a.Health
+	if status == "" {
+		status = "healthy"
+	}
+	return protocol.StorageAccess{Status: status, Readable: true, Writable: !a.ReadOnly, TotalBytes: a.Total, AvailableBytes: &available, ObservedAt: at, ZFSPool: a.ZFSPool}
+}
+
+// storageServesData accepts a ZFS pool that lost redundancy: "degraded" still reads and
+// writes, and refusing it would take working VMs down over a disk that has a replica.
+func storageServesData(health string) bool { return health == "healthy" || health == "degraded" }
 
 var (
 	nativeRun          = run
@@ -108,7 +125,7 @@ func storageVerify(ctx context.Context, s protocol.StorageRegistration, want sto
 	if err != nil {
 		return err
 	}
-	if got.Path != want.Path || got.Identity != want.Identity || got.ReadOnly || got.Health != "healthy" {
+	if got.Path != want.Path || got.Identity != want.Identity || got.ReadOnly || !storageServesData(got.Health) {
 		return errors.New("storage access changed or is unavailable")
 	}
 	return qemuStorageAccess(ctx, got.Path)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type FormEvent, type InputHTMLAttributes } from "react";
-import type { Host, Storage } from "./managed";
-import { ZFSProvisionWizard } from "./zfs";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type InputHTMLAttributes } from "react";
+import type { Host, Storage, ZFSPoolStatus } from "./managed";
+import { ZFSProvisionWizard, ZFSReplaceDialog, zfsFailedDevices, zfsReplaceableDevices } from "./zfs";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Props = { poolID: string; masterHostID: string; hosts: Host[]; storage: Storage[]; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (message: string) => void };
@@ -60,12 +60,15 @@ export const storageObservationFresh = (observedAt?: string) => {
   const checked = observedAt ? new Date(observedAt).valueOf() : NaN;
   return Number.isFinite(checked) && checked <= Date.now() && Date.now() - checked <= 30_000;
 };
+// Core's own rule (storageServesData): a pool that lost a disk still serves every VM on it,
+// so a degraded repository stays usable and is shown as needing attention, not as broken.
+export const storageServesData = (status?: string) => status === "healthy" || status === "degraded";
 export const storageUsable = (s: Storage, hostID: string) => {
   if (s.kind === "zfs" && s.zfs_provisioned) {
     const access = s.zfs_host_access?.find(item => item.host_id === hostID);
     return s.status === "succeeded" && s.capabilities?.vm_disk === true && Boolean(access && access.readable && access.writable && !access.error && storageObservationFresh(access.observed_at));
   }
-  const base = s.status === "succeeded" && s.access?.readable === true && s.access?.writable === true && s.access?.status === "healthy" && s.capabilities?.vm_disk === true;
+  const base = s.status === "succeeded" && s.access?.readable === true && s.access?.writable === true && storageServesData(s.access?.status) && s.capabilities?.vm_disk === true;
   if (!base) return false;
   if (!sharedStorageProfile(s)) return s.host_id === hostID;
   if (clusteredGFS2Profile(s) && !sharedStorageEligible(s, hostID)) return false;
@@ -106,11 +109,67 @@ export function storageChecked(value?: string) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) || date.getUTCFullYear() <= 1 ? "Not checked" : `Checked ${date.toLocaleString()}`;
 }
+// ZFS reports scan sizes already formatted ("129M", "4.89G"), so the percentage an operator
+// actually wants is read back from those strings rather than recomputed from raw bytes.
+export const zfsSizeBytes = (value?: string) => {
+  const parsed = /^\s*([\d.]+)\s*([KMGTPE]?)/.exec(value || "");
+  if (!parsed) return NaN;
+  return Number(parsed[1]) * 1024 ** "BKMGTPE".indexOf(parsed[2] || "B");
+};
+// A running scan is shown with its percentage; a finished one with how it ended.
+// The parenthetical uses the same quantity the percentage was derived from (issued when
+// present, otherwise examined), so the two halves of the sentence cannot disagree.
+export function zfsScanProgress(scan: NonNullable<ZFSPoolStatus["scan"]>) {
+  const name = scan.function.toLowerCase();
+  if (scan.state !== "SCANNING") return `last ${name} ${scan.state.toLowerCase()}`;
+  const quantity = scan.issued ?? scan.examined;
+  const done = zfsSizeBytes(quantity), total = zfsSizeBytes(scan.to_examine);
+  const percent = done >= 0 && total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : NaN;
+  return `${name} in progress${Number.isFinite(percent) ? ` · ${percent}%` : ""} (${quantity ?? "?"} of ${scan.to_examine ?? "?"})`;
+}
+// Non-zero ZFS leaf counters are attention, even while the leaf stays ONLINE.
+const zfsDeviceErrorParts = (device: NonNullable<ZFSPoolStatus["devices"]>[number]) => {
+  const parts: string[] = [];
+  if (device.read_errors && device.read_errors !== "0") parts.push(`${device.read_errors} read errors`);
+  if (device.write_errors && device.write_errors !== "0") parts.push(`${device.write_errors} write errors`);
+  if (device.checksum_errors && device.checksum_errors !== "0") parts.push(`${device.checksum_errors} checksum errors`);
+  return parts;
+};
+// Core reports the pool itself, so a repository that lost a disk names it and shows the
+// resilver that is putting it right, instead of only a status word. Error counts and a
+// non-empty ZFS status sentence also raise attention, even when every leaf is ONLINE.
+export function zfsPoolSummary(pool: ZFSPoolStatus) {
+  const failed = zfsFailedDevices(pool);
+  const failedNames = new Set(failed.map(item => item.device));
+  const parts = [`Pool ${pool.state.toLowerCase()}`, ...failed.map(item => `${item.device} ${item.state.toLowerCase()}`)];
+  for (const device of pool.devices || []) {
+    const errors = zfsDeviceErrorParts(device);
+    if (!errors.length) continue;
+    const name = device.path || device.name;
+    if (failedNames.has(name)) parts.push(...errors);
+    else parts.push(name, ...errors);
+  }
+  if (pool.scan) parts.push(zfsScanProgress(pool.scan));
+  const attention = pool.state !== "ONLINE" || failed.length > 0 || Boolean(pool.status) || (pool.devices || []).some(device => zfsDeviceErrorParts(device).length > 0);
+  return { text: parts.join(" · "), attention };
+}
+// Status and action sentences are visible text, not a hover-only title; the summary line wraps
+// so a long by-id degraded string does not force the table wide (SR-056).
+function ZFSPoolLines({ pool, prefix }: { pool: ZFSPoolStatus; prefix?: string }) {
+  const summary = zfsPoolSummary(pool);
+  const detail = [pool.status, pool.action].filter(Boolean).join(" ");
+  const text = prefix ? `${prefix} · ${summary.text}` : summary.text;
+  return <><small className={summary.attention ? "badge degraded" : undefined} style={{ whiteSpace: "normal" }}>{text}</small>{detail ? <small>{detail}</small> : null}</>;
+}
 function storageHosts(s: Storage, hosts: Host[]) {
   const master = hosts.find(h => h.id === s.host_id)?.hostname || s.host_id;
   const link = (id: string, name: string) => <a href={`#/hosts/${encodeURIComponent(id)}`}>{name}</a>;
-  if (s.kind === "zfs" && s.zfs_provisioned) return <>{s.zfs_host_access?.map(access => { const host = hosts.find(item => item.id === access.host_id); const current = storageObservationFresh(access.observed_at); const state = current && access.readable && access.writable && !access.error ? "eligible" : access.error || !current ? "unavailable / stale" : "not writable"; return <small key={access.host_id}>{link(access.host_id, host?.hostname || access.host_id)} · {state} · {access.available_bytes === undefined ? "capacity unknown" : `${(access.available_bytes / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB available`} · {storageChecked(access.observed_at)}</small>; })}</>;
-  if (!sharedStorageProfile(s) || !s.member_access?.length) return <>{link(s.host_id, master)}<small>Assigned Core host</small></>;
+  if (s.kind === "zfs" && s.zfs_provisioned) return <>{s.zfs_host_access?.map(access => { const host = hosts.find(item => item.id === access.host_id); const current = storageObservationFresh(access.observed_at); const state = current && access.readable && access.writable && !access.error ? "eligible" : access.error || !current ? "unavailable / stale" : "not writable"; return <Fragment key={access.host_id}><small>{link(access.host_id, host?.hostname || access.host_id)} · {state} · {access.available_bytes === undefined ? "capacity unknown" : `${(access.available_bytes / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB available`} · {storageChecked(access.observed_at)}</small>{access.pool && <ZFSPoolLines pool={access.pool} />}</Fragment>; })}</>;
+  if (!sharedStorageProfile(s) || !s.member_access?.length) {
+    // Registered (not Core-provisioned) ZFS carries pool detail on access.zfs_pool only.
+    const registered = s.kind === "zfs" && !s.zfs_host_access?.length ? s.access?.zfs_pool : undefined;
+    return <>{link(s.host_id, master)}<small>Assigned Core host</small>{registered && <ZFSPoolLines pool={registered} />}</>;
+  }
   return <>{link(s.host_id, master)}<small>Master / assigned Core</small>{s.member_access.map(access => { const member = hosts.find(h => h.id === access.host_id); const host = member?.hostname || access.host_id; const verdict = !member || member.revoked || member.connection !== "fresh" ? "last report / not current" : memberAccessState(s, access); return <small key={access.host_id}>{link(access.host_id, host)} · {verdict} · {storageChecked(access.observed_at)}</small> })}</>;
 }
 // A v2 repository exists only after Core assigns an ID/generation.  A queued browser request
@@ -258,6 +317,7 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
   const [form, setForm] = useState(false);
   const [zfsProvision, setZFSProvision] = useState(false);
   const [configureZFS, setConfigureZFS] = useState<ZFSOutcome | null>(null);
+  const [replaceZFS, setReplaceZFS] = useState<{ repositoryID: string; name: string; host: Host } | null>(null);
   const [draft, setDraft] = useState<Draft>(blank);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -423,7 +483,8 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
       })}</tbody></table></div> : <p className="empty">No storage repositories reported. Register an existing local directory, NFS export, ZFS dataset, SMB share or iSCSI filesystem.</p>}
       <p className="panel-note">Core rechecks identity and access before VM disk, media and power operations. NFS, SMB and clustered GFS2 iSCSI use a member only after Core confirms its current writable, QEMU and locking access; capacity is reported once for the repository. Local, ZFS and ordinary/exclusive iSCSI remain assigned to one Core.</p>
     </section>
-    {(() => { const repositories = Array.from(new Map(zfsOutcomes.map(result => [result.repository_id, result])).values()); return repositories.length ? <section className="panel" aria-label="ZFS storage by host"><div className="section-heading"><h2>ZFS storage by host</h2></div>{repositories.map(repository => <div key={repository.repository_id}><h3>{repository.name}</h3><div className="table-scroll"><table><thead><tr><th>Host</th><th>Status</th><th>Layout</th><th>Action</th></tr></thead><tbody>{hosts.filter(host => !host.revoked && (repository.scope === "pool" || host.id === repository.host_id)).map(host => { const result = zfsOutcomes.find(item => item.repository_id === repository.repository_id && item.host_id === host.id); return <tr key={host.id}><td>{host.hostname}</td><td>{result ? <>{status(result.status)}{result.error && <small>{result.error}</small>}</> : "Not set up"}</td><td>{result?.layout || "—"}</td><td>{!result && host.connection === "fresh" && host.capabilities?.includes("storage-zfs-provision-v1") ? <button type="button" disabled={busy || unavailable || zfsProvision} onClick={() => { setConfigureZFS({ ...repository, host_id: host.id }); setZFSProvision(true); setForm(false); }}>Add this host</button> : "—"}</td></tr>; })}</tbody></table></div></div>)}</section> : null; })()}
+    {(() => { const repositories = Array.from(new Map(zfsOutcomes.map(result => [result.repository_id, result])).values()); return repositories.length ? <section className="panel" aria-label="ZFS storage by host"><div className="section-heading"><h2>ZFS storage by host</h2></div>{repositories.map(repository => <div key={repository.repository_id}><h3>{repository.name}</h3><div className="table-scroll"><table><thead><tr><th>Host</th><th>Status</th><th>Layout</th><th>Action</th></tr></thead><tbody>{hosts.filter(host => !host.revoked && (repository.scope === "pool" || host.id === repository.host_id)).map(host => { const result = zfsOutcomes.find(item => item.repository_id === repository.repository_id && item.host_id === host.id); const access = storage.find(s => s.id === repository.repository_id)?.zfs_host_access?.find(item => item.host_id === host.id); const pool = access?.pool; const poolFresh = host.connection === "fresh" && storageObservationFresh(access?.observed_at); const replaceable = zfsReplaceableDevices(pool); const scanning = poolFresh && pool?.scan?.state === "SCANNING"; const beingReplaced = poolFresh && (pool?.devices || []).some(device => device.parent === "replacing" || device.parent === "spare"); return <tr key={host.id}><td>{host.hostname}</td><td>{result ? <>{status(result.status)}{result.error && <small>{result.error}</small>}</> : "Not set up"}{pool && <ZFSPoolLines pool={pool} prefix={poolFresh ? undefined : "Last report"} />}</td><td>{result?.layout || "—"}</td><td>{scanning ? "resilvering" : beingReplaced ? "being replaced" : pool && replaceable.length && poolFresh && host.capabilities?.includes("storage-zfs-replace-v1") && host.capabilities?.includes("storage-discovery-v1") ? <button type="button" className="danger" disabled={busy || unavailable} onClick={() => setReplaceZFS({ repositoryID: repository.repository_id, name: repository.name, host })}>Replace disk</button> : !result && host.connection === "fresh" && host.capabilities?.includes("storage-zfs-provision-v1") ? <button type="button" disabled={busy || unavailable || zfsProvision} onClick={() => { setConfigureZFS({ ...repository, host_id: host.id }); setZFSProvision(true); setForm(false); }}>Add this host</button> : "—"}</td></tr>; })}</tbody></table></div></div>)}</section> : null; })()}
+    {replaceZFS && <ZFSReplaceDialog poolID={poolID} repositoryID={replaceZFS.repositoryID} host={replaceZFS.host} pool={storage.find(s => s.id === replaceZFS.repositoryID)?.zfs_host_access?.find(access => access.host_id === replaceZFS.host.id)?.pool} api={api} unavailable={unavailable} onClose={() => setReplaceZFS(null)} onSubmitted={(failed, replacement) => { void reload(); onNotice(`Disk replacement submitted for ${replaceZFS.name} on ${replaceZFS.host.hostname}: ${replacement} replaces ${failed}. The resilver is shown on the repository; ZFS retires the old disk itself when the resilver finishes.`); }} />}
     <ClusteredBlockStatus poolID={poolID} masterHostID={masterHostID} hosts={hosts} api={api} unavailable={unavailable} />
     <dialog ref={browserDialog} className="confirm-dialog storage-browser" aria-labelledby="storage-browser-title" onCancel={event => { event.preventDefault(); closeBrowser(); }} onClose={() => { if (!browserDialog.current?.open) cancelBrowser(); }}>{browser && <><h2 id="storage-browser-title">{browser.kind === "smb" ? "Browse shared folders" : "Browse exports"}</h2><p className="mono storage-browser-path">{browser.kind === "smb" ? `//${draft.server}${browser.path}` : `${draft.server}:${browser.path || "/"}`}</p><div className="actions"><button type="button" title="Back / Up" disabled={browser.loading || !browser.path} onClick={browseUp}>Up</button><button type="button" disabled={browser.loading} onClick={() => void browse(browser.kind, browser.path, browser.base)}>Refresh</button></div>{browser.loading ? <p role="status">Loading folders…</p> : browser.error ? <><p className="alert" role="alert">{browser.error}</p><button type="button" onClick={() => void browse(browser.kind, browser.path, browser.base)}>Retry</button></> : browser.candidates.length ? <><ul className="storage-browser-list">{browser.candidates.map((candidate, index) => <li key={`${candidate.path}-${index}`}><button type="button" className="storage-browser-folder" aria-label={candidate.existing ? `Open ${candidate.path}, existing repository` : `Open ${candidate.path}`} aria-pressed={browser.selected?.path === candidate.path} onClick={() => setBrowser({ ...browser, selected: candidate })} onDoubleClick={() => openFolder(candidate)}><span aria-hidden="true">📁</span><span className="storage-browser-name">{candidate.path}</span>{candidate.existing && <span className="storage-existing-badge" title="Existing repository">E</span>}</button></li>)}</ul>{browser.candidates.length >= 64 && <p className="help">Showing up to 64 results; use a known path manually if your folder is missing.</p>}</> : <p className="empty">No folders were found. Enter the source manually or choose another location.</p>}<div className="actions"><button type="button" disabled={browser.loading || !browser.selected} onClick={() => browser.selected && openFolder(browser.selected)}>Open folder</button><button type="button" onClick={closeBrowser}>Cancel</button><button type="button" className="primary" disabled={browser.loading || !browser.selected} onClick={selectFolder}>Select folder</button></div></>}</dialog>
     <dialog ref={detach} className="confirm-dialog" aria-labelledby="detach-storage-title" onClose={() => { setRemove(null); setDetachError(""); }}>{remove && <form onSubmit={e => { e.preventDefault(); void detachStorage(); }}><h2 id="detach-storage-title">Detach {remove.name}?</h2><p>Confirm the repository name to remove Nex’s configuration. This does not delete data.</p>{detachError && <p className="alert" role="alert">{detachError}</p>}<label>Repository name<input required autoFocus pattern={remove.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} /></label><div className="actions"><button type="button" disabled={busy} onClick={() => detach.current?.close()}>Cancel</button><button className="danger" disabled={busy}>{busy ? "Detaching…" : "Detach storage"}</button></div></form>}</dialog>

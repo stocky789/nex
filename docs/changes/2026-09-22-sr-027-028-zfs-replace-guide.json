@@ -1,0 +1,38 @@
+{
+  "summary": "Confirm and fix staged-review SR-027 and SR-028: the Replace a failed disk guide now names the ZFS storage by host Action column (and when Replace disk is absent), and ZFSReplaceDialog shows the chosen disk's by-id beside the erase confirmation like the system-disk dialog.",
+  "paths": [
+    "docs/guide/storage-repositories.md",
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-sr-027-028-zfs-replace-guide.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Replace a failed disk step 2 now points at ZFS storage by host / Action and notes the fresh-connection and capability gate; step 5's displayed by-id claim matches the dialog after the UI fix.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Guide wording and a Controller UI confirmation label only; no Controller/Core contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Staged-review defect fixes; no published milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state. The dialog only displays an already-known discovery field; the guide change records no new setting."
+  },
+  "verification": {
+    "method": "Inspected web/src/storage.tsx: Replace disk is only in the ZFS storage by host Action column, gated on failed leaves, host.connection === fresh, storage-zfs-replace-v1 and storage-discovery-v1. Inspected ZFSReplaceDialog before the fix (no by-id beside confirmation) and after (mono span like md.tsx). Ran node --test web/src/zfs.test.mjs and python3 scripts/check_docs.py --worktree. Browser walkthrough not run (labs stopped).",
+    "evidence": [
+      "web/src/zfs.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

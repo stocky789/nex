@@ -1,0 +1,58 @@
+{
+  "summary": "Staged-review small fixes SR-006/047/050/054/055/081/083/087/111/112: ESP nofail guide scope, zfs-replace verification wording, ONLINE failed-disk guide, ZFS replace membership/capability tests, spare-apart-from-layout cases, CheckWithCache failed-refresh stamp, version-light text label, stats plan tokens, SystemDiskReplaceCapability storage handshake gate, ZFS Blank muted CSS. API impact: none (existing contracts; capability advertisement timing only).",
+  "paths": [
+    "docs/guide/install-nex-core.md",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "docs/guide/storage-repositories.md",
+    "docs/changes/2026-09-22-zfs-replace.json",
+    "docs/plans/2026-09-22-host-hardware-and-sensors.md",
+    "internal/controller/zfs_replace_test.go",
+    "internal/protocol/storage_test.go",
+    "internal/nexupdate/nexupdate.go",
+    "internal/nexupdate/nexupdate_test.go",
+    "internal/agent/run.go",
+    "internal/agent/md_replace_test.go",
+    "web/src/main.tsx",
+    "web/src/updates.ts",
+    "web/src/updates.test.mjs",
+    "web/src/style.css",
+    "web/src/zfs.test.mjs",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-sr-006-112-small-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "ESP nofail scope on install and replace-system-disk pages; ONLINE failed-disk step on storage-repositories.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/replace-a-failed-system-disk.md",
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No new or changed Controller/Core wire contract. SystemDiskReplaceCapability is the existing capability; only when the agent advertises it changed (after StorageProtocolReady). Version UI and apt cache stamp are Controller-local.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug and docs fixes for already-landed slices; host-hardware plan Visual style updated to match plain-stats CSS, no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable pool or Controller state added. Apt refresh stamp remains ephemeral Controller cache under its data dir."
+  },
+  "verification": {
+    "method": "go test ./internal/controller/ -count=1 -run TestZFSReplaceChecksSelectedHostCapabilityAndMembership; go test ./internal/protocol/ -count=1 -run TestValidateZFSProvisionCountsSparesApartFromTheLayout; go test ./internal/nexupdate/ -count=1 -run TestCheckWithCacheFailedRefreshStampsAttempt; go test ./internal/agent/ -count=1 -run TestSystemDiskReplaceCapabilityFollowsStorageHandshake; node web/src/updates.test.mjs; node web/src/zfs.test.mjs; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "internal/controller/zfs_replace_test.go",
+      "internal/protocol/storage_test.go",
+      "internal/nexupdate/nexupdate_test.go",
+      "internal/agent/md_replace_test.go",
+      "web/src/updates.test.mjs",
+      "web/src/zfs.test.mjs"
+    ]
+  }
+}

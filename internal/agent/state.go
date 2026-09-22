@@ -57,6 +57,11 @@ type State struct {
 	// ZFSProvisionProtocolReady is the narrower Controller acknowledgement for
 	// ZFS-only inventory and commands. It resets on Controller replacement.
 	ZFSProvisionProtocolReady bool `json:"zfs_provision_protocol_ready,omitempty"`
+	// ZFSReplaceProtocolReady is the narrower acknowledgement for hot-spare /
+	// widened-layout selections and the additive zfs_pool / pool observation
+	// fields. It resets on Controller replacement and clears when a Controller
+	// only acknowledges storage-zfs-provision-v1.
+	ZFSReplaceProtocolReady bool `json:"zfs_replace_protocol_ready,omitempty"`
 	// StorageClusterProtocolReady is Controller-connection scoped. It is set
 	// only by the explicit clustered-storage v2 acknowledgement and reset on
 	// reconnect/replacement before a report can carry clustered-storage data.

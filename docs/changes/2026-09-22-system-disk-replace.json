@@ -1,0 +1,71 @@
+{
+  "summary": "A host reports the Linux md arrays it has assembled and can rebuild a degraded system-disk mirror onto a replacement disk. vmhost.ReadMDArrays(root) reads /sys/block/md*/md/ directly - level, raid_disks, degraded, sync_action, the position in sync_completed as a percentage, and each dev-* member's device, slot and state - and readHardware returns it as the hardware report's md_arrays section; mdadm is never parsed, so the section is testable against a fixture tree. A new capability-gated operation, host-system-disk-replace-v1, takes one array and one replacement device from the existing ZFS device discovery listing (same eligibility, fingerprint and typed erase confirmation rules). Core revalidates both against a fresh observation and then runs wipefs --all, sgdisk --replicate plus sgdisk -G, udevadm settle, mdadm --add, and the bootloader on the new disk the way the installer does it for that firmware: grub-install on BIOS (firmware branch on /sys/firmware/efi; the installer still places an ESP on every member), and on UEFI mkfs.vfat on the replacement's copy of the surviving disk's ESP followed by the host's own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing, after which the kernel rebuilds the mirror with nothing waiting on the Controller. It is journaled on the host, keyed on the operation ID: a redelivered command replays its outcome, an array that already has the replacement as a member is adopted rather than wiped again, and an agent interrupted after the wipe resumes from the wipe-started stage and checks the identity that survives a wipe instead of the fingerprint. The Controller relays it at POST /api/v1/hosts/{id}/system-disk with an administrator session and CSRF, refusing a revoked, stale or too-old host, and stores nothing but the task it keeps for every host operation. The host page's Stats tab gains a System disk panel: the array's state in one sentence with what to do about it, a progress bar with the kernel's own copy rate while it rebuilds, each member with its disk's size and a Failed mark, and Replace disk on a degraded array, with the ZFS wizard's device picker and typed erase confirmation. A host with no mirror and one whose Core cannot report arrays or cannot replace a disk are all told so rather than shown nothing. The panel rereads the mirror while a rebuild runs and follows the submitted task to its outcome, so neither needs a manual refresh. API impact: changed contract (the hardware report's md_arrays) and new contract (POST /api/v1/hosts/{id}/system-disk and the host-system-disk-replace command).",
+  "paths": [
+    "internal/protocol/hardware.go",
+    "internal/protocol/systemdisk.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/md.go",
+    "internal/vmhost/md_test.go",
+    "internal/vmhost/md_replace.go",
+    "internal/vmhost/md_replace_test.go",
+    "internal/agent/hardware.go",
+    "internal/agent/md_replace.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/md_replace.go",
+    "internal/controller/md_replace_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/controller.go",
+    "internal/controller/stats.go",
+    "web/src/md.tsx",
+    "web/src/md.test.mjs",
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/main.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-22-software-raid.md",
+    "docs/qa/2026-09-22-system-disk-replace.md",
+    "docs/changes/2026-09-22-system-disk-replace.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A new operator workflow: reading a host's system disk mirror on its Stats tab and replacing a failed disk, including the typed erase confirmation, the rebuild expectation and every refusal.",
+    "pages": [
+      "docs/guide/replace-a-failed-system-disk.md",
+      "docs/guide/README.md",
+      "docs/guide/usage-history.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "POST /api/v1/hosts/{id}/system-disk is a new admin-authenticated, CSRF-protected route relaying the new durable host-system-disk-replace command, gated on the new host-system-disk-replace-v1 capability; the host hardware report is a changed contract in the same slice, gaining md_arrays. Both sides are implemented here, with the refusals, the replay rule and the interrupted-retry behaviour in the reference.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Slice 3 of docs/plans/2026-09-22-software-raid.md as planned; no published milestone changed status."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The mirror is the host's own. Nothing is pool-scoped, and the Controller keeps only the operation row it keeps for every host command.",
+    "record": "The md array superblocks on the host's system disks, and /etc/mdadm/mdadm.conf written by the installer. Adding a member does not change the array's UUID, so nothing rewrites mdadm.conf, and the kernel assembles the mirror at boot with no Nex code. The replacement operation's own journal is <state-dir>/system-disk-replace/<operation-id>.json on that host, which only prevents a destructive step from being repeated.",
+    "recovery": "Nothing to re-enter. A fresh Controller reads the array, its members and any rebuild from the host's hardware report as soon as the host reconnects and offers host-hardware-v1."
+  },
+  "verification": {
+    "method": "go vet ./... and go test ./internal/... . internal/vmhost: fixture /sys/block trees cover a healthy mirror, a degraded one and a rebuilding one (that fixture's file set and values are a lab host's own capture, with the device names changed) and a machine with no sysfs at all; a stubbed sysfs, discovery listing and command runner cover the full command sequence, the replay of a redelivered operation, the refusals (healthy array, ineligible disk, unconfirmed erase, smaller disk, unknown array, and the disk still carrying the array), the adoption of an array that already has the replacement, the retry after an interrupted wipe, and that the retry still refuses a disk another array or pool claimed meanwhile - that last check was confirmed to fail against the code without its guard. internal/controller: the relay, the exact replay and the changed-payload conflict, the CSRF requirement, the old-Core 409 and five invalid-input refusals. web: md.test.mjs covers the state and summary sentence for every panel state, the failed-member and member-to-disk matching, the required replacement size, the largest-first ordering, the disk usability, too-small and confirmation rules, and that the panel follows a rebuild and its task; npm run typecheck and npm test pass. tests.test_api_contract, scripts/generate_api.py --check and the repository privacy test pass. The disposable-host run in the QA record reached a completed replacement, rebuild and boot from the replacement disk, with the refusals and an interrupted-agent retry observed, before lab work was stopped part way; that record's Outstanding section lists what was not finished, including a replacement submitted from the dialog itself and the UEFI ESP copy, which is covered by a unit test only.",
+    "evidence": [
+      "internal/vmhost/md_test.go",
+      "internal/vmhost/md_replace_test.go",
+      "internal/controller/md_replace_test.go",
+      "web/src/md.test.mjs",
+      "docs/qa/2026-09-22-system-disk-replace.md"
+    ]
+  }
+}

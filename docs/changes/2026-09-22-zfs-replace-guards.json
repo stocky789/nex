@@ -1,0 +1,52 @@
+{
+  "summary": "ZFS replace refuses nested replacing/spare leaves and healthy-member false adopts before wipe; pool observation keeps parent markers and ignores class containers; UI hides Replace during scan/being-replaced; size and erase-confirmation checks run before wipe or on wipe-started resume.",
+  "paths": [
+    "internal/vmhost/zfs_status.go",
+    "internal/vmhost/zfs_status_test.go",
+    "internal/vmhost/zfs_replace.go",
+    "internal/vmhost/zfs_replace_test.go",
+    "internal/vmhost/testdata/zpool-status-spare-derived.json",
+    "internal/protocol/managed.go",
+    "web/src/managed.tsx",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-zfs-replace-guards.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Replace disk is absent while the Action cell shows resilvering or being replaced; Needs attention sentences now include already-being-replaced, already-in-pool and undersized.",
+    "pages": ["docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "ZFSPoolDevice gains optional parent (replacing|spare). Core refusals for nested replace, healthy-member adopt, undersized replacement and wipe-started erase confirmation are documented. Root-only leaf walk and class-container ignore update the pool observation description.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/peer-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes to an existing replace flow; no milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Observation and refusal behaviour only; durable pool state remains the zpool itself and the existing host replace journal."
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost/ -count=1 -run 'TestDecodeZFSPoolStatus|TestZFSReplace'; node web/src/storage.test.mjs; node web/src/zfs.test.mjs; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/vmhost/zfs_status_test.go",
+      "internal/vmhost/zfs_replace_test.go",
+      "web/src/storage.test.mjs",
+      "web/src/zfs.test.mjs"
+    ]
+  }
+}

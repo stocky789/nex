@@ -66,5 +66,22 @@ class FreshInstallTargetTests(unittest.TestCase):
                     lab_tools.validate_target(lab)
 
 
+    def test_resolve_ovmf_reports_missing_firmware(self):
+        with patch.object(lab_tools, 'OVMF_CODE_CANDIDATES', (Path('/missing/OVMF_CODE.4m.fd'),)):
+            with self.assertRaisesRegex(RuntimeError, 'OVMF 4M firmware not found'):
+                lab_tools.resolve_ovmf()
+
+    def test_resolve_ovmf_accepts_override_beside_vars(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            code = root / 'OVMF_CODE_4M.fd'
+            variables = root / 'OVMF_VARS_4M.fd'
+            code.write_bytes(b'code')
+            variables.write_bytes(b'vars')
+            resolved_code, resolved_vars = lab_tools.resolve_ovmf(code)
+            self.assertEqual(resolved_code, code.resolve())
+            self.assertEqual(resolved_vars, variables.resolve())
+
+
 if __name__ == '__main__':
     unittest.main()

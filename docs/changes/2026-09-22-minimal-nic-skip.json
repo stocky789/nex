@@ -1,0 +1,40 @@
+{
+  "summary": "Minimal install asks whether to configure more network adapters after the management choice (default no), so leftover NICs are left unconfigured instead of forcing a mode question for each one. When yes, leftover adapters offer skip/dhcp/static; skip stores disabled in the handoff. API impact: none.",
+  "paths": [
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "tests/integration/installer-text-wizard.py",
+    "docs/guide/install-nex-core.md",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-22-minimal-nic-skip.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Minimal install question order and adapter choices changed: operators now see a Yes/No skip for leftover adapters and skip/dhcp/static when configuring them.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Text installer frontend only. The handoff file and nex-config validation are unchanged; mode=disabled is still what leftover skipped adapters write.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Installer UX fix only; no milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installation-time settings for the host being built. No Controller or pool-scoped durable record is added."
+  },
+  "verification": {
+    "method": "python3 tests/integration/installer-text-wizard.py passed (busybox ash lane skipped: busybox not installed). Covers default skip of leftover NICs, yes-path configure with skip/dhcp/static, and management NIC that is not first in discovery order. python3 scripts/check_docs.py --worktree. Simulation only; newt console and booted minimal ISO not exercised.",
+    "evidence": [
+      "tests/integration/installer-text-wizard.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

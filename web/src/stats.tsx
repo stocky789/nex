@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./stats.css";
+import { SystemDiskMirror, SYSTEM_DISK_CAPABILITY, type MDArray } from "./md";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 export type StatsSeries = { key: string; group: string; label: string; unit: string; values: (number | null)[] };
@@ -162,25 +163,24 @@ export function gauges(history: StatsHistory, thresholds: Thresholds = {}): Gaug
   return out;
 }
 
-// A half-circle drawn with pathLength 100, so the filled share is the percentage itself.
-const GAUGE_ARC = "M8 40 A32 32 0 0 1 72 40";
-
-function GaugeArc({ gauge }: { gauge: Gauge }) {
+// Fold Warm/Critical into the meter's valuetext: the coloured state word is presentational and
+// the bar is aria-hidden, so assistive tech only hears the announced value.
+export function gaugeValueText(gauge: Pick<Gauge, "unit" | "value" | "state">): string {
   const text = formatValue(gauge.unit, gauge.value);
+  if (gauge.state === "normal") return text;
+  return `${text} ${gauge.state === "critical" ? "Critical" : "Warm"}`;
+}
+
+function GaugeTile({ gauge }: { gauge: Gauge }) {
+  const text = formatValue(gauge.unit, gauge.value);
+  const announced = gaugeValueText(gauge);
   const percent = gauge.value != null && gauge.scale ? Math.max(0, Math.min(100, (100 * gauge.value) / gauge.scale)) : null;
-  const meter = gauge.value != null && gauge.scale != null;
-  // A gauge with no current reading is drawn in the track grey: the green accent means "inside its
-  // normal range", which is not something an unknown value can claim.
-  const accent = gauge.value == null ? "var(--stats-track)"
-    : `var(--accent-${{ "cpu.total": "blue", memory: "teal" }[gauge.key] ?? { normal: "green", warm: "yellow", critical: "rose" }[gauge.state]})`;
-  return <div className={`stats-gauge stats-gauge-${gauge.state}`} style={{ "--gauge-accent": accent } as CSSProperties}>
-    <svg className="stats-gauge-arc" viewBox="0 0 80 48" aria-hidden="true" focusable="false">
-      <path className="stats-gauge-track" d={GAUGE_ARC} pathLength={100} />
-      {percent != null && <path className="stats-gauge-fill" d={GAUGE_ARC} pathLength={100} strokeDasharray={`${percent} 100`} />}
-    </svg>
-    <div className="stats-gauge-value" {...(meter ? { role: "meter", "aria-valuenow": gauge.value!, "aria-valuemin": 0, "aria-valuemax": Math.max(gauge.scale!, gauge.value!), "aria-valuetext": text, "aria-label": gauge.label } : {})}>{text}</div>
-    {gauge.state !== "normal" && <span className="stats-gauge-pill">{gauge.state === "critical" ? "Critical" : "Warm"}</span>}
+  return <div className={`stats-gauge stats-gauge-${gauge.state}`}>
     <div className="stats-gauge-label">{gauge.label}</div>
+    <div className="stats-gauge-value" {...(percent != null ? { role: "meter", "aria-valuenow": gauge.value!, "aria-valuemin": 0, "aria-valuemax": Math.max(gauge.scale!, gauge.value!), "aria-valuetext": announced, "aria-label": gauge.label } : {})}>
+      {text}{gauge.state !== "normal" && <span className="stats-gauge-state" aria-hidden="true">{gauge.state === "critical" ? "Critical" : "Warm"}</span>}
+    </div>
+    {percent != null && <div className="stats-gauge-bar" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>}
   </div>;
 }
 
@@ -213,6 +213,7 @@ export type HostHardware = {
   disks: Unavailable & { devices?: HardwareDisk[] };
   pci: Unavailable & { devices?: PCIDevice[] };
   sensors: Unavailable & { temperatures?: TemperatureSensor[] };
+  md_arrays?: Unavailable & { arrays?: MDArray[] | null };
 };
 
 const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(" ");
@@ -236,6 +237,24 @@ export function sectionNote(section: Unavailable | undefined, rows: number): str
   return rows ? null : "None reported.";
 }
 
+// System-disk panel states derived from md_arrays. The Controller always remarsals the field, so
+// an older Core that never sent it arrives as arrays:null; a current Core that looked and found
+// none sends arrays:[]. Keep "Single system disk" only for the latter.
+export type MDArraysView = "unreported" | "unavailable" | "empty" | "arrays";
+export function mdArraysView(section: HostHardware["md_arrays"]): MDArraysView {
+  if (section?.unavailable) return "unavailable";
+  if (!Array.isArray(section?.arrays)) return "unreported";
+  return section.arrays.length ? "arrays" : "empty";
+}
+
+// Replace disk… opens storage/discover first; gate on the same discovery/provision caps that call
+// needs, not only host-system-disk-replace-v1.
+export function systemDiskReplaceSupported(capabilities?: string[]): boolean {
+  return !!capabilities?.includes(SYSTEM_DISK_CAPABILITY)
+    && !!capabilities?.includes("storage-discovery-v1")
+    && !!capabilities?.includes("storage-zfs-provision-v1");
+}
+
 // Gauge scale and warning band come from the host's own sensor thresholds, joined to the history by
 // series key, so no number is invented in the UI.
 export function sensorThresholds(hw: HostHardware | null): Thresholds {
@@ -244,7 +263,7 @@ export function sensorThresholds(hw: HostHardware | null): Thresholds {
   return out;
 }
 
-const pill = (v?: string) => v ? <span className="stats-pill">{v}</span> : null;
+const id = (v?: string) => v ? <span className="stats-id">{v}</span> : null;
 
 function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
   return <table className="stats-hw-table"><tbody>
@@ -252,9 +271,9 @@ function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
   </tbody></table>;
 }
 
-function Section({ title, note, children }: { title: string; note: string | null; children: ReactNode }) {
+function Section({ title, note, count, children }: { title: string; note: string | null; count?: number; children: ReactNode }) {
   return <details className="stats-hw-section">
-    <summary>{title}</summary>
+    <summary>{title}{count != null && !note && <span className="stats-hw-count">{count}</span>}</summary>
     {note ? <p className="empty">{note}</p> : children}
   </details>;
 }
@@ -267,58 +286,59 @@ function HardwareSections({ hw }: { hw: HostHardware }) {
       <KeyValues rows={[
         ["Vendor", sys.vendor],
         ["Model", join(sys.model, sys.version)],
-        ["Serial", pill(sys.serial)],
+        ["Serial", id(sys.serial)],
         ["Board", join(sys.board_vendor, sys.board_name, sys.board_version)],
-        ["Board serial", pill(sys.board_serial)],
+        ["Board serial", id(sys.board_serial)],
         ["Chassis", join(sys.chassis_vendor, sys.chassis_type)],
-        ["BIOS", sys.bios_version ? <>{pill(sys.bios_version)} {join(sys.bios_vendor, sys.bios_date)}</> : null],
+        ["BIOS", sys.bios_version ? <>{id(sys.bios_version)} {join(sys.bios_vendor, sys.bios_date)}</> : null],
       ]} />
     </Section>
     <Section title="CPU" note={sectionNote(hw.cpu, cpu.model ? 1 : 0)}>
       <KeyValues rows={[["Model", cpu.model], ["Sockets", cpu.sockets], ["Cores", cpu.cores], ["Threads", cpu.threads]]} />
     </Section>
-    <Section title="Memory" note={sectionNote(hw.memory, modules.length)}>
+    <Section title="Memory" note={sectionNote(hw.memory, modules.length)} count={modules.length}>
       <table className="stats-hw-table">
         <thead><tr><th>Slot</th><th>Size</th><th>Type</th><th>Speed</th><th>Manufacturer</th><th>Part</th></tr></thead>
         <tbody>{modules.map(m => <tr key={m.slot}>
           <td>{m.slot}</td><td>{m.size_bytes ? formatValue("bytes", m.size_bytes) : "Empty"}</td><td>{m.type}</td>
-          <td>{m.speed_mts ? `${m.speed_mts} MT/s` : ""}</td><td>{m.manufacturer}</td><td>{pill(m.part)}</td>
+          <td>{m.speed_mts ? `${m.speed_mts} MT/s` : ""}</td><td>{m.manufacturer}</td><td>{id(m.part)}</td>
         </tr>)}</tbody>
       </table>
     </Section>
-    <Section title="Disks" note={sectionNote(hw.disks, disks.length)}>
+    <Section title="Disks" note={sectionNote(hw.disks, disks.length)} count={disks.length}>
       <table className="stats-hw-table">
         <thead><tr><th>Device</th><th>Model</th><th>Size</th><th>Type</th><th>Transport</th><th>Serial</th></tr></thead>
         <tbody>{disks.map(d => <tr key={d.name}>
           <td>{d.name}</td><td>{d.model}</td><td>{formatValue("bytes", d.size_bytes)}</td>
-          <td>{d.rotational ? "Rotational" : "Solid state"}</td><td>{d.transport}</td><td>{pill(d.serial)}</td>
+          <td>{d.rotational ? "Rotational" : "Solid state"}</td><td>{d.transport}</td><td>{id(d.serial)}</td>
         </tr>)}</tbody>
       </table>
     </Section>
-    <Section title="PCI devices" note={sectionNote(hw.pci, pci.length)}>
+    <Section title="PCI devices" note={sectionNote(hw.pci, pci.length)} count={pci.length}>
       <table className="stats-hw-table">
         <thead><tr><th>Address</th><th>Class</th><th>Device</th><th>IDs</th></tr></thead>
         <tbody>{pci.map(d => <tr key={d.address}>
-          <td>{d.address}</td><td>{d.class}</td><td>{join(d.vendor, d.device)}</td><td>{pill(`${d.vendor_id}:${d.device_id}`)}</td>
+          <td>{d.address}</td><td>{d.class}</td><td>{join(d.vendor, d.device)}</td><td>{id(`${d.vendor_id}:${d.device_id}`)}</td>
         </tr>)}</tbody>
       </table>
     </Section>
-    <Section title="Temperature sensors" note={sectionNote(hw.sensors, sensors.length)}>
+    <Section title="Temperature sensors" note={sectionNote(hw.sensors, sensors.length)} count={sensors.length}>
       <table className="stats-hw-table">
         <thead><tr><th>Sensor</th><th>Chip</th><th>Warns at</th><th>Critical at</th><th>Series</th></tr></thead>
         <tbody>{sensors.map(s => <tr key={s.key}>
           <td>{s.label}</td><td>{s.chip}</td><td>{formatValue("celsius", s.max_celsius)}</td>
-          <td>{formatValue("celsius", s.crit_celsius)}</td><td>{pill(s.key)}</td>
+          <td>{formatValue("celsius", s.crit_celsius)}</td><td>{id(s.key)}</td>
         </tr>)}</tbody>
       </table>
     </Section>
   </>;
 }
 
-function HardwarePanel({ hardware, loading, failure, onRetry }: { hardware: HostHardware | null; loading: boolean; failure: StatsFailure | null; onRetry: () => void }) {
+function HardwarePanel({ hardware, loading, failure, onRetry, id, poolID, api, replaceSupported }: { hardware: HostHardware | null; loading: boolean; failure: StatsFailure | null; onRetry: () => void; id: string; poolID: string; api: API; replaceSupported: boolean }) {
   // Hardware is read once when the tab opens, so Retry is the only way to reread it — including
   // after a report loaded and the host has since changed or gone stale.
-  return <section className="panel stats stats-hardware" aria-label="Hardware">
+  const mdView = hardware ? mdArraysView(hardware.md_arrays) : null;
+  return <section className="panel stats" aria-label="Hardware">
     <div className="section-heading"><h2>Hardware</h2>
       <div className="stats-controls"><button type="button" disabled={loading} onClick={onRetry}>Retry</button></div>
     </div>
@@ -326,6 +346,12 @@ function HardwarePanel({ hardware, loading, failure, onRetry }: { hardware: Host
     {failure?.kind === "stale" && <div className="stats-stale" role="status">{hardware ? "The host connection is stale. Showing the last loaded hardware; it may be out of date." : "The host connection is stale. Reconnect Nex Core, then retry."}</div>}
     {failure?.kind === "error" && <div className="alert" role="alert">{hardware ? `Could not reread the hardware; showing the last loaded report. ${failure.message}` : failure.message}</div>}
     {!hardware && !failure && <p className="empty" role="status">Reading hardware from the host…</p>}
+    {hardware && mdView === "unavailable" && <div className="md-arrays">
+      <h3>System disk</h3>
+      <p className="empty">{hardware.md_arrays?.reason || "This section is not available on this host."}</p>
+    </div>}
+    {hardware && mdView && mdView !== "unavailable" && <SystemDiskMirror arrays={hardware.md_arrays?.arrays ?? []} disks={hardware.disks?.devices ?? []}
+      hostID={id} poolID={poolID} api={api} supported={replaceSupported} reported={mdView !== "unreported"} onReplaced={onRetry} />}
     {hardware && <div className="stats-hw-sections"><HardwareSections hw={hardware} /></div>}
   </section>;
 }
@@ -427,7 +453,7 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
   </div>;
 }
 
-export function Stats({ kind, id, api, capabilities, realtimeLimitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; realtimeLimitMS?: number }) {
+export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; poolID?: string; realtimeLimitMS?: number }) {
   const [range, setRange] = useState("10m");
   const [stacked, setStacked] = useState(false);
   const [history, setHistory] = useState<StatsHistory | null>(null);
@@ -444,6 +470,9 @@ export function Stats({ kind, id, api, capabilities, realtimeLimitMS = REALTIME_
   const [hardwareFailure, setHardwareFailure] = useState<StatsFailure | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareAttempt, setHardwareAttempt] = useState(0);
+  // Stable identity so SystemDiskMirror's rebuild/task intervals are not torn down on every
+  // Stats history re-render (default 10m range polls every 5s).
+  const rereadHardware = useCallback(() => setHardwareAttempt(a => a + 1), []);
 
   useEffect(() => {
     if (!hardwareSupported) return;
@@ -494,7 +523,8 @@ export function Stats({ kind, id, api, capabilities, realtimeLimitMS = REALTIME_
   const hasData = history?.series.some(s => s.values.some(v => v != null));
   return <>
     {hardwareSupported && hardwareFailure?.kind !== "capability" &&
-      <HardwarePanel hardware={hardware} loading={hardwareLoading} failure={hardwareFailure} onRetry={() => setHardwareAttempt(a => a + 1)} />}
+      <HardwarePanel hardware={hardware} loading={hardwareLoading} failure={hardwareFailure} onRetry={rereadHardware}
+        id={id} poolID={poolID} api={api} replaceSupported={systemDiskReplaceSupported(capabilities)} />}
     <section className="panel stats" aria-label="Usage history">
     <div className="section-heading">
       <h2>Usage history</h2>
@@ -506,7 +536,7 @@ export function Stats({ kind, id, api, capabilities, realtimeLimitMS = REALTIME_
     </div>
     {/* Gauges read the 10-minute history only. A longer range stores averages of up to a day,
         which would be painted as the current reading, band and all. */}
-    {kind === "host" && range === "10m" && history && <div className="stats-gauges">{gauges(history, sensorThresholds(hardware)).map(g => <GaugeArc key={g.key} gauge={g} />)}</div>}
+    {kind === "host" && range === "10m" && history && <div className="stats-gauges">{gauges(history, sensorThresholds(hardware)).map(g => <GaugeTile key={g.key} gauge={g} />)}</div>}
     {kind === "host" && <RealtimeStats kind={kind} id={id} api={api} stacked={stacked} limitMS={realtimeLimitMS} />}
     {failure?.kind === "capability" && <p className="stats-state" role="status">Upgrade Nex Core to see usage history.</p>}
     {failure?.kind === "stale" && <div className="stats-stale" role="status">{history ? "The host connection is stale. Showing last loaded usage history; it may be out of date." : "The host connection is stale. Reconnect Nex Core, then retry."} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}

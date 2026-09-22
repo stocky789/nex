@@ -66,9 +66,9 @@ func TestUpdatesAuthAndApply(t *testing.T) {
 	a.call("GET", "/api/v1/updates", nil, nil, 401)
 
 	a = newClient(t)
-	var st nexupdate.Status
+	var st controllerUpdates
 	read(t, a.call("GET", "/api/v1/updates", nil, nil, 200), &st)
-	if !st.UpdateAvailable || st.AvailableVersion != "9.9.9" || st.Package != "nex-controller" {
+	if !st.UpdateAvailable || st.AvailableVersion != "9.9.9" || st.Package != "nex-controller" || st.CoreAvailableVersion != "9.9.9" {
 		t.Fatalf("%+v", st)
 	}
 

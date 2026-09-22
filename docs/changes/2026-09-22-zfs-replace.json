@@ -1,0 +1,89 @@
+{
+  "summary": "A provisioned ZFS repository can have a failed disk replaced from the Controller, and its layouts widen. protocol.ValidZFSLayout now accepts a mirror of two or three devices and raidz3 at five or more, and each host's selection may carry `spares`: hot spares are erased exactly like the data disks (same eligibility, fingerprint and typed erase-confirmation rules), are passed as `spare` vdevs and the pool is created with `autoreplace=on`, so ZFS resilvers onto one by itself; they satisfy no part of the layout rule. A new capability-gated operation, storage-zfs-replace-v1, names one repository, one host, the failed leaf by its /dev/disk/by-id path as the pool observation reports it, and one replacement from the existing ZFS device discovery listing. The Controller relays it at POST /api/v1/storage/zfs/replace with an administrator session, same Origin and CSRF, refusing invalid input, an unknown or stale pool master or host and a Core on either side without the capability, and stores nothing but the request/operation relay row. The pool master accepts the command only for its own pool and only for a repository its own record already holds on that host, and either runs it locally or forwards it to that ready current member over the authenticated peer route POST /api/v1/pool/zfs-provision/replace. The executing host revalidates the pool and the disk against a fresh observation, then runs wipefs --all and zpool replace; it is done when zpool replace returns, the resilver is read from the existing per-host pool observation, and ZFS retires the old disk itself when the resilver completes. The work is journaled on that host, keyed on the operation ID: a redelivered command replays its recorded outcome, a pool already resilvering onto the replacement is adopted as success, an operation ID reused for a different repository, failed leaf or replacement is refused, and an agent interrupted after the wipe resumes from the wipe-started stage and checks the identity that survives a wipe instead of the fingerprint. The master then records the replacement disk on its repository record. Slice 2 of the software RAID plan. API impact: changed contract (ZFS provisioning layouts and ZFSProvisionHost.spares) and new contract (POST /api/v1/storage/zfs/replace, the storage-zfs-replace command and the peer route). Independent review of the slice found that the host worker's adoption of a pool already resilvering onto the replacement could never match a real pool, because a provisioned pool names its leaves by the partition ZFS created on the selected disk, so a retry after an interruption past zpool replace would have cleared the live replacement; that is BUG-0445, fixed with zfsPoolHoldsDisk and two failing-first checks, one of them against a decoded replacing-0 observation. The same review round makes the UI apply Core's storageServesData rule through one shared helper, so a registered degraded ZFS dataset stays usable and degraded repositories stay eligible for ISO uploads; records in the API reference and the plan that the pool observation does not label spare, log or cache devices; replaces the mislabelled captured ONLINE fixture (it was a resilvering pool) with a derived idle one; removes a dead whole-disk/partition comparison in ZFSReplaceRequest.Valid; and collapses the duplicated ZFSHostAccess and StorageAccess literals. A quality-of-life pass then reworked the screens without changing what Core decides: each host's disks are one sorted table with size, type, model, serial and blank/has-data columns, a Spare column that appears once holding a disk back still leaves a redundant pool, and a line naming how many ticked disks hold old data before the confirmation step; a live summary under each host reads '3 data disks + 1 hot spare -> RAIDZ1, ~16 GiB usable, survives 1 disk failure'; the layout picker lists every layout with a one-line description, marks Automatic as Core's default for the ticked count, gives the reason a layout cannot be built instead of hiding it, and says so plainly when only one layout is possible; the ZFS-by-host row carries the failed disk and the resilver with its percentage beside the Replace disk button; the replace dialog preselects nothing, names the disk its confirm button erases and says ZFS retires the old disk itself; and the empty states repeat Core's own reasons for every disk it will not offer.",
+  "paths": [
+    "internal/protocol/storage.go",
+    "internal/protocol/storage_test.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/provision_zfs.go",
+    "internal/vmhost/provision_zfs_vdev_test.go",
+    "internal/vmhost/zfs_replace.go",
+    "internal/vmhost/zfs_replace_test.go",
+    "internal/agent/zfs_replace.go",
+    "internal/agent/zfs_replace_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/zfs_replace.go",
+    "internal/controller/zfs_replace_test.go",
+    "internal/controller/controller.go",
+    "web/src/zfs.tsx",
+    "web/src/storage.tsx",
+    "internal/controller/managed.go",
+    "web/src/zfs.test.mjs",
+    "web/src/storage.test.mjs",
+    "docs/qa/2026-09-22-zfs-replace.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/storage-repositories.md",
+    "docs/plans/2026-09-22-software-raid.md",
+    "docs/changes/2026-09-22-zfs-replace.json",
+    "internal/vmhost/zfs_status_test.go",
+    "internal/vmhost/testdata/zpool-status-replacing-derived.json",
+    "internal/vmhost/testdata/zpool-status-idle-derived.json",
+    "internal/vmhost/pool_storage.go",
+    "internal/agent/zfs_pool.go",
+    "web/src/managed.tsx",
+    "docs/BUG_LEDGER.md",
+    "web/src/style.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Two operator-visible changes in docs/guide/storage-repositories.md: the provisioning wizard's layout choices widen (a mirror of two or three disks, RAIDZ3 from five) and gain a Spare tick, which the page explains including that a spare is erased like any other selected disk and counts toward no layout; and a new 'Replace a failed disk' workflow covering where the action appears on a degraded repository's host row, picking the failed disk and the replacement, the typed erase confirmation, the resilver expectation, that VMs keep running, and that ZFS removes the old disk itself.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "POST /api/v1/storage/zfs/replace is a new administrator-authenticated, CSRF- and Origin-protected route relaying the new durable storage-zfs-replace command (protocol.ZFSReplaceRequest on Command.zfs_replace), gated on the new storage-zfs-replace-v1 capability, with the new pool-master-to-member peer route POST /api/v1/pool/zfs-provision/replace authenticated by the master certificate. ZFS provisioning is a changed contract in the same slice: the layout rule widens and ZFSProvisionHost gains the optional spares array. Hot spares and the widened layouts (three-disk mirror, raidz3) require storage-zfs-replace-v1 on the pool master and every selected host; the Controller refuses otherwise and the wizard gates the Spare column and those layout radios on the same capability, so an older Core never receives them. Additive zfs_pool/pool observation fields are withheld from reports until the Controller acknowledges storage-zfs-replace-v1. Both sides are implemented here, with the authorization, validation, every refusal sentence, the asynchronous result, the safe-retry rule and the interrupted-run behaviour in the reference.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ],
+    "operations": [
+      "POST /api/v1/storage/zfs/replace",
+      "POST /api/v1/storage/zfs/provision",
+      "POST /api/v1/pool/zfs-provision/replace",
+      "storage-zfs-replace command",
+      "POST /api/v1/agent/report"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Slice 2 of docs/plans/2026-09-22-software-raid.md as planned; no published milestone changed status, and the slice's lab walkthrough is still open."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Nothing durable is added to the Controller: it keeps only the request/operation relay row it keeps for every managed command, and the pool's current device set, its health and the resilver are all read back from the pool itself. The Controller never derives or remembers which disks a repository holds.",
+    "record": "The zpool on the executing host is the record of its own device set, read with `zpool status`. The executing host also journals this operation at <state-dir>/zfs-replace/<operation-id>.json, which only keeps a destructive step from being repeated after an interruption. The pool master's ZFS repository record (zfs-pool.json, with its lifecycle receipts in zfs-lifecycle.json) is updated to name the replacement disk, so the master's durable record keeps matching the pool.",
+    "recovery": "Nothing to re-enter. A fresh Controller re-adopts the repository and its per-host outcomes from the pool master's inventory when the master reconnects, and sees the pool's current disks, its health and any running resilver again in the next per-host ZFS observation."
+  },
+  "verification": {
+    "method": "Offline contract and documentation checks were run for this record's documentation: python3 -m unittest tests.test_api_contract (passes in the combined tree: this change's controller route, ZFSReplaceRequest schema, Command.zfs_replace, x-commands entry, kind enums and peer route, together with lane D's SystemDiskReplaceCommand/SystemDiskReplaceRequest schema and host-system-disk-replace kind enum entry which belong to the system-disk-replace record and landed in the same batch), python3 scripts/generate_api.py --check after regenerating docs/api/index.html and docs/api/peer.html, and python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The Go behaviour checks for this slice are its own test files: the host worker's command sequence, its adoption of a pool already resilvering onto the replacement, the ONLINE and missing-leaf refusals, the reused operation ID and the interrupted-wipe retry; the master aggregate's pool, master, repository and membership refusals; the Controller relay, exact replay, changed-payload conflict, CSRF requirement, old-Core refusal and invalid input; and the protocol layout and device validation including spares. The slice was then walked through in the disposable three-host ZFS lab, through the API and in Chromium: a failed mirror member replaced on the pool master while two VMs kept running and the repository's files kept their checksums; the agent killed between wipefs and zpool replace and the same operation resumed from its wipe-started journal without erasing the disk again; a three-way mirror and a mirror with a hot spare provisioned on the member host, with autoreplace=on, and a failed disk in the spare-backed pool replaced over the peer channel; and the ONLINE-leaf, wrong-leaf-name, old-Core, invalid-input and missing-CSRF refusals observed as they are documented. Evidence, actual commands and the untested limits (no automatic spare engagement, no RAIDZ3 provisioning, no real hardware) are in docs/qa/2026-09-22-zfs-replace.md. After independent review the Go, UI, contract, generation and privacy checks were rerun with the fixes in place, and the two adoption checks were confirmed to fail without them. No lab step was rerun: the lab VMs froze the workstation and all lab work was stopped (project owner, 2026-09-22), so the interrupted-retry rerun with the interruption after zpool replace starts, retained output for the three-way mirror and hot-spare sections, RAIDZ3 provisioning, automatic spare engagement and a capture that would let Core label spare/log/cache devices are recorded as outstanding in docs/qa/2026-09-22-zfs-replace.md and in the plan's Slice 2 status. The quality-of-life pass was checked by npm typecheck and the node UI suites only, against the code and the captures already taken: no browser was run, because Playwright and the labs are stopped (project owner, 2026-09-22). The new layout arithmetic, the layout reasons, the blocked-disk summary, the disk order and the scan percentage are unit-tested; the rendering of the new tables, the layout fieldset and the degraded host row has not been seen and is listed as outstanding in the QA record.",
+    "evidence": [
+      "docs/qa/2026-09-22-zfs-replace.md",
+      "internal/vmhost/zfs_replace_test.go",
+      "internal/agent/zfs_replace_test.go",
+      "internal/controller/zfs_replace_test.go",
+      "internal/protocol/storage_test.go",
+      "internal/vmhost/provision_zfs_vdev_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

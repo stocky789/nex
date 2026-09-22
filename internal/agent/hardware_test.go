@@ -115,9 +115,43 @@ func fixtureHost(t *testing.T, tools map[string]string) string {
 	return root
 }
 
+// writeMDFixture builds the same /sys/block tree vmhost's md tests use, so the agent
+// wiring of ReadMDArrays is checked against a real fixture rather than a stubbed return.
+func writeMDFixture(t *testing.T, root, name string, array map[string]string, members map[string]map[string]string) {
+	t.Helper()
+	dir := filepath.Join(root, "sys/block", name, "md")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sys/block", "sda"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for file, value := range array {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(value+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for member, files := range members {
+		if err := os.MkdirAll(filepath.Join(dir, "dev-"+member), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for file, value := range files {
+			if err := os.WriteFile(filepath.Join(dir, "dev-"+member, file), []byte(value+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestReadHardwareReportsEverySection(t *testing.T) {
 	root := fixtureHost(t, map[string]string{
 		"dmidecode": fixtureDmidecode, "lsblk": fixtureLsblk, "lspci": fixtureLspci})
+	writeMDFixture(t, root, "md0",
+		map[string]string{"level": "raid1", "raid_disks": "2", "degraded": "0", "sync_action": "idle", "sync_completed": "none"},
+		map[string]map[string]string{
+			"sda2": {"state": "in_sync", "slot": "0"},
+			"sdb2": {"state": "in_sync", "slot": "1"},
+		})
 	hw := readHardware(context.Background(), root)
 
 	if hw.ObservedAt.IsZero() {
@@ -168,6 +202,9 @@ func TestReadHardwareReportsEverySection(t *testing.T) {
 		sensor.MaxCelsius == nil || *sensor.MaxCelsius != 95 || sensor.CritCelsius == nil || *sensor.CritCelsius != 105 {
 		t.Fatalf("sensor %+v", sensor)
 	}
+	if hw.MDArrays.Unavailable || len(hw.MDArrays.Arrays) != 1 || hw.MDArrays.Arrays[0].Name != "md0" {
+		t.Fatalf("md_arrays %+v", hw.MDArrays)
+	}
 }
 
 // A missing or failing tool leaves its own section unavailable with a reason; every other
@@ -206,6 +243,9 @@ func TestReadHardwareWithoutSysfsOrProc(t *testing.T) {
 	}
 	if hw.Memory.TotalBytes != 0 || len(hw.Sensors.Temperatures) != 0 {
 		t.Fatalf("invented values: %+v", hw)
+	}
+	if !hw.MDArrays.Unavailable || hw.MDArrays.Reason == "" {
+		t.Fatalf("missing md sysfs reported as present: %+v", hw.MDArrays)
 	}
 }
 

@@ -32,11 +32,18 @@ def validate_lab(path):
     return lab
 
 
+def lab_disks(lab):
+    """This lab's target files: host.raw, then host2.raw, host3.raw, ..."""
+    return [lab / 'host.raw'] + sorted(lab.glob('host[0-9].raw'))
+
+
 def validate_target(path):
     lab = validate_lab(path)
     blocks = qmp(lab / 'qmp.sock', 'query-block')
-    disks = [b.get('inserted', {}) for b in blocks if b.get('device') == 'hostdisk']
-    assert len(disks) == 1 and disks[0].get('drv') == 'raw' and disks[0].get('file') == str(lab / 'host.raw'), 'running QEMU must use this exact new raw lab target'
+    disks = [b.get('inserted', {}) for b in blocks if b.get('device', '').startswith('hostdisk')]
+    expected = {str(d) for d in lab_disks(lab)}
+    assert disks and all(d.get('drv') == 'raw' and d.get('file') in expected for d in disks), \
+        'running QEMU must use only this new raw lab\'s targets'
     return lab
 
 
@@ -46,14 +53,16 @@ def port():
         return s.getsockname()[1]
 
 
-def prepare(evidence, memory_mib=12288, vcpus=4):
+def prepare(evidence, memory_mib=12288, vcpus=4, disks=1):
     lab = Path(tempfile.mkdtemp(prefix='nex-fresh-install.', dir=ROOT / '.cache'))
+    for index in range(disks):
+        disk = lab / ('host.raw' if index == 0 else f'host{index + 1}.raw')
+        with disk.open('xb') as f:
+            f.truncate(128 * 1024**3)
+        assert disk.stat().st_blocks == 0
+        with disk.open('rb') as f:
+            assert f.read(1024 * 1024) == bytes(1024 * 1024)
     disk = lab / 'host.raw'
-    with disk.open('xb') as f:
-        f.truncate(128 * 1024**3)
-    assert disk.stat().st_blocks == 0
-    with disk.open('rb') as f:
-        assert f.read(1024 * 1024) == bytes(1024 * 1024)
     info = {'format': 'raw', 'virtual-size': disk.stat().st_size, 'backing_file': None}
     ports = {key: port() for key in ('ssh', 'core', 'controller', 'vnc')}
     for name in ('root-password', 'controller-password'):
@@ -66,7 +75,7 @@ def prepare(evidence, memory_mib=12288, vcpus=4):
         'root_password_file': str(lab / 'root-password'), 'controller_password_file': str(lab / 'controller-password'),
         'controller_address': '10.0.2.20/24', 'gateway': '10.0.2.2', 'dns': '10.0.2.3',
         'guest_iso': str(ROOT / '.cache/nex-iso/debian-13.6.0-amd64-netinst.iso'),
-        'memory_mib': memory_mib, 'vcpus': vcpus}
+        'memory_mib': memory_mib, 'vcpus': vcpus, 'disks': disks}
     (lab / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     evidence.mkdir(parents=True, exist_ok=True)
     safe_info = {k: v for k, v in info.items() if k != 'filename'}
@@ -77,7 +86,26 @@ def prepare(evidence, memory_mib=12288, vcpus=4):
     return lab
 
 
-def start(lab, iso, evidence, installed=False):
+OVMF_CODE_CANDIDATES = (
+    Path('/usr/share/edk2/x64/OVMF_CODE.4m.fd'),
+    Path('/usr/share/OVMF/OVMF_CODE_4M.ms.fd'),
+    Path('/usr/share/OVMF/OVMF_CODE_4M.fd'),
+)
+
+
+def resolve_ovmf(code=None):
+    """Return (CODE path, VARS path) for UEFI lab boots, or raise with a clear prerequisite."""
+    resolved = Path(code) if code else next((p for p in OVMF_CODE_CANDIDATES if p.exists()), None)
+    if not resolved:
+        raise RuntimeError('OVMF 4M firmware not found; UEFI has not been tested')
+    resolved = resolved.resolve(strict=True)
+    variables = resolved.with_name(resolved.name.replace('CODE', 'VARS'))
+    if not variables.is_file():
+        raise RuntimeError(f'OVMF VARS file not found beside {resolved}; UEFI has not been tested')
+    return resolved, variables
+
+
+def start(lab, iso, evidence, installed=False, uefi=False, detach=(), uefi_code=None):
     lab = validate_lab(lab)
     config = json.loads((lab / 'config.json').read_text())
     p = config['ports']
@@ -85,10 +113,22 @@ def start(lab, iso, evidence, installed=False):
         '-display', 'none', '-monitor', 'none', '-serial', f'file:{lab}/serial.log',
         '-qmp', f'unix:{lab}/qmp.sock,server=on,wait=off', '-vga', 'none', '-device', 'VGA,xres=800,yres=600',
         '-device', 'qemu-xhci,id=xhci', '-device', 'usb-tablet,bus=xhci.0',
-        '-drive', f'file={lab}/host.raw,format=raw,if=none,id=hostdisk',
-        '-device', 'virtio-blk-pci,drive=hostdisk,serial=NEX-FRESH-QA-ONLY,bootindex=2',
         '-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{p["ssh"]}-10.0.2.15:22,hostfwd=tcp:127.0.0.1:{p["core"]}-10.0.2.15:9443,hostfwd=tcp:127.0.0.1:{p["controller"]}-10.0.2.20:8443',
         '-device', 'virtio-net-pci,netdev=n0,mac=52:54:00:91:20:15', '-no-reboot']
+    # Every prepared target, minus any the caller detached to prove the host still boots.
+    for index, disk in enumerate(lab_disks(lab)):
+        if disk.name in detach:
+            continue
+        command.extend(['-drive', f'file={disk},format=raw,if=none,id=hostdisk{index}',
+            '-device', f'virtio-blk-pci,drive=hostdisk{index},serial=NEX-FRESH-QA-ONLY-{index},bootindex={index + 2}'])
+    if uefi:
+        ovmf_code, ovmf_vars = resolve_ovmf(uefi_code)
+        firmware = lab / 'OVMF_VARS.fd'
+        if not firmware.exists():
+            firmware.write_bytes(ovmf_vars.read_bytes())
+        command.extend(['-drive', f'if=pflash,format=raw,readonly=on,file={ovmf_code}',
+            '-drive', f'if=pflash,format=raw,file={firmware}',
+            '-machine', 'q35'])
     if not installed:
         iso = iso.resolve(strict=True)
         command.extend(['-cdrom', str(iso), '-boot', 'd'])
@@ -148,6 +188,10 @@ if __name__ == '__main__':
     p.add_argument('--iso', type=Path)
     p.add_argument('--installed', action='store_true')
     p.add_argument('--poweroff', action='store_true', help='request graceful ACPI poweroff of only the validated running fresh lab')
+    p.add_argument('--uefi', action='store_true', help='boot this lab through OVMF instead of the SeaBIOS default')
+    p.add_argument('--uefi-code', type=Path, help='OVMF CODE file; matching VARS file must be beside it')
+    p.add_argument('--detach', default='', help='comma-separated lab disk files to leave unattached, e.g. host.raw')
+    p.add_argument('--disks', type=int, default=1, help='blank target disks to create at --prepare')
     p.add_argument('--memory-mib', type=int, default=12288, help='lab guest RAM, recorded in config.json at --prepare')
     p.add_argument('--vcpus', type=int, default=4, help='lab guest vCPUs, recorded in config.json at --prepare')
     p.add_argument('--evidence', type=Path, help='new evidence directory; required to prepare or boot the installer, never the committed docs/qa evidence')
@@ -155,11 +199,12 @@ if __name__ == '__main__':
     if (args.prepare or not (args.poweroff or args.installed)) and not args.evidence:
         p.error('--evidence is required')
     if args.prepare:
-        prepare(args.evidence, args.memory_mib, args.vcpus)
+        prepare(args.evidence, args.memory_mib, args.vcpus, args.disks)
     elif args.poweroff:
         lab = validate_target(args.lab_dir)
         qmp(lab / 'qmp.sock', 'system_powerdown')
         print('Requested graceful poweroff of ' + lab.name)
     else:
         assert args.lab_dir and (args.iso or args.installed)
-        start(args.lab_dir, args.iso, args.evidence, args.installed)
+        start(args.lab_dir, args.iso, args.evidence, args.installed, args.uefi,
+              tuple(d for d in args.detach.split(',') if d), args.uefi_code)

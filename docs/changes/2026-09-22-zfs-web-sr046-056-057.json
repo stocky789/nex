@@ -1,0 +1,41 @@
+{
+  "summary": "Re-apply the ZFS spare redundancy rule on untick/review/payload (SR-046), show pool status/action as visible wrapping text (SR-056), refresh Replace dialog from live inventory (SR-057), and correct related guide wording (SR-048/049/051/052). API impact: none.",
+  "paths": [
+    "web/src/zfs.tsx",
+    "web/src/zfs.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-zfs-web-sr046-056-057.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Spare tick rule, resilvering spelling, erase-button placeholder, and post-wipe Needs attention outcomes in docs/guide/storage-repositories.md.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI and guide only. No Controller/Core wire or docs/API.md change; provision/replace contracts unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes for already-shipped ZFS provision/replace UI and guide."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation and client-side selection validation. Durable pool/repository state remains on the pool master."
+  },
+  "verification": {
+    "method": "node web/src/zfs.test.mjs; node web/src/storage.test.mjs; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree (scoped to this change's paths).",
+    "evidence": [
+      "web/src/zfs.test.mjs",
+      "web/src/storage.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

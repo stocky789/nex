@@ -1,0 +1,30 @@
+{
+  "summary": "Host Stats tab restyled: hardware sections, gauges and charts are white cards on a neutral canvas with plain headings, muted labels, tabular values and a thin fill bar per gauge, replacing the accent-coloured left borders, tinted backgrounds, half-circle arcs, uppercase captions and pill badges. Warm and critical readings keep their word beside the value. Collapsed hardware cards show their row count. API impact: none.",
+  "paths": [
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "docs/guide/usage-history.md describes the gauges, hardware sections and charts by their readings and the Warm and Critical marks, all of which are unchanged; only decoration changed."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation only; no request or response changed."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Visual cleanup of shipped behaviour."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck; web/src/stats.test.mjs (helpers and the series-on-white 3:1 contrast check); Playwright Chromium against a real Controller with the simulated agent, hardware and 10-minute history answered by route interception with fictional values, labelled simulated: hardware summary, System, Disks and Temperature sensors cards with counts, four gauge tiles (one Warm, amber bar) and the charts rendered with no page errors; captures inspected.",
+    "evidence": [
+      "web/src/stats.test.mjs"
+    ]
+  }
+}

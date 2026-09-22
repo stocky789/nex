@@ -116,6 +116,52 @@ assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/
 # array member, so it must never be answered for the operator.
 seed = Path('installer/gui/nex-config.c').read_text()
 assert 'partman-md/device_remove_md' not in seed, 'RAID removal would touch disks the operator did not select'
+# Two or more selected disks install one md RAID1 mirror of a single ext4 root, with an
+# ESP per disk on the GPT label a UEFI install uses. One disk keeps the plain layout.
+# Generated lines (including NVMe "p" suffixes and disk counts) are exercised by
+# tests/integration/installer-hostname.py driving render(); keep only structural guards here.
+assert 'd-i partman-auto/method string raid' in seed and 'd-i partman-auto/method string regular' in seed
+assert 'd-i partman-auto/expert_recipe string nex-mirror :: ' in seed
+assert 'd-i partman-partitioning/default_label string gpt' in seed
+assert '1 1 1 free $iflabel{ gpt } method{ biosgrub } . ' in seed
+assert '538 538 538 free $iflabel{ gpt } method{ efi } format{ } . ' in seed
+assert '1000 20000 1000000000 raid $primary{ } method{ raid } .' in seed
+assert 'd-i grub-installer/force-efi-extra-removable boolean true' in seed, 'every ESP needs the removable boot path'
+assert 'd-i partman-basicfilesystems/no_swap boolean false' in seed, 'the mirror has no swap; partman must not ask'
+# Every selected disk is validated, not just the first, and a mirror of mismatched
+# disks is refused rather than silently shrunk to the smallest one.
+assert 'validate_disk(disk[i],size[i],serial[i],dev[i])' in seed
+assert "within 10% of the smallest selected disk's capacity" in seed
+assert 'fail("Select each mirror disk only once.")' in seed
+recheck = Path('installer/gui/recheck.sh').read_text()
+assert "sed -n 's/^disk=//p' /run/nex-installer/config.ini | tr ';' ' '" in recheck, \
+    'signatures must be cleared on every selected disk'
+graphical = Path('installer/gui/nex-wizard.c').read_text()
+# Both frontends offer the mirror the same way: a tick list of disks, keyboard included.
+assert 'gtk_cell_renderer_toggle_new()' in graphical and 'disk_toggled' in graphical, \
+    'the graphical Disk step must offer a mirror as a tick list'
+assert 'GDK_space' in graphical, 'Space must tick the focused disk'
+assert 'Type: multiselect' in templates.split('Template: nex-installer/disk\n')[1], \
+    'the text Disk step must offer a mirror'
+assert '[ $(set -- $disks; echo $#) -eq 1 ] && db_set nex-installer/disk "$choices"' in wizard, \
+    'the text Disk step must preselect a lone eligible disk, like the GUI'
+# The same facts about each disk in both frontends, so neither is the informed one.
+for fact in ('"Capacity"', '"Type"', '"Model"', '"Serial"', '"Contents"'):
+    assert fact in graphical, fact
+assert 'queue/rotational' in graphical and 'queue/rotational' in wizard
+assert 'has_partitions' in graphical and 'has partitions' in wizard
+assert 'keeps running if one disk fails.' in graphical
+assert 'one disk can fail without stopping the host' in wizard
+assert 'compare_names' in graphical.split('/sys/class/block', 1)[1], 'both frontends list disks in one order'
+assert "within 10% of the smallest selected disk's capacity" in wizard
+assert 'device/serial' in wizard.split('step_disk()', 1)[1].split('step_erase()', 1)[0], \
+    'the text Disk choices must name the serial like the graphical list'
+assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an unconfigured adapter'
+assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
+assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in graphical, \
+    'GTK discover must skip disks below 16 GiB like the text frontend'
+assert 'smallest disk %.1f GiB' in graphical, 'mirror summary must not call raw capacity usable'
+assert 'Template: nex-installer/disk-error\n' in templates
 assert '"/var/log/partman"' in Path('installer/gui/nex-shell.c').read_text(), 'View log must include the partman log'
 
 packages = Path('installer/packages.txt').read_text().split()
@@ -128,6 +174,54 @@ late = Path('installer/late-install.sh').read_text()
 assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
 assert 'PermitRootLogin no' in late
 assert 'systemctl disable zfs-import-scan.service' in late, 'Leftover ZFS pools on unselected disks must not be imported at boot'
+# Embedded configure.sh and nex-sync-esp are data to sh -n on late-install.sh; syntax-check them.
+import subprocess as _sp
+for marker, label in (("<<'TARGET'", 'TARGET'), ("<<'ESP'", 'ESP')):
+    block = late.split(f"{marker}\n", 1)[1].split(f'\n{label}\n', 1)[0]
+    _sp.run(['sh', '-n'], input=block, text=True, check=True)
+    print(f'PASS: late-install {label} heredoc is valid shell')
+# A mirrored system disk is assembled by the kernel from the members' own superblocks;
+# the installed host needs mdadm, its config in the initramfs and GRUB on every ESP.
+# Gate on the installed root being an md device, not on any leftover array in mdstat.
+assert 'mdadm' in packages
+assert "case $root in /dev/md*)" in late
+assert "mdadm --detail --scan \"$root\"" in late and 'update-initramfs -u' in late
+assert '/usr/local/sbin/nex-sync-esp' in late and 'DPkg::Post-Invoke' in late
+assert 'mkdir -p "$copy/EFI"' in late, 'a freshly formatted ESP has no EFI directory to copy into'
+assert 'sed -i' in late and 'UUID=' in late.split('nex-sync-esp', 1)[1], \
+    'nex-sync-esp must rewrite fstab when it remounts a surviving ESP'
+# The mounted ESP is one member's own partition: a replaced or failed disk must not drop the
+# host into emergency mode while the mirror itself is healthy. Apply the real sed to a fixture.
+fstab_fixture = (
+    '# / was on /dev/md0 during installation\n'
+    'UUID=root-uuid / ext4 errors=remount-ro 0 1\n'
+    '# /boot/efi was on /dev/sda1 during installation\n'
+    'UUID=esp-uuid /boot/efi vfat umask=0077 0 1\n'
+    '/dev/sr0 /media/cdrom0 udf,iso9660 user,noauto 0 0\n'
+)
+sed_expr = None
+for line in late.splitlines():
+    if 'sed -i' in line and 'boot' in line and 'nofail' in line and 'x-systemd.device-timeout' in line:
+        # late-install runs: sed -i 'EXPR' /etc/fstab — extract EXPR
+        start = line.index("'") + 1
+        end = line.rindex("'")
+        sed_expr = line[start:end]
+        break
+assert sed_expr, 'late-install must rewrite the /boot/efi fstab options'
+rewritten = _sp.run(['sed', sed_expr], input=fstab_fixture, text=True, capture_output=True, check=True).stdout
+assert rewritten.splitlines()[0] == fstab_fixture.splitlines()[0]
+assert rewritten.splitlines()[1] == fstab_fixture.splitlines()[1]
+assert rewritten.splitlines()[2] == fstab_fixture.splitlines()[2]
+assert 'UUID=esp-uuid /boot/efi vfat umask=0077,nofail,x-systemd.device-timeout=5s 0 1' in rewritten
+assert rewritten.splitlines()[4] == fstab_fixture.splitlines()[4]
+print('PASS: /boot/efi fstab rewrite adds only nofail and a short device timeout')
+# Copying to no ESP is a failure, so the replace operation can tell and install the ESP
+# itself; the installer and the APT hook both tolerate that status.
+assert '[ "$written" -gt 0 ]' in late, 'nex-sync-esp must report copying nothing'
+assert "trap 'umount \"$copy\" 2>/dev/null || true; rmdir \"$copy\" 2>/dev/null || true' EXIT" in late, \
+    'nex-sync-esp must unmount a failed member ESP copy on EXIT'
+assert '/usr/local/sbin/nex-sync-esp || true' in late
+assert 'DPkg::Post-Invoke { "/usr/local/sbin/nex-sync-esp || true"; };' in late
 assert 'systemd.ssh_auto=no' in late
 assert 'nex-core-local.service' in late
 assert 'Local alpha: no Nex Controller' not in late

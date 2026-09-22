@@ -202,6 +202,33 @@ func TestZFSProvisionRequiresCurrentCoreCapability(t *testing.T) {
 	a.call(http.MethodPost, "/api/v1/storage/discover", protocol.StorageDiscoveryRequest{RequestID: "zfs-discover-old", PoolID: pool, HostID: host.HostID, Kind: "zfs-device"}, nil, http.StatusConflict)
 }
 
+func TestZFSProvisionRefusesSparesAndWidenedLayoutsWithoutReplaceCapability(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(host.HostID)
+	cert := certificate(t, host.CertificatePEM)
+	caps := []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability, protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability}
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: caps})
+	device := func(name string) protocol.ZFSProvisionDevice {
+		return protocol.ZFSProvisionDevice{ByID: "/dev/disk/by-id/" + name, Serial: name, Fingerprint: strings.Repeat("a", 64), SizeBytes: 1 << 30}
+	}
+	spare := zfsProvisionAPIRequest{RequestID: "zfs-spare-old", Name: "With spare", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{{
+		HostID: host.HostID, Layout: "mirror", Devices: []protocol.ZFSProvisionDevice{device("d1"), device("d2")}, Spares: []protocol.ZFSProvisionDevice{device("s1")},
+	}}}
+	if body := a.call(http.MethodPost, "/api/v1/storage/zfs/provision", spare, nil, http.StatusConflict).Body.String(); !strings.Contains(body, protocol.ZFSReplaceCapability) {
+		t.Fatalf("spare provision without replace capability: %s", body)
+	}
+	three := zfsProvisionAPIRequest{RequestID: "zfs-mirror3-old", Name: "Three mirror", PoolID: pool, Scope: "host", Hosts: []protocol.ZFSProvisionHost{{
+		HostID: host.HostID, Layout: "mirror", Devices: []protocol.ZFSProvisionDevice{device("d1"), device("d2"), device("d3")},
+	}}}
+	if body := a.call(http.MethodPost, "/api/v1/storage/zfs/provision", three, nil, http.StatusConflict).Body.String(); !strings.Contains(body, protocol.ZFSReplaceCapability) {
+		t.Fatalf("three-disk mirror without replace capability: %s", body)
+	}
+	withReplace := append(append([]string{}, caps...), protocol.ZFSReplaceCapability)
+	a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: withReplace})
+	a.call(http.MethodPost, "/api/v1/storage/zfs/provision", spare, nil, http.StatusAccepted)
+}
+
 func TestZFSProvisionInventoryRemainsCoreOwnedPerHostReadModel(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))

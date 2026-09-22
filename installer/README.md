@@ -71,7 +71,8 @@ component. External redistribution still follows [licensing](../docs/LICENSING.m
 
 ## Install in a disposable VM first
 
-Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk.
+Boot the ISO with at least 2 virtual CPUs, 4 GB RAM and a blank 24 GB virtual disk, or two
+blank disks of the same size to exercise the mirrored system disk.
 Use hardware acceleration/nested virtualization when testing KVM guests. Select
 **GUI install - Nex Core** for the Nex mouse/keyboard wizard, or
 **Minimal install - Nex Core (text)** for the same wizard in a keyboard-only interface.
@@ -99,10 +100,34 @@ resolution changes. It offers five named keyboard layouts, area/timezone dropdow
 password visibility toggle that resets when leaving the host page. Timezone selection
 requires no typing; UTC is the default.
 
-Both modes require an explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disk of
-at least 16 GiB, plus a confirmation that defaults to no and names that disk at review
-before whole-disk ext4 installation. Returning to Review resets the confirmation.
-The validation handoff rechecks disk identity before partitioning. See the
+Both modes require explicitly selected writable, nonremovable whole sd/vd/xvd/nvme disks of
+at least 16 GiB, plus a confirmation that defaults to no and names every selected disk at review
+before installation. Returning to Review resets the confirmation.
+Both offer the same tick list, in the same sorted order, with the same facts about each disk:
+device, capacity, SSD/HDD/NVMe, model, serial and whether it already has partitions. The graphical
+step uses a checkbox column (Space or Enter ticks the focused row) and a live summary line under
+the list that names the resulting layout - single disk, or a mirror with its smallest member's
+capacity - and reports a selection outside the 10 % rule in red while the operator is still
+choosing. Disks under 16 GiB are omitted from both lists, not offered and refused.
+A lone eligible disk is ticked for them; a mirror never is, but a tip offers it when two
+similar-sized disks are present. `nex-config` stays the authority: the summary repeats its rules,
+it does not replace them.
+One disk installs a whole-disk ext4 layout, unchanged. Two or more disks install an md RAID1
+mirror (metadata 1.2) of a single ext4 root. Every mirror disk gets the same GPT layout on either
+firmware - a 1 MiB BIOS boot partition, a 512 MiB ESP, then the array member as partition 3 - so
+the member index never depends on the firmware and `grub-install --target=i386-pc` has somewhere
+to embed. Every member must be within 10% of the smallest selected disk's capacity.
+The mirrored layout has no swap partition. GRUB is installed on every selected disk: legacy
+BIOS through `grub-installer/bootdev`, UEFI by writing the mounted ESP and copying it to the
+other members' ESPs, which Debian 13's `grub-efi-amd64` does not manage itself; an APT
+`DPkg::Post-Invoke` hook repeats that copy whenever a package changes `/boot/efi`.
+`mdadm` is installed from the offline repository, and the installed host's
+`/etc/mdadm/mdadm.conf` and initramfs are regenerated from the array partman created. The ESP
+mounted at `/boot/efi` is one member's own partition rather than part of the mirror, so the
+mirrored host mounts it `nofail`: a replaced or failed disk must not stop the boot while the
+mirror itself is healthy.
+The validation handoff rechecks the identity, capacity and serial of every selected disk
+before partitioning. See the
 [operator procedure](../docs/guide/install-nex-core.md) for exact choices and recovery.
 
 Both frontends write the same private `/run/nex-installer/config.ini` and both are applied

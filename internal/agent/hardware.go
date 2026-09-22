@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 )
 
 // Hardware is read live from the host whenever the Controller asks for it. Nothing here is
@@ -42,6 +43,7 @@ func readHardware(ctx context.Context, root string) protocol.HostHardware {
 	hw.Disks = readDisks(ctx)
 	hw.PCI = readPCI(ctx)
 	hw.Sensors = readSensors(filepath.Join(root, "sys/class/hwmon"))
+	hw.MDArrays = vmhost.ReadMDArrays(root)
 	return hw
 }
 

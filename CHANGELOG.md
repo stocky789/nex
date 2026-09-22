@@ -83,9 +83,121 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   promotion, master change and eject — are in one **Actions** menu in a trailing column, the
   master's row no longer offers actions that can never apply to it, and every column but
   Convergence is sized to its content.
+- The Nex Core installer can put the system disk on a **Linux md RAID1 mirror**: tick two or more
+  disks at install time. The host keeps running if one of those disks fails; replace the failed
+  disk from the host's **Stats** tab.
+- **Replace disk** on a degraded ZFS repository (or a degraded system mirror) clears a spare and
+  rebuilds onto it from Nex Controller. ZFS pools may also take hot spares and a three-disk mirror
+  or RAIDZ3 when every selected host supports disk replace.
+- A host's **Version** light shows whether its Nex Core matches the newest release in the update
+  archive (green), has an update (orange) or a new major release (red).
 
 ### Bug Fixes
 
+- A ZFS repository whose pool is still serving after a disk failure stays readable and writable
+  and shows as degraded, instead of being taken out of service until the disk is replaced
+  (BUG-0443).
+- The host Version line now names the state in text (up to date, update available, or major
+  release behind) beside the colour light, so the meaning does not depend on hover or colour
+  alone (BUG-0524).
+- Checking for updates on an offline Controller no longer runs the same failing archive refresh
+  twice when it also looks up the newest Nex Core (BUG-0523).
+- Install and replace-system-disk guide pages now agree on ESP `nofail`: this build mounts with it;
+  older and hand-built mirrors may still need the console steps (BUG-0519).
+- The ZFS replace guide no longer says an ONLINE disk appears in the failed-disk list; those disks
+  are not offered (BUG-0520).
+- The host Version light no longer pulses green for plain Debian (or other non-Nex-Core) OS
+  strings, and no longer misreads apt epoch or package revisions. A pre-release host against the
+  matching final release now shows an update available, and a pre-release archive candidate is not
+  offered as an upgrade over that final. Signing out clears the light so a non-administrator does
+  not keep the previous admin's archive answer (BUG-0470, BUG-0471, BUG-0472).
+- On a host Stats tab, the system disk mirror now keeps following a rebuild and a submitted
+  replacement on its own. The progress percentage and the success or failure notice used to freeze
+  until Retry was pressed by hand, because each history refresh restarted the follow timers
+  (BUG-0448).
+- When Replace disk… finds no usable spare, the dialog now says every disk is in use. It used to
+  claim every spare was too small even when size was never the problem; that sentence is reserved
+  for when every offered disk really is undersized (BUG-0449).
+- Replace disk… is hidden while a system array is rebuilding, and Nex Core refuses a second
+  replacement until recover, resync or reshape finishes (BUG-0473).
+- Healthy system arrays are summarised by their RAID level instead of always as a mirror, and
+  Replace disk… is offered only for RAID1 (BUG-0474).
+- Temperature gauges announce Warm or Critical in the meter value, not only as coloured text
+  (BUG-0475).
+- The system disk panel no longer calls an older Core or an unavailable md report a single
+  unmirrored disk; it shows the upgrade or host reason instead (BUG-0476).
+- Hardware table headers keep their underline, the system disk block matches the other Hardware
+  cards, and the Healthy state meets text contrast on the Stats canvas (BUG-0477, BUG-0478).
+- Replace disk… stays hidden until the host also supports storage discovery, so the dialog does
+  not open into an immediate discovery refusal (BUG-0479).
+- Hot spares and widened ZFS layouts (three-disk mirror, RAIDZ3) are refused unless every
+  selected host and the pool master support disk replace; the wizard hides Spare and those
+  layouts without that capability (BUG-0491).
+- Pool detail on ZFS repositories is withheld from reports until the Controller acknowledges
+  disk-replace support, so an older Controller no longer rejects every host report (BUG-0492).
+- Replace disk… on a system mirror now uses the same disk table as ZFS replace, with an extra Fit
+  column for disks that are too small (BUG-0481).
+- Replacing a system disk and replacing a ZFS pool disk now take the same host lock, so two
+  replacements cannot wipe the same spare at once (BUG-0482).
+- A system-disk replacement that failed while installing the bootloader can be retried after the
+  mirror finishes rebuilding; it no longer refuses the new disk as already in sync (BUG-0483).
+- Choosing a disk that still shows as a faulty mirror member is refused instead of reported as a
+  successful repair (BUG-0484).
+- On UEFI hosts, when `/boot/efi` is empty because the failed disk held that mount, the replacement
+  copies boot files from the surviving disk's EFI system partition (BUG-0485).
+- Replacing a failed ZFS disk shows the replacement's by-id name beside the erase confirmation,
+  so the name to type is visible without hovering the serial (BUG-0487).
+- The guide for replacing a failed ZFS disk now points at **ZFS storage by host** and its
+  **Action** column, where **Replace disk** actually appears (BUG-0486).
+- A registered ZFS dataset now shows the same pool detail line (failed disk, resilver,
+  error counts) under Host access instead of only the word degraded (BUG-0488).
+- A running ZFS resilver percentage now matches the size figures beside it (BUG-0489).
+- A ZFS pool that is still ONLINE but has leaf read/write/checksum errors, or a ZFS status
+  sentence, is flagged for attention with the offending device named (BUG-0490).
+- Replace disk on a ZFS pool is hidden while a resilver is running or the failed leaf is already
+  being replaced, and Nex Core refuses a nested replace or an already-healthy member before wiping
+  another disk (BUG-0493, BUG-0494, BUG-0495).
+- A ZFS replacement that is smaller than the failed disk is refused before wipe, and a resume after
+  wipe-started still requires erase confirmation if the disk now holds data (BUG-0496, BUG-0497).
+- A ZFS hot spare that needs erase is wiped with the data disks, an ineligible spare is refused
+  before wipe, and `zpool create` turns on automatic spare engagement when spares are selected
+  (BUG-0498, BUG-0499).
+- A timed-out storage probe no longer keeps the previous ZFS pool detail, and **Replace disk** on
+  **ZFS storage by host** stays hidden until the host connection and pool observation are both
+  current; a stale pool line is marked **Last report** (BUG-0500).
+- A ZFS hot spare can no longer be left on a single data disk by unticking after Spare; the wizard
+  and payload both re-apply the two-data-disk rule (BUG-0501).
+- ZFS pool status and action sentences are visible under the summary line, and a long degraded
+  summary wraps instead of stretching the Storage table (BUG-0502).
+- **Replace disk** follows the live pool observation while open, so a leaf that came back online
+  reaches the empty state instead of a stale failed list (BUG-0503).
+- ZFS replace guide: resilvering spelling, erase-button placeholder, and post-wipe Needs attention
+  outcomes (BUG-0504, BUG-0505).
+- On a mirrored install, losing the disk whose EFI partition fstab named no longer leaves GRUB
+  upgrades writing into an empty `/boot/efi` directory: the host remounts a surviving member's
+  ESP, rewrites that fstab UUID, and keeps copying boot files to the other members. The ESP mount
+  also uses `nofail` with a short device timeout so a missing ESP cannot drop a healthy mirror
+  into emergency mode (BUG-0506).
+- Minimal (text) install now preselects a lone eligible disk, matching the graphical installer
+  (BUG-0508).
+- A single-disk install on a machine that still has an old software RAID on unselected disks no
+  longer records those foreign arrays in the new host's mdadm.conf or initramfs (BUG-0509).
+- The pool master refuses hot spares and widened ZFS layouts on a member that lacks disk-replace
+  support before posting the selection, instead of forwarding an opaque peer refusal (BUG-0510).
+- Replacing a ZFS disk on a member waits long enough for wipe and `zpool replace`, and a dropped
+  peer connection no longer cancels work already started on that host (BUG-0512).
+- Minimal install no longer walks every network adapter by default. After you pick the
+  management adapter, a Yes/No asks whether to configure more; Enter means no and leaves the
+  rest unconfigured. Choosing yes still offers **Disabled**, **dhcp** or **static** on each leftover
+  adapter (BUG-0444).
+- Graphical and text installers now share the same disk and network wording: mirror capacity uses
+  the smallest disk size rather than calling it usable, disks under 16 GiB are omitted from both
+  lists, leftover adapters say **Disabled** in both frontends, and the text disk list names each
+  serial (BUG-0514–BUG-0518).
+- A failed ESP copy on a mirrored host no longer leaves a member's EFI partition mounted after
+  apt (BUG-0519).
+- Disk selection refusals use one shared 10% mirror rule sentence, and CI pins the 5% accept /
+  over-10% refuse boundary for both frontends (BUG-0520, BUG-0525).
 - A replacement Nex Controller can now recover a pool whose master is gone for good. Previously
   the first survivor to re-enroll was recorded as the pool master, every other member's
   enrollment was held, and promoting the survivor was refused with "this host is already the pool

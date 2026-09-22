@@ -76,10 +76,13 @@ Known limits:
 6. Drag across a chart to zoom all charts to that period; double-click to zoom back out.
 7. Select a series name below a chart to hide or show that series (a hidden series is dimmed and
    struck through). Hidden series stay hidden while you refresh.
-8. On a host, read the **Hardware** panel above the charts: a summary line naming the server,
-   its CPU, installed memory and BIOS version. Select a section — **System**, **CPU**,
-   **Memory**, **Disks**, **PCI devices** or **Temperature sensors** — to expand its table.
-   Select **Retry** in the panel if the host could not be reached.
+8. On a host, read the **Hardware** panel above the charts. A **System disk mirror** block at
+   the top of the panel shows whether the system disk is mirrored and offers **Replace disk…**
+   when a member has failed ([Replace a failed system disk](replace-a-failed-system-disk.md)).
+   Below that, a summary line names the server, its CPU, installed memory and BIOS version.
+   Select a section — **System**, **CPU**, **Memory**, **Disks**, **PCI devices** or
+   **Temperature sensors** — to expand its table; collapsed sections that have rows show a
+   count. Select **Retry** in the panel if the host could not be reached.
 9. On a host with the **Last 10 minutes** range selected, read the gauges above the charts: CPU
    and memory as a percentage, then one gauge per temperature sensor showing its reading in °C.
    A sensor at or above its warm threshold is marked **Warm**, and at or above its critical

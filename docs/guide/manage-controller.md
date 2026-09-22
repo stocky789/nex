@@ -150,7 +150,12 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    hostname; its header shows the **Pool master** role badge (the **Member** badge is
    reserved for hosts joined in a later phase). **General** shows **Host overview**
    and health checks: identity, last contact and observation times, CPU/RAM and OS/agent
-   version. Select **Networking** for observed interfaces or **Storage** for observed
+   version. A light beside **Version** compares the host with the newest Nex Core in the
+   update archive: pulsing green is up to date, orange means a newer release exists, and red
+   means a newer major release exists (for example the host runs 1.x and 2.0 is available).
+   Hover over the light for the versions behind it. No light appears when the archive could
+   not be read, the account is not an administrator, or the host's version string is not a
+   Nex Core release. Select **Networking** for observed interfaces or **Storage** for observed
    disks; these are read-only observations. **Activity** shows recorded changes for the
    selected resource. Selecting another resource returns to **General**.
    Connection warnings remain visible on the host's General, Networking and Storage views.

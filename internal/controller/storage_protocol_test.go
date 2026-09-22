@@ -84,6 +84,10 @@ func TestZFSCoreReceivesCapabilityAcknowledgementWithoutNewResponseFields(t *tes
 	if old.Capability != protocol.ZFSProvisionCapability || old.ProtocolVersion != protocol.Version {
 		t.Fatalf("ZFS support object changed shape: %+v", old)
 	}
+	replace := a.report(cert, protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: []string{protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability}})
+	if replace.StorageRepositories == nil || replace.StorageRepositories.Capability != protocol.ZFSReplaceCapability {
+		t.Fatalf("missing ZFS replace capability acknowledgement: %+v", replace.StorageRepositories)
+	}
 }
 
 func TestClusteredStorageV2AcknowledgementDispatchesAndAcceptsProofRequestID(t *testing.T) {

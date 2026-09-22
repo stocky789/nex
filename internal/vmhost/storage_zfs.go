@@ -45,6 +45,7 @@ func prepareZFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	path.Available = a.Available
 	path.Observed = a.Observed
 	path.Health = a.Health
+	path.ZFSPool = a.ZFSPool
 	return path, nil
 }
 
@@ -70,7 +71,15 @@ func inspectZFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	if mounted != "yes" || mountpoint != v.MountPath {
 		return storageAccess{}, errors.New("ZFS dataset is not mounted at its registered mount path")
 	}
-	if health != "ONLINE" {
+	// A DEGRADED pool has lost redundancy but still serves every read and write, so the
+	// repository stays in service until the failed device is replaced.  FAULTED, UNAVAIL,
+	// SUSPENDED and REMOVED do not serve data and remain inaccessible.
+	switch health {
+	case "ONLINE":
+		health = "healthy"
+	case "DEGRADED":
+		health = "degraded"
+	default:
 		return storageAccess{}, fmt.Errorf("ZFS pool health is %s", health)
 	}
 	if want := s.Identity.ZFS; want != nil && ((want.PoolGUID != "" && want.PoolGUID != poolGUID) || (want.DatasetGUID != "" && want.DatasetGUID != datasetGUID)) {
@@ -98,7 +107,8 @@ func inspectZFS(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	}
 	a.Available = available
 	a.Observed = protocol.StorageIdentity{ZFS: &protocol.ZFSStorageIdentity{PoolGUID: poolGUID, DatasetGUID: datasetGUID}}
-	a.Health = "healthy"
+	a.Health = health
+	a.ZFSPool = zfsPoolStatus(ctx, v.Pool)
 	return a, nil
 }
 

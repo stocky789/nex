@@ -303,6 +303,50 @@ func TestRefreshIndexFailureLeavesNoStamp(t *testing.T) {
 	}
 }
 
+// CheckWithCache stamps a failed refresh so GET /api/v1/updates does not run apt-get update
+// twice when it then checks nex-core-local against the same unreachable archive.
+func TestCheckWithCacheFailedRefreshStampsAttempt(t *testing.T) {
+	calls := fakeCommands(t, func(line string) (string, int) {
+		if strings.Contains(line, "apt-get") && strings.Contains(line, "update") {
+			return "could not resolve host", 1
+		}
+		if strings.HasPrefix(line, "apt-cache policy") {
+			return "Candidate: (none)\n", 0
+		}
+		return "", 0
+	})
+	cache := t.TempDir()
+	st, err := CheckWithCache(context.Background(), "https://mirror.example/apt", "nex-controller", cache)
+	if err != nil || st.Error == "" {
+		t.Fatalf("expected a refresh error status: %v %+v", err, st)
+	}
+	stamp := filepath.Join(cache, "apt-refresh.stamp")
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("failed refresh left no stamp: %v", err)
+	}
+	updates := 0
+	for _, line := range *calls {
+		if strings.Contains(line, "apt-get") && strings.Contains(line, "update") {
+			updates++
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("first CheckWithCache ran apt-get update %d times:\n%s", updates, joined(calls))
+	}
+	if _, err := CheckWithCache(context.Background(), "https://mirror.example/apt", "nex-core-local", cache); err != nil {
+		t.Fatal(err)
+	}
+	updates = 0
+	for _, line := range *calls {
+		if strings.Contains(line, "apt-get") && strings.Contains(line, "update") {
+			updates++
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("second CheckWithCache refreshed again:\n%s", joined(calls))
+	}
+}
+
 // The whole point of the change: upgrades go through apt so dependencies resolve,
 // and never through dpkg -i, which cannot satisfy them.
 func TestApplyLocalUpgradesViaApt(t *testing.T) {

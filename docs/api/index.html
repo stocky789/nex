@@ -39,6 +39,7 @@
 <li><a href="#createStorageRegistration">POST /api/v1/storage</a></li>
 <li><a href="#discoverStorage">POST /api/v1/storage/discover</a></li>
 <li><a href="#provisionZFSStorage">POST /api/v1/storage/zfs/provision</a></li>
+<li><a href="#replaceZFSDisk">POST /api/v1/storage/zfs/replace</a></li>
 <li><a href="#getStorageCluster">GET /api/v1/storage/cluster</a></li>
 <li><a href="#applyStorageCluster">POST /api/v1/storage/cluster/apply</a></li>
 <li><a href="#verifyStorageClusterFence">POST /api/v1/storage/cluster/verify-fence</a></li>
@@ -85,6 +86,7 @@
 <li><a href="#hostHardware">GET /api/v1/hosts/{id}/hardware</a></li>
 <li><a href="#setPoolBMCProvisioning">POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning</a></li>
 <li><a href="#setPoolHostFencing">POST /api/v1/pools/{id}/host-fencing</a></li>
+<li><a href="#replaceSystemDisk">POST /api/v1/hosts/{id}/system-disk</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -163,6 +165,17 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Master-directed durable ZFS provisioning. Core owns repository identity, validates stable selected devices immediately before destructive work, journals recovery and performs selected member work through authenticated Core-peer transport. Results are reported in Inventory.managed.zfs_provisions for adoption after Controller replacement.&quot;
+}</pre></section>
+<section><h2>storage-zfs-replace</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;capability&quot;: &quot;storage-zfs-replace-v1&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Master-directed replacement of one failed leaf device of a provisioned ZFS pool. It is addressed to the pool master, which accepts it only for its own pool and only for a repository its own record already holds on the named host, and either performs it locally or forwards it to that ready current member over the authenticated Core-peer channel. The executing host revalidates the pool and the disk against a fresh observation, then runs wipefs --all on the replacement and zpool replace; the command is complete when zpool replace returns, and the resilver that follows is reported by the ordinary per-host ZFS observation. ZFS retires the old device itself when the resilver finishes; nothing detaches it. The host journals the operation under its state directory, keyed on operation_id: a redelivered command replays its recorded outcome, a pool already resilvering onto the replacement is adopted as success, an operation ID reused for a different repository, failed leaf or replacement is refused, and an agent interrupted after the wipe resumes from the wipe-started stage, where the wiped disk can no longer match its fingerprint and the identity that survives a wipe (the same by_id, serial and size) is checked instead. The master then records the replacement disk on its own repository record. Master-side refusals are failed results (\&quot;ZFS disk replacement targets another pool\&quot;, \&quot;only the pool master may replace a ZFS disk\&quot;, \&quot;this pool master has no ZFS repository of that ID on that host\&quot;, \&quot;the selected ZFS host is not a ready current member\&quot;); the executing host&#x27;s refusals arrive as needs_attention carrying its own sentence (\&quot;&lt;device&gt; is no longer part of this pool; check the pool before replacing a disk\&quot;, \&quot;&lt;device&gt; is online, so there is nothing to replace\&quot;, \&quot;the replacement disk cannot be safely observed\&quot;, \&quot;the replacement disk changed since it was selected, or is in use\&quot;, \&quot;the replacement disk holds old data and was not confirmed for erasure\&quot;, \&quot;the replacement disk could not be cleared\&quot;, \&quot;&lt;old&gt; could not be replaced with &lt;new&gt;\&quot;).&quot;
 }</pre></section>
 <section><h2>storage-update</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -386,6 +399,17 @@
   },
   &quot;capability&quot;: &quot;pool-host-fencing-v1 on the pool master.&quot;,
   &quot;semantics&quot;: &quot;Payload: PoolCommand{request_id, action: host-fencing, membership.master_host_id, enabled}. It names no member, because the setting is the pool&#x27;s. The master records PoolMembership.host_fencing_disabled as the negative of enabled and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state and not a transition, so re-sending the state already recorded answers succeeded. Turning it on arms nothing by itself: Nex Core arms a host&#x27;s watchdog only where every prerequisite in PoolFenceSummary.prerequisites holds, and the quorum line is unknown until this pool runs a quorum service. Refusals: \&quot;this command carries no host fencing request\&quot;, \&quot;only the pool master records whether host fencing is on\&quot;, \&quot;pool membership is unavailable\&quot;, and the authority-write refusals a fence profile takes while a master change is in flight.&quot;
+}</pre></section>
+<section><h2>host-system-disk-replace</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Addressed to the host whose mirror is rebuilt and performed entirely by it; nothing is pool-scoped and nothing is kept by the Controller. The durable record is the md superblocks and the installer&#x27;s /etc/mdadm/mdadm.conf, whose array UUID does not change when a member is added. Core journals the operation under its state directory, keyed on operation_id: a redelivered command replays its recorded outcome, an array that already has the replacement as a member is adopted without wiping it again, and an agent interrupted after the wipe resumes from the wipe-started stage, where the wiped disk can no longer match its fingerprint and the identity that survives a wipe (the same by_id, serial and size) is checked instead. A member whose disk the kernel no longer exposes is the failure being repaired and is passed over. Refusals are definite failed results carrying Core&#x27;s own sentence: \&quot;/dev/mdN is not degraded, so there is no member to replace\&quot;, \&quot;&lt;device&gt; is a &lt;level&gt; array; only a RAID1 mirror is rebuilt this way\&quot;, \&quot;&lt;device&gt; has no working member to copy from; restore this host instead\&quot;, \&quot;the replacement disk changed since it was selected, or is in use\&quot;, \&quot;the replacement disk holds old data and was not confirmed for erasure\&quot;, \&quot;Nex Core cannot read this host&#x27;s RAID arrays\&quot;, \&quot;this host has no array &lt;mdN&gt;\&quot;, \&quot;&lt;disk&gt; already holds a working member of &lt;array&gt;\&quot;, \&quot;the replacement disk cannot be safely observed\&quot;, \&quot;the replacement disk is smaller than the remaining system disk\&quot;.&quot;,
+  &quot;capability&quot;: &quot;host-system-disk-replace-v1&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -3436,6 +3460,124 @@
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Controller persistence failure; no durable command was accepted.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="replaceZFSDisk"><h2>POST <code>/api/v1/storage/zfs/replace</code></h2>
+<p>Replace a failed disk of a provisioned ZFS repository</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller persists a stable request_id and relays one durable storage-zfs-replace command to the pool master, which checks that the repository and the host are its own and either runs the work itself or forwards it to that ready current member over the authenticated peer channel. The executing host revalidates the pool and the disk against a fresh observation, then clears the replacement with wipefs --all and runs zpool replace; the operation is done when zpool replace returns. The resilver that follows is ZFS&#x27;s own work and is read from the repository&#x27;s ordinary pool observation, and ZFS retires the old disk itself when it finishes. VMs on the pool keep running throughout and nothing waits on the Controller. The refusals below are only what the Controller can already see from its own rows; Core checks the pool, the failed leaf, the replacement and the erase confirmation again, and its own refusals arrive as the operation&#x27;s result rather than as an HTTP status here. Implemented in development product 0.4.3.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;replaceZFSDisk&quot;,
+  &quot;summary&quot;: &quot;Replace a failed disk of a provisioned ZFS repository&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller persists a stable request_id and relays one durable storage-zfs-replace command to the pool master, which checks that the repository and the host are its own and either runs the work itself or forwards it to that ready current member over the authenticated peer channel. The executing host revalidates the pool and the disk against a fresh observation, then clears the replacement with wipefs --all and runs zpool replace; the operation is done when zpool replace returns. The resilver that follows is ZFS&#x27;s own work and is read from the repository&#x27;s ordinary pool observation, and ZFS retires the old disk itself when it finishes. VMs on the pool keep running throughout and nothing waits on the Controller. The refusals below are only what the Controller can already see from its own rows; Core checks the pool, the failed leaf, the replacement and the erase confirmation again, and its own refusals arrive as the operation&#x27;s result rather than as an HTTP status here. Implemented in development product 0.4.3.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.3&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Token returned by login or current session.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceAPIRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;The durable command was journaled for the pool master. An accepted request is not proof that a disk was changed: follow the operation and the repository&#x27;s pool observation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation with its current status, and no second command.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, \&quot;a stable request_id is required\&quot;, or the request bounds: \&quot;ZFS disk replacement requires a repository, pool and host\&quot;, \&quot;ZFS disk replacement names the failed device by its /dev/disk/by-id path\&quot;, \&quot;the replacement must be a different disk from the failed one\&quot;, \&quot;ZFS provision device is invalid\&quot; (a by_id that is not under /dev/disk/by-id/, a missing serial or size, or a fingerprint that is not 64 hex characters), \&quot;ZFS erase confirmation must name the selected device\&quot;.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;The selected host is not a known host (\&quot;host not found\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;\&quot;pool not found\&quot;; a pool whose master_host_id no longer resolves to a host (\&quot;host not found\&quot;); the pool master or the selected host is revoked, stale or in another pool (\&quot;host must be fresh, active, in the selected pool, and support managed-vm-v1\&quot;, \&quot;the selected host must be fresh, active and in the selected pool\&quot;); the master is too old for ZFS work (\&quot;pool master does not support ZFS provisioning; upgrade Nex Core\&quot;); either side is too old for this operation (\&quot;replacing a ZFS disk needs storage-zfs-replace-v1 on the pool master and the selected host; upgrade Nex Core\&quot;); or the request_id was already used (\&quot;request_id already used with another payload\&quot;, \&quot;request_id already used for another operation\&quot;).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller storage failure; no durable command was accepted.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
@@ -8193,6 +8335,135 @@
     }
   }
 }</pre></details></section>
+<section id="replaceSystemDisk"><h2>POST <code>/api/v1/hosts/{id}/system-disk</code></h2>
+<p>Replace a failed disk of a host&#x27;s system mirror</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the host, which revalidates the array and the disk against its own observation and then clears the replacement, copies the partition table from the surviving member&#x27;s disk with sgdisk --replicate and randomises its identifiers, adds the new member with mdadm --add, and makes the disk bootable the way the installer does for that firmware: on BIOS grub-install --target=i386-pc on the disk itself (firmware branch on /sys/firmware/efi; the installer still places an ESP on every mirror member, but that path does not format it), and on UEFI mkfs.vfat on the replacement&#x27;s copy of the surviving disk&#x27;s ESP followed by the host&#x27;s own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing. The kernel rebuilds the mirror afterwards; the host and its VMs keep running and nothing waits on the Controller. The Controller computes nothing and stores nothing but the task: the mirror&#x27;s state comes from the host hardware report. The refusals below are only what the Controller can already see from this host&#x27;s reports; Core checks the array, the disk, its size and the erase confirmation again, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.4.3.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;replaceSystemDisk&quot;,
+  &quot;summary&quot;: &quot;Replace a failed disk of a host&#x27;s system mirror&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the host, which revalidates the array and the disk against its own observation and then clears the replacement, copies the partition table from the surviving member&#x27;s disk with sgdisk --replicate and randomises its identifiers, adds the new member with mdadm --add, and makes the disk bootable the way the installer does for that firmware: on BIOS grub-install --target=i386-pc on the disk itself (firmware branch on /sys/firmware/efi; the installer still places an ESP on every mirror member, but that path does not format it), and on UEFI mkfs.vfat on the replacement&#x27;s copy of the surviving disk&#x27;s ESP followed by the host&#x27;s own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing. The kernel rebuilds the mirror afterwards; the host and its VMs keep running and nothing waits on the Controller. The Controller computes nothing and stores nothing but the task: the mirror&#x27;s state comes from the host hardware report. The refusals below are only what the Controller can already see from this host&#x27;s reports; Core checks the array, the disk, its size and the erase confirmation again, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.4.3.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.3&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Host ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/HostSystemDiskRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;The durable command was journaled for the host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of the same request_id and payload: the original operation with its current status, and no second command.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceAccepted&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Malformed JSON, unknown field, \&quot;host and a stable request_id are required\&quot;, or the request bounds: \&quot;system disk replacement names one md array, such as md0\&quot;, \&quot;system disk replacement device is invalid\&quot; (a by_id that is not under /dev/disk/by-id/, a missing serial or size, or a fingerprint that is not 64 hex characters), \&quot;the erase confirmation must name the selected device\&quot;, \&quot;system disk replacement requires a host\&quot;.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or expired administrator session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Missing or wrong X-CSRF-Token, or a cross-origin request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown host.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The host is revoked, it is not freshly connected (\&quot;the host must be freshly connected before its system disk is replaced\&quot;), its Nex Core is too old (\&quot;replacing a system disk needs host-system-disk-replace-v1 on this host; upgrade Nex Core\&quot;), or the request_id was already used with another payload.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;500&quot;: {
+      &quot;description&quot;: &quot;Controller storage failure.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -8873,6 +9144,7 @@
         &quot;storage-detach&quot;,
         &quot;storage-credential-retire&quot;,
         &quot;storage-zfs-provision&quot;,
+        &quot;storage-zfs-replace&quot;,
         &quot;network-register&quot;,
         &quot;network-remove&quot;,
         &quot;network-update&quot;,
@@ -8892,7 +9164,8 @@
         &quot;pool-promote&quot;,
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
-        &quot;pool-host-fencing&quot;
+        &quot;pool-host-fencing&quot;,
+        &quot;host-system-disk-replace&quot;
       ]
     },
     &quot;storage&quot;: {
@@ -9008,6 +9281,16 @@
         }
       ]
     },
+    &quot;zfs_replace&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
     &quot;pool&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -9027,6 +9310,17 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
+    },
+    &quot;system_disk_replace&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/SystemDiskReplaceRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Set on a host-system-disk-replace command: the array to rebuild and the replacement disk.&quot;
     }
   },
   &quot;required&quot;: [
@@ -10107,6 +10401,7 @@
         &quot;storage-detach&quot;,
         &quot;storage-credential-retire&quot;,
         &quot;storage-zfs-provision&quot;,
+        &quot;storage-zfs-replace&quot;,
         &quot;network-register&quot;,
         &quot;network-remove&quot;,
         &quot;network-update&quot;,
@@ -10126,7 +10421,8 @@
         &quot;pool-promote&quot;,
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
-        &quot;pool-host-fencing&quot;
+        &quot;pool-host-fencing&quot;,
+        &quot;host-system-disk-replace&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -11891,6 +12187,16 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;zfs_pool&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -12221,6 +12527,16 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
       }
+    },
+    &quot;spares&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      },
+      &quot;description&quot;: &quot;Hot spares. They are erased like the data disks, added as spare vdevs and the pool is created with autoreplace=on, so ZFS resilvers onto one by itself when a data disk fails. They satisfy no part of the layout rule.&quot;
     }
   },
   &quot;required&quot;: [
@@ -12360,6 +12676,98 @@
   &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionHostResult&quot;,
   &quot;description&quot;: &quot;Durable outcome for one selected host. pool_guid and dataset_guid identify that host&#x27;s independent native zpool and dataset after a successful provision; this outcome alone is not a current access observation.&quot;
 }</pre></details>
+<details id="ZFSReplaceRequest"><summary>ZFSReplaceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Replace one failed leaf device of a provisioned ZFS repository&#x27;s pool on one host. old_device names the leaf exactly as the pool observation reports it, and device is one candidate from POST /api/v1/storage/discover with kind zfs-device, carrying the same identity, fingerprint and typed erase confirmation rules the ZFS wizard uses. Core revalidates both against a fresh observation of the pool and the disk before it touches anything.&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core operation identity. The executing host journals its replacement under it, so a redelivered command replays the recorded outcome instead of acting again.&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The configured host whose pool holds the failed disk. It may be the pool master or a ready current member.&quot;
+    },
+    &quot;old_device&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The failed leaf&#x27;s /dev/disk/by-id path, as the repository&#x27;s pool observation reports it.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;old_device&quot;,
+    &quot;device&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSReplaceRequest&quot;
+}</pre></details>
+<details id="ZFSReplaceAPIRequest"><summary>ZFSReplaceAPIRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The Controller allocates the operation ID; request_id is the client&#x27;s own stable retry key.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;old_device&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;device&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;old_device&quot;,
+    &quot;device&quot;
+  ]
+}</pre></details>
+<details id="ZFSReplaceAccepted"><summary>ZFSReplaceAccepted</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;old_device&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;host_id&quot;,
+    &quot;old_device&quot;,
+    &quot;operation&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
 <details id="ZFSHostAccess"><summary>ZFSHostAccess</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -12402,6 +12810,16 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -12411,6 +12829,115 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.ZFSHostAccess&quot;,
   &quot;description&quot;: &quot;Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission.&quot;
+}</pre></details>
+<details id="ZFSPoolStatus"><summary>ZFSPoolStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scan&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolScan&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolDevice&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolStatus&quot;,
+  &quot;description&quot;: &quot;Core&#x27;s transient `zpool status` observation of one imported pool. Nothing durable is derived from it: the Controller passes it through and a fresh Controller sees it again on the next report.&quot;
+}</pre></details>
+<details id="ZFSPoolScan"><summary>ZFSPoolScan</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;function&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;start_time&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;end_time&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;to_examine&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;examined&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;issued&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;function&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolScan&quot;,
+  &quot;description&quot;: &quot;A running or completed scrub or resilver. ZFS formats its own sizes and timestamps, so they are reported as the strings it produced.&quot;
+}</pre></details>
+<details id="ZFSPoolDevice"><summary>ZFSPoolDevice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;parent&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;replacing or spare when this leaf sits under an in-flight replacement or activated-spare vdev; omitted for an ordinary data leaf.&quot;
+    },
+    &quot;read_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;write_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;checksum_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolDevice&quot;,
+  &quot;description&quot;: &quot;One leaf of the pool&#x27;s vdev tree, named as the pool was created: the /dev/disk/by-id path for a Core-provisioned repository. parent marks an in-flight replacing or spare vdev.&quot;
 }</pre></details>
 <details id="StorageDiscoveryResult"><summary>StorageDiscoveryResult</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -15050,6 +15577,10 @@
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Non-fatal repo or apply problem; installed_version remains valid for check.&quot;
+    },
+    &quot;core_available_version&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Newest nex-core-local version the archive offers, for comparing against each host&#x27;s reported version; absent when the archive does not offer it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -17919,6 +18450,9 @@
     },
     &quot;sensors&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/HardwareSensors&quot;
+    },
+    &quot;md_arrays&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/HardwareMDArrays&quot;
     }
   },
   &quot;required&quot;: [
@@ -17928,7 +18462,8 @@
     &quot;memory&quot;,
     &quot;disks&quot;,
     &quot;pci&quot;,
-    &quot;sensors&quot;
+    &quot;sensors&quot;,
+    &quot;md_arrays&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.HostHardware&quot;,
   &quot;description&quot;: &quot;What a host reads about itself on request. State owner: Nex Core. Nothing here is cached, persisted or reported in a heartbeat, so a fresh Controller sees the same report as the one it replaced.&quot;
@@ -18800,5 +19335,197 @@
     &quot;total&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolFenceCluster&quot;
+}</pre></details>
+<details id="MDMember"><summary>MDMember</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One dev-* entry of an md array: the partition, the slot it fills and the state the kernel reports for it.&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Kernel name of the member partition, such as sda2.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;/dev path of the member partition.&quot;
+    },
+    &quot;slot&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The array slot this member fills, or \&quot;none\&quot; for a spare or failed member.&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The kernel&#x27;s own member state, such as in_sync, spare, faulty or write_mostly; several are comma separated.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;device&quot;,
+    &quot;slot&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.MDMember&quot;
+}</pre></details>
+<details id="MDArray"><summary>MDArray</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One /sys/block/md*/md/ directory. A member the kernel no longer exposes is simply absent, so fewer members than raid_disks is how a failed disk appears.&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Array name, such as md0.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;/dev path of the array.&quot;
+    },
+    &quot;level&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;RAID level as the kernel reports it, such as raid1.&quot;
+    },
+    &quot;raid_disks&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;How many members the array is defined to have.&quot;
+    },
+    &quot;degraded&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;How many members are missing or failed; 0 is a healthy array.&quot;
+    },
+    &quot;sync_action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The action the kernel is running: idle, resync, recover, check, repair or reshape.&quot;
+    },
+    &quot;sync_percent&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;number&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Position in the running action, from md/sync_completed. Absent when the host reports none, so no progress is invented.&quot;
+    },
+    &quot;sync_speed_kbs&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;The kernel&#x27;s current copy rate in KB/s while an action runs; absent when none does.&quot;
+    },
+    &quot;members&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/MDMember&quot;
+      },
+      &quot;description&quot;: &quot;At most 64 members.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;device&quot;,
+    &quot;level&quot;,
+    &quot;raid_disks&quot;,
+    &quot;degraded&quot;,
+    &quot;members&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.MDArray&quot;
+}</pre></details>
+<details id="HardwareMDArrays"><summary>HardwareMDArrays</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The Linux md arrays the kernel has assembled on this host, read straight from sysfs rather than parsed from mdadm. A host with no arrays reports an empty list, not an unavailable section. At most 32 arrays.&quot;,
+  &quot;properties&quot;: {
+    &quot;unavailable&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;arrays&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/MDArray&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;arrays&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.HardwareMDArrays&quot;
+}</pre></details>
+<details id="SystemDiskReplaceAccepted"><summary>SystemDiskReplaceAccepted</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Acceptance of the durable command. Acceptance is not the rebuild: the host performs it when it collects the command, and the mirror&#x27;s state is read back from GET /api/v1/hosts/{id}/hardware.&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;array&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;array&quot;,
+    &quot;operation&quot;
+  ]
+}</pre></details>
+<details id="HostSystemDiskRequest"><summary>HostSystemDiskRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Rebuild one degraded system-disk mirror onto one replacement disk. The device is one candidate from POST /api/v1/storage/discover with kind zfs-device, carrying the same identity, fingerprint and typed erase confirmation rules the ZFS wizard uses; Core revalidates all of it against a fresh observation before it touches the disk.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stable client request identity. An exact repeat replays the same operation.&quot;
+    },
+    &quot;array&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^md[0-9]+$&quot;,
+      &quot;description&quot;: &quot;The array to rebuild, named as the hardware report names it.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;array&quot;,
+    &quot;device&quot;
+  ]
+}</pre></details>
+<details id="SystemDiskReplaceRequest"><summary>SystemDiskReplaceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;The durable host-system-disk-replace command payload.&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The managed journal&#x27;s replay key, identical to the command envelope&#x27;s operation_id.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The host whose mirror is rebuilt; the agent refuses a command addressed to another host.&quot;
+    },
+    &quot;array&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^md[0-9]+$&quot;
+    },
+    &quot;device&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;host_id&quot;,
+    &quot;array&quot;,
+    &quot;device&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.SystemDiskReplaceRequest&quot;
 }</pre></details>
 </section></main></html>

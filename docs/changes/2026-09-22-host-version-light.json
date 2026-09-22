@@ -1,0 +1,46 @@
+{
+  "summary": "The Controller host page shows a light beside the host's Nex Core version: pulsing green when it matches the newest release in the update archive, orange when a newer release exists, red when that is a new major release, with a hover explanation. GET /api/v1/updates additionally reports core_available_version. API impact: changed contract (additive field).",
+  "paths": [
+    "internal/controller/updates.go",
+    "internal/controller/updates_test.go",
+    "web/src/updates.ts",
+    "web/src/updates.test.mjs",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/guide/manage-controller.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "docs/guide/manage-controller.md describes the light's colours, the hover text and when no light appears.",
+    "pages": [
+      "docs/guide/manage-controller.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Controller GET /api/v1/updates gains the optional core_available_version field (newest nex-core-local in the archive); no request, authorization or Core-side contract changes. docs/API.md and docs/api/openapi.json updated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Small UI addition within shipped host inventory and update behaviour."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Nothing durable: the Controller reads the archive's index through its existing APT cache and compares it with the version each host already reports."
+  },
+  "verification": {
+    "method": "go test ./internal/controller -run TestUpdatesAuthAndApply (asserts core_available_version); web/src/updates.test.mjs covers current, behind, major, ahead-of-archive and unknown; npm --prefix web run typecheck; generate_api.py --check. Browser (simulated, labelled): Playwright Chromium against a real Controller with the simulated agent, GET /api/v1/updates answered by route interception with core_available_version 0.4.3, 0.4.4, 1.4.3 and absent against a host presenting Nex Core 0.4.3; the Version row showed green, orange, red and no light with the expected hover titles and no page errors. No APT archive was read: this workstation has no apt, so the real archive lookup is untested here.",
+    "evidence": [
+      "internal/controller/updates_test.go",
+      "web/src/updates.test.mjs"
+    ]
+  }
+}

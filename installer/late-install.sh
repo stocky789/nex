@@ -80,6 +80,76 @@ systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pc
 # disks the operator did not select. Pools Nex creates are cached and imported by
 # zfs-import-cache; an old pool stays untouched until an operator imports it deliberately.
 systemctl disable zfs-import-scan.service || true
+# A mirrored system disk: partman created the array, and the kernel assembles it from
+# the members' own superblocks. Record only the root array for this host's initramfs
+# (never a leftover array on unselected disks), and keep every member's ESP bootable,
+# because grub-efi-amd64 only ever writes the one mounted ESP.
+root=$(findmnt -no SOURCE /)
+case $root in /dev/md*)
+    { /usr/share/mdadm/mkconf | grep -v '^ARRAY'; mdadm --detail --scan "$root"; } > /etc/mdadm/mdadm.conf
+    update-initramfs -u
+    cat > /usr/local/sbin/nex-sync-esp <<'ESP'
+#!/bin/sh
+# Copy the EFI boot files GRUB maintains in /boot/efi onto the other members of the
+# root RAID1 mirror, so the host still boots when that disk fails. Only disks that
+# carry the root mirror are touched.
+set -eu
+root=$(findmnt -no SOURCE /)
+case $root in /dev/md*) ;; *) exit 1 ;; esac
+# fstab names one member's ESP by UUID. When that disk is gone, /boot/efi is an empty
+# directory on the root filesystem: remount any surviving member ESP and rewrite fstab
+# so GRUB upgrades and the APT hook keep writing a real ESP instead of the empty dir.
+if ! findmnt -no TARGET /boot/efi >/dev/null 2>&1 || ! [ -d /boot/efi/EFI ]; then
+    findmnt -no TARGET /boot/efi >/dev/null 2>&1 && umount /boot/efi || true
+    mounted=
+    for member in $(mdadm --detail --export "$root" | sed -n 's/^MD_DEVICE_[^=]*_DEV=//p'); do
+        disk=$(lsblk -no PKNAME "$member")
+        esp=$(lsblk -nro PATH,PARTTYPE "/dev/$disk" | awk '$2 == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" { print $1 }')
+        [ -n "$esp" ] || continue
+        mount "$esp" /boot/efi || continue
+        if [ -d /boot/efi/EFI ]; then
+            uuid=$(blkid -s UUID -o value "$esp" 2>/dev/null || true)
+            if [ -n "$uuid" ] && [ -f /etc/fstab ]; then
+                sed -i '/[[:space:]]\/boot\/efi[[:space:]]/ s|^[^#[:space:]][^[:space:]]*|UUID='"$uuid"'|' /etc/fstab
+            fi
+            mounted=$esp
+            break
+        fi
+        umount /boot/efi || true
+    done
+    [ -n "$mounted" ] || exit 1
+fi
+[ -d /boot/efi/EFI ] || exit 1
+mounted=$(findmnt -no SOURCE /boot/efi)
+copy=$(mktemp -d)
+trap 'umount "$copy" 2>/dev/null || true; rmdir "$copy" 2>/dev/null || true' EXIT
+written=0
+for member in $(mdadm --detail --export "$root" | sed -n 's/^MD_DEVICE_[^=]*_DEV=//p'); do
+    disk=$(lsblk -no PKNAME "$member")
+    esp=$(lsblk -nro PATH,PARTTYPE "/dev/$disk" | awk '$2 == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" { print $1 }')
+    { [ -n "$esp" ] && [ "$esp" != "$mounted" ]; } || continue
+    mount "$esp" "$copy"
+    mkdir -p "$copy/EFI"
+    cp -a /boot/efi/EFI/. "$copy/EFI/"
+    umount "$copy"
+    written=$((written + 1))
+done
+# Copying nothing is a failure, not success: a caller that makes a replacement disk
+# bootable must be able to tell, and fall back to installing the ESP itself.
+[ "$written" -gt 0 ]
+ESP
+    chmod 755 /usr/local/sbin/nex-sync-esp
+    printf '%s\n' 'DPkg::Post-Invoke { "/usr/local/sbin/nex-sync-esp || true"; };' \
+        > /etc/apt/apt.conf.d/99nex-sync-esp
+    # It reports failure when there is no mounted ESP to copy, which is the normal case on a
+    # legacy BIOS install; GRUB is on every disk there through grub-installer/bootdev.
+    /usr/local/sbin/nex-sync-esp || true
+    # /boot/efi is one member's own partition, not part of the mirror. A replaced or failed
+    # disk must not drop the host into emergency mode while the mirror itself is healthy.
+    # A short device timeout keeps local-fs.target from waiting the default 90s for a missing
+    # ESP UUID before nofail lets boot continue (docs/qa/2026-09-22-system-disk-replace.md).
+    sed -i '/[[:space:]]\/boot\/efi[[:space:]]/ s/\(vfat[[:space:]]\+\)\([^[:space:]]\+\)/\1\2,nofail,x-systemd.device-timeout=5s/' /etc/fstab
+esac
 # nex-core-local's postinst diverts Debian's os-release symlink and writes the
 # Nex Core identity from its own package version; the console banners reuse it.
 . /etc/os-release

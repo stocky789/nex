@@ -67,3 +67,44 @@ with tempfile.TemporaryDirectory() as d:
  (p/'dev/sda').write_bytes(b'\xff'*(32*MiB)); assert subprocess.run(['sh','-c',s],env=env).returncode==0
  assert (p/'dev/sda').read_bytes()[:16]==b'\xff'*16, 'A partman restart must not clear the disk again'
  print('PASS: partition hook clears only the selected RAID/LVM disk, once, and only stops its array')
+
+# Two selected disks: wipe both, stop only their arrays, leave a third array and its disk alone.
+with tempfile.TemporaryDirectory() as d:
+ p=Path(d); (p/'active').touch(); MiB=1024*1024
+ (p/'check').write_text('#!/bin/sh\nexit 0\n'); (p/'check').chmod(0o755)
+ (p/'bin').mkdir(); (p/'bin/mdadm').write_text(f'#!/bin/sh\necho "$@" >> {p}/mdadm.log\n'); (p/'bin/mdadm').chmod(0o755)
+ (p/'config.ini').write_text('[Host]\ndisk=/dev/sda;/dev/sdb;\n')
+ (p/'mdstat').write_text(
+  'Personalities : [raid1]\n'
+  'md127 : active raid1 sda3[0] sdc3[1]\n'
+  'md126 : active raid1 sdb3[0] sdd3[1]\n'
+  'md125 : active raid1 sdc1[0] sdd1[1]\n')
+ layout={
+  'sda':[('sda3',10240,20480)],
+  'sdb':[('sdb3',10240,20480)],
+  'sdc':[('sdc1',2048,8192),('sdc3',10240,20480)],
+ }
+ for disk,parts in layout.items():
+  (p/'dev'/disk).parent.mkdir(exist_ok=True); (p/'dev'/disk).write_bytes(b'\xff'*(32*MiB))
+  (p/'sys/class/block'/disk).mkdir(parents=True); (p/'sys/class/block'/disk/'size').write_text(str(32*MiB//512))
+  for part,_,size in parts:
+   q=p/'sys/class/block'/disk/part; q.mkdir(); (q/'partition').write_text('1'); (q/'size').write_text(str(size))
+   (p/'dev'/part).write_bytes(b'\xff'*(size*512))
+ s=(Path('installer/gui/recheck.sh').read_text().replace('/run/nex-installer/',f'{p}/').replace('/usr/bin/nex-config',str(p/'check'))
+    .replace('SYS=/sys',f'SYS={p}/sys').replace('DEV=/dev',f'DEV={p}/dev').replace('MDSTAT=/proc/mdstat',f'MDSTAT={p}/mdstat').replace('PARTMAN=/var/lib/partman',f'PARTMAN={p}/partman'))
+ env=dict(os.environ,PATH=f'{p}/bin:'+os.environ['PATH'])
+ r=subprocess.run(['sh','-c',s],capture_output=True,text=True,env=env); assert r.returncode==0, r.stderr
+ stops=sorted((p/'mdadm.log').read_text().splitlines())
+ assert stops==[f'--stop {p}/dev/md126', f'--stop {p}/dev/md127'], stops
+ for dev in ('sda','sda3','sdb','sdb3'):
+  b=(p/'dev'/dev).read_bytes(); n=min(MiB,len(b)//2)
+  assert b[:n]==bytes(n) and b[-n:]==bytes(n), f'{dev} signatures not cleared'
+  if len(b) > 2*MiB:
+   assert b'\xff' in b[MiB:-MiB], f'{dev} middle rewritten'
+ for dev in ('sdc','sdc1','sdc3'):
+  assert (p/'dev'/dev).read_bytes()==b'\xff'*len((p/'dev'/dev).read_bytes()), f'{dev} was modified'
+ before={dev: (p/'dev'/dev).read_bytes() for dev in ('sda','sdb','sdc','sda3','sdb3','sdc1','sdc3')}
+ assert subprocess.run(['sh','-c',s],env=env).returncode==0
+ for dev,data in before.items():
+  assert (p/'dev'/dev).read_bytes()==data, f'second run rewrote {dev}'
+ print('PASS: partition hook clears every selected mirror disk, stops only their arrays, and is idempotent')

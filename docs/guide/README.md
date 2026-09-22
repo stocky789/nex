@@ -59,9 +59,11 @@ verification limits that apply to its workflow.
 20. [Read VM and host usage history, hardware and temperatures](usage-history.md)
    (Stats tab charts up to a year back, with Stacked, zoom and legend toggles, and a host's
    Hardware panel, gauges and temperature chart).
-21. [Check and apply software updates](software-updates.md)
+21. [Replace a failed system disk](replace-a-failed-system-disk.md)
+   (rebuild a host's mirrored system disk from the Stats tab while the host keeps running).
+22. [Check and apply software updates](software-updates.md)
    (Controller and host-local package updates from a configured repo).
-22. [Publish a Nex Core release](publish-a-release.md)
+23. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification

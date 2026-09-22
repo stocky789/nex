@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 #include <gtk/gtk.h>
+#include <gdk/gdkkeysyms.h>
 #include <glib/gstdio.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -16,7 +17,7 @@ static GtkWidget *step_labels[5];
 static GtkWidget *host, *network_hostname, *password, *repeat, *zone_entry, *keymap, *show_password, *timezone_area;
 static gchar **timezones;
 static GtkWidget *nic_list, *nic_details, *mode, *address, *gateway, *vlan, *management, *dns;
-static GtkWidget *disk_list, *review, *confirmation, *dhcp_retry;
+static GtkWidget *disk_list, *disk_summary, *review, *confirmation, *dhcp_retry;
 static gboolean loading_nic;
 static guint dhcp_debounce, dhcp_children;
 static gint dhcp_link = -1;
@@ -24,9 +25,11 @@ typedef struct { GPid pid; gint output; guint timeout; gboolean expired; } DHCPP
 static DHCPPreview *dhcp_preview;
 static GKeyFile *config;
 static GPtrArray *nics, *disks;
-static gint selected_nic = -1, selected_disk = -1, page;
+static GArray *disk_sizes;
+static gint selected_nic = -1, page;
+static guint selected_disks;
 static gboolean prepared, preparing, keyboard_ready = TRUE;
-static const gchar *titles[] = { "Welcome to Nex Core", "Name this host", "Connect your host", "Choose the installation disk", "Review and install" };
+static const gchar *titles[] = { "Welcome to Nex Core", "Name this host", "Connect your host", "Choose the installation disks", "Review and install" };
 static const gchar *modes[] = { "disabled", "dhcp", "static" };
 static const gchar *keymaps[] = { "us", "gb", "de", "fr", "es" };
 static const gchar *keyboard_names[] = { "English (United States)", "English (United Kingdom)", "German", "French", "Spanish" };
@@ -253,20 +256,136 @@ static void append_device(GtkWidget *list, const gchar *text, gint index)
     GtkListStore *store = GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(list))); GtkTreeIter iter;
     gtk_list_store_append(store, &iter); gtk_list_store_set(store, &iter, 0, text, 1, index, -1);
 }
-static void disk_changed(GtkTreeSelection *selection, gpointer unused)
+/* The Disk step is a tick list: one disk installs as it always has, two or more become a
+ * mirror. Selection lives in the model's toggle column, not in the row highlight. */
+enum { DISK_SELECTED, DISK_NAME, DISK_CAPACITY, DISK_TYPE, DISK_MODEL, DISK_SERIAL, DISK_CONTENTS, DISK_INDEX, DISK_COLUMNS };
+
+/* SSD, HDD or NVMe, so the operator can tell the disks apart at a glance. */
+static const gchar *disk_kind(const gchar *name)
 {
-    GtkTreeModel *model; GtkTreeIter iter;
-    (void)unused;
-    selected_disk = -1;
-    if (gtk_tree_selection_get_selected(selection, &model, &iter)) gtk_tree_model_get(model, &iter, 1, &selected_disk, -1);
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(confirmation), FALSE);
-    if (selected_disk >= 0) {
-        gchar *name = g_ptr_array_index(disks, selected_disk), *disk = g_strdup_printf("/dev/%s", name), *s;
-        g_key_file_set_string(config, "Host", "disk", disk); g_free(disk);
-        s = property("/sys/class/block", name, "size"); g_key_file_set_uint64(config, "Host", "disk_size", g_ascii_strtoull(s, NULL, 10) * 512); g_free(s);
-        s = property("/sys/class/block", name, "device/serial"); g_key_file_set_string(config, "Host", "disk_serial", s); g_free(s);
-        s = property("/sys/class/block", name, "dev"); g_key_file_set_string(config, "Host", "disk_major_minor", s); g_free(s);
+    gchar *rotational;
+    const gchar *kind;
+    if (g_str_has_prefix(name, "nvme")) return "NVMe";
+    rotational = property("/sys/class/block", name, "queue/rotational");
+    kind = !strcmp(rotational, "0") ? "SSD" : !strcmp(rotational, "1") ? "HDD" : "\342\200\224";
+    g_free(rotational); return kind;
+}
+/* A disk that already holds partitions is one to look at twice before erasing it. */
+static gboolean has_partitions(const gchar *name)
+{
+    gchar *base = g_strdup_printf("/sys/class/block/%s", name);
+    GDir *dir = g_dir_open(base, 0, NULL);
+    const gchar *entry;
+    gboolean found = FALSE;
+    while (dir && (entry = g_dir_read_name(dir))) {
+        gchar *path = g_build_filename(base, entry, "partition", NULL);
+        found |= g_file_test(path, G_FILE_TEST_EXISTS);
+        g_free(path);
     }
+    if (dir) g_dir_close(dir);
+    g_free(base); return found;
+}
+/* Two listed disks close enough in size to mirror: what the tip offers. */
+static gboolean similar_disks(void)
+{
+    guint i, j;
+    for (i = 0; i < disk_sizes->len; i++)
+        for (j = i + 1; j < disk_sizes->len; j++) {
+            guint64 a = g_array_index(disk_sizes, guint64, i), b = g_array_index(disk_sizes, guint64, j);
+            guint64 small = MIN(a, b), large = MAX(a, b);
+            if (small >= 16ULL * 1024 * 1024 * 1024 && large <= small + small / 10) return TRUE;
+        }
+    return FALSE;
+}
+/* Live Disk summary: same wording as the text frontend and nex-config refusals. */
+static gchar *disk_summary_text(guint selected, guint listed, guint64 smallest, guint64 largest, gboolean has_similar)
+{
+    if (selected && largest > smallest + smallest / 10)
+        return g_strdup("<span foreground='#B3261E'>Every mirror disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as large as its smallest member. Select disks of similar size.</span>");
+    if (!selected)
+        return g_strdup(listed > 1 && has_similar
+            ? "No disk selected.\nTip: tick two disks of similar size for a mirrored system disk that survives one disk failure."
+            : "No disk selected.");
+    if (selected == 1)
+        return g_strdup("1 disk: single disk, ext4, no redundancy.");
+    return g_markup_printf_escaped("%u disks: RAID1 mirror, smallest disk %.1f GiB, keeps running if one disk fails.",
+        selected, smallest / (1024.0 * 1024 * 1024));
+}
+static void disks_changed(void)
+{
+    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list));
+    GtkTreeIter iter;
+    GPtrArray *names = g_ptr_array_new_with_free_func(g_free), *sizes = g_ptr_array_new_with_free_func(g_free);
+    GPtrArray *serials = g_ptr_array_new_with_free_func(g_free), *ids = g_ptr_array_new_with_free_func(g_free);
+    guint64 smallest = 0, largest = 0;
+    gboolean valid;
+    gchar *summary;
+    for (valid = gtk_tree_model_get_iter_first(model, &iter); valid; valid = gtk_tree_model_iter_next(model, &iter)) {
+        gboolean selected; gint index; gchar *name, *s; guint64 bytes;
+        gtk_tree_model_get(model, &iter, DISK_SELECTED, &selected, DISK_INDEX, &index, -1);
+        if (!selected) continue;
+        name = g_ptr_array_index(disks, index);
+        bytes = g_array_index(disk_sizes, guint64, index);
+        if (!smallest || bytes < smallest) smallest = bytes;
+        if (bytes > largest) largest = bytes;
+        g_ptr_array_add(names, g_strdup_printf("/dev/%s", name));
+        g_ptr_array_add(sizes, g_strdup_printf("%" G_GUINT64_FORMAT, bytes));
+        s = property("/sys/class/block", name, "device/serial"); g_ptr_array_add(serials, s);
+        s = property("/sys/class/block", name, "dev"); g_ptr_array_add(ids, s);
+    }
+    selected_disks = names->len;
+    g_key_file_set_string_list(config, "Host", "disk", (const gchar **)names->pdata, names->len);
+    g_key_file_set_string_list(config, "Host", "disk_size", (const gchar **)sizes->pdata, sizes->len);
+    g_key_file_set_string_list(config, "Host", "disk_serial", (const gchar **)serials->pdata, serials->len);
+    g_key_file_set_string_list(config, "Host", "disk_major_minor", (const gchar **)ids->pdata, ids->len);
+    g_ptr_array_free(names, TRUE); g_ptr_array_free(sizes, TRUE); g_ptr_array_free(serials, TRUE); g_ptr_array_free(ids, TRUE);
+    summary = disk_summary_text(selected_disks, disks->len, smallest, largest, similar_disks());
+    gtk_label_set_markup(GTK_LABEL(disk_summary), summary);
+    g_free(summary);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(confirmation), FALSE);
+}
+static void disk_toggle_row(GtkTreeIter *iter)
+{
+    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list));
+    gboolean selected;
+    gtk_tree_model_get(model, iter, DISK_SELECTED, &selected, -1);
+    gtk_list_store_set(GTK_LIST_STORE(model), iter, DISK_SELECTED, !selected, -1);
+    disks_changed();
+}
+static void disk_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer unused)
+{
+    GtkTreeIter iter;
+    (void)cell; (void)unused;
+    if (gtk_tree_model_get_iter_from_string(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list)), &iter, path))
+        disk_toggle_row(&iter);
+}
+/* Space and Enter tick the focused row wherever the cursor column sits. */
+static gboolean disk_key(GtkWidget *widget, GdkEventKey *event, gpointer unused)
+{
+    GtkTreePath *path = NULL; GtkTreeIter iter;
+    (void)unused;
+    if (event->keyval != GDK_space && event->keyval != GDK_Return && event->keyval != GDK_KP_Enter) return FALSE;
+    gtk_tree_view_get_cursor(GTK_TREE_VIEW(widget), &path, NULL);
+    if (!path) return FALSE;
+    if (gtk_tree_model_get_iter(gtk_tree_view_get_model(GTK_TREE_VIEW(widget)), &iter, path)) disk_toggle_row(&iter);
+    gtk_tree_path_free(path);
+    return TRUE;
+}
+static GtkWidget *disk_list_widget(void)
+{
+    const gchar *titles[] = { "Use", "Device", "Capacity", "Type", "Model", "Serial", "Contents" };
+    GtkListStore *store = gtk_list_store_new(DISK_COLUMNS, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_STRING,
+        G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
+    GtkWidget *w = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
+    GtkCellRenderer *toggle = gtk_cell_renderer_toggle_new();
+    gint column;
+    g_signal_connect(toggle, "toggled", G_CALLBACK(disk_toggled), NULL);
+    gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(w), -1, titles[DISK_SELECTED], toggle, "active", DISK_SELECTED, NULL);
+    for (column = DISK_NAME; column <= DISK_CONTENTS; column++)
+        gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(w), -1, titles[column],
+            gtk_cell_renderer_text_new(), "text", column, NULL);
+    g_signal_connect(w, "key-press-event", G_CALLBACK(disk_key), NULL);
+    g_object_unref(store); return w;
 }
 static gboolean installation_media(const gchar *name)
 {
@@ -292,6 +411,7 @@ static void discover(void)
 {
     GDir *dir; const gchar *name; gchar *path, *s, *group, *size, *model, *text;
     GPtrArray *names = g_ptr_array_new_with_free_func(g_free); guint i;
+    /* names is reused for the block devices below. */
     dir = g_dir_open("/sys/class/net", 0, NULL);
     while (dir && (name = g_dir_read_name(dir))) g_ptr_array_add(names, g_strdup(name));
     if (dir) g_dir_close(dir);
@@ -309,21 +429,45 @@ static void discover(void)
         g_free(group); g_free(s);
     }
     g_ptr_array_free(names, TRUE);
+    names = g_ptr_array_new_with_free_func(g_free);
     dir = g_dir_open("/sys/class/block", 0, NULL);
-    while (dir && (name = g_dir_read_name(dir))) {
-        gboolean skip;
+    while (dir && (name = g_dir_read_name(dir))) g_ptr_array_add(names, g_strdup(name));
+    if (dir) g_dir_close(dir);
+    g_ptr_array_sort(names, compare_names); /* the text frontend's glob is sorted; show the same order */
+    for (i = 0; i < names->len; i++) {
+        GtkTreeIter iter; gboolean skip; guint64 bytes; gchar *serial, *capacity;
+        name = g_ptr_array_index(names, i);
         if (!nex_install_disk_name_supported(name)) continue;
         path = g_strdup_printf("/sys/class/block/%s/partition", name); skip = g_file_test(path, G_FILE_TEST_EXISTS); g_free(path);
         s = property("/sys/class/block", name, "ro"); skip |= strcmp(s, "0") != 0; g_free(s);
         s = property("/sys/class/block", name, "removable"); skip |= strcmp(s, "0") != 0; g_free(s);
         if (skip || installation_media(name)) continue;
-        size = property("/sys/class/block", name, "size"); model = property("/sys/class/block", name, "device/model");
-        if (!g_ascii_strtoull(size, NULL, 10)) { g_free(size); g_free(model); continue; }
-        text = g_strdup_printf("/dev/%s   %.1f GiB   %s", name, g_ascii_strtoull(size, NULL, 10) * 512.0 / 1073741824.0, model);
-        g_ptr_array_add(disks, g_strdup(name)); append_device(disk_list, text, disks->len - 1);
-        g_free(text); g_free(size); g_free(model);
+        size = property("/sys/class/block", name, "size");
+        bytes = g_ascii_strtoull(size, NULL, 10) * 512; g_free(size);
+        /* Same 16 GiB floor as the text frontend and nex-config: do not list undersized disks. */
+        if (!bytes || bytes < 16ULL * 1024 * 1024 * 1024) continue;
+        model = property("/sys/class/block", name, "device/model");
+        serial = property("/sys/class/block", name, "device/serial");
+        capacity = g_strdup_printf("%.1f GiB", bytes / (1024.0 * 1024 * 1024));
+        text = g_strdup_printf("/dev/%s", name);
+        g_ptr_array_add(disks, g_strdup(name));
+        g_array_append_val(disk_sizes, bytes);
+        gtk_list_store_append(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list))), &iter);
+        gtk_list_store_set(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list))), &iter,
+            DISK_SELECTED, FALSE, DISK_NAME, text, DISK_CAPACITY, capacity, DISK_TYPE, disk_kind(name),
+            DISK_MODEL, *model ? model : "\342\200\224", DISK_SERIAL, *serial ? serial : "\342\200\224",
+            DISK_CONTENTS, has_partitions(name) ? "Has partitions" : "Blank",
+            DISK_INDEX, (gint)(disks->len - 1), -1);
+        g_free(text); g_free(capacity); g_free(model); g_free(serial);
     }
-    if (dir) g_dir_close(dir);
+    g_ptr_array_free(names, TRUE);
+    /* One eligible disk is the only possible answer, so tick it; a mirror is never assumed. */
+    if (disks->len == 1) {
+        GtkTreeIter iter;
+        if (gtk_tree_model_get_iter_first(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list)), &iter))
+            gtk_list_store_set(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list))), &iter, DISK_SELECTED, TRUE, -1);
+    }
+    disks_changed();
     if (!nics->len) gtk_label_set_text(GTK_LABEL(nic_details), "No physical network adapters detected.\nYou can install offline and configure networking locally later.");
     else { GtkTreePath *first = gtk_tree_path_new_first(); gtk_tree_selection_select_path(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), first); gtk_tree_path_free(first); }
     gtk_widget_set_sensitive(mode, nics->len > 0);
@@ -429,13 +573,28 @@ static gboolean collect(void)
     g_key_file_set_string(config, "Network", "dns", value(dns));
     if (page >= 2 && !nex_network_validate(config, &error)) { message(error ? error->message : "Check the network settings."); g_clear_error(&error); return FALSE; }
     if (page < 3) return TRUE;
-    if (selected_disk < 0) { message("Select the disk to erase and install Nex Core onto."); return FALSE; }
-    if (g_key_file_get_uint64(config, "Host", "disk_size", NULL) < 16ULL * 1024 * 1024 * 1024) { message("Select an installation disk with at least 16 GiB capacity."); return FALSE; }
+    if (!selected_disks) { message("Select the disk to erase and install Nex Core onto, or two or more disks for a mirror."); return FALSE; }
+    {
+        gsize count; gchar **sizes = g_key_file_get_string_list(config, "Host", "disk_size", &count, NULL);
+        guint64 smallest = 0; const gchar *reason = NULL;
+        for (gsize i = 0; i < count; i++) {
+            guint64 bytes = g_ascii_strtoull(sizes[i], NULL, 10);
+            if (bytes < 16ULL * 1024 * 1024 * 1024) reason = "Every disk must be at least 16 GiB.";
+            if (!smallest || bytes < smallest) smallest = bytes;
+        }
+        /* A mirror is only as large as its smallest member. */
+        for (gsize i = 0; !reason && i < count; i++)
+            if (g_ascii_strtoull(sizes[i], NULL, 10) > smallest + smallest / 10)
+                reason = "Every mirror disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as large as its smallest member. Select disks of similar size.";
+        g_strfreev(sizes);
+        if (reason) { message(reason); return FALSE; }
+    }
     return TRUE;
 }
 static void show_review(void)
 {
-    GString *s = g_string_new(NULL); guint i; gchar *group, *m, *a, *g, *management_name, *zone, *erase_label;
+    GString *s = g_string_new(NULL); guint i; gchar *group, *m, *a, *g, *management_name, *zone, *erase_label, *targets, **selection, **sizes;
+    gsize count; guint64 capacity = 0;
     zone = g_key_file_get_string(config, "Host", "timezone", NULL);
     management_name = g_key_file_get_string(config, "Network", "management", NULL);
     g_string_append_printf(s, "HOST\n%s   •   %s   •   Keyboard %s\nRoot password: set\n\nNETWORK\nManagement: %s\nDNS: %s\n", value(host), zone, keymaps[gtk_combo_box_get_active(GTK_COMBO_BOX(keymap))], management_name && *management_name ? management_name : "Offline", *value(dns) ? value(dns) : "Automatic / none");
@@ -453,11 +612,20 @@ static void show_review(void)
         g_string_append_c(s, '\n'); g_free(group); g_free(m); g_free(a); g_free(g);
     }
     g_free(management_name);
-    g_string_append_printf(s, "\nERASE AND INSTALL\n/dev/%s   •   Whole disk   •   ext4\nAll existing partitions and data on this disk will be removed.", (gchar *)g_ptr_array_index(disks, selected_disk));
+    selection = g_key_file_get_string_list(config, "Host", "disk", &count, NULL);
+    targets = g_strjoinv(" + ", selection);
+    g_string_append_printf(s, "\nERASE AND INSTALL\n%s   •   Whole disk%s   •   %s\nAll existing partitions and data on %s will be removed.",
+        targets, count > 1 ? "s" : "", count > 1 ? "RAID1 mirror, ext4" : "ext4", count > 1 ? "these disks" : "this disk");
     gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(review)), s->str, -1); g_string_free(s, TRUE);
-    erase_label = g_strdup_printf("_Erase all data on /dev/%s (%.1f GiB)",
-        (gchar *)g_ptr_array_index(disks, selected_disk),
-        g_key_file_get_uint64(config, "Host", "disk_size", NULL) / (1024.0 * 1024 * 1024));
+    /* A mirror is as large as its smallest member, so that is the capacity to name. */
+    sizes = g_key_file_get_string_list(config, "Host", "disk_size", NULL, NULL);
+    for (i = 0; sizes && sizes[i]; i++) {
+        guint64 bytes = g_ascii_strtoull(sizes[i], NULL, 10);
+        if (!capacity || bytes < capacity) capacity = bytes;
+    }
+    erase_label = g_strdup_printf("_Erase all data on %s (%.1f GiB%s)", targets,
+        capacity / (1024.0 * 1024 * 1024), count > 1 ? " mirror" : "");
+    g_strfreev(sizes); g_free(targets); g_strfreev(selection);
     gtk_button_set_label(GTK_BUTTON(confirmation), erase_label); g_free(erase_label);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(confirmation), FALSE);
 }
@@ -465,7 +633,7 @@ static void install(void)
 {
     gchar *data, *stderr_text = NULL, *argv[] = { "/usr/lib/nex-installer/validate-config", "/run/nex-installer/config.ini", NULL };
     gsize length, written = 0; gint fd, status, sync_status, close_status; GError *error = NULL;
-    if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(confirmation))) { message("Confirm that all data on the selected disk can be erased."); return; }
+    if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(confirmation))) { message("Confirm that all data on the selected disks can be erased."); return; }
     if (!collect()) return;
     if (g_mkdir_with_parents("/run/nex-installer", 0700) < 0) { message("Cannot create protected installation settings."); return; }
     data = g_key_file_to_data(config, &length, NULL);
@@ -506,7 +674,7 @@ static void go(GtkButton *button, gpointer unused)
     else if (page==3) gtk_widget_grab_focus(disk_list);
     else if (page==4) gtk_widget_grab_focus(confirmation);
     gtk_widget_set_sensitive(back, page > 0);
-    gtk_button_set_label(GTK_BUTTON(next), page == 4 ? "Erase disk and install Nex Core" : "Continue");
+    gtk_button_set_label(GTK_BUTTON(next), page != 4 ? "Continue" : selected_disks > 1 ? "Erase disks and install Nex Core" : "Erase disk and install Nex Core");
 }
 static GtkWidget *page_box(void)
 {
@@ -523,6 +691,7 @@ int main(int argc, char **argv)
     GtkWidget *root, *header, *brand, *box, *row, *editor, *buttons, *scroll, *body, *panel, *content; GdkPixbuf *board, *crop, *scaled; guint i;
     gtk_init(&argc, &argv); umask(0077);
     config = g_key_file_new(); nics = g_ptr_array_new_with_free_func(g_free); disks = g_ptr_array_new_with_free_func(g_free);
+    disk_sizes = g_array_new(FALSE, FALSE, sizeof(guint64));
     gtk_rc_parse_string(
         "style \"nex\" { font_name=\"FreeSans 11\" bg[NORMAL]=\"#EFF3F8\" fg[NORMAL]=\"#17233B\" text[NORMAL]=\"#17233B\" base[NORMAL]=\"#FFFFFF\" base[SELECTED]=\"#2456D9\" text[SELECTED]=\"#FFFFFF\" GtkWidget::focus-line-width=1 GtkWidget::focus-padding=2 } class \"GtkWidget\" style \"nex\" "
         "style \"surface\" { bg[NORMAL]=\"#FFFFFF\" } widget \"*.form\" style \"surface\" widget \"*.form.*\" style \"surface\" "
@@ -593,12 +762,12 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), label("Use IPv4/prefix, for example 192.168.1.20/24. Separate DNS addresses with spaces.\nVLAN 0 is untagged; use 1–4094 for a tagged connection.\nOnly the management adapter may have a default gateway."), FALSE, FALSE, 0);
     g_signal_connect(vlan, "value-changed", G_CALLBACK(dhcp_changed), NULL);
     g_signal_connect(mode, "changed", G_CALLBACK(mode_changed), NULL); g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), "changed", G_CALLBACK(nic_changed), NULL);
-    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Select one whole disk for Nex Core. All partitions and data on that disk will be erased.\nOther disks are left untouched."), FALSE, FALSE, 0); disk_list = list_widget(); gtk_widget_set_size_request(disk_list, -1, 140); gtk_box_pack_start(GTK_BOX(box), disk_list, TRUE, TRUE, 0); gtk_box_pack_start(GTK_BOX(box), label("No disks listed? Check that the VM or host has a writable internal disk attached,\nthen restart the installer."), FALSE, FALSE, 0);
-    box = page_box(); scroll = gtk_scrolled_window_new(NULL, NULL); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); review = gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(review), GTK_WRAP_WORD_CHAR); gtk_container_add(GTK_CONTAINER(scroll), review); gtk_widget_set_size_request(scroll, -1, 255); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); confirmation = gtk_check_button_new_with_mnemonic("_Erase all data on the selected disk"); gtk_box_pack_start(GTK_BOX(box), confirmation, FALSE, FALSE, 0); g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(disk_list)), "changed", G_CALLBACK(disk_changed), NULL);
+    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Tick one disk, or two or more to mirror.\nEverything on the ticked disks is erased; other disks are left alone."), FALSE, FALSE, 0); disk_list = disk_list_widget(); gtk_widget_set_size_request(disk_list, -1, 140); gtk_box_pack_start(GTK_BOX(box), disk_list, TRUE, TRUE, 0); disk_summary = label("No disk selected."); gtk_box_pack_start(GTK_BOX(box), disk_summary, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(box), label("No disks listed? Check that the VM or host has a writable internal disk attached,\nthen restart the installer."), FALSE, FALSE, 0);
+    box = page_box(); scroll = gtk_scrolled_window_new(NULL, NULL); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); review = gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(review), FALSE); gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(review), GTK_WRAP_WORD_CHAR); gtk_container_add(GTK_CONTAINER(scroll), review); gtk_widget_set_size_request(scroll, -1, 255); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); confirmation = gtk_check_button_new_with_mnemonic("_Erase all data on the selected disks"); gtk_box_pack_start(GTK_BOX(box), confirmation, FALSE, FALSE, 0);
     error_label = label(""); gtk_widget_set_name(error_label, "error"); gtk_label_set_line_wrap(GTK_LABEL(error_label), FALSE); gtk_label_set_ellipsize(GTK_LABEL(error_label), PANGO_ELLIPSIZE_END); gtk_box_pack_start(GTK_BOX(content), error_label, FALSE, FALSE, 0);
     buttons = gtk_hbox_new(FALSE, 12); back = gtk_button_new_with_mnemonic("_Back"); next = gtk_button_new_with_label("Preparing Nex Core…"); gtk_widget_set_name(next, "primary"); gtk_button_set_relief(GTK_BUTTON(back), GTK_RELIEF_NONE); gtk_widget_set_sensitive(back, FALSE); gtk_box_pack_start(GTK_BOX(buttons), back, FALSE, FALSE, 0); gtk_box_pack_end(GTK_BOX(buttons), next, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(content), buttons, FALSE, FALSE, 0); g_signal_connect(back, "clicked", G_CALLBACK(go), NULL); g_signal_connect(next, "clicked", G_CALLBACK(go), NULL);
     gtk_widget_show_all(window); fit_screen(gtk_widget_get_screen(window), NULL); gtk_window_present(GTK_WINDOW(window)); keyboard_changed(GTK_COMBO_BOX(keymap), NULL); prepare(); g_timeout_add_seconds(2, refresh_nic_details, NULL); gtk_main();
     dhcp_cancel();
     while (dhcp_children) g_main_context_iteration(NULL, TRUE);
-    g_strfreev(timezones); g_key_file_free(config); g_ptr_array_free(nics, TRUE); g_ptr_array_free(disks, TRUE); return 0;
+    g_strfreev(timezones); g_key_file_free(config); g_ptr_array_free(nics, TRUE); g_ptr_array_free(disks, TRUE); g_array_free(disk_sizes, TRUE); return 0;
 }

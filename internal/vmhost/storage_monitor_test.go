@@ -84,23 +84,24 @@ func TestStorageMonitorDeadlineClearsPlacementAccess(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
 	var calls atomic.Int32
+	pool := &protocol.ZFSPoolStatus{Name: "nex-repo-1", State: "DEGRADED", Devices: []protocol.ZFSPoolDevice{{Name: "disk-1", State: "OFFLINE"}}, Scan: &protocol.ZFSPoolScan{Function: "RESILVER", State: "SCANNING", Examined: "1G", ToExamine: "2G"}}
 	m := newStorageMonitor(5*time.Millisecond, func(context.Context, protocol.StorageRegistration) (storageAccess, error) {
 		if calls.Add(1) == 1 {
-			return storageAccess{Total: 100, Available: 40, Health: "healthy"}, nil
+			return storageAccess{Total: 100, Available: 40, Health: "degraded", ZFSPool: pool}, nil
 		}
 		<-block
 		return storageAccess{}, nil
 	})
 	storage := []protocol.StorageRegistration{monitorStorage("repo-1")}
 	m.Tick(context.Background(), storage)
-	if got := waitStorageStatus(t, m, storage, "healthy")[0].Access; !got.Readable || !got.Writable {
-		t.Fatalf("initial healthy probe lacks access: %+v", got)
+	if got := waitStorageStatus(t, m, storage, "degraded")[0].Access; !got.Readable || !got.Writable || got.ZFSPool == nil {
+		t.Fatalf("initial probe lacks access or pool detail: %+v", got)
 	}
 	m.Tick(context.Background(), storage) // Starts the second, deliberately hung probe.
 	time.Sleep(10 * time.Millisecond)
 	m.Tick(context.Background(), storage)
-	if got := m.Overlay(storage)[0].Access; got.Status != "unknown" || got.Readable || got.Writable {
-		t.Fatalf("expired storage probe left optimistic placement access: %+v", got)
+	if got := m.Overlay(storage)[0].Access; got.Status != "unknown" || got.Readable || got.Writable || got.ZFSPool != nil || got.ObservedAt.IsZero() {
+		t.Fatalf("expired storage probe left optimistic placement access or stale pool detail: %+v", got)
 	}
 }
 

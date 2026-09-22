@@ -1,0 +1,71 @@
+{
+  "summary": "A ZFS repository whose pool is DEGRADED stays readable and writable and reports status 'degraded' instead of being taken out of service, and Core reports `zpool status --json` detail (pool state, ZFS's status/action sentences, the scrub or resilver, and each leaf device by id with its error counts) on the per-host ZFS observation. FAULTED, UNAVAIL, SUSPENDED and REMOVED remain inaccessible (BUG-0443, slice 1 of the software RAID plan). API impact: changed contract.",
+  "paths": [
+    "internal/vmhost/storage_zfs.go",
+    "internal/vmhost/zfs_status.go",
+    "internal/vmhost/zfs_status_test.go",
+    "internal/vmhost/testdata/zpool-status-idle-derived.json",
+    "internal/vmhost/testdata/zpool-status-degraded.json",
+    "internal/vmhost/testdata/zpool-status-resilvering.json",
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_monitor.go",
+    "internal/vmhost/placement.go",
+    "internal/vmhost/managed.go",
+    "internal/agent/zfs_pool.go",
+    "internal/protocol/managed.go",
+    "internal/protocol/storage.go",
+    "web/src/managed.tsx",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/storage-repositories.md",
+    "docs/qa/2026-09-22-zfs-degraded.md",
+    "docs/plans/2026-09-22-software-raid.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see a new repository state: docs/guide/storage-repositories.md explains what Degraded means for a provisioned ZFS repository, that VMs keep running and new ones can still be created on it, that a single-disk repository has no redundancy, and that the failed disk should be replaced promptly. The ZFS troubleshooting entry no longer treats DEGRADED as an access failure.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "StorageAccess.status gains the value 'degraded' with readable/writable true, and both StorageAccess and each zfs_host_access entry gain an optional pool object (ZFSPoolStatus/ZFSPoolScan/ZFSPoolDevice) carrying Core's zpool status observation. Both sides ship together: Core produces it, the Controller passes it through and stores none of it, and the UI renders it. The additive zfs_pool/pool fields are withheld from agent reports until the Controller acknowledges storage-zfs-replace-v1; an older Controller therefore never sees those fields and does not 400 the whole report. The degraded status string alone remains additive for Controllers that only acknowledge storage-zfs-provision-v1. Affected contracts: Managed/StorageRegistration.access and .zfs_host_access in docs/api/openapi.json and docs/api/peer-openapi.json, with the generated reference regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ],
+    "operations": [
+      "GET /api/v1/storage",
+      "POST /api/v1/agent/report",
+      "storage-zfs-provision-v1 observation"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No website roadmap change; the plan's slice 1 heading records the implemented status in docs/plans/2026-09-22-software-raid.md."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "No new durable state. Pool health and the vdev tree are transient Core observations of the imported zpool, read with `zpool status` at observation time. The durable records are unchanged: the repository record and lifecycle receipts on the pool master, the ZFS pool/dataset themselves and each host's managed journal. A fresh Controller re-adopts those from the master and sees the pool detail again on the next report; it stores none of it.",
+    "record": "The pool master's zfs-pool.json / zfs-lifecycle.json repository records and each host's managed registration journal, all unchanged by this slice."
+  },
+  "verification": {
+    "method": "go test ./internal/... and go vet ./internal/... (new internal/vmhost/zfs_status_test.go: the health mapping for ONLINE, DEGRADED, FAULTED, SUSPENDED, UNAVAIL and REMOVED, and decoding three `zpool status --json` fixtures — two captured from a file-backed fixture pool on a lab Core host running zfs-2.3.9 (degraded, resilvering) and zpool-status-idle-derived.json derived from a capture by removing the in-flight resilver; a genuine idle ONLINE pool capture remains outstanding). npm --prefix web run typecheck and npm --prefix web test. python3 scripts/generate_api.py --check after regenerating. Disposable two-host ZFS lab: provisioned a two-disk mirror repository, created and started a VM on it, offlined one member, confirmed the Controller reported degraded with the offlined leaf by id while the VM kept running, wrote and verified data, created and started a second VM on the degraded pool, reviewed the Storage page in a browser, then onlined the member and saw the finished resilver reported and the pool healthy again.",
+    "evidence": [
+      "docs/qa/2026-09-22-zfs-degraded.md",
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/zfs_status_test.go",
+      "web/src/storage.test.mjs"
+    ]
+  }
+}

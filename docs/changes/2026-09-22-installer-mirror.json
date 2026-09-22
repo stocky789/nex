@@ -1,0 +1,48 @@
+{
+  "summary": "The Nex Core installer offers one disk (unchanged) or two or more disks as a Linux md RAID1 mirror for the system disk, in both the graphical and the text frontend. Both Disk steps are a tick list of the same sorted disks with the same facts about each (device, capacity, SSD/HDD/NVMe, model, serial, whether it already has partitions); the graphical one adds a live summary of the resulting layout and reports the 16 GiB and 10 % rules inline as the operator ticks, preselects a lone eligible disk and offers a tip when two similar disks are present. nex-config validates the identity, capacity and serial of every selected disk, refuses a member outside 10% of the smallest one's capacity, and generates a partman RAID recipe that gives every mirror disk the same GPT layout on either firmware (1 MiB BIOS boot partition, 512 MiB ESP, then the md RAID1 member as partition 3, holding a single ext4 root). recheck.sh clears signatures on every selected disk and keeps BUG-0413's guard. GRUB is installed on every member: legacy BIOS through grub-installer/bootdev, UEFI by copying the installed ESP onto the other members' ESPs, which Debian 13's grub-efi-amd64 does not manage itself. mdadm ships in the offline repository, the installed host's mdadm.conf and initramfs are generated from the array, and the mirrored host mounts its ESP with nofail so a replaced or failed disk cannot drop a healthy mirror into emergency mode (found by lane D on a booted host). Slice 3 (installer part) of the software RAID plan. API impact: none.",
+  "paths": [
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/recheck.sh",
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/late-install.sh",
+    "installer/packages.txt",
+    "installer/check.sh",
+    "installer/README.md",
+    "tests/integration/installer-disk.py",
+    "tests/integration/installer-text-wizard.py",
+    "tests/integration/fresh_install_lab.py",
+    "tests/integration/fresh_install_gui.py",
+    "docs/guide/install-nex-core.md",
+    "docs/qa/iso/2026-09-22-installer-mirror.md",
+    "docs/plans/2026-09-22-software-raid.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Disk step is a new operator choice with new rules and a new installed layout. docs/guide/install-nex-core.md names the multiple selection in both frontends, the 10% capacity rule and its reason, the mirrored layout (one ext4 root on an md RAID1 array, an ESP per disk under UEFI, no swap partition), that the confirmation names every selected disk, and what happens when a mirror disk fails: the host keeps running on the surviving disk with its VMs untouched, the array is degraded until the disk is replaced, and a mirror is not a backup. installer/README.md records the same for contributors. installer/README.md carries the same detail for contributors; it is not a guide page. The Disk step is now described as a tick list with columns, the live summary and the preselection/tip behaviour, in both the graphical and the minimal walkthrough.",
+    "pages": [
+      "docs/guide/install-nex-core.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The installer runs before any Nex Controller or Nex Core service exists on the machine. It exchanges nothing with the Controller: the whole change is the local wizard handoff (/run/nex-installer/config.ini, a private file read only by nex-config on the same machine), the Debian Installer preseed it generates, and the installed host's own boot configuration. No Controller operation, agent command, observation or client-facing endpoint is added or changed. Reporting the resulting md array to the Controller is a separate, Core-side change (host-system-disk-replace-v1 and the hardware report's md_arrays) with its own record.",
+    "operations": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No published website roadmap milestone changed status. The plan's Slice 3 heading in docs/plans/2026-09-22-software-raid.md records the installer part as implemented with lab acceptance outstanding, and the three findings the run established: partman-md's marker does not stop partman-auto-raid creating the new array, Debian 13's grub-efi-amd64 has no multi-ESP support to reuse, and the mirrored layout needs partman's swap warning answered in the preseed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The mirror is host-local Core state written at installation: the md superblocks on each member partition, /etc/mdadm/mdadm.conf and the initramfs copy of it, plus GRUB on each disk. Nothing is pool-scoped and nothing is kept in the Controller; the kernel assembles the array from the superblocks with no Nex code and no Controller connection. A fresh or replaced Controller learns the mirror from the host's hardware report, which Core produces by reading /sys/block/md*.",
+    "record": "Each member partition's md 1.2 superblock, /etc/mdadm/mdadm.conf and the initramfs on the installed host; re-read by the kernel at every boot and reported to any Controller by Core."
+  },
+  "verification": {
+    "method": "bash installer/check.sh (new assertions for the RAID recipe, the per-disk validation, the 10% rule, the swap answer, the multiselect Disk step in both frontends, mdadm, the mdadm.conf/initramfs regeneration and the ESP copy, alongside BUG-0413's existing guard). python3 tests/integration/installer-disk.py (the real validator compiled against a simulated device boundary: a two-disk mirror, a mismatched pair, a disk selected twice, an empty selection, an unsupported second disk and a changed serial on the second member). python3 tests/integration/installer-text-wizard.py (the shipping text wizard against a fixture machine: a two-disk selection writes both disks to the handoff, a mismatched pair is refused and asked again, single-disk answers unchanged). python3 -m unittest tests.test_fresh_install_lab. Both frontends' compiles are clean, the GTK wizard inside the pinned ISO builder image. Two development ISOs were built and installed in disposable QEMU labs as far as partitioning and the base system, which established the partman-md marker, multi-ESP and swap findings; the lab run was stopped before any installed host booted, so the boot, disk-detach, leftover-array and single-disk end-to-end checks are recorded as OUTSTANDING in the QA record and the plan. This slice is not complete until they run. The generated fstab rewrite was exercised against a sample Debian fstab: only the /boot/efi line gains nofail. Booted-host behaviour of the ESP mount, the copy and the hook remains OUTSTANDING in the QA record. After review: the member index no longer depends on the firmware (constant partition 3 with a seeded GPT label and a BIOS boot partition), nex-sync-esp reports failure when it copies to no ESP while the installer and the APT hook tolerate that status, and the erase confirmation names the capacity again. These are source-level changes only; the lab installs predate them. The Disk step rework is covered by installer/check.sh (the toggle column, the keyboard toggle, the columns, rotational/partition facts, the summary wording and one sorted order for both frontends), by installer-disk.py (the same wizard assertions) and by installer-text-wizard.py, whose fixture now carries rotational flags and a leftover partition so the choice lines are checked against real sysfs facts. A headless capture of the rebuilt GTK wizard was attempted and abandoned: the builder image has no Xvfb, the workstation has no GTK 2 runtime, and the wizard reads absolute /sys paths that a container cannot have a fixture bind-mounted over without privileged remounting. The new screens have therefore been compiled and asserted, not seen.",
+    "evidence": [
+      "docs/qa/iso/2026-09-22-installer-mirror.md"
+    ]
+  }
+}

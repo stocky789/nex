@@ -237,8 +237,10 @@ type Command struct {
 	ResourceLifecycle *ResourceLifecycleRequest       `json:"resource_lifecycle,omitempty"`
 	CredentialRetire  *StorageCredentialRetireRequest `json:"credential_retire,omitempty"`
 	ZFSProvision      *ZFSProvisionRequest            `json:"zfs_provision,omitempty"`
+	ZFSReplace        *ZFSReplaceRequest              `json:"zfs_replace,omitempty"`
 	Pool              *PoolCommand                    `json:"pool,omitempty"`
 	ManagementNetwork *ManagementNetworkRequest       `json:"management_network,omitempty"`
+	SystemDiskReplace *SystemDiskReplaceRequest       `json:"system_disk_replace,omitempty"`
 	OperationID       string                          `json:"operation_id"`
 	Kind              string                          `json:"kind"`
 }

@@ -174,6 +174,10 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"host_id": cmd.Pool.MemberHostID, "peer_origin": cmd.Pool.PeerOrigin, "operation": op}
 	case cmd.ManagementNetwork != nil:
 		return map[string]any{"host_id": cmd.ManagementNetwork.HostID, "action": cmd.ManagementNetwork.Action, "operation": op}
+	case cmd.SystemDiskReplace != nil:
+		return map[string]any{"host_id": cmd.SystemDiskReplace.HostID, "array": cmd.SystemDiskReplace.Array, "operation": op}
+	case cmd.ZFSReplace != nil:
+		return map[string]any{"repository_id": cmd.ZFSReplace.RepositoryID, "host_id": cmd.ZFSReplace.HostID, "old_device": cmd.ZFSReplace.OldDevice, "operation": op}
 	case cmd.ZFSProvision != nil:
 		response := map[string]any{"name": cmd.ZFSProvision.Name, "pool_id": cmd.ZFSProvision.PoolID, "scope": cmd.ZFSProvision.Scope, "hosts": cmd.ZFSProvision.Hosts, "operation": op}
 		if cmd.ZFSProvision.RepositoryID != "" {

@@ -8,20 +8,21 @@ MDSTAT=/proc/mdstat
 PARTMAN=/var/lib/partman
 if [ -f /run/nex-installer/active ]; then
     /usr/bin/nex-config --recheck /run/nex-installer/config.ini
-    # The operator confirmed erasing this disk. A previous install's RAID membership or LVM
-    # makes partman-auto stop silently ("No root file system", BUG-0413), and partman's own
-    # RAID removal zeroes every member disk. Clear only the selected disk, once, before
-    # partman assembles arrays (25md-devices) and scans it.
-    disk=$(sed -n 's/^disk=//p' /run/nex-installer/config.ini)
-    name=${disk#/dev/}
-    marker=/run/nex-installer/wiped-$name
-    if [ ! -e "$marker" ]; then
+    # The operator confirmed erasing these disks: one, or every member of the mirror.
+    # A previous install's RAID membership or LVM makes partman-auto stop silently
+    # ("No root file system", BUG-0413), and partman's own RAID removal zeroes every
+    # member disk. Clear only the selected disks, once each, before partman assembles
+    # arrays (25md-devices) and scans them.
+    for disk in $(sed -n 's/^disk=//p' /run/nex-installer/config.ini | tr ';' ' '); do
+        name=${disk#/dev/}
+        marker=/run/nex-installer/wiped-$name
+        if [ -e "$marker" ]; then continue; fi
         parts=
         for part in "$SYS/class/block/$name/$name"*; do
             [ -f "$part/partition" ] && parts="$parts ${part##*/}"
         done
         # Stop arrays holding this disk; nothing is written to their other members.
-        for md in $(for p in $name $parts; do sed -n "s/^\(md[0-9]*\) : .*[[:space:]]$p\[[0-9]*\].*/\1/p" "$MDSTAT" 2>/dev/null; done | sort -u); do
+        for md in $(for p in $name $parts; do sed -n "s/^\\(md[0-9]*\\) : .*[[:space:]]$p\\[[0-9]*\\].*/\\1/p" "$MDSTAT" 2>/dev/null; done | sort -u); do
             mdadm --stop "$DEV/$md"
         done
         # Zero the first and last MiB of every partition, then of the disk: covers RAID
@@ -36,10 +37,11 @@ if [ -f /run/nex-installer/active ]; then
         sync
         blockdev --rereadpt "$DEV/$name" 2>/dev/null || true
         logger -t nex-installer "Cleared previous partitions and RAID/LVM signatures from $disk" 2>/dev/null || true
-        # Mark partman's RAID/LVM scan done (25md-devices, 26lvm-devices) so it neither
-        # reassembles the other disks' leftover array nor gives the installed host its mdadm.conf.
-        mkdir -p "$PARTMAN"
-        : > "$PARTMAN/md"; : > "$PARTMAN/lvm"
         : > "$marker"
-    fi
+    done
+    # Mark partman's RAID/LVM scan done (25md-devices, 26lvm-devices) so it does not
+    # reassemble leftover arrays on disks the operator did not select. partman-auto-raid
+    # loads md-mod and creates this install's mirror itself, so the marker does not stop it.
+    mkdir -p "$PARTMAN"
+    : > "$PARTMAN/md"; : > "$PARTMAN/lvm"
 fi

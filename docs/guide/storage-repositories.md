@@ -159,11 +159,30 @@ open native and image-delivery checks.
    host only and is not offered for hosts Core has already configured for the repository.
    If one host cannot report its devices, its message appears under that host and it is
    left as it is while the other hosts remain selectable. **Refresh disks** asks Core again.
-4. Check the layout shown under each host: single disk for one device, mirror for two, and
-   RAIDZ1 for three or more. One disk has no redundancy. With four or more disks ticked,
-   **Layout** also offers RAIDZ1, striped mirrors (even counts) and RAIDZ2; leave it on
-   **Automatic** to accept Core's default. A choice that no longer fits the ticked disks
-   returns to **Automatic**.
+   Once three or more data disks are ticked — enough that holding one back still leaves a
+   redundant pool — a **Spare** column appears. Tick it on a disk to
+   make that disk a hot spare instead of a data disk. A hot spare sits
+   idle in the pool until a data disk fails, and ZFS then resilvers onto it by itself without
+   waiting for anyone (one sentence of help says the same beside the list). A spare is erased exactly like any other selected disk, needs the same
+   typed confirmation when it holds old data, and counts toward no layout: the data disks
+   alone have to satisfy the layout, so two data disks and a spare is still a two-disk mirror
+   with a spare, not a three-way mirror. Each Spare tick needs three data disks still ticked on
+   that host; otherwise the wizard shows **Keep at least two data disks** and refuses the spare.
+   Unticking a data disk after marking a spare clears the spare again if fewer than two data disks
+   would remain.
+4. Check the summary under each host. It follows the ticks as they change and reads, for
+   example, `3 data disks + 1 hot spare → RAIDZ1, ~16 GiB usable, survives 1 disk failure`.
+   The usable figure is the plain arithmetic on the smallest ticked disk, so it is shown as
+   approximate: ZFS's own overhead is not in it. **Layout** lists every layout with one line
+   each, and **Automatic** is marked as Core's default for the number of disks ticked: a
+   single disk for one device, a mirror for two, and RAIDZ1 for three or more. A layout the
+   ticked disks cannot build stays in the list with what it needs instead — a mirror of two
+   **or three** disks, RAIDZ1 from three, striped mirrors from an even number of four or
+   more, RAIDZ2 from four and RAIDZ3 from five — so nothing disappears without a reason. When
+   the ticked disks allow only one layout, the page says so instead of offering a choice of
+   one. A three-disk mirror survives two failed disks and is also the way to add a disk to a
+   mirror before removing a suspect one. Spares are not counted here. A choice that no longer
+   fits the ticked disks returns to **Automatic**.
 5. Select **Review and erase →** and review every selected device and its host. For old
    data, type the exact displayed by-id name. Select **Erase disks and create storage** only
    after verifying the list: provisioning destroys data on the selected devices. Core checks
@@ -197,6 +216,87 @@ disks and type it again before **Erase disks and create storage** becomes availa
 browser or Controller. An ambiguous destructive step stays **Needs attention** until it
 can be safely reconciled; it is not permission to erase again. **Detach** unregisters
 storage and keeps the zpool and data intact.
+
+#### When a disk in a provisioned ZFS repository fails
+
+A mirror or RAIDZ pool that loses a disk keeps working. The repository's host row on the
+**Storage** page shows **Pool degraded**, the failed device by its by-id name and its state
+(for example `offline`, `faulted` or `unavail`), and the scrub or resilver that is running,
+with the percentage it has finished and how much of the pool it has examined. The same line
+appears on the host's row under **ZFS storage by host**, beside the **Replace disk** button
+that repairs it — or **resilvering** / **being replaced** in that Action cell while a
+resilver or in-flight replacement is already under way, so a second submit is not offered.
+Nex Core reports this from the pool itself; it is what `zpool status` on
+that host shows.
+
+A registered OpenZFS dataset (Register storage, not Add ZFS storage) shows the same pool
+line on its repository row under **Host access**, because that path has no per-host ZFS
+table.
+
+The repository stays readable and writable while it is degraded. Running VMs keep running,
+their disks keep being written, and new VMs can still be created and started on it. A single
+disk repository has no redundancy: a lost disk there makes the repository unavailable
+instead, as does a pool that ZFS reports as faulted, unavailable, removed or suspended.
+
+Degraded means the redundancy the repository was built for is now spent. Replace the disk
+promptly: a second failure before the pool is repaired loses the data. Fit a replacement of
+at least the same size in the affected host and follow **Replace a failed disk** below. Once
+the resilver finishes, the host row returns to **Pool online**.
+
+If the repository was built with a hot spare, ZFS has already started resilvering onto the
+spare by itself; the host row shows that resilver. Replace the failed disk anyway, so the
+spare goes back to being a spare.
+
+#### Replace a failed disk
+
+Do this on the host whose row reports the failure. The repository stays in service while it
+runs, and the work belongs to Nex Core: it carries on if the browser is closed or the
+Controller is unreachable.
+
+1. Fit the replacement disk in that host. It must be at least as large as the disk it
+   replaces. Nothing else has to be prepared: the disk is erased as part of the replacement.
+2. On the pool's **Storage** page, scroll to **ZFS storage by host** for that repository.
+   Find the host row that reports **Pool degraded** and select **Replace disk** in its
+   **Action** column. The button is only on that panel, and only while the host is freshly
+   connected, its pool observation is current, and it reports ZFS replace and storage discovery.
+   A row that still shows an older pool line is prefixed **Last report** and does not offer
+   **Replace disk**.
+3. Choose the failed disk. Nothing is chosen for you, even when only one disk has failed. It
+   is named by the same by-id name the host row reports, with the state ZFS gives it. A disk
+   ZFS still reports as ONLINE is not offered at all — if the disk you expected is missing from
+   the list, the pool does not consider it failed; check the pool before going further. An
+   ONLINE leaf that somehow reaches submit is refused with the other **Needs attention**
+   messages.
+4. Choose the replacement from the host's disk list. It shows the same size, type, model and
+   serial as the provisioning wizard, and refuses the same disks for the same reasons — a
+   disk in use, a system device, or one the host cannot observe safely.
+5. If the replacement is marked **Has old data — will be erased**, type its exact displayed
+   by-id name to confirm. The confirm button names the disk it erases — **Erase
+   _disk_ and replace** — so check that name against the disk you fitted before selecting it.
+
+**What happens next.** Nex Core checks both disks against the host again, clears the
+replacement and hands it to ZFS. The repository's host row then shows a **resilver** with how
+much of the pool it has copied. A resilver takes as long as the data on the pool needs —
+minutes for a nearly empty pool, many hours for a full one — and it is not something to wait
+in front of. VMs on the repository keep running and keep being written to throughout, and
+nothing is lost if the browser or the Controller goes away.
+
+When the resilver finishes, ZFS removes the old disk from the pool itself. Nothing has to be
+detached by hand, and the host row returns to **Pool online**. The old disk can then be taken
+out of the host.
+
+If the operation ends in **Needs attention**, read its message before retrying: it says what
+Nex Core found instead — the disk is no longer part of the pool, it is online, it is already
+being replaced, the replacement is already part of the pool, it is too small, the
+replacement changed or is in use since it was picked, or it holds old data that was not
+confirmed. Nothing was erased in those cases. Two other messages can only appear after the
+replacement disk was cleared: **the replacement disk could not be cleared**, and
+**… could not be replaced with …**. In those cases the disk has been wiped, the pool is
+unchanged, and retrying the same replacement is what finishes it. Retrying the same
+replacement is safe when the pool is already resilvering onto the replacement: that case is
+recognized rather than started again.
+While the host row's Action cell shows **resilvering** or **being replaced**, **Replace disk**
+is not offered.
 
 ### Use NFS or SMB on a joined member
 
@@ -355,9 +455,11 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **NFS access fails:** confirm NFSv4, server/export path and UID/GID or root-squash policy. Do not
   switch to a soft mount. If server or filesystem identity changed, restore the original source.
   Earlier registrations without a filesystem ID stay unavailable.
-- **ZFS access fails:** confirm the pool is imported and `ONLINE`, the dataset is mounted at the
+- **ZFS access fails:** confirm the pool is imported, the dataset is mounted at the
   reported mount point, the module/tools work on the running kernel, and there is capacity. Unlock
   encrypted datasets through boot configuration; do not force-import or change pool settings.
+  A `DEGRADED` pool is not an access failure: it stays in service, and the host row names the
+  failed device to replace.
 - **SMB access fails:** confirm share, account, domain/workgroup, password, transport-encryption policy, permissions
   and locking. Passwords are not recoverable from Controller; rotate them with an update. A missing
   or changed `.nex-storage-marker` fails safely: restore it from a trusted copy, then **Recheck**.
@@ -410,6 +512,14 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   protection and is unsupported.
 
 ## Verification
+
+**Replace a failed disk** was walked through against a running build in a disposable lab; see
+[replacing a failed disk in a provisioned ZFS pool](../qa/2026-09-22-zfs-replace.md). The
+API path of the mirror replacement was observed with output retained. Three-way mirror and
+hot-spare checks were run but retained no evidence. The reworked disk tables, Spare column,
+layout fieldset, live summary, degraded host row and confirm button have not been seen in a
+browser. RAIDZ3 provisioning, automatic spare engagement and the post-`zpool replace`
+interrupted retry remain outstanding.
 
 ZFS disk provisioning has separate [rollout verification](../qa/2026-09-19-zfs-provisioning.md).
 Its acceptance remains open; earlier existing-dataset checks do not prove disk provisioning,

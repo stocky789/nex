@@ -1,0 +1,38 @@
+{
+  "summary": "Surface access.zfs_pool on registered ZFS repository rows, make resilver progress print the quantity its percentage came from, and raise pool-summary attention for leaf error counts or a non-empty ZFS status sentence (SR-041–044 / BUG-0488–0490). API impact: none.",
+  "paths": [
+    "web/src/managed.tsx",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/guide/storage-repositories.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Registered OpenZFS datasets now show the pool detail line under Host access; docs/guide/storage-repositories.md notes that path beside the provisioned host-row behaviour.",
+    "pages": [
+      "docs/guide/storage-repositories.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core wire change and no docs/API.md edit. StorageAccess.zfs_pool and leaf error fields were already on the contract; this change only types and renders them in the Storage UI.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "UI bug fixes for already-shipped ZFS observation display; no roadmap milestone moved."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation-only. Durable pool/repository state remains on the pool master; the Controller still stores none of the zpool observation."
+  },
+  "verification": {
+    "method": "node web/src/storage.test.mjs; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree (scoped to this change's paths).",
+    "evidence": [
+      "web/src/storage.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

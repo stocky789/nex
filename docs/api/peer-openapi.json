@@ -19,7 +19,7 @@
         "description": "Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.",
         "security": [],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: joining host → pool master",
+        "x-audience": "Core peer: joining host \u2192 pool master",
         "responses": {
           "200": {
             "description": "Member certificate and membership.",
@@ -86,7 +86,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Origin recorded."
@@ -149,7 +149,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → selected pool member",
+        "x-audience": "Core peer: pool master \u2192 selected pool member",
         "responses": {
           "200": {
             "description": "Fresh accepted native observation for this exact command.",
@@ -236,7 +236,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → pool member",
+        "x-audience": "Core peer: pool master \u2192 pool member",
         "responses": {
           "200": {
             "description": "What this member holds, or an empty object when it holds nothing.",
@@ -280,7 +280,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → pool member",
+        "x-audience": "Core peer: pool master \u2192 pool member",
         "requestBody": {
           "required": true,
           "description": "JSON, at most 1 MiB.",
@@ -357,7 +357,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Desired VLAN networks.",
@@ -392,7 +392,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "parameters": [
           {
             "name": "network_id",
@@ -437,7 +437,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "parameters": [
           {
             "name": "network_id",
@@ -488,7 +488,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Shared ISO library entries.",
@@ -523,7 +523,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "parameters": [
           {
             "name": "media_id",
@@ -568,7 +568,7 @@
           }
         ],
         "x-introduced-version": "0.3.4",
-        "x-audience": "Core peer: member → pool master",
+        "x-audience": "Core peer: member \u2192 pool master",
         "parameters": [
           {
             "name": "media_id",
@@ -619,7 +619,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Eligible repositories.",
@@ -668,7 +668,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Repository transfer.",
@@ -736,7 +736,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Reservation held."
@@ -806,7 +806,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Release applied or not applicable. A reservation is removed only when `operation_id` matches the operation that holds it (or when `release_unused=1` is set). A mismatch or an absent reservation leaves state unchanged and still returns 204: the later operation never held its own reservation, so the live operation's reservation must stay in place."
@@ -887,7 +887,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Observation recorded."
@@ -969,7 +969,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Lease held.",
@@ -1071,7 +1071,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Released or not held."
@@ -1154,7 +1154,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "202": {
             "description": "Durably retained, but legacy owner adoption waits until every current ready member has reported."
@@ -1225,14 +1225,14 @@
       "post": {
         "operationId": "peerPoolVMExecution",
         "summary": "Admit a pool VM execution transition",
-        "description": "Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member's exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.",
+        "description": "Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member's exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.",
         "security": [
           {
             "PoolMemberCertificate": []
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Request echoed with epoch and action acknowledgements.",
@@ -1340,7 +1340,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "200": {
             "description": "Projections.",
@@ -1399,7 +1399,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "responses": {
           "204": {
             "description": "Accepted."
@@ -1452,14 +1452,14 @@
       "post": {
         "operationId": "peerVerifyClusterFence",
         "summary": "Ask a surviving member to verify a fence",
-        "description": "Served by a pool member to the current master (PoolMasterCertificate); the master dials only a ready member's advertised origin pinned to its membership certificate. target_host_id must equal the membership master host ID and differ from the serving host; config.pool_id must be this pool; request_id 1–128 characters. The survivor durably records the request before running native fence verification (bounded to two minutes). The request_id is the replay boundary: a replay with the same digest after success returns 204 without repeating any action; any other replay returns 409 and must be reconciled via the proof route. Body at most 1 MiB. `target_host_id` must be the calling master: the master verifies other targets locally and asks a surviving member only to prove the master's own exclusion, which the master cannot prove itself.",
+        "description": "Served by a pool member to the current master (PoolMasterCertificate); the master dials only a ready member's advertised origin pinned to its membership certificate. target_host_id must equal the membership master host ID and differ from the serving host; config.pool_id must be this pool; request_id 1\u2013128 characters. The survivor durably records the request before running native fence verification (bounded to two minutes). The request_id is the replay boundary: a replay with the same digest after success returns 204 without repeating any action; any other replay returns 409 and must be reconciled via the proof route. Body at most 1 MiB. `target_host_id` must be the calling master: the master verifies other targets locally and asks a surviving member only to prove the master's own exclusion, which the master cannot prove itself.",
         "security": [
           {
             "PoolMasterCertificate": []
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → pool member",
+        "x-audience": "Core peer: pool master \u2192 pool member",
         "responses": {
           "204": {
             "description": "Fence exclusion verified."
@@ -1519,7 +1519,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → pool member",
+        "x-audience": "Core peer: pool master \u2192 pool member",
         "responses": {
           "200": {
             "description": "Recorded proofs.",
@@ -1927,6 +1927,44 @@
         }
       }
     },
+    "/api/v1/pool/zfs-provision/replace": {
+      "post": {
+        "operationId": "peerReplaceZFSDisk",
+        "summary": "Replace a failed disk of a provisioned ZFS pool on a selected member",
+        "description": "Served only by the addressed member and authenticated with the current pool master certificate. The master forwards its own validated ZFSReplaceRequest unchanged; the member accepts it only for its own pool and host ID, revalidates the pool and the disk against a fresh observation, and journals the work under the operation ID, so a redelivered request replays its recorded outcome and a pool already resilvering onto the replacement is adopted rather than erased again.",
+        "security": [
+          {
+            "PoolMasterCertificate": []
+          }
+        ],
+        "x-introduced-version": "0.4.3",
+        "x-audience": "Core peer: pool master to configured member",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZFSReplaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The member's own Result for the operation: succeeded, or needs_attention carrying its refusal sentence."
+          },
+          "400": {
+            "description": "Invalid request, or one addressed to another pool or host."
+          },
+          "401": {
+            "description": "Caller is not the current pool master."
+          },
+          "405": {
+            "description": "Method other than POST."
+          }
+        }
+      }
+    },
     "/api/v1/pool/zfs-provision/lifecycle": {
       "post": {
         "operationId": "peerZFSRepositoryLifecycle",
@@ -1985,14 +2023,14 @@
       "post": {
         "operationId": "peerPoolTransferStep",
         "summary": "Perform one step of a pool master change or eject on this host",
-        "description": "Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host's current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet — which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host's.",
+        "description": "Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host's current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet \u2014 which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host's.",
         "security": [
           {
             "PoolPeerCertificate": []
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: pool master → member, and new master → every other host",
+        "x-audience": "Core peer: pool master \u2192 member, and new master \u2192 every other host",
         "requestBody": {
           "required": true,
           "description": "JSON, at most 256 KiB.",
@@ -2069,7 +2107,7 @@
           }
         ],
         "x-introduced-version": "0.1.0",
-        "x-audience": "Core peer: any pool certificate holder → any pool host",
+        "x-audience": "Core peer: any pool certificate holder \u2192 any pool host",
         "parameters": [
           {
             "name": "vms",
@@ -2139,7 +2177,7 @@
           }
         ],
         "x-introduced-version": "0.4.3",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "requestBody": {
           "required": true,
           "description": "JSON, at most 64 KiB.",
@@ -2195,14 +2233,14 @@
       "post": {
         "operationId": "peerOfferProvisionedFence",
         "summary": "Offer the pool master the fence device this host configured on its own controller",
-        "description": "Served by the pool master. The member certificate says which host is calling and the profile is recorded for that host only: a member cannot offer a fence device for another host. The master writes the password into its own private fence-credential store first, because the identity check that follows signs in with it, and then records the profile through exactly the path an operator-entered profile takes — including proving over the network that the controller really manages that host's machine, and refusing to replace a profile an operator entered by hand. Nothing is recorded if any step refuses, and the refusal sentence is returned so the member can report it. Idempotent in effect: a member that has already had its profile recorded does not call this again, and a repeat records the same profile with fresh material. Body at most 8 KiB.",
+        "description": "Served by the pool master. The member certificate says which host is calling and the profile is recorded for that host only: a member cannot offer a fence device for another host. The master writes the password into its own private fence-credential store first, because the identity check that follows signs in with it, and then records the profile through exactly the path an operator-entered profile takes \u2014 including proving over the network that the controller really manages that host's machine, and refusing to replace a profile an operator entered by hand. Nothing is recorded if any step refuses, and the refusal sentence is returned so the member can report it. Idempotent in effect: a member that has already had its profile recorded does not call this again, and a repeat records the same profile with fresh material. Body at most 8 KiB.",
         "security": [
           {
             "PoolMemberCertificate": []
           }
         ],
         "x-introduced-version": "0.4.2",
-        "x-audience": "Core peer: pool member → pool master",
+        "x-audience": "Core peer: pool member \u2192 pool master",
         "requestBody": {
           "required": true,
           "description": "JSON, at most 8 KiB.",
@@ -2564,7 +2602,7 @@
           },
           "system_uuid": {
             "type": "string",
-            "description": "This member's own SMBIOS system UUID, in any usual spelling; the master normalizes it to 32 lower-case hex digits and refuses known firmware placeholders (all-zero, all-ff and the common 03000200-0400-0500-0006-000700080009). Recorded in the member's membership row and used to prove a management controller belongs to this machine before a fence powers it off. The master records it only in the calling member's own row, and refuses two changes that would let a host defeat its own fencing: replacing an identity it already reported while a BMC fence profile is recorded against it (clearing the profile is the motherboard-replacement path), and claiming an identity another member of the pool already holds. A refused value is dropped silently — the request still returns 204 when the origin was recorded — and the member simply cannot be given a BMC fence device. Members send it at join and on every reconcile pass, so a pool formed before this existed gains it without re-joining; a member too old to send one is unaffected."
+            "description": "This member's own SMBIOS system UUID, in any usual spelling; the master normalizes it to 32 lower-case hex digits and refuses known firmware placeholders (all-zero, all-ff and the common 03000200-0400-0500-0006-000700080009). Recorded in the member's membership row and used to prove a management controller belongs to this machine before a fence powers it off. The master records it only in the calling member's own row, and refuses two changes that would let a host defeat its own fencing: replacing an identity it already reported while a BMC fence profile is recorded against it (clearing the profile is the motherboard-replacement path), and claiming an identity another member of the pool already holds. A refused value is dropped silently \u2014 the request still returns 204 when the origin was recorded \u2014 and the member simply cannot be given a BMC fence device. Members send it at join and on every reconcile pass, so a pool formed before this existed gains it without re-joining; a member too old to send one is unaffected."
           },
           "bmc": {
             "anyOf": [
@@ -2575,7 +2613,7 @@
                 "type": "null"
               }
             ],
-            "description": "What this member's own Nex Core found and did about its own management controller. Recorded in the calling member's own row; the state must be one of the closed set and the sentence is bounded at 1 KiB, or the request is refused with 400. It is an observation and nothing more: a host cannot change what the pool decided about it, so a report of state \"removed\" does not delete the fence device the pool recorded — withdrawing one is an operator decision authenticated at the Controller and recorded by the master. A report that does not differ from the one already recorded, except in its timestamp, is not written at all, so a settled pool's signed authority does not move because a host keeps saying the same thing. Like the other two fields it may be sent on its own and it moves no membership generation."
+            "description": "What this member's own Nex Core found and did about its own management controller. Recorded in the calling member's own row; the state must be one of the closed set and the sentence is bounded at 1 KiB, or the request is refused with 400. It is an observation and nothing more: a host cannot change what the pool decided about it, so a report of state \"removed\" does not delete the fence device the pool recorded \u2014 withdrawing one is an operator decision authenticated at the Controller and recorded by the master. A report that does not differ from the one already recorded, except in its timestamp, is not written at all, so a settled pool's signed authority does not move because a host keeps saying the same thing. Like the other two fields it may be sent on its own and it moves no membership generation."
           },
           "watchdog": {
             "anyOf": [
@@ -2810,7 +2848,7 @@
           },
           "bmc_provisioning_disabled": {
             "type": "boolean",
-            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it — one operator action with one meaning — and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
+            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it \u2014 one operator action with one meaning \u2014 and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
           },
           "watchdog": {
             "anyOf": [
@@ -3334,6 +3372,16 @@
           },
           "error": {
             "type": "string"
+          },
+          "zfs_pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZFSPoolStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3534,7 +3582,7 @@
               3,
               17
             ],
-            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself — 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement — either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
+            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself \u2014 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement \u2014 either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
           },
           "provisioned_by_core": {
             "type": "boolean",
@@ -3545,7 +3593,7 @@
           "kind"
         ],
         "x-go-type": "protocol.StorageClusterFence",
-        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages — the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection — identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read — rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
+        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection \u2014 identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read \u2014 rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
       },
       "StorageClusterFenceStatus": {
         "type": "object",
@@ -3876,6 +3924,16 @@
             "items": {
               "$ref": "#/components/schemas/ZFSProvisionDevice"
             }
+          },
+          "spares": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ZFSProvisionDevice"
+            },
+            "description": "Hot spares. They are erased like the data disks, added as spare vdevs and the pool is created with autoreplace=on, so ZFS resilvers onto one by itself when a data disk fails. They satisfy no part of the layout rule."
           }
         },
         "required": [
@@ -3917,6 +3975,42 @@
           "hosts"
         ],
         "x-go-type": "protocol.ZFSProvisionRequest"
+      },
+      "ZFSReplaceRequest": {
+        "type": "object",
+        "description": "Replace one failed leaf device of a provisioned ZFS repository's pool on one host. old_device names the leaf exactly as the pool observation reports it, and device is one candidate from POST /api/v1/storage/discover with kind zfs-device, carrying the same identity, fingerprint and typed erase confirmation rules the ZFS wizard uses. Core revalidates both against a fresh observation of the pool and the disk before it touches anything.",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "description": "Core operation identity. The executing host journals its replacement under it, so a redelivered command replays the recorded outcome instead of acting again."
+          },
+          "repository_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string",
+            "description": "The configured host whose pool holds the failed disk. It may be the pool master or a ready current member."
+          },
+          "old_device": {
+            "type": "string",
+            "description": "The failed leaf's /dev/disk/by-id path, as the repository's pool observation reports it."
+          },
+          "device": {
+            "$ref": "#/components/schemas/ZFSProvisionDevice"
+          }
+        },
+        "required": [
+          "operation_id",
+          "repository_id",
+          "pool_id",
+          "host_id",
+          "old_device",
+          "device"
+        ],
+        "x-go-type": "protocol.ZFSReplaceRequest"
       },
       "ZFSProvisionHostResult": {
         "type": "object",
@@ -4016,6 +4110,16 @@
           },
           "error": {
             "type": "string"
+          },
+          "pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZFSPoolStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4025,6 +4129,115 @@
         ],
         "x-go-type": "protocol.ZFSHostAccess",
         "description": "Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission."
+      },
+      "ZFSPoolStatus": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "scan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZFSPoolScan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "devices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ZFSPoolDevice"
+            }
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "x-go-type": "protocol.ZFSPoolStatus",
+        "description": "Core's transient `zpool status` observation of one imported pool. Nothing durable is derived from it: the Controller passes it through and a fresh Controller sees it again on the next report."
+      },
+      "ZFSPoolScan": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "start_time": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "string"
+          },
+          "to_examine": {
+            "type": "string"
+          },
+          "examined": {
+            "type": "string"
+          },
+          "issued": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "state"
+        ],
+        "x-go-type": "protocol.ZFSPoolScan",
+        "description": "A running or completed scrub or resilver. ZFS formats its own sizes and timestamps, so they are reported as the strings it produced."
+      },
+      "ZFSPoolDevice": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string",
+            "description": "replacing or spare when this leaf sits under an in-flight replacement or activated-spare vdev; omitted for an ordinary data leaf."
+          },
+          "read_errors": {
+            "type": "string"
+          },
+          "write_errors": {
+            "type": "string"
+          },
+          "checksum_errors": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "x-go-type": "protocol.ZFSPoolDevice",
+        "description": "One leaf of the pool's vdev tree, named as the pool was created: the /dev/disk/by-id path for a Core-provisioned repository. parent marks an in-flight replacing or spare vdev."
       },
       "ZFSProvisionPeerRequest": {
         "type": "object",
@@ -4307,7 +4520,7 @@
           "model"
         ],
         "x-go-type": "protocol.VMCPU",
-        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets × cores × threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
+        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets \u00d7 cores \u00d7 threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
       },
       "VMCreateSpec": {
         "type": "object",
@@ -6266,7 +6479,7 @@
               "no_peer",
               "not_applicable"
             ],
-            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait — a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
+            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait \u2014 a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
           },
           "reason": {
             "type": "string",
@@ -6396,7 +6609,7 @@
               "unknown",
               "none"
             ],
-            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software — a hung kernel does not run it — so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
+            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software \u2014 a hung kernel does not run it \u2014 so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
           },
           "device": {
             "type": "string",
@@ -6511,12 +6724,12 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at — not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
+            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at \u2014 not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
           },
           "armed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog — a reboot, a cluster restart — produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
+            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog \u2014 a reboot, a cluster restart \u2014 produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
           }
         },
         "required": [
@@ -6551,7 +6764,7 @@
           "held_seconds": {
             "type": "integer",
             "minimum": 0,
-            "description": "How long this host has continuously been in a quorate partition without the target, on a monotonic clock. Any flap — the target reappearing, quorum lost, or this agent restarting — restarts it from zero."
+            "description": "How long this host has continuously been in a quorate partition without the target, on a monotonic clock. Any flap \u2014 the target reappearing, quorum lost, or this agent restarting \u2014 restarts it from zero."
           },
           "bound_seconds": {
             "type": "integer",

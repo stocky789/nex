@@ -61,6 +61,85 @@ func TestZFSLegacyPreflightOmitsPoolLocalRegistrationFields(t *testing.T) {
 	}
 }
 
+func TestZFSPoolObservationIsStrippedUntilReplaceAcknowledgement(t *testing.T) {
+	pool := &protocol.ZFSPoolStatus{Name: "nex-repo-1", State: "DEGRADED", Devices: []protocol.ZFSPoolDevice{{Name: "disk-1", State: "OFFLINE"}}}
+	managed := &protocol.ManagedState{Storage: []protocol.StorageRegistration{
+		{ID: "registered", Kind: protocol.StorageKindZFS, Access: protocol.StorageAccess{Status: "degraded", Readable: true, Writable: true, ZFSPool: pool}},
+		{ID: "provisioned", Kind: protocol.StorageKindZFS, ZFSProvisioned: true, Access: protocol.StorageAccess{Status: "degraded", Readable: true, Writable: true, ZFSPool: pool}, ZFSHostAccess: []protocol.ZFSHostAccess{{HostID: "host-1", Readable: true, Pool: pool}}},
+	}}
+	// This is the actual old strict-decoder failure: Access.zfs_pool and
+	// ZFSHostAccess.pool are rejected as unknown fields.
+	type oldAccess struct {
+		Status         string  `json:"status"`
+		Readable       bool    `json:"readable"`
+		Writable       bool    `json:"writable"`
+		TotalBytes     uint64  `json:"total_bytes,omitempty"`
+		AvailableBytes *uint64 `json:"available_bytes,omitempty"`
+		ObservedAt     any     `json:"observed_at,omitempty"`
+		Error          string  `json:"error,omitempty"`
+	}
+	type oldHostAccess struct {
+		HostID         string  `json:"host_id"`
+		PoolGUID       string  `json:"pool_guid,omitempty"`
+		DatasetGUID    string  `json:"dataset_guid,omitempty"`
+		Path           string  `json:"path,omitempty"`
+		Readable       bool    `json:"readable"`
+		Writable       bool    `json:"writable"`
+		TotalBytes     uint64  `json:"total_bytes,omitempty"`
+		AvailableBytes *uint64 `json:"available_bytes,omitempty"`
+		ObservedAt     any     `json:"observed_at,omitempty"`
+		Error          string  `json:"error,omitempty"`
+	}
+	raw, err := json.Marshal(managed.Storage[0].Access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejectedAccess oldAccess
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejectedAccess); err == nil || !strings.Contains(err.Error(), "zfs_pool") {
+		t.Fatalf("old strict schema did not reject Access.zfs_pool: %v", err)
+	}
+	raw, err = json.Marshal(managed.Storage[1].ZFSHostAccess[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejectedHost oldHostAccess
+	decoder = json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejectedHost); err == nil || !strings.Contains(err.Error(), "pool") {
+		t.Fatalf("old strict schema did not reject ZFSHostAccess.pool: %v", err)
+	}
+	projected := zfsPoolObservationForController(managed, false)
+	if managed.Storage[0].Access.ZFSPool == nil || managed.Storage[1].ZFSHostAccess[0].Pool == nil {
+		t.Fatal("report projection mutated Core-owned pool observation")
+	}
+	if projected.Storage[0].Access.ZFSPool != nil || projected.Storage[1].Access.ZFSPool != nil || projected.Storage[1].ZFSHostAccess[0].Pool != nil {
+		t.Fatalf("legacy projection retained unsupported pool fields: %#v", projected)
+	}
+	raw, err = json.Marshal(projected.Storage[0].Access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder = json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejectedAccess); err != nil {
+		t.Fatalf("old strict schema rejected stripped Access: %v", err)
+	}
+	raw, err = json.Marshal(projected.Storage[1].ZFSHostAccess[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder = json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rejectedHost); err != nil {
+		t.Fatalf("old strict schema rejected stripped ZFSHostAccess: %v", err)
+	}
+	if got := zfsPoolObservationForController(managed, true); got != managed || got.Storage[0].Access.ZFSPool == nil {
+		t.Fatal("acknowledged Controller must receive the native observation")
+	}
+}
+
 func TestCredentialRetirementRequiresPreflight(t *testing.T) {
 	s := testStore(t)
 	cmd := protocol.Command{OperationID: "retire-1", Kind: "storage-credential-retire", CredentialRetire: &protocol.StorageCredentialRetireRequest{Receipt: "receipt-1", PoolID: "pool-1", HostID: "host-1"}}

@@ -96,6 +96,9 @@ func (m *StorageMonitor) Tick(ctx context.Context, repositories []protocol.Stora
 			entry.access.Status = "unknown"
 			entry.access.Readable, entry.access.Writable = false, false
 			entry.access.Error = "storage probe deadline exceeded; observation is stale"
+			// Pool detail is transient: keep it and an operator reads a frozen resilver as live.
+			entry.access.ZFSPool = nil
+			entry.access.ObservedAt = now.UTC()
 		}
 	}
 	if len(ids) == 0 || ctx.Err() != nil {
@@ -129,17 +132,15 @@ func (m *StorageMonitor) run(ctx context.Context, entry *storageProbeState) {
 		entry.access.Status = "unknown"
 		entry.access.Readable, entry.access.Writable = false, false
 		entry.access.Error = "storage probe deadline exceeded; observation is stale"
+		entry.access.ZFSPool = nil
+		entry.access.ObservedAt = now
 		return
 	}
 	if err != nil {
 		entry.access = protocol.StorageAccess{Status: "unavailable", Error: err.Error(), ObservedAt: now}
 		return
 	}
-	available := got.Available
-	entry.access = protocol.StorageAccess{Status: got.Health, Readable: true, Writable: !got.ReadOnly, TotalBytes: got.Total, AvailableBytes: &available, ObservedAt: now}
-	if entry.access.Status == "" {
-		entry.access.Status = "healthy"
-	}
+	entry.access = observedStorageAccess(got, now)
 }
 
 // Overlay copies durable repository records and replaces only their ephemeral access result.

@@ -101,6 +101,34 @@ func storageClusterResultsForController(results []protocol.StorageClusterResult,
 	return out
 }
 
+// zfsPoolObservationForController is a report-only compatibility projection.
+// Native Core observations stay intact; an older Controller that has not
+// acknowledged storage-zfs-replace-v1 simply never sees Access.zfs_pool or
+// ZFSHostAccess.pool.
+func zfsPoolObservationForController(managed *protocol.ManagedState, ready bool) *protocol.ManagedState {
+	if managed == nil || ready {
+		return managed
+	}
+	copy := *managed
+	copy.Storage = append([]protocol.StorageRegistration(nil), copy.Storage...)
+	for i := range copy.Storage {
+		if copy.Storage[i].Access.ZFSPool != nil {
+			access := copy.Storage[i].Access
+			access.ZFSPool = nil
+			copy.Storage[i].Access = access
+		}
+		if len(copy.Storage[i].ZFSHostAccess) == 0 {
+			continue
+		}
+		hosts := append([]protocol.ZFSHostAccess(nil), copy.Storage[i].ZFSHostAccess...)
+		for j := range hosts {
+			hosts[j].Pool = nil
+		}
+		copy.Storage[i].ZFSHostAccess = hosts
+	}
+	return &copy
+}
+
 type RunConfig struct {
 	Heartbeat, ProbeInterval, ProbeTimeout time.Duration
 	history                                *usageHistory // set by Run; answers stats channels
@@ -315,16 +343,26 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		inv = &legacy
 	}
 	if s.State.StorageProtocolReady {
-		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability)
-		if !s.State.ZFSProvisionProtocolReady && inv.Managed != nil {
-			// Strict older Controllers reject unknown managed and registration
-			// fields. Advertise the optional extension, but omit every pool-local
-			// ZFS record until this Controller explicitly acknowledges it; presenting
-			// it as a legacy host-local registration would lose its pool semantics.
-			managed := zfsLegacyManagedProjection(inv.Managed)
-			copy := *inv
-			copy.Managed = managed
-			inv = &copy
+		// System-disk replace opens storage/discover for the spare list, so it shares the
+		// storage handshake gate with discovery and ZFS provision/replace.
+		capabilities = append(capabilities, "storage-repositories-v1", protocol.StorageDiscoveryCapability, protocol.ZFSProvisionCapability, protocol.ZFSReplaceCapability, protocol.SystemDiskReplaceCapability)
+		if inv.Managed != nil {
+			managed := inv.Managed
+			if !s.State.ZFSProvisionProtocolReady {
+				// Strict older Controllers reject unknown managed and registration
+				// fields. Advertise the optional extension, but omit every pool-local
+				// ZFS record until this Controller explicitly acknowledges it; presenting
+				// it as a legacy host-local registration would lose its pool semantics.
+				managed = zfsLegacyManagedProjection(managed)
+			}
+			if !s.State.ZFSReplaceProtocolReady {
+				managed = zfsPoolObservationForController(managed, false)
+			}
+			if managed != inv.Managed {
+				copy := *inv
+				copy.Managed = managed
+				inv = &copy
+			}
 		}
 	}
 	if s.State.StorageClusterProtocolReady {
@@ -385,12 +423,15 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// connectivity over the configuration under test; a staged change cannot be confirmed
 	// without such an observation. A no-op unless one is applied.
 	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
-	if response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && (response.StorageRepositories.Capability == protocol.StorageRepositoryCapability || response.StorageRepositories.Capability == protocol.ZFSProvisionCapability) {
+	if response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && (response.StorageRepositories.Capability == protocol.StorageRepositoryCapability || response.StorageRepositories.Capability == protocol.ZFSProvisionCapability || response.StorageRepositories.Capability == protocol.ZFSReplaceCapability) {
 		if !s.State.StorageProtocolReady {
 			s.State.StorageProtocolReady = true
 		}
-		if response.StorageRepositories.Capability == protocol.ZFSProvisionCapability {
-			s.State.ZFSProvisionProtocolReady = true
+		provisionReady := response.StorageRepositories.Capability == protocol.ZFSProvisionCapability || response.StorageRepositories.Capability == protocol.ZFSReplaceCapability
+		replaceReady := response.StorageRepositories.Capability == protocol.ZFSReplaceCapability
+		if s.State.ZFSProvisionProtocolReady != provisionReady || s.State.ZFSReplaceProtocolReady != replaceReady {
+			s.State.ZFSProvisionProtocolReady = provisionReady
+			s.State.ZFSReplaceProtocolReady = replaceReady
 		}
 		if err = s.Save(); err != nil {
 			return persistenceError{fmt.Errorf("persist storage protocol preflight: %w", err)}

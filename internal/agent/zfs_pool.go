@@ -313,11 +313,17 @@ func zfsPoolHasObservedRegistration(op zfsPoolOperation, observe func(string) pr
 	return false
 }
 
+// zfsHostAccess is the one shape a host's ZFS repository observation takes, whether this
+// host reports its own or answers the master's peer probe.
+func zfsHostAccess(hostID string, entry protocol.StorageRegistration) protocol.ZFSHostAccess {
+	return protocol.ZFSHostAccess{HostID: hostID, PoolGUID: entry.Identity.ZFS.PoolGUID, DatasetGUID: entry.Identity.ZFS.DatasetGUID, Path: entry.Path, Readable: entry.Access.Readable, Writable: entry.Access.Writable, TotalBytes: entry.Access.TotalBytes, AvailableBytes: entry.Access.AvailableBytes, ObservedAt: entry.Access.ObservedAt, Error: entry.Access.Error, Pool: entry.Access.ZFSPool}
+}
+
 func observePoolZFSAccess(ctx context.Context, s *Store, hostID, repositoryID string, storage []protocol.StorageRegistration) protocol.ZFSHostAccess {
 	if hostID == s.State.HostID {
 		for _, entry := range storage {
 			if entry.ID == repositoryID && entry.ZFSProvisioned && entry.Identity.ZFS != nil {
-				return protocol.ZFSHostAccess{HostID: hostID, PoolGUID: entry.Identity.ZFS.PoolGUID, DatasetGUID: entry.Identity.ZFS.DatasetGUID, Path: entry.Path, Readable: entry.Access.Readable, Writable: entry.Access.Writable, TotalBytes: entry.Access.TotalBytes, AvailableBytes: entry.Access.AvailableBytes, ObservedAt: entry.Access.ObservedAt, Error: entry.Access.Error}
+				return zfsHostAccess(hostID, entry)
 			}
 		}
 		return protocol.ZFSHostAccess{HostID: hostID, Error: "local ZFS repository is not observed"}
@@ -566,14 +572,8 @@ func dispatchPoolZFSHost(ctx context.Context, s *Store, membership protocol.Pool
 	if host.HostID == s.State.HostID {
 		return poolZFSExecuteLocal(ctx, s, operationID, request.RepositoryID, request, host)
 	}
-	member := protocol.PoolMember{}
-	for _, candidate := range membership.Members {
-		if candidate.HostID == host.HostID {
-			member = candidate
-			break
-		}
-	}
-	if member.PeerOrigin == "" {
+	member, ok := poolMemberByID(membership, host.HostID)
+	if !ok || member.PeerOrigin == "" {
 		return zfsPoolFailure(request, host, "selected ZFS host is unreachable")
 	}
 	client, err := PoolMemberPeerClient(s, member.PeerOrigin, host.HostID)
@@ -581,6 +581,18 @@ func dispatchPoolZFSHost(ctx context.Context, s *Store, membership protocol.Pool
 		return zfsPoolFailure(request, host, "selected ZFS host is unreachable")
 	}
 	defer client.CloseIdleConnections()
+	// Hot spares and the widened layouts need storage-zfs-replace-v1. An older
+	// member's strict peer decoder rejects those fields with an opaque 400; refuse
+	// here with an upgrade sentence before any destructive selection is posted.
+	if protocol.ZFSProvisionNeedsReplaceCapability(protocol.ZFSProvisionRequest{Hosts: []protocol.ZFSProvisionHost{host}}) {
+		supported, probeErr := poolZFSMemberSupportsReplace(ctx, client, member.PeerOrigin)
+		if probeErr != nil {
+			return zfsPoolFailure(request, host, "selected ZFS host is unreachable")
+		}
+		if !supported {
+			return zfsPoolFailure(request, host, "hot spares and widened ZFS layouts need "+protocol.ZFSReplaceCapability+" on every selected host; upgrade Nex Core")
+		}
+	}
 	body, _ := json.Marshal(zfsPoolPeerRequest{OperationID: operationID, RepositoryID: request.RepositoryID, Request: request, Host: host})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolZFSPath, bytes.NewReader(body))
 	if err != nil {
@@ -597,6 +609,25 @@ func dispatchPoolZFSHost(ctx context.Context, s *Store, membership protocol.Pool
 		return zfsPoolFailure(request, host, "selected ZFS host refused provisioning")
 	}
 	return outcome
+}
+
+// poolZFSMemberSupportsReplace probes the member's replace peer route with an empty
+// body. A Core that advertises storage-zfs-replace-v1 answers "invalid ZFS disk
+// replacement"; an older Core falls through to the provision handler and answers
+// "invalid ZFS provision". The probe never reaches wipe or zpool.
+var poolZFSMemberSupportsReplace = func(ctx context.Context, client *http.Client, origin string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(origin, "/")+poolZFSReplacePath, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return resp.StatusCode == http.StatusBadRequest && strings.Contains(string(body), "disk replacement"), nil
 }
 
 func zfsPoolFailure(request protocol.ZFSProvisionRequest, host protocol.ZFSProvisionHost, message string) protocol.ZFSProvisionHostResult {
@@ -638,7 +669,7 @@ func PoolZFSHandler(s *Store) http.Handler {
 			for _, entry := range managed.Storage {
 				if entry.ID == repositoryID && entry.ZFSProvisioned && entry.Identity.ZFS != nil {
 					w.Header().Set("Content-Type", "application/json")
-					_ = json.NewEncoder(w).Encode(protocol.ZFSHostAccess{HostID: s.State.HostID, PoolGUID: entry.Identity.ZFS.PoolGUID, DatasetGUID: entry.Identity.ZFS.DatasetGUID, Path: entry.Path, Readable: entry.Access.Readable, Writable: entry.Access.Writable, TotalBytes: entry.Access.TotalBytes, AvailableBytes: entry.Access.AvailableBytes, ObservedAt: entry.Access.ObservedAt, Error: entry.Access.Error})
+					_ = json.NewEncoder(w).Encode(zfsHostAccess(s.State.HostID, entry))
 					return
 				}
 			}

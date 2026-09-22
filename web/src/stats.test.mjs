@@ -6,7 +6,7 @@ import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 
 const moduleURL = bundleTestModule(new URL("./stats.tsx", import.meta.url), "stats", true);
-const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, stackedPercentMax, timestamps, statsFailure, lastValue, gaugeState, gauges, hardwareSummary, sectionNote, sensorThresholds } = await import(moduleURL);
+const { formatValue, formatTicks, byteIncrs, enoughLiveSamples, updatedAgo, REALTIME_LIMIT_MS, isolatedIndices, charts, plotValues, stackBands, stackedPercentMax, timestamps, statsFailure, lastValue, gaugeState, gauges, gaugeValueText, hardwareSummary, sectionNote, sensorThresholds, mdArraysView, systemDiskReplaceSupported } = await import(moduleURL);
 
 const s = (key, group, unit, values) => ({ key, group, label: key, unit, values });
 const history = { object: "vm", id: "vm-1", range: "10m", step_seconds: 5, start: "2026-09-16T00:00:00Z", series: [
@@ -110,6 +110,15 @@ assert.equal(row[1].value, 25, "memory is used over total");
 assert.deepEqual([row[2].scale, row[2].state], [100, "normal"], "a sensor scales to its crit");
 assert.deepEqual([row[3].value, row[3].scale, row[3].state], [null, null, "normal"], "a stale sensor without thresholds shows a plain unknown");
 assert.deepEqual(gauges({ ...host, object: "vm" }), [], "a VM has no hardware to gauge");
+// SR-085: Warm/Critical must be in aria-valuetext; the visible state span is presentational.
+assert.equal(gaugeValueText({ unit: "celsius", value: 96, state: "critical" }), "96 °C Critical");
+assert.equal(gaugeValueText({ unit: "celsius", value: 82, state: "warm" }), "82 °C Warm");
+assert.equal(gaugeValueText({ unit: "percent", value: 40, state: "normal" }), "40%");
+{
+  const statsSrc = readFileSync(new URL("./stats.tsx", import.meta.url), "utf8");
+  assert.match(statsSrc, /aria-valuetext": announced/);
+  assert.match(statsSrc, /stats-gauge-state" aria-hidden="true"/);
+}
 
 // Hardware panel: the summary line, what a section shows instead of a table, and the thresholds the
 // gauges above join to the history by series key. Every value here is a fictional fixture.
@@ -134,6 +143,21 @@ assert.equal(sectionNote({ unavailable: true }, 0), "This section is not availab
 assert.equal(sectionNote(hw.disks, 0), "None reported.", "available but empty is not an error");
 assert.equal(sectionNote(undefined, 0), "Not reported by this host.", "an older reply missing a section says so");
 
+// SR-086: arrays:null is an older Core; arrays:[] is a current Core with no mirror; unavailable
+// must surface the host's reason rather than "Single system disk".
+assert.equal(mdArraysView(undefined), "unreported");
+assert.equal(mdArraysView({ arrays: null }), "unreported", "Controller remarsal of a missing section");
+assert.equal(mdArraysView({ arrays: [] }), "empty", "current Core looked and found no arrays");
+assert.equal(mdArraysView({ unavailable: true, reason: "the kernel exposes no block devices for this host", arrays: [] }), "unavailable");
+assert.equal(mdArraysView({ arrays: [{ name: "md0" }] }), "arrays");
+assert.equal(mdArraysView({ unavailable: true, arrays: [{ name: "md0" }] }), "unavailable", "unavailable wins over a stale list");
+
+// SR-091: Replace needs discovery + provision, not only the system-disk capability.
+assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1"]), false);
+assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1", "storage-discovery-v1"]), false);
+assert.equal(systemDiskReplaceSupported(["host-system-disk-replace-v1", "storage-discovery-v1", "storage-zfs-provision-v1"]), true);
+assert.equal(systemDiskReplaceSupported(undefined), false);
+
 assert.deepEqual(sensorThresholds(hw), {
   "temp.coretemp-0000:00:18.3.1": { max: 80, crit: 100 },
   "temp.acpitz-0.1": { max: undefined, crit: undefined },
@@ -141,26 +165,33 @@ assert.deepEqual(sensorThresholds(hw), {
 assert.deepEqual(sensorThresholds(null), {}, "no hardware report means no invented bands");
 assert.deepEqual(gauges(host, sensorThresholds(hw))[2].scale, 100, "the CPU sensor gauge ends at its crit");
 assert.equal(statsFailure(failure("the host agent does not report hardware; upgrade Nex Core", 409)).kind, "capability", "the hardware relay's 409 hides the panel rather than offering a retry");
+// Hardware Retry must keep a stable callback identity across Stats re-renders so the system-disk
+// mirror's rebuild/task intervals are not cleared every 5s by a fresh inline arrow.
+{
+  const statsSrc = readFileSync(new URL("./stats.tsx", import.meta.url), "utf8");
+  assert.match(statsSrc, /const rereadHardware = useCallback\(\(\) => setHardwareAttempt\(a => a \+ 1\), \[\]\);/);
+  assert.match(statsSrc, /onRetry=\{rereadHardware\}/);
+  assert.doesNotMatch(statsSrc, /onRetry=\{\(\) => setHardwareAttempt/);
+}
 // WCAG 1.4.11: a plotted line is non-text content, so every series colour needs 3:1 against the
-// card it is drawn on — the card tints itself with 6% of its accent, so the darkest of those wins.
+// white card it is drawn on.
 {
   const css = readFileSync(new URL("./stats.css", import.meta.url), "utf8");
-  const token = name => {
-    const value = css.match(new RegExp(`--${name}: ([^;]+);`))[1];
-    return value.startsWith("#") ? value : token(value.replace(/var\(--|\)/g, ""));
-  };
   const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
   const luminance = hex => rgb(hex).map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
   const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
-  const surface = rgb(token("stats-card"));
-  const tint = hex => "#" + rgb(hex).map((v, i) => Math.round(v * 0.06 + surface[i] * 0.94).toString(16).padStart(2, "0")).join("");
-  const accents = [...css.matchAll(/--accent-[a-z]+: (#[0-9a-f]{6});/g)].map(m => tint(m[1]));
-  const card = accents.reduce((darkest, hex) => luminance(hex) < luminance(darkest) ? hex : darkest);
   for (let i = 1; i <= 8; i++) {
-    const colour = token(`series-${i}`);
-    assert.ok(contrast(colour, card) >= 3, `--series-${i} ${colour} is ${contrast(colour, card).toFixed(2)}:1 on ${card}, below 3:1`);
+    const colour = css.match(new RegExp(`--series-${i}: (#[0-9a-f]{6});`))[1];
+    assert.ok(contrast(colour, "#ffffff") >= 3, `--series-${i} ${colour} is ${contrast(colour, "#ffffff").toFixed(2)}:1 on white, below 3:1`);
   }
+  // SR-088: only the last body row drops its rule, so thead keeps its underline.
+  assert.match(css, /\.stats-hw-table tbody tr:last-child > \* \{ border-bottom: 0; \}/);
+  assert.doesNotMatch(css, /\.stats-hw-table tr:last-child > \*/);
+  // SR-089 / SR-090: system-disk block is a card; Healthy text meets 4.5:1 on the panel canvas.
+  assert.match(css, /\.md-arrays \{[^}]*background: #fff/);
+  const healthy = css.match(/\.md-healthy \{ color: (#[0-9a-f]{6});/)[1];
+  assert.ok(contrast(healthy, "#f7f8fa") >= 4.5, `.md-healthy ${healthy} is ${contrast(healthy, "#f7f8fa").toFixed(2)}:1 on #f7f8fa, below 4.5:1`);
 }
 
 console.log("stats helpers ok");

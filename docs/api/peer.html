@@ -34,6 +34,7 @@
 <li><a href="#peerCPUBaseline">GET /api/v1/pool/cpu/baseline</a></li>
 <li><a href="#peerProvisionZFS">POST /api/v1/pool/zfs-provision</a></li>
 <li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
+<li><a href="#peerReplaceZFSDisk">POST /api/v1/pool/zfs-provision/replace</a></li>
 <li><a href="#peerZFSRepositoryLifecycle">POST /api/v1/pool/zfs-provision/lifecycle</a></li>
 <li><a href="#peerPoolTransferStep">POST /api/v1/pool/transfer</a></li>
 <li><a href="#peerGetPoolAuthority">GET /api/v1/pool/authority</a></li>
@@ -1990,6 +1991,45 @@
     }
   }
 }</pre></details></section>
+<section id="peerReplaceZFSDisk"><h2>POST <code>/api/v1/pool/zfs-provision/replace</code></h2>
+<p>Replace a failed disk of a provisioned ZFS pool on a selected member</p><p>Served only by the addressed member and authenticated with the current pool master certificate. The master forwards its own validated ZFSReplaceRequest unchanged; the member accepts it only for its own pool and host ID, revalidates the pool and the disk against a fresh observation, and journals the work under the operation ID, so a redelivered request replays its recorded outcome and a pool already resilvering onto the replacement is adopted rather than erased again.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerReplaceZFSDisk&quot;,
+  &quot;summary&quot;: &quot;Replace a failed disk of a provisioned ZFS pool on a selected member&quot;,
+  &quot;description&quot;: &quot;Served only by the addressed member and authenticated with the current pool master certificate. The master forwards its own validated ZFSReplaceRequest unchanged; the member accepts it only for its own pool and host ID, revalidates the pool and the disk against a fresh observation, and journals the work under the operation ID, so a redelivered request replays its recorded outcome and a pool already resilvering onto the replacement is adopted rather than erased again.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.3&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: pool master to configured member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSReplaceRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The member&#x27;s own Result for the operation: succeeded, or needs_attention carrying its refusal sentence.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request, or one addressed to another pool or host.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the current pool master.&quot;
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than POST.&quot;
+    }
+  }
+}</pre></details></section>
 <section id="peerZFSRepositoryLifecycle"><h2>POST <code>/api/v1/pool/zfs-provision/lifecycle</code></h2>
 <p>Apply a ZFS repository lifecycle phase on a selected member</p><p>Served only to the current pool master. The master dispatches a validated Core storage lifecycle command to each configured local ZFS host; Core keeps the durable master operation and dependency checks.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -3400,6 +3440,16 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;zfs_pool&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -3942,6 +3992,16 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
       }
+    },
+    &quot;spares&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+      },
+      &quot;description&quot;: &quot;Hot spares. They are erased like the data disks, added as spare vdevs and the pool is created with autoreplace=on, so ZFS resilvers onto one by itself when a data disk fails. They satisfy no part of the layout rule.&quot;
     }
   },
   &quot;required&quot;: [
@@ -3983,6 +4043,42 @@
     &quot;hosts&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ZFSProvisionRequest&quot;
+}</pre></details>
+<details id="ZFSReplaceRequest"><summary>ZFSReplaceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Replace one failed leaf device of a provisioned ZFS repository&#x27;s pool on one host. old_device names the leaf exactly as the pool observation reports it, and device is one candidate from POST /api/v1/storage/discover with kind zfs-device, carrying the same identity, fingerprint and typed erase confirmation rules the ZFS wizard uses. Core revalidates both against a fresh observation of the pool and the disk before it touches anything.&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core operation identity. The executing host journals its replacement under it, so a redelivered command replays the recorded outcome instead of acting again.&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The configured host whose pool holds the failed disk. It may be the pool master or a ready current member.&quot;
+    },
+    &quot;old_device&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;The failed leaf&#x27;s /dev/disk/by-id path, as the repository&#x27;s pool observation reports it.&quot;
+    },
+    &quot;device&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ZFSProvisionDevice&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;old_device&quot;,
+    &quot;device&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSReplaceRequest&quot;
 }</pre></details>
 <details id="ZFSProvisionHostResult"><summary>ZFSProvisionHostResult</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -4082,6 +4178,16 @@
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolStatus&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -4091,6 +4197,115 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.ZFSHostAccess&quot;,
   &quot;description&quot;: &quot;Current per-host observation for a Core-provisioned local ZFS repository. The GUIDs, path, capacity and read/write flags apply only to host_id; a missing or errored observation grants no placement permission.&quot;
+}</pre></details>
+<details id="ZFSPoolStatus"><summary>ZFSPoolStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;scan&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolScan&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;devices&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ZFSPoolDevice&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolStatus&quot;,
+  &quot;description&quot;: &quot;Core&#x27;s transient `zpool status` observation of one imported pool. Nothing durable is derived from it: the Controller passes it through and a fresh Controller sees it again on the next report.&quot;
+}</pre></details>
+<details id="ZFSPoolScan"><summary>ZFSPoolScan</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;function&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;start_time&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;end_time&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;to_examine&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;examined&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;issued&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;function&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolScan&quot;,
+  &quot;description&quot;: &quot;A running or completed scrub or resilver. ZFS formats its own sizes and timestamps, so they are reported as the strings it produced.&quot;
+}</pre></details>
+<details id="ZFSPoolDevice"><summary>ZFSPoolDevice</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;parent&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;replacing or spare when this leaf sits under an in-flight replacement or activated-spare vdev; omitted for an ordinary data leaf.&quot;
+    },
+    &quot;read_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;write_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;checksum_errors&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ZFSPoolDevice&quot;,
+  &quot;description&quot;: &quot;One leaf of the pool&#x27;s vdev tree, named as the pool was created: the /dev/disk/by-id path for a Core-provisioned repository. parent marks an in-flight replacing or spare vdev.&quot;
 }</pre></details>
 <details id="ZFSProvisionPeerRequest"><summary>ZFSProvisionPeerRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,

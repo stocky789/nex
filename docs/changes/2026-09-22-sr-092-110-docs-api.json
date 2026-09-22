@@ -1,0 +1,54 @@
+{
+  "summary": "Documentation and OpenAPI accuracy for staged-review SR-092–110: changelog entries for the 0.4.3 RAID/replace/version-light batch; API.md and OpenAPI aligned with capability-gated zfs_pool, real Core refusal sentences, md_arrays remarsal behaviour, firmware-based system-disk bootloader branch, 404/409 for ZFS replace master lookup, x-introduced-version 0.4.3, host-system-disk-replace capability key; install and usage-history guide corrections; platform and software-RAID plan evidence/layout wording; QA ESP observation labelled for BIOS. API impact: existing contract (reference text and OpenAPI metadata only).",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/usage-history.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-22-software-raid.md",
+    "docs/qa/2026-09-22-system-disk-replace.md",
+    "docs/changes/2026-09-22-system-disk-replace.json",
+    "docs/changes/2026-09-22-sr-092-110-docs-api.json",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Install guide: mirror expected-result softened and verification links installer-mirror QA; usage-history step 8 names System disk mirror and section row counts. Minimal NIC order and Erase disk(s) label were already correct.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/usage-history.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No behaviour change. docs/API.md and OpenAPI descriptions/metadata corrected to match implemented Controller/Core refusals, capability gating and introduced versions; HTML regenerated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Platform and software-RAID plan wording corrected to match existing slice statuses and the implemented GPT layout; the published website roadmap board is unchanged."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation and generated API reference only; no durable product state."
+  },
+  "verification": {
+    "method": "Confirmed each finding against code (zfsProvisionMaster→409 host not found; refusal strings in vmhost zfs_replace/md_replace; mdArraysView/arrays:null; /sys/firmware/efi branch; three-partition recipe in nex-config.c; OpenAPI sources). python3 scripts/generate_api.py then --check; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. No lab evidence invented.",
+    "evidence": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/qa/2026-09-22-system-disk-replace.md"
+    ]
+  }
+}

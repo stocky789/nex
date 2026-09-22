@@ -1581,7 +1581,7 @@ func (e *ManagedEngine) registerStorage(ctx context.Context, j *managedJournal, 
 	}
 	applied.Identity = access.Observed
 	applied.Capabilities = storageCapabilities(applied)
-	applied.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+	applied.Access = observedStorageAccess(access, time.Now().UTC())
 	j.AppliedStorage = &applied
 	committed = true
 	return nil
@@ -3032,7 +3032,7 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			next.Path = access.Path
 			next.Identity = access.Observed
 			next.Capabilities = storageCapabilities(next)
-			next.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+			next.Access = observedStorageAccess(access, time.Now().UTC())
 			j.AppliedStorage = &next
 			if credentialChanged && current.CredentialReceipt != "" && current.CredentialReceipt != next.CredentialReceipt {
 				if err := releaseStorageCredential(filepath.Dir(e.stateDir), protocol.StorageRegistration{CredentialReceipt: current.CredentialReceipt, PoolID: current.PoolID, HostID: current.HostID}); err != nil {

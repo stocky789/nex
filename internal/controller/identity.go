@@ -551,8 +551,13 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		repositoryCapability := protocol.StorageRepositoryCapability
 		// Reuse the established support capability handshake: a Core must not send
 		// ZFS-only inventory to a strict older Controller until this acknowledgement.
+		// storage-zfs-replace-v1 is the narrowest ack for hot spares, widened layouts
+		// and the additive zfs_pool / pool observation fields.
 		if slices.Contains(v.Capabilities, protocol.ZFSProvisionCapability) {
 			repositoryCapability = protocol.ZFSProvisionCapability
+		}
+		if slices.Contains(v.Capabilities, protocol.ZFSReplaceCapability) {
+			repositoryCapability = protocol.ZFSReplaceCapability
 		}
 		out.StorageRepositories = &protocol.StorageRepositorySupport{ProtocolVersion: protocol.Version, Capability: repositoryCapability}
 		clusterCapability := protocol.StorageClusterCapability

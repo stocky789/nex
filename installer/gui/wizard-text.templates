@@ -72,6 +72,15 @@ Description: No network adapter was detected
  Nex Core installs offline on this host. Configure networking locally after the
  host reboots, or attach an adapter and start setup again.
 
+Template: nex-installer/other-adapters
+Type: boolean
+Default: false
+Description: Configure more network adapters?
+ ${detail}
+ .
+ Answer no to leave remaining adapters unconfigured and continue. Answer yes to set
+ IPv4 on each remaining adapter; each one still offers Disabled.
+
 Template: nex-installer/mode
 Type: select
 Choices: ${choices}
@@ -103,26 +112,32 @@ Description: DNS servers:
  by DHCP on the management adapter.
 
 Template: nex-installer/disk
-Type: select
+Type: multiselect
 Choices: ${choices}
-Description: Installation disk:
- The whole disk is erased and installed with one ext4 filesystem. Only
- writable, nonremovable disks of at least 16 GiB that do not hold the
- installation media are listed.
+Description: Installation disks:
+ Select one disk to install on, or two or more disks to mirror, so the host keeps
+ running when one of them fails. Everything on the selected disks is erased;
+ other disks are left alone. Two disks within 10% of each other's capacity make a
+ good mirror pair; a mirror is only as large as its smallest member.
+
+Template: nex-installer/disk-error
+Type: error
+Description: Installation disks not accepted
+ ${detail}
 
 Template: nex-installer/no-disk
 Type: error
 Description: No installation disk was found
- No writable, nonremovable disk of at least 16 GiB was detected. Attach a
- supported disk and start setup again. Installation media and removable
- devices are never offered as targets.
+ Only writable, nonremovable disks of at least 16 GiB are offered, and none was
+ detected. Attach a supported disk and start setup again. Installation media and
+ removable devices are never offered as targets.
 
 Template: nex-installer/erase
 Type: boolean
 Default: false
 Description: Erase ${disk} and install Nex Core?
  Review these settings. Answering yes starts partitioning and destroys every
- existing filesystem on ${disk}.
+ existing filesystem on every disk listed above.
  .
  Host name: ${hostname}
  Timezone: ${timezone}
@@ -132,8 +147,9 @@ Description: Erase ${disk} and install Nex Core?
  Adapters: ${adapters}
  DNS servers: ${dns}
  .
- Installation disk: ${disk}
+ Installation disks: ${disk}
  Capacity: ${disksize}
  Serial: ${serial}
+ Layout: ${layout}
  .
  Answer no to go back and change any of these settings.

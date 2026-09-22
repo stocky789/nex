@@ -1,33 +1,21 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* Stats tabs use their own light surface with vivid accents. The accents are the card, gauge and
- * pill palette; series 2 to 5 are darkened variants of their accents so every plotted line stays
- * above 3:1 on the tinted card while charts, gauges and cards still read as one system. Series
- * colors are hex so the chart can add a translucent fill. */
+/* Series colours are hex so the chart can add a translucent fill. */
 .stats {
-  --stats-bg: #ecf5f8;
-  --stats-card: #ffffff;
-  --stats-border: #d1d9e6;
+  --stats-border: #dde3ea;
   --stats-muted: #67778d;
-  --stats-track: #e8e9eb;
-  --accent-blue: #3273dc;
-  --accent-teal: #00d1b2;
-  --accent-sky: #209cee;
-  --accent-green: #23d160;
-  --accent-yellow: #ffdd57;
-  --accent-violet: #7c5cff;
-  --accent-rose: #ff3860;
-  --series-1: var(--accent-blue);
+  --stats-line: #eef1f5;
+  --stats-ink: #1f2937;
+  --series-1: #3273dc;
   --series-2: #0e7490;
   --series-3: #1179b5;
   --series-4: #0f8a5f;
   --series-5: #9a6700;
-  --series-6: var(--accent-violet);
-  --series-7: var(--accent-rose);
+  --series-6: #7c5cff;
+  --series-7: #ff3860;
   --series-8: #5b6570;
 }
-/* The tokens apply wherever .stats is used, including the realtime view inside the VM console
- * tab; the light surface belongs to the Stats panels only. */
-section.panel.stats { background: var(--stats-bg); }
+/* Cards sit on a faint neutral canvas so they read as cards without borders doing all the work. */
+section.panel.stats { background: #f7f8fa; }
 .stats-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .stats-controls label { display: inline-flex; align-items: center; gap: 6px; }
 .stats-toggle input { accent-color: var(--blue); }
@@ -37,63 +25,47 @@ section.panel.stats { background: var(--stats-bg); }
 .stats-state, .stats-stale { margin: 8px 10px; padding: 8px 10px; border: 1px solid #d5dbe3; }
 .stats-stale { background: #fff8df; border-color: #ead59a; color: #5c4300; }
 .stats-stale button { margin-left: 8px; }
-.stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 10px; }
+.stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
 @media (max-width: 900px) { .stats-grid { grid-template-columns: minmax(0, 1fr); } }
-/* Each card carries its group's accent as a left border over a 6% tint of the same colour. */
-.stats-chart-cpu { --card-accent: var(--accent-blue); }
-.stats-chart-memory { --card-accent: var(--accent-teal); }
-.stats-chart-network { --card-accent: var(--accent-sky); }
-.stats-chart-disk { --card-accent: var(--accent-green); }
-.stats-chart-load { --card-accent: var(--accent-violet); }
-/* Sensors take sky, not rose: rose means a reading at or above crit, and a card painted in it
- * whatever the temperature would make the colour carry no state. */
-.stats-chart-temperature { --card-accent: var(--accent-sky); }
-.stats-chart {
-  margin: 0; padding: 10px 12px; min-width: 0;
-  border: 1px solid var(--stats-border); border-left: 4px solid var(--card-accent, var(--accent-blue)); border-radius: 6px;
-  background: color-mix(in srgb, var(--card-accent, var(--accent-blue)) 6%, var(--stats-card));
-}
-.stats-chart figcaption { margin: 0 0 6px; color: var(--stats-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.stats-chart { margin: 0; padding: 12px 14px; min-width: 0; border: 1px solid var(--stats-border); border-radius: 6px; background: #fff; }
+.stats-chart figcaption { margin: 0 0 8px; color: var(--stats-ink); font-size: 13px; font-weight: 600; }
 
-.stats-gauges { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 10px 0; }
-.stats-gauge {
-  flex: 0 1 132px; min-width: 112px; padding: 8px 10px 10px; text-align: center;
-  border: 1px solid var(--stats-border); border-left: 4px solid var(--gauge-accent); border-radius: 6px;
-  background: color-mix(in srgb, var(--gauge-accent) 6%, var(--stats-card));
-}
-.stats-gauge-arc { display: block; width: 100%; height: 40px; }
-.stats-gauge-arc path { fill: none; stroke-width: 9; stroke-linecap: round; }
-.stats-gauge-track { stroke: var(--stats-track); }
-.stats-gauge-fill { stroke: var(--gauge-accent); }
-.stats-gauge-value { margin-top: -6px; color: #303943; font-size: 18px; font-weight: 600; }
-.stats-gauge-label { color: var(--stats-muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; overflow-wrap: anywhere; }
-.stats-gauge-pill { display: inline-block; margin: 2px 0; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; }
-.stats-gauge-warm .stats-gauge-pill { background: var(--accent-yellow); color: #3a2f00; }
-.stats-gauge-critical .stats-gauge-pill { background: var(--accent-rose); color: #ffffff; }
+.stats-gauges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 12px 12px 0; }
+.stats-gauge { padding: 10px 12px 12px; border: 1px solid var(--stats-border); border-radius: 6px; background: #fff; }
+.stats-gauge-label { color: var(--stats-muted); font-size: 12px; overflow-wrap: anywhere; }
+.stats-gauge-value { margin-top: 2px; color: var(--stats-ink); font-size: 22px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.stats-gauge-state { margin-left: 8px; font-size: 11px; font-weight: 600; vertical-align: 3px; }
+.stats-gauge-warm .stats-gauge-state { color: #b45309; }
+.stats-gauge-critical .stats-gauge-state { color: #b91c1c; }
+.stats-gauge-bar { height: 3px; margin-top: 10px; border-radius: 2px; background: var(--stats-line); overflow: hidden; }
+.stats-gauge-bar span { display: block; height: 100%; border-radius: 2px; background: var(--blue); }
+.stats-gauge-warm .stats-gauge-bar span { background: #d97706; }
+.stats-gauge-critical .stats-gauge-bar span { background: #dc2626; }
 
-/* Hardware: one summary line, then a quiet expandable card per section. */
-.stats-hardware { --card-accent: var(--accent-violet); }
-.stats-hw-summary { margin: 0; padding: 0 10px 10px; color: #303943; }
-.stats-hw-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 10px 10px; }
+/* Hardware: one summary line, then an expandable card per report. */
+.stats-hw-summary { margin: 0; padding: 12px 12px 0; color: var(--stats-ink); }
+.stats-hw-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px; padding: 12px; }
 @media (max-width: 900px) { .stats-hw-sections { grid-template-columns: minmax(0, 1fr); } }
 /* A six-column table has a minimum width a phone cannot give it; the card scrolls rather than
  * pushing the whole page sideways. */
-.stats-hw-section {
-  min-width: 0; overflow-x: auto; padding: 6px 12px 8px;
-  border: 1px solid var(--stats-border); border-left: 4px solid var(--card-accent); border-radius: 6px;
-  background: color-mix(in srgb, var(--card-accent) 6%, var(--stats-card));
-}
-.stats-hw-section summary { color: var(--stats-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
-.stats-hw-section .empty { margin: 6px 0 0; }
-.stats-hw-table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 12px; }
-.stats-hw-table th { color: var(--stats-muted); font-weight: 600; text-align: left; }
-.stats-hw-table thead th { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.stats-hw-section { min-width: 0; overflow-x: auto; border: 1px solid var(--stats-border); border-radius: 6px; background: #fff; }
+.stats-hw-section summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: var(--stats-ink); font-weight: 600; cursor: pointer; list-style: none; }
+.stats-hw-section summary::-webkit-details-marker { display: none; }
+.stats-hw-section summary::before { content: ""; flex: none; width: 6px; height: 6px; margin-left: 2px; border-right: 1.5px solid #6b7280; border-bottom: 1.5px solid #6b7280; transform: rotate(-45deg); transition: transform .15s; }
+.stats-hw-section[open] summary::before { transform: rotate(45deg); }
+.stats-hw-section[open] summary { border-bottom: 1px solid var(--stats-line); }
+.stats-hw-count { margin-left: auto; color: var(--stats-muted); font-size: 12px; font-weight: 400; }
+.stats-hw-section .empty { margin: 0; padding: 14px 12px; text-align: left; }
+.stats-hw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.stats-hw-table th { background: none; border-right: 0; color: var(--stats-muted); font-weight: 500; text-align: left; }
+.stats-hw-table tbody th { width: 140px; }
+.stats-hw-table td:first-child { min-width: 0; }
 /* break-word, not anywhere: "anywhere" lets the column shrink below a word and splits "coretemp"
  * into "coretem p". A value too long for its column still breaks. */
-.stats-hw-table th, .stats-hw-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--stats-border); vertical-align: top; overflow-wrap: break-word; }
-/* An identifier broken across lines reads as two values ("1d0f:00 61"), so pills never wrap; the
- * section scrolls instead. */
-.stats-pill { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: 9px; background: color-mix(in srgb, var(--accent-blue) 12%, var(--stats-card)); color: #303943; font-size: 11px; }
+.stats-hw-table th, .stats-hw-table td { padding: 7px 12px; border-bottom: 1px solid var(--stats-line); vertical-align: top; overflow-wrap: break-word; }
+.stats-hw-table tbody tr:last-child > * { border-bottom: 0; }
+/* An identifier broken across lines reads as two values ("1d0f:00 61"); the card scrolls instead. */
+.stats-id { font-family: Consolas, monospace; font-size: 11px; white-space: nowrap; }
 
 .stats-legend { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 4px; }
 .stats-chip {
@@ -135,3 +107,17 @@ section.panel.stats { background: var(--stats-bg); }
 .stats-note button { margin-left: 8px; }
 .stats-grid-live { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .stats-grid-live .stats-chart { padding: 6px 10px; }
+
+/* Same card treatment as .stats-hw-section so the system-disk block matches the panel. */
+.md-arrays { margin: 0 12px 12px; padding: 12px; border: 1px solid var(--stats-border); border-radius: 6px; background: #fff; }
+.md-arrays h3 { margin: 0 0 4px; font-size: 12px; }
+.md-array + .md-array { margin-top: 8px; border-top: 1px solid #e0e3e7; padding-top: 8px; }
+.md-line { display: flex; align-items: center; gap: 6px; margin: 0; }
+.md-line button { margin-left: auto; }
+.md-summary { margin: 2px 0 0; color: var(--muted); }
+.md-progress { width: 100%; max-width: 320px; height: 8px; margin-top: 4px; }
+.md-members { margin: 4px 0 0; padding: 0; list-style: none; color: var(--muted); }
+.md-choices { margin: 0 0 10px; }
+.md-degraded { color: #b45309; font-weight: 600; }
+/* Match .notice (#166534): body-weight text needs ≥4.5:1 on the #f7f8fa panel canvas. */
+.md-healthy { color: #166534; font-weight: 600; }

@@ -90,6 +90,23 @@ nocomma() { printf '%s' "$1" | tr ',' ' '; }
 # kept space would look like the disk or adapter had been swapped.
 read_attr() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" 2>/dev/null || true; }
 
+# SSD, HDD or NVMe, and whether a disk already holds partitions: the same facts the
+# graphical wizard shows in its columns, so the operator can tell the disks apart.
+disk_kind() {
+    case $1 in nvme*) printf 'NVMe'; return ;; esac
+    case $(read_attr "$SYS/class/block/$1/queue/rotational") in
+        0) printf 'SSD' ;;
+        1) printf 'HDD' ;;
+        *) printf 'disk' ;;
+    esac
+}
+disk_contents() {
+    for part in "$SYS/class/block/$1/$1"*; do
+        if [ -f "$part/partition" ]; then printf 'has partitions'; return; fi
+    done
+    printf 'blank'
+}
+
 # --------------------------------------------------------------------- discovery
 
 nics=
@@ -246,8 +263,45 @@ step_management() {
     if [ "$RET" = "$OFFLINE" ]; then v_management=; else v_management=${RET%% *}; fi
 }
 
+# After the management choice, offer one Yes/No instead of walking every leftover
+# adapter. No is the default: a normal install only needs the management NIC.
+step_other() {
+    extras=
+    for nic in $nics; do
+        [ -n "$v_management" ] && [ "$nic" = "$v_management" ] && continue
+        extras="${extras:+$extras }$nic"
+    done
+    [ -z "$extras" ] && { v_other_adapters=false; return "$SKIP"; }
+
+    count=$(set -- $extras; printf '%s' "$#")
+    names=$(printf '%s' "$extras" | sed 's/ /, /g')
+    if [ -n "$v_management" ]; then
+        detail="Management adapter: $v_management. Remaining ($count): $names. A normal install only needs the management adapter."
+    else
+        detail="Offline install. Adapters ($count): $names. Answer no to leave every adapter unconfigured."
+    fi
+    db_subst nex-installer/other-adapters detail "$detail"
+    db_set nex-installer/other-adapters "${v_other_adapters:-false}"
+    ask nex-installer/other-adapters || return 1
+    v_other_adapters=$RET
+
+    if [ "$v_other_adapters" != true ]; then
+        for nic in $extras; do
+            key=$(varkey "$nic")
+            setv "mode_$key" disabled
+            setv "vlan_$key" 0
+            setv "address_$key" ''
+            setv "gateway_$key" ''
+        done
+    fi
+}
+
 step_nic() {
     nic=$1
+    # Skipped leftovers stay disabled from step_other; do not ask about them.
+    if [ "$nic" != "${v_management-}" ] && [ "${v_other_adapters:-false}" != true ]; then
+        return "$SKIP"
+    fi
     key=$(varkey "$nic")
     mac=$(read_attr "$SYS/class/net/$nic/address")
     if [ "$nic" = "$v_management" ]; then
@@ -255,17 +309,22 @@ step_nic() {
         detail="$mac - management adapter: it becomes br0 and owns the default route and DNS."
         default=dhcp
     else
-        choices="disabled, dhcp, static"
-        detail="$mac - additional adapter: it is configured without a default route or DNS."
-        default=disabled
+        # Same operator-facing word as the graphical wizard; the handoff still stores disabled.
+        choices="Disabled, dhcp, static"
+        detail="$mac - additional adapter: Disabled leaves it unconfigured. No default route or DNS."
+        default=Disabled
     fi
     db_subst nex-installer/mode nic "$nic"
     db_subst nex-installer/mode detail "$detail"
     db_subst nex-installer/mode choices "$choices"
     previous=$(getv "mode_$key")
+    case $previous in
+        disabled) previous=Disabled ;;
+    esac
     db_set nex-installer/mode "${previous:-$default}"
     ask nex-installer/mode || return 1
     mode=$RET
+    [ "$mode" = Disabled ] && mode=disabled
     setv "mode_$key" "$mode"
 
     if [ "$mode" = disabled ]; then
@@ -311,22 +370,53 @@ step_dns() {
 
 step_disk() {
     choices=
+    # $disks comes from a sorted glob, so both frontends list the disks in the same order.
     for name in $disks; do
         sectors=$(read_attr "$SYS/class/block/$name/size")
         model=$(read_attr "$SYS/class/block/$name/device/model")
-        entry=$(nocomma "$name - $((sectors / 2097152)) GiB${model:+ - $model}")
+        serial=$(read_attr "$SYS/class/block/$name/device/serial")
+        entry=$(nocomma "$name - $((sectors / 2097152)) GiB - $(disk_kind "$name")${model:+ - $model}${serial:+ - $serial} - $(disk_contents "$name")")
         if [ -z "$choices" ]; then choices=$entry; else choices="$choices, $entry"; fi
     done
-    db_subst nex-installer/disk choices "$choices"
-    ask nex-installer/disk || return 1
-    v_disk=${RET%% *}
+    # Match the graphical wizard: a lone eligible disk is already ticked.
+    [ $(set -- $disks; echo $#) -eq 1 ] && db_set nex-installer/disk "$choices"
+    while :; do
+        db_subst nex-installer/disk choices "$choices"
+        ask nex-installer/disk || return 1
+        # cdebconf answers a multiselect as "entry, entry"; each entry starts with the name.
+        v_disks=$(printf '%s\n' "$RET" | awk -F', ' '{ for (i = 1; i <= NF; i++) { split($i, f, " "); printf "%s ", f[1] } }')
+        detail=
+        if [ -z "$v_disks" ]; then
+            detail="Select at least one disk: one to install on, or two or more to mirror."
+        else
+            # An md mirror is only as large as its smallest member.
+            smallest=
+            for name in $v_disks; do
+                sectors=$(read_attr "$SYS/class/block/$name/size")
+                if [ -z "$smallest" ] || [ "$sectors" -lt "$smallest" ]; then smallest=$sectors; fi
+            done
+            for name in $v_disks; do
+                sectors=$(read_attr "$SYS/class/block/$name/size")
+                if [ "$sectors" -gt $((smallest + smallest / 10)) ]; then
+                    detail="Every mirror disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as large as its smallest member. Select disks of similar size."
+                fi
+            done
+        fi
+        if [ -z "$detail" ]; then return 0; fi
+        fail_note nex-installer/disk-error "$detail"
+    done
 }
 
 step_erase() {
-    sectors=$(read_attr "$SYS/class/block/$v_disk/size")
-    v_disk_size=$((sectors * 512))
-    v_disk_serial=$(read_attr "$SYS/class/block/$v_disk/device/serial")
-    v_disk_dev=$(read_attr "$SYS/class/block/$v_disk/dev")
+    # One review line per selected disk: name, capacity and serial.
+    targets= ; capacities= ; serials=
+    for name in $v_disks; do
+        sectors=$(read_attr "$SYS/class/block/$name/size")
+        serial=$(read_attr "$SYS/class/block/$name/device/serial")
+        targets="${targets:+$targets, }/dev/$name"
+        capacities="${capacities:+$capacities, }$((sectors / 2097152)) GiB ($((sectors * 512)) bytes)"
+        serials="${serials:+$serials, }${serial:-not reported}"
+    done
     # A debconf substitution is one line, so every adapter is reviewed on one.
     adapters=
     for nic in $nics; do
@@ -345,9 +435,10 @@ step_erase() {
     else
         management=Offline
     fi
-    db_subst nex-installer/erase disk "/dev/$v_disk"
-    db_subst nex-installer/erase disksize "$((sectors / 2097152)) GiB ($v_disk_size bytes)"
-    db_subst nex-installer/erase serial "${v_disk_serial:-not reported}"
+    db_subst nex-installer/erase disk "$targets"
+    db_subst nex-installer/erase disksize "$capacities"
+    db_subst nex-installer/erase serial "$serials"
+    db_subst nex-installer/erase layout "$(set -- $v_disks; if [ $# -gt 1 ]; then echo "md RAID1 mirror of $# disks, one ext4 root; one disk can fail without stopping the host"; else echo "one ext4 filesystem, no redundancy"; fi)"
     db_subst nex-installer/erase hostname "$v_hostname"
     db_subst nex-installer/erase timezone "$v_timezone"
     db_subst nex-installer/erase keymap "$v_keymap"
@@ -383,6 +474,8 @@ step_validate() {
 
 # GKeyFile unescapes \\ and \s, so a value must be escaped before it is written.
 ini() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+# List values also escape ; so a serial containing one cannot split the string list.
+ini_list() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/;/\\;/g'; }
 ini_secret() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/ /\\s/g'; }
 
 write_config() {
@@ -392,10 +485,19 @@ write_config() {
         printf 'timezone=%s\n' "$(ini "$v_timezone")"
         printf 'keymap=%s\n' "$(ini "$v_keymap")"
         printf 'password=%s\n' "$(ini_secret "$v_password")"
-        printf 'disk=/dev/%s\n' "$v_disk"
-        printf 'disk_size=%s\n' "$v_disk_size"
-        printf 'disk_serial=%s\n' "$(ini "$v_disk_serial")"
-        printf 'disk_major_minor=%s\n' "$v_disk_dev"
+        # One ;-separated list entry per selected disk, in the order nex-config checks them.
+        for key in disk disk_size disk_serial disk_major_minor; do
+            printf '%s=' "$key"
+            for name in $v_disks; do
+                case $key in
+                    disk) printf '/dev/%s;' "$name" ;;
+                    disk_size) printf '%s;' "$(($(read_attr "$SYS/class/block/$name/size") * 512))" ;;
+                    disk_serial) printf '%s;' "$(ini_list "$(read_attr "$SYS/class/block/$name/device/serial")")" ;;
+                    disk_major_minor) printf '%s;' "$(ini_list "$(read_attr "$SYS/class/block/$name/dev")")" ;;
+                esac
+            done
+            printf '\n'
+        done
         printf '\n[Network]\n'
         printf 'management=%s\n' "$v_management"
         printf 'dns=%s\n' "$(ini "$v_dns")"
@@ -421,13 +523,11 @@ v_tzarea=UTC
 v_timezone=UTC
 v_password=
 v_management=
+v_other_adapters=false
 v_dns=
-v_disk=
-v_disk_size=
-v_disk_serial=
-v_disk_dev=
+v_disks=
 
-steps="hostname keymap tzarea tzzone password management"
+steps="hostname keymap tzarea tzzone password management other"
 for nic in $nics; do steps="$steps nic:$nic"; done
 steps="$steps dns disk erase validate"
 

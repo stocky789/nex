@@ -15,7 +15,7 @@ import { Icon } from "./icons";
 import { PoolMembers } from "./pool-members";
 import { HostRestrictedBanner } from "./pool-promotion";
 import { HostNetwork } from "./host-network";
-import { followUpdate, type UpdateStatus } from "./updates";
+import { followUpdate, versionLight, type UpdateStatus } from "./updates";
 
 type Site = { id: string; name: string };
 type Pool = Site & { site_id: string; master_host_id: string };
@@ -437,6 +437,7 @@ function App() {
       setSession(null);
       setData(empty);
       setToken(null);
+      setUpdate(null);
     }
     if (!response.ok) {
       let message = `Request failed (${response.status}).`;
@@ -677,6 +678,9 @@ function App() {
     const timer = setInterval(() => void reload(), 10000);
     return () => clearInterval(timer);
   }, [session]);
+  useEffect(() => {
+    if (session && host) api<UpdateStatus>("updates").then(setUpdate, () => {});
+  }, [session, host?.id]);
   useEffect(() => {
     if (!session || kind !== "updates") return;
     setUpdateNote("");
@@ -937,6 +941,7 @@ function App() {
                 setSession(null);
                 setData(empty);
                 setToken(null);
+                setUpdate(null);
               })
             }
             disabled={busy}
@@ -1431,7 +1436,7 @@ function App() {
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
               {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div></>}
               {vm && tab === "Stats" && <Stats key={vm.id} kind="vm" id={vm.id} api={api} />}
-              {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} />}
+              {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} poolID={host.pool_id} />}
               {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
               {host && !vm && tab === "Networking" && <HostNetwork key={host.id} hostID={host.id} api={api} unavailable={Boolean(error)} />}
               <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || tab === "Stats" || Boolean(pool && !host && tab !== "General")}>
@@ -1538,7 +1543,7 @@ function App() {
               {host ? (
                 <>
                   {tab !== "Console" && host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} />}
-                  {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} />}
+                  {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} coreAvailable={update?.core_available_version} />}
                   {tab === "Storage" && <HostISOs host={host} media={data.media} storage={data.storage} unavailable={Boolean(error)} />}
                 </>
               ) : (
@@ -1768,8 +1773,9 @@ function hostConsoleBlocker(host: Host): string {
   if (!host.capabilities?.includes("host-console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
   return "";
 }
-function HostDetails({ host, master, tab }: { host: Host; master: boolean; tab: string }) {
+function HostDetails({ host, master, tab, coreAvailable }: { host: Host; master: boolean; tab: string; coreAvailable?: string }) {
   const inv = host.inventory;
+  const light = inv && versionLight(inv.os_version, coreAvailable);
   return (
     <div className="host-details" data-tab={tab}>
       <section className="panel host-overview" hidden={tab === "Console"}>
@@ -1803,7 +1809,7 @@ function HostDetails({ host, master, tab }: { host: Host; master: boolean; tab: 
               <dt>Virtualization features</dt>
               <dd>{inv.virtualization?.join(", ") || "None reported"}</dd>
               <dt>Version</dt>
-              <dd>{inv.os_version}</dd>
+              <dd>{light ? <><span className={`version-light ${light.level}`} aria-hidden="true" /><span title={light.title}>{inv.os_version} · {light.label}</span></> : inv.os_version}</dd>
             </>
           )}
         </Details>

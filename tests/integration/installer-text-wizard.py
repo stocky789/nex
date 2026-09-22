@@ -198,7 +198,8 @@ int main(int argc, char **argv)
     g_print("dns=%s\n", s ? s : "");
     s = g_key_file_get_string(keys, "Network", "management", NULL);
     g_print("management=%s\n", s ? s : "");
-    g_print("disk_size=%" G_GUINT64_FORMAT "\n", g_key_file_get_uint64(keys, "Host", "disk_size", NULL));
+    s = g_key_file_get_string(keys, "Host", "disk_size", NULL);
+    g_print("disk_size=%s\n", s ? s : "");
     groups = g_key_file_get_groups(keys, NULL);
     for (int i = 0; groups[i]; i++)
         if (g_str_has_prefix(groups[i], "NIC:"))
@@ -218,6 +219,7 @@ NICS = {
 # not the installation media.
 BLOCKS = {
     'sda': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:0',
+            'queue/rotational': '0',
             'device/serial': 'TESTSERIAL1', 'device/model': 'QEMU HARDDISK'},
     'sdb': {'size': '2048', 'ro': '0', 'removable': '0', 'dev': '8:16'},          # under 16 GiB
     'sdc': {'size': '67108864', 'ro': '0', 'removable': '1', 'dev': '8:32'},      # removable
@@ -225,9 +227,24 @@ BLOCKS = {
     'sdd': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:48'},      # installation media
     'sdf': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:80',
             'partition': '1', 'device/model': 'QEMU HARDDISK'},                   # partition
+    'sdg': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:96',
+            'queue/rotational': '1',
+            'device/serial': 'TESTSERIAL2', 'device/model': 'QEMU HARDDISK'},     # mirror partner
+    'sdh': {'size': '33554432', 'ro': '0', 'removable': '0', 'dev': '8:112',
+            'queue/rotational': '0',
+            'device/serial': 'TESTSERIAL3', 'device/model': 'QEMU HARDDISK'},     # half the size
+    'sdi': {'size': '63753421', 'ro': '0', 'removable': '0', 'dev': '8:128',
+            'queue/rotational': '0',
+            'device/serial': 'TESTSERIAL4', 'device/model': 'QEMU HARDDISK'},     # ~5% smaller
 }
 
-DISK_CHOICES = 'sda - 32 GiB - QEMU HARDDISK'
+DISK_ONE = 'sda - 32 GiB - SSD - QEMU HARDDISK - TESTSERIAL1 - blank'
+DISK_PARTNER = 'sdg - 32 GiB - HDD - QEMU HARDDISK - TESTSERIAL2 - has partitions'
+DISK_SMALLER = 'sdh - 16 GiB - SSD - QEMU HARDDISK - TESTSERIAL3 - blank'
+DISK_NEAR = 'sdi - 30 GiB - SSD - QEMU HARDDISK - TESTSERIAL4 - blank'
+DISK_CHOICES = ', '.join([DISK_ONE, DISK_PARTNER, DISK_SMALLER, DISK_NEAR])
+DISK_MIRROR = ', '.join([DISK_ONE, DISK_PARTNER])
+DISK_MIRROR_NEAR = ', '.join([DISK_ONE, DISK_NEAR])
 MANAGEMENT_CHOICES = ('eth0 - 52:54:00:aa:bb:01 - link detected, '
                       'eth1 - 52:54:00:aa:bb:02 - no link')
 OFFLINE = 'Offline (no management network)'
@@ -278,6 +295,9 @@ def build_fixture(root, nics=NICS, blocks=BLOCKS, prepared=True):
         base = root / 'sys/class/block' / name
         for attribute, value in attributes.items():
             write(base / attribute, value + '\n')
+    # A leftover partition on the mirror partner: the wizard reports it as "has partitions"
+    # so the operator sees which disk still holds data.
+    write(root / 'sys/class/block/sdg/sdg1/partition', '1\n')
     # The mounted media partition and the whole disk behind it are both excluded.
     partition = root / 'sys/block/sdd/sdd1'
     write(partition / 'partition', '1\n')
@@ -417,10 +437,10 @@ hostname=nexcore
 timezone=UTC
 keymap=us
 password=nexcore-test-pw
-disk=/dev/sda
-disk_size=34359738368
-disk_serial=TESTSERIAL1
-disk_major_minor=8:0
+disk=/dev/sda;
+disk_size=34359738368;
+disk_serial=TESTSERIAL1;
+disk_major_minor=8:0;
 
 [Network]
 management=eth0
@@ -448,11 +468,11 @@ DEFAULT_SCRIPT = [
     'nex-installer/password nexcore-test-pw',
     'nex-installer/password-again nexcore-test-pw',
     'nex-installer/management <DEFAULT>',
+    'nex-installer/other-adapters <DEFAULT>',  # no: leave eth1 disabled
     'nex-installer/mode <DEFAULT>',   # eth0, the management adapter: dhcp
     'nex-installer/vlan <DEFAULT>',
-    'nex-installer/mode <DEFAULT>',   # eth1: disabled
     'nex-installer/dns <DEFAULT>',
-    'nex-installer/disk <DEFAULT>',
+    'nex-installer/disk ' + DISK_ONE,
     'nex-installer/erase true',
 ]
 
@@ -463,9 +483,9 @@ DEFAULT_ORDER = [
     'nex-installer/password',
     'nex-installer/password-again',
     'nex-installer/management',
+    'nex-installer/other-adapters',
     'nex-installer/mode',
     'nex-installer/vlan',
-    'nex-installer/mode',
     'nex-installer/dns',
     'nex-installer/disk',
     'nex-installer/erase',
@@ -506,15 +526,15 @@ NAVIGATION_SCRIPT = [
     'nex-installer/password ' + PASSWORD,
     'nex-installer/password-again ' + PASSWORD,
     'nex-installer/management eth0 - 52:54:00:aa:bb:01 - link detected',
+    'nex-installer/other-adapters false',
     'nex-installer/mode static',
     'nex-installer/vlan 10',
     'nex-installer/address 192.0.2.10/24',
     'nex-installer/gateway 192.0.2.1',
-    'nex-installer/mode disabled',
     'nex-installer/dns 192.0.2.53 192.0.2.54',
-    'nex-installer/disk ' + DISK_CHOICES,
+    'nex-installer/disk ' + DISK_ONE,
     'nex-installer/erase false',
-    'nex-installer/disk ' + DISK_CHOICES,
+    'nex-installer/disk ' + DISK_ONE,
     'nex-installer/erase true',
 ]
 
@@ -530,11 +550,11 @@ NAVIGATION_ORDER = [
     'nex-installer/password',
     'nex-installer/password-again',
     'nex-installer/management',
+    'nex-installer/other-adapters',
     'nex-installer/mode',
     'nex-installer/vlan',
     'nex-installer/address',
     'nex-installer/gateway',
-    'nex-installer/mode',
     'nex-installer/dns',
     'nex-installer/disk',
     'nex-installer/erase',
@@ -547,10 +567,10 @@ hostname=nexcore.example.test
 timezone=Australia/Sydney
 keymap=gb
 password=pass\sword\\one
-disk=/dev/sda
-disk_size=34359738368
-disk_serial=TESTSERIAL1
-disk_major_minor=8:0
+disk=/dev/sda;
+disk_size=34359738368;
+disk_serial=TESTSERIAL1;
+disk_major_minor=8:0;
 
 [Network]
 management=eth0
@@ -582,10 +602,12 @@ def scenario_navigation_and_handoff(shell, root):
     assert session.subst('nex-installer/disk', 'choices') == DISK_CHOICES
     assert session.subst('nex-installer/management', 'choices').startswith(MANAGEMENT_CHOICES), \
         session.subst('nex-installer/management', 'choices')
-    # The management adapter cannot be switched off; the other one can.
-    assert session.substitutions('nex-installer/mode', 'choices') == \
-        ['dhcp, static', 'disabled, dhcp, static'], \
+    # Answering no to other adapters skips eth1; only the management NIC is asked.
+    assert session.substitutions('nex-installer/mode', 'choices') == ['dhcp, static'], \
         session.substitutions('nex-installer/mode', 'choices')
+    assert session.subst('nex-installer/other-adapters', 'detail') == \
+        'Management adapter: eth0. Remaining (1): eth1. A normal install only needs the management adapter.', \
+        session.subst('nex-installer/other-adapters', 'detail')
     assert session.config == NAVIGATION_CONFIG, (session.config, session.explain())
     assert session.config_path.stat().st_mode & 0o077 == 0, oct(session.config_path.stat().st_mode)
     assert not (root / 'run/nex-installer/config.ini.new').exists()
@@ -595,7 +617,7 @@ def scenario_navigation_and_handoff(shell, root):
     assert decoded['password'] == PASSWORD, decoded
     assert decoded['dns'] == '192.0.2.53 192.0.2.54', decoded
     assert decoded['vlan:eth0'] == '10', decoded
-    assert decoded['disk_size'] == '34359738368', decoded
+    assert decoded['disk_size'] == '34359738368;', decoded
     assert decoded['validate'] == 'VALID', decoded
     return None
 
@@ -607,13 +629,13 @@ STATIC_SCRIPT = [
     'nex-installer/password nexcore-test-pw',
     'nex-installer/password-again nexcore-test-pw',
     'nex-installer/management <DEFAULT>',
+    'nex-installer/other-adapters <DEFAULT>',
     'nex-installer/mode static',
     'nex-installer/vlan 10',
     'nex-installer/address 192.0.2.10/24',
     'nex-installer/gateway 192.0.2.1',
-    'nex-installer/mode <DEFAULT>',   # eth1: disabled
     'nex-installer/dns <DEFAULT>',
-    'nex-installer/disk <DEFAULT>',
+    'nex-installer/disk ' + DISK_ONE,
     'nex-installer/erase true',
 ]
 
@@ -627,6 +649,7 @@ def scenario_erase_summary(shell, root):
     assert session.subst('nex-installer/erase', 'disk') == '/dev/sda'
     assert session.subst('nex-installer/erase', 'disksize') == '32 GiB (34359738368 bytes)'
     assert session.subst('nex-installer/erase', 'serial') == 'TESTSERIAL1'
+    assert session.subst('nex-installer/erase', 'layout') == 'one ext4 filesystem, no redundancy'
     assert session.subst('nex-installer/erase', 'hostname') == 'nexcore.example.test'
     assert session.subst('nex-installer/erase', 'timezone') == 'UTC'
     assert session.subst('nex-installer/erase', 'keymap') == 'us'
@@ -635,6 +658,89 @@ def scenario_erase_summary(shell, root):
     assert session.subst('nex-installer/erase', 'adapters') == \
         'eth0: static 192.0.2.10/24, gateway 192.0.2.1, VLAN 10; eth1: disabled', \
         session.subst('nex-installer/erase', 'adapters')
+    return None
+
+
+def scenario_mirror_selection(shell, root):
+    """Two disks become one handoff listing both, in selection order."""
+    build_fixture(root)
+    script(root, DEFAULT_SCRIPT[:-2] + ['nex-installer/disk ' + DISK_MIRROR,
+                                        'nex-installer/erase true'])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.subst('nex-installer/erase', 'disk') == '/dev/sda, /dev/sdg', session.explain()
+    assert session.subst('nex-installer/erase', 'serial') == 'TESTSERIAL1, TESTSERIAL2'
+    assert session.subst('nex-installer/erase', 'layout') == \
+        'md RAID1 mirror of 2 disks, one ext4 root; one disk can fail without stopping the host'
+    for line in ('disk=/dev/sda;/dev/sdg;', 'disk_size=34359738368;34359738368;',
+                 'disk_serial=TESTSERIAL1;TESTSERIAL2;', 'disk_major_minor=8:0;8:96;'):
+        assert line + '\n' in session.config, (line, session.config, session.explain())
+    return None
+
+
+def scenario_mirror_capacity_mismatch(shell, root):
+    """A disk far smaller than the others is refused, and the question is asked again."""
+    build_fixture(root)
+    script(root, DEFAULT_SCRIPT[:-2] + [
+        'nex-installer/disk ' + ', '.join([DISK_ONE, DISK_SMALLER]),
+        'nex-installer/disk-error <note>',
+        'nex-installer/disk ' + DISK_MIRROR,
+        'nex-installer/erase true'])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert "within 10% of the smallest" in session.subst('nex-installer/disk-error', 'detail'), \
+        session.explain()
+    assert 'disk=/dev/sda;/dev/sdg;\n' in session.config, (session.config, session.explain())
+    return None
+
+
+def scenario_mirror_capacity_near(shell, root):
+    """A partner about 5% smaller is accepted; the 10% rule is not equality-only."""
+    build_fixture(root)
+    script(root, DEFAULT_SCRIPT[:-2] + [
+        'nex-installer/disk ' + DISK_MIRROR_NEAR,
+        'nex-installer/erase true'])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert 'disk=/dev/sda;/dev/sdi;\n' in session.config, (session.config, session.explain())
+    assert 'disk_serial=TESTSERIAL1;TESTSERIAL4;\n' in session.config, session.config
+    return None
+
+
+def scenario_empty_disk_selection_retried(shell, root):
+    """Unticking every disk is refused in place; a later selection still hands off."""
+    build_fixture(root)
+    script(root, DEFAULT_SCRIPT[:-2] + [
+        'nex-installer/disk',
+        'nex-installer/disk-error <note>',
+        'nex-installer/disk ' + DISK_ONE,
+        'nex-installer/erase true'])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert 'Select at least one disk' in session.subst('nex-installer/disk-error', 'detail'), \
+        session.explain()
+    assert 'disk=/dev/sda;\n' in session.config, (session.config, session.explain())
+    return None
+
+
+def scenario_disk_serial_list_escape(shell, root):
+    """A semicolon in a disk serial must not split the GKeyFile string list."""
+    blocks = dict(BLOCKS)
+    blocks['sda'] = dict(BLOCKS['sda'], **{'device/serial': 'AB;CD'})
+    build_fixture(root, blocks=blocks)
+    choice = 'sda - 32 GiB - SSD - QEMU HARDDISK - AB;CD - blank'
+    script(root, DEFAULT_SCRIPT[:-2] + [
+        'nex-installer/disk ' + choice,
+        'nex-installer/erase true'])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.subst('nex-installer/disk', 'choices').startswith(choice), \
+        session.subst('nex-installer/disk', 'choices')
+    assert 'disk_serial=AB\\;CD;\n' in session.config, (session.config, session.explain())
+    decoded = decode(session.config_path)
+    if decoded is None:
+        return 'no C compiler with glib-2.0; the handoff was not decoded'
+    assert decoded['validate'] == 'VALID', decoded
     return None
 
 
@@ -655,7 +761,7 @@ def scenario_sysfs_values_trimmed(shell, root):
         'nex-installer/mode <DEFAULT>',
         'nex-installer/vlan <DEFAULT>',
         'nex-installer/dns <DEFAULT>',
-        'nex-installer/disk <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
         'nex-installer/erase true',
     ])
     session = run(root, shell)
@@ -667,7 +773,7 @@ def scenario_sysfs_values_trimmed(shell, root):
         session.subst('nex-installer/management', 'choices')
     assert session.subst('nex-installer/erase', 'serial') == 'TESTSERIAL1'
     written = session.config or ''
-    assert 'disk_serial=TESTSERIAL1\n' in written, (written, session.explain())
+    assert 'disk_serial=TESTSERIAL1;\n' in written, (written, session.explain())
     assert 'mac=52:54:00:aa:bb:01\n' in written, (written, session.explain())
     return None
 
@@ -730,10 +836,10 @@ hostname=nexcore.example.test
 timezone=Australia/Sydney
 keymap=de
 password=retain-this-pw
-disk=/dev/sda
-disk_size=34359738368
-disk_serial=TESTSERIAL1
-disk_major_minor=8:0
+disk=/dev/sda;
+disk_size=34359738368;
+disk_serial=TESTSERIAL1;
+disk_major_minor=8:0;
 
 [Network]
 management=eth0
@@ -774,23 +880,23 @@ def scenario_rejected_settings_keep_answers(shell, root):
         'nex-installer/password-again <DEFAULT>',
         'nex-installer/management <DEFAULT>',
         'nex-installer/management <DEFAULT>',
+        'nex-installer/other-adapters <DEFAULT>',
+        'nex-installer/other-adapters <DEFAULT>',
         'nex-installer/mode static',
         'nex-installer/vlan 20',
         'nex-installer/address 192.0.2.10/24',
         'nex-installer/gateway 192.0.2.1',
         'nex-installer/mode <DEFAULT>',
-        'nex-installer/mode <DEFAULT>',
         'nex-installer/vlan <DEFAULT>',
         'nex-installer/address <DEFAULT>',
         'nex-installer/gateway <DEFAULT>',
-        'nex-installer/mode <DEFAULT>',
         'nex-installer/dns 192.0.2.53',
         'nex-installer/dns <DEFAULT>',
-        'nex-installer/disk <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
         'nex-installer/erase true',
         # The rejection returns here with everything still filled in.
         'nex-installer/erase <BACK>',
-        'nex-installer/disk <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
         'nex-installer/erase true',
     ])
     session = run(root, shell)
@@ -818,10 +924,10 @@ hostname=nexcore
 timezone=UTC
 keymap=us
 password=nexcore-test-pw
-disk=/dev/sda
-disk_size=34359738368
-disk_serial=TESTSERIAL1
-disk_major_minor=8:0
+disk=/dev/sda;
+disk_size=34359738368;
+disk_serial=TESTSERIAL1;
+disk_major_minor=8:0;
 
 [Network]
 management=
@@ -853,12 +959,13 @@ def scenario_offline_management(shell, root):
         'nex-installer/password nexcore-test-pw',
         'nex-installer/password-again nexcore-test-pw',
         'nex-installer/management ' + OFFLINE,
+        'nex-installer/other-adapters true',
         'nex-installer/mode static',
         'nex-installer/vlan <DEFAULT>',
         'nex-installer/address 192.0.2.10/24',
-        'nex-installer/mode <DEFAULT>',   # eth1: disabled
+        'nex-installer/mode <DEFAULT>',   # eth1: Disabled → disabled
         'nex-installer/dns <DEFAULT>',
-        'nex-installer/disk <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
         'nex-installer/erase true',
     ])
     session = run(root, shell)
@@ -868,8 +975,11 @@ def scenario_offline_management(shell, root):
         MANAGEMENT_CHOICES + ', ' + OFFLINE, \
         session.subst('nex-installer/management', 'choices')
     assert session.substitutions('nex-installer/mode', 'choices') == \
-        ['disabled, dhcp, static', 'disabled, dhcp, static'], \
+        ['Disabled, dhcp, static', 'Disabled, dhcp, static'], \
         session.substitutions('nex-installer/mode', 'choices')
+    assert session.subst('nex-installer/other-adapters', 'detail') == \
+        'Offline install. Adapters (2): eth0, eth1. Answer no to leave every adapter unconfigured.', \
+        session.subst('nex-installer/other-adapters', 'detail')
     # Only a management adapter may carry a default route.
     assert 'nex-installer/gateway' not in session.asked(), (session.asked(), session.explain())
     assert session.subst('nex-installer/erase', 'management') == 'Offline'
@@ -882,15 +992,88 @@ def scenario_offline_management(shell, root):
     return None
 
 
+def scenario_configure_other_adapter(shell, root):
+    """Answering yes walks every leftover adapter; Disabled still stores disabled."""
+    build_fixture(root)
+    script(root, [
+        'nex-installer/hostname <DEFAULT>',
+        'nex-installer/keymap <DEFAULT>',
+        'nex-installer/timezone-area <DEFAULT>',
+        'nex-installer/password nexcore-test-pw',
+        'nex-installer/password-again nexcore-test-pw',
+        'nex-installer/management <DEFAULT>',
+        'nex-installer/other-adapters true',
+        'nex-installer/mode <DEFAULT>',   # eth0 management: dhcp
+        'nex-installer/vlan <DEFAULT>',
+        'nex-installer/mode dhcp',        # eth1 additional
+        'nex-installer/vlan <DEFAULT>',
+        'nex-installer/dns <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
+        'nex-installer/erase true',
+    ])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.asked() == [
+        'nex-installer/hostname',
+        'nex-installer/keymap',
+        'nex-installer/timezone-area',
+        'nex-installer/password',
+        'nex-installer/password-again',
+        'nex-installer/management',
+        'nex-installer/other-adapters',
+        'nex-installer/mode',
+        'nex-installer/vlan',
+        'nex-installer/mode',
+        'nex-installer/vlan',
+        'nex-installer/dns',
+        'nex-installer/disk',
+        'nex-installer/erase',
+    ], (session.asked(), session.explain())
+    assert session.substitutions('nex-installer/mode', 'choices') == \
+        ['dhcp, static', 'Disabled, dhcp, static'], \
+        session.substitutions('nex-installer/mode', 'choices')
+    assert 'mode=dhcp\n' in session.config
+    assert session.config.count('mode=dhcp\n') == 2, session.config
+    assert 'mode=disabled\n' not in session.config, session.config
+    return None
+
+
+def scenario_management_not_first_nic(shell, root):
+    """Skipping others still configures the chosen management NIC, even when it is not first."""
+    build_fixture(root)
+    script(root, [
+        'nex-installer/hostname <DEFAULT>',
+        'nex-installer/keymap <DEFAULT>',
+        'nex-installer/timezone-area <DEFAULT>',
+        'nex-installer/password nexcore-test-pw',
+        'nex-installer/password-again nexcore-test-pw',
+        'nex-installer/management eth1 - 52:54:00:aa:bb:02 - link detected',
+        'nex-installer/other-adapters false',
+        'nex-installer/mode <DEFAULT>',   # eth1 only; eth0 is skipped
+        'nex-installer/vlan <DEFAULT>',
+        'nex-installer/dns <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
+        'nex-installer/erase true',
+    ])
+    session = run(root, shell)
+    assert session.result.returncode == 0, session.explain()
+    assert session.asked().count('nex-installer/mode') == 1, (session.asked(), session.explain())
+    assert session.subst('nex-installer/mode', 'nic') == 'eth1', session.explain()
+    assert 'management=eth1\n' in session.config, session.config
+    assert re.search(r'\[NIC:eth0\]\nmac=.*\nmode=disabled\n', session.config), session.config
+    assert re.search(r'\[NIC:eth1\]\nmac=.*\nmode=dhcp\n', session.config), session.config
+    return None
+
+
 NO_NIC_CONFIG = r'''[Host]
 hostname=nexcore
 timezone=UTC
 keymap=us
 password=nexcore-test-pw
-disk=/dev/sda
-disk_size=34359738368
-disk_serial=TESTSERIAL1
-disk_major_minor=8:0
+disk=/dev/sda;
+disk_size=34359738368;
+disk_serial=TESTSERIAL1;
+disk_major_minor=8:0;
 
 [Network]
 management=
@@ -908,7 +1091,7 @@ def scenario_no_network_adapter(shell, root):
         'nex-installer/password nexcore-test-pw',
         'nex-installer/password-again nexcore-test-pw',
         'nex-installer/dns <DEFAULT>',
-        'nex-installer/disk <DEFAULT>',
+        'nex-installer/disk ' + DISK_ONE,
         'nex-installer/erase true',
     ])
     session = run(root, shell)
@@ -985,11 +1168,18 @@ SHELL_SCENARIOS = [
     scenario_navigation_and_handoff,
     scenario_erase_summary,
     scenario_sysfs_values_trimmed,
+    scenario_mirror_selection,
+    scenario_mirror_capacity_mismatch,
+    scenario_mirror_capacity_near,
+    scenario_empty_disk_selection_retried,
+    scenario_disk_serial_list_escape,
     scenario_keymap_arguments,
     scenario_keymap_empty_map_retried,
     scenario_keymap_load_failure_retried,
     scenario_rejected_settings_keep_answers,
     scenario_offline_management,
+    scenario_configure_other_adapter,
+    scenario_management_not_first_nic,
     scenario_no_network_adapter,
     scenario_prepare_runs_before_frontend,
     scenario_prepare_failure_stops_setup,

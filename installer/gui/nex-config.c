@@ -30,40 +30,19 @@ static char *read_text(const char *path)
     if (!g_file_get_contents(path, &s, NULL, NULL)) return g_strdup("");
     return g_strstrip(s);
 }
-static void validate(GKeyFile *config, gboolean password_required)
+/* The selected disks, one list entry each; a single disk is a one-entry list. */
+static char **disk_list(GKeyFile *config, const char *key, gsize *count)
 {
-    GError *error = NULL;
-    char *hostname = value(config, "hostname"), *zone = value(config, "timezone");
-    char *keymap = value(config, "keymap"), *password = value(config, "password");
-    char *disk = value(config, "disk"), *size = value(config, "disk_size");
-    char *serial = value(config, "disk_serial"), *dev = value(config, "disk_major_minor");
-    char *zones = read_text("/usr/share/nex-installer/timezones");
-    char *needle = g_strdup_printf("\n%s\n", zone);
-    char *haystack = g_strdup_printf("\n%s\n", zones);
-    char *normalized_hostname = nex_hostname_normalize(hostname);
-    if (!normalized_hostname)
-        fail("Use an ASCII host name or FQDN, e.g. nexcore.example.test.");
-    g_free(normalized_hostname);
-    if (!strstr(haystack, needle) || strchr(zone, '\n') || !zone[0])
-        fail("Select a valid timezone from the supplied list.");
-    if (strcmp(keymap,"us") && strcmp(keymap,"gb") && strcmp(keymap,"de") && strcmp(keymap,"fr") && strcmp(keymap,"es"))
-        fail("Select a supported keyboard layout.");
-    if (password_required && (g_utf8_strlen(password,-1) < 8 || strlen(password) > 512 || strchr(password,'\n') || strchr(password,'\r')))
-        fail("Enter a root password of at least 8 characters, at most 512 bytes, without line breaks.");
-    if (!nex_network_validate(config, &error)) fail(error ? error->message : "Network settings are invalid.");
-    char **nic_groups=g_key_file_get_groups(config,NULL);
-    for (int i=0;nic_groups[i];i++) {
-        if (!g_str_has_prefix(nic_groups[i],"NIC:")) continue;
-        char *nic_path=g_strdup_printf("/sys/class/net/%s/address",nic_groups[i]+4);
-        char *observed=read_text(nic_path);
-        char *selected=g_key_file_get_string(config,nic_groups[i],"mac",NULL);
-        if (!selected || g_ascii_strcasecmp(observed,selected)) fail("A network adapter changed or disappeared; restart setup and select it again.");
-        g_free(nic_path);g_free(observed);g_free(selected);
-    }
-    g_strfreev(nic_groups);
+    char **entries = g_key_file_get_string_list(config, "Host", key, count, NULL);
+    if (!entries) { *count = 0; entries = g_new0(char *, 1); }
+    return entries;
+}
+/* Whole-disk erase safety and last-moment identity of one selected disk. */
+static guint64 validate_disk(const char *disk, const char *size, const char *serial, const char *dev)
+{
+    struct stat st;
     if (!g_str_has_prefix(disk,"/dev/") || !nex_install_disk_name_supported(disk+5))
         fail("Select a supported installation disk.");
-    struct stat st;
     if (stat(disk,&st) || !S_ISBLK(st.st_mode)) fail("The selected disk is no longer available.");
     char *base = g_strdup_printf("/sys/class/block/%s",disk+5);
     char *path = g_strdup_printf("%s/partition",base);
@@ -98,9 +77,58 @@ static void validate(GKeyFile *config, gboolean password_required)
         }
         g_strfreev(fields);
     }
+    g_free(base);g_free(path);g_free(actual);g_free(expected_size);g_free(mounts);g_strfreev(lines);
+    return bytes;
+}
+static void validate(GKeyFile *config, gboolean password_required)
+{
+    GError *error = NULL;
+    char *hostname = value(config, "hostname"), *zone = value(config, "timezone");
+    char *keymap = value(config, "keymap"), *password = value(config, "password");
+    gsize disks = 0, sizes = 0, serials = 0, devs = 0;
+    char **disk = disk_list(config, "disk", &disks), **size = disk_list(config, "disk_size", &sizes);
+    char **serial = disk_list(config, "disk_serial", &serials), **dev = disk_list(config, "disk_major_minor", &devs);
+    char *zones = read_text("/usr/share/nex-installer/timezones");
+    char *needle = g_strdup_printf("\n%s\n", zone);
+    char *haystack = g_strdup_printf("\n%s\n", zones);
+    char *normalized_hostname = nex_hostname_normalize(hostname);
+    if (!normalized_hostname)
+        fail("Use an ASCII host name or FQDN, e.g. nexcore.example.test.");
+    g_free(normalized_hostname);
+    if (!strstr(haystack, needle) || strchr(zone, '\n') || !zone[0])
+        fail("Select a valid timezone from the supplied list.");
+    if (strcmp(keymap,"us") && strcmp(keymap,"gb") && strcmp(keymap,"de") && strcmp(keymap,"fr") && strcmp(keymap,"es"))
+        fail("Select a supported keyboard layout.");
+    if (password_required && (g_utf8_strlen(password,-1) < 8 || strlen(password) > 512 || strchr(password,'\n') || strchr(password,'\r')))
+        fail("Enter a root password of at least 8 characters, at most 512 bytes, without line breaks.");
+    if (!nex_network_validate(config, &error)) fail(error ? error->message : "Network settings are invalid.");
+    char **nic_groups=g_key_file_get_groups(config,NULL);
+    for (int i=0;nic_groups[i];i++) {
+        if (!g_str_has_prefix(nic_groups[i],"NIC:")) continue;
+        char *nic_path=g_strdup_printf("/sys/class/net/%s/address",nic_groups[i]+4);
+        char *observed=read_text(nic_path);
+        char *selected=g_key_file_get_string(config,nic_groups[i],"mac",NULL);
+        if (!selected || g_ascii_strcasecmp(observed,selected)) fail("A network adapter changed or disappeared; restart setup and select it again.");
+        g_free(nic_path);g_free(observed);g_free(selected);
+    }
+    g_strfreev(nic_groups);
+    if (!disks || disks != sizes || disks != serials || disks != devs)
+        fail("Select the disk or disks to erase and install Nex Core onto.");
+    guint64 smallest = 0;
+    for (gsize i = 0; i < disks; i++) {
+        for (gsize j = 0; j < i; j++)
+            if (!strcmp(disk[i],disk[j])) fail("Select each mirror disk only once.");
+        guint64 bytes = validate_disk(disk[i],size[i],serial[i],dev[i]);
+        if (!smallest || bytes < smallest) smallest = bytes;
+    }
+    /* A mirror is only as large as its smallest member; refuse a badly mismatched pair. */
+    for (gsize i = 0; i < disks; i++)
+        if (g_ascii_strtoull(size[i],NULL,10) > smallest + smallest / 10)
+            fail("Every mirror disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as large as its smallest member. Select disks of similar size.");
     explicit_bzero(password,strlen(password));
-    g_free(password);g_free(hostname);g_free(zone);g_free(keymap);g_free(disk);g_free(size);g_free(serial);g_free(dev);
-    g_free(zones);g_free(needle);g_free(haystack);g_free(base);g_free(path);g_free(actual);g_free(expected_size);g_free(mounts);g_strfreev(lines);
+    g_free(password);g_free(hostname);g_free(zone);g_free(keymap);
+    g_strfreev(disk);g_strfreev(size);g_strfreev(serial);g_strfreev(dev);
+    g_free(zones);g_free(needle);g_free(haystack);
 }
 static void protected_write(const char *path, const char *data)
 {
@@ -133,7 +161,10 @@ int main(int argc,char **argv)
     if (!hash || hash[0]!='\x24') fail("Unable to protect root credentials.");
     GError *error=NULL;
     if (!nex_network_write(config,"/run/nex-installer/target",&error)) fail(error ? error->message : "Unable to stage network settings.");
-    char *hostname=value(config,"hostname"),*zone=value(config,"timezone"),*keymap=value(config,"keymap"),*disk=value(config,"disk");
+    char *hostname=value(config,"hostname"),*zone=value(config,"timezone"),*keymap=value(config,"keymap");
+    /* disk_list must stay below the hostname line: installer-hostname.py extracts render from there. */
+    gsize disks=0;
+    char **disk=disk_list(config,"disk",&disks);
     char *normalized_hostname=nex_hostname_normalize(hostname);
     g_free(hostname); hostname=normalized_hostname;
     g_key_file_set_string(config,"Host","hostname",hostname);
@@ -145,6 +176,20 @@ int main(int argc,char **argv)
     protected_write("/run/nex-installer/target/etc/hosts",hosts);
     if (chmod("/run/nex-installer/target/etc/hostname",0644) || chmod("/run/nex-installer/target/etc/hosts",0644)) fail("Unable to set host configuration permissions.");
     g_free(hostfile);g_free(hosts);
+    /* One disk keeps the whole-disk ext4 layout; two or more become an md RAID1 mirror of
+     * one ext4 root. Every mirror disk gets the same GPT layout on either firmware - a
+     * 1 MiB BIOS boot partition, a 512 MiB ESP, then the array member - so the member is
+     * always partition 3 and either firmware can boot the host from any of the disks. */
+    gboolean uefi=g_file_test("/sys/firmware/efi",G_FILE_TEST_IS_DIR);
+    GString *targets=g_string_new(disk[0]), *members=g_string_new("");
+    for (gsize i=0;i<disks;i++) {
+        const char *name=disk[i];
+        if (i) g_string_append_printf(targets," %s",name);
+        /* Partition 3 on every member: the mirror recipe below always lays down the
+         * BIOS boot partition and the ESP first, whichever firmware is running. */
+        g_string_append_printf(members,"%s%s%s3",i ? "#" : "",name,
+            g_ascii_isdigit(name[strlen(name)-1]) ? "p" : "");
+    }
     GString *seed=g_string_new("");
     g_string_append_printf(seed,
         "d-i debian-installer/locale string en_US.UTF-8\n"
@@ -158,16 +203,44 @@ int main(int argc,char **argv)
         "d-i passwd/root-login boolean true\n"
         "d-i passwd/make-user boolean false\n"
         "d-i passwd/root-password-crypted password %s\n"
-        "d-i partman-auto/disk string %s\n"
-        "d-i partman-auto/method string regular\n"
-        "d-i partman-auto/choose_recipe select atomic\n"
+        "d-i partman-auto/disk string %s\n",keymap,zone,shortname,domain,hash,targets->str);
+    if (disks > 1)
+        g_string_append_printf(seed,
+            "d-i partman-auto/method string raid\n"
+            /* GPT on both firmwares: grub-install --target=i386-pc needs the BIOS boot
+             * partition, which only GPT has, and a fixed label keeps the member index
+             * constant instead of following partman's per-disk default. */
+            "d-i partman-partitioning/default_label string gpt\n"
+            "d-i partman-auto/expert_recipe string nex-mirror :: "
+            "1 1 1 free $iflabel{ gpt } method{ biosgrub } . "
+            "538 538 538 free $iflabel{ gpt } method{ efi } format{ } . "
+            "1000 20000 1000000000 raid $primary{ } method{ raid } .\n"
+            "d-i partman-auto-raid/recipe string 1 %u 0 ext4 / %s .\n"
+            "d-i partman-md/confirm boolean true\n"
+            "d-i partman-md/confirm_nooverwrite boolean true\n"
+            /* The mirror holds one ext4 root and no swap; answer partman's warning
+             * rather than interrupt the operator with a partitioning question. */
+            "d-i partman-basicfilesystems/no_swap boolean false\n"
+            /* Every ESP also gets the removable boot path, so the firmware boots
+             * whichever disk survives without an NVRAM entry of its own. */
+            "d-i grub-installer/force-efi-extra-removable boolean true\n",(unsigned)disks,members->str);
+    else
+        g_string_append(seed,
+            "d-i partman-auto/method string regular\n"
+            "d-i partman-auto/choose_recipe select atomic\n");
+    g_string_append(seed,
         "d-i partman-partitioning/confirm_write_new_label boolean true\n"
         "d-i partman/choose_partition select finish\n"
         "d-i partman/confirm boolean true\n"
-        "d-i partman/confirm_nooverwrite boolean true\n"
-        "d-i grub-installer/bootdev string %s\n"
+        "d-i partman/confirm_nooverwrite boolean true\n");
+    /* Legacy BIOS boots from whichever disk survives, so GRUB goes on every one of
+     * them. A UEFI install writes the ESP mounted by partman; late-install copies it
+     * to the other members' ESPs, which grub-efi-amd64 does not manage itself. */
+    if (!uefi || disks == 1)
+        g_string_append_printf(seed,"d-i grub-installer/bootdev string %s\n",targets->str);
+    g_string_append(seed,
         "d-i grub-installer/only_debian boolean true\n"
-        "d-i finish-install/reboot_in_progress seen false\n",keymap,zone,shortname,domain,hash,disk,disk);
+        "d-i finish-install/reboot_in_progress seen false\n");
     protected_write("/run/nex-installer/answers.cfg",seed->str);
     /* Retain only non-secret selections for last-moment disk identity checking. */
     g_key_file_remove_key(config,"Host","password",NULL);
@@ -176,6 +249,7 @@ int main(int argc,char **argv)
     explicit_bzero(password,strlen(password)); explicit_bzero(hash,strlen(hash));
     explicit_bzero(seed->str,seed->len);
     g_free(safe);g_free(password);g_string_free(seed,TRUE);g_key_file_free(config);
-    g_strfreev(name_parts);g_free(hostname);g_free(zone);g_free(keymap);g_free(disk);
+    g_string_free(targets,TRUE);g_string_free(members,TRUE);
+    g_strfreev(name_parts);g_free(hostname);g_free(zone);g_free(keymap);g_strfreev(disk);
     return 0;
 }

@@ -303,6 +303,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolZFSLifecycleHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolZFSReplacePath {
+			PoolZFSReplaceHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolZFSPath || strings.HasPrefix(r.URL.Path, poolZFSPath+"/") {
 			PoolZFSHandler(s).ServeHTTP(w, r)
 			return

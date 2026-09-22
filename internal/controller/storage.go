@@ -316,6 +316,15 @@ func (c *Controller) provisionZFSStorage(w http.ResponseWriter, r *http.Request,
 		fail(w, http.StatusConflict, err.Error())
 		return
 	}
+	needsReplace := protocol.ZFSProvisionNeedsReplaceCapability(request)
+	if needsReplace {
+		var raw string
+		var capabilities []string
+		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", master).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.ZFSReplaceCapability) {
+			fail(w, http.StatusConflict, fmt.Sprintf("hot spares and widened ZFS layouts need %s on the pool master and every selected host; upgrade Nex Core", protocol.ZFSReplaceCapability))
+			return
+		}
+	}
 	// Core still decides the provisioning itself; refusing a stale or incapable selected
 	// host here only turns a delayed needs_attention into an immediate answer.
 	for _, selected := range request.Hosts {
@@ -327,6 +336,10 @@ func (c *Controller) provisionZFSStorage(w http.ResponseWriter, r *http.Request,
 		var capabilities []string
 		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", selected.HostID).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, protocol.ZFSProvisionCapability) {
 			fail(w, http.StatusConflict, "selected host does not support ZFS provisioning; upgrade Nex Core")
+			return
+		}
+		if needsReplace && !contains(capabilities, protocol.ZFSReplaceCapability) {
+			fail(w, http.StatusConflict, fmt.Sprintf("hot spares and widened ZFS layouts need %s on the pool master and every selected host; upgrade Nex Core", protocol.ZFSReplaceCapability))
 			return
 		}
 	}

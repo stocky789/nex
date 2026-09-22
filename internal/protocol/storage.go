@@ -16,6 +16,13 @@ const StorageRepositoryCapability = "storage-repositories-v1"
 const StorageDiscoveryCapability = "storage-discovery-v1"
 const ZFSProvisionCapability = "storage-zfs-provision-v1"
 
+// ZFSReplaceCapability gates replacing a failed disk in a provisioned pool, hot spares and
+// the widened provision layouts (three-disk mirror, raidz3), and the additive zfs_pool /
+// pool observation fields in inventory reports. A Core without it never receives those
+// selections or the replace command; a Controller that has not acknowledged it never
+// receives the new observation fields.
+const ZFSReplaceCapability = "storage-zfs-replace-v1"
+
 const (
 	StorageKindLocal = "local"
 	StorageKindNFS   = "nfs"
@@ -128,6 +135,9 @@ type StorageAccess struct {
 	EffectiveQuotaBytes *uint64   `json:"effective_quota_bytes,omitempty"`
 	ObservedAt          time.Time `json:"observed_at,omitempty"`
 	Error               string    `json:"error,omitempty"`
+	// ZFSPool carries `zpool status` detail for a ZFS repository, so a degraded pool
+	// reports which device failed and how far its resilver has got.
+	ZFSPool *ZFSPoolStatus `json:"zfs_pool,omitempty"`
 }
 
 // StorageLifecycleRequest changes an existing repository. Register deliberately remains the
@@ -235,6 +245,44 @@ type ZFSProvisionHost struct {
 	HostID  string               `json:"host_id"`
 	Layout  string               `json:"layout"`
 	Devices []ZFSProvisionDevice `json:"devices"`
+	// Spares are hot spares: ZFS resilvers onto one by itself when a data disk fails.
+	// They satisfy no part of the layout rule, so they are counted separately.
+	Spares []ZFSProvisionDevice `json:"spares,omitempty"`
+}
+
+// ZFSReplaceRequest replaces one failed leaf of a provisioned pool with one disk the
+// operator picked from the same discovery listing the wizard uses. OldDevice is the leaf
+// as `zpool status` reports it on that host; Core revalidates both against a fresh
+// observation before it touches anything.
+type ZFSReplaceRequest struct {
+	OperationID  string             `json:"operation_id"`
+	RepositoryID string             `json:"repository_id"`
+	PoolID       string             `json:"pool_id"`
+	HostID       string             `json:"host_id"`
+	OldDevice    string             `json:"old_device"`
+	Device       ZFSProvisionDevice `json:"device"`
+}
+
+func (r ZFSReplaceRequest) Valid() error {
+	if err := requireNonEmptyBoundedID(r.OperationID, "ZFS disk replacement requires an operation ID"); err != nil {
+		return err
+	}
+	if !storageOpaqueID.MatchString(r.OperationID) {
+		return errors.New("ZFS disk replacement requires an operation ID")
+	}
+	if !storageOpaqueID.MatchString(r.RepositoryID) || !storageOpaqueID.MatchString(r.PoolID) || !storageOpaqueID.MatchString(r.HostID) {
+		return errors.New("ZFS disk replacement requires a repository, pool and host")
+	}
+	// The failed leaf is named exactly as the pool observation reports it, which for a
+	// provisioned repository is the by-id path of the partition ZFS created on the disk
+	// the pool was given.
+	if !strings.HasPrefix(r.OldDevice, "/dev/disk/by-id/") || strings.ContainsAny(r.OldDevice, "\x00\r\n") {
+		return errors.New("ZFS disk replacement names the failed device by its /dev/disk/by-id path")
+	}
+	if r.OldDevice == r.Device.ByID || strings.HasPrefix(r.OldDevice, r.Device.ByID+"-part") {
+		return errors.New("the replacement must be a different disk from the failed one")
+	}
+	return validZFSDevice(r.Device)
 }
 
 // Repository identity is deliberately absent: Nex Core assigns it while
@@ -542,20 +590,49 @@ func ValidateZFSProvision(v ZFSProvisionRequest) error {
 		}
 		seen[host.HostID] = true
 		byID := map[string]bool{}
-		for _, device := range host.Devices {
-			if !strings.HasPrefix(device.ByID, "/dev/disk/by-id/") || strings.ContainsAny(device.ByID, "\x00\r\n") || device.Serial == "" || device.SizeBytes == 0 || !zfsDeviceFingerprint.MatchString(device.Fingerprint) || byID[device.ByID] {
+		for _, device := range append(append([]ZFSProvisionDevice{}, host.Devices...), host.Spares...) {
+			if err := validZFSDevice(device); err != nil {
+				return err
+			}
+			if byID[device.ByID] {
 				return errors.New("ZFS provision device is invalid")
 			}
 			byID[device.ByID] = true
-			if device.EraseConfirmation != "" && device.EraseConfirmation != device.ByID {
-				return errors.New("ZFS erase confirmation must name the selected device")
-			}
 		}
 	}
 	if v.Scope == "host" && len(v.Hosts) != 1 {
 		return errors.New("host-scoped ZFS provision needs one host")
 	}
 	return nil
+}
+
+// validZFSDevice applies the selected-disk rules shared by provisioning and replacement:
+// a stable by-id identity, a serial, a size, the discovery fingerprint, and an erase
+// confirmation that names the disk it erases.
+func validZFSDevice(device ZFSProvisionDevice) error {
+	if !strings.HasPrefix(device.ByID, "/dev/disk/by-id/") || strings.ContainsAny(device.ByID, "\x00\r\n") || device.Serial == "" || device.SizeBytes == 0 || !zfsDeviceFingerprint.MatchString(device.Fingerprint) {
+		return errors.New("ZFS provision device is invalid")
+	}
+	if device.EraseConfirmation != "" && device.EraseConfirmation != device.ByID {
+		return errors.New("ZFS erase confirmation must name the selected device")
+	}
+	return nil
+}
+
+// ZFSProvisionNeedsReplaceCapability reports whether a provision request uses hot spares
+// or a layout that storage-zfs-provision-v1 alone rejected (three-disk mirror, raidz3).
+// Those selections must not be sent to a Core without storage-zfs-replace-v1.
+func ZFSProvisionNeedsReplaceCapability(v ZFSProvisionRequest) bool {
+	for _, host := range v.Hosts {
+		if len(host.Spares) > 0 {
+			return true
+		}
+		layout := ZFSLayout(host.Layout, len(host.Devices))
+		if layout == "raidz3" || (layout == "mirror" && len(host.Devices) == 3) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidZFSLayout reports whether an explicit layout can be built from exactly
@@ -567,11 +644,13 @@ func ValidZFSLayout(layout string, devices int) bool {
 	case "single":
 		return devices == 1
 	case "mirror":
-		return devices == 2
+		return devices == 2 || devices == 3
 	case "raidz1":
 		return devices >= 3
 	case "raidz2":
 		return devices >= 4
+	case "raidz3":
+		return devices >= 5
 	case "striped_mirrors":
 		return devices >= 4 && devices%2 == 0
 	}

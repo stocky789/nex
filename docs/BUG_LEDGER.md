@@ -6563,3 +6563,732 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: one shared `followUpdate` (`web/src/updates.ts`) replaces the two copied loops. A poll that cannot reach the service is skipped and the loop carries on; only a reported `done` or `failed` phase, an HTTP error (a response with a status) or the ten-minute bound ends it. Net −21 lines across the two pages.
 - Regression: `web/src/updates.test.mjs` — a poll sequence of two refused fetches, then `restarting`, then `done` must resolve `done`; the same sequence rejected the previous inline loop with `Failed to fetch` (checked with the old loop body in a scratch script). Also covers a reported failure, an HTTP error surfacing and the bound. Command: `npm --prefix web test` (with `npm --prefix web run typecheck`), run by both `phase1` workflow copies. Not verified against a live update: the lab Controller VM was unreachable during this fix, so the helper's actual outcome there is unknown.
 - Avoid: ending a wait for a restart on the first lost connection; keeping two copies of the same poll loop.
+
+## BUG-0444 — Minimal install walked every NIC after management selection
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; not exercised on a booted ISO (see Regression).
+- Symptom: after choosing the management adapter in the text installer, the next screen was IPv4 configuration for the first detected NIC, which often was not the one just chosen. The wizard then asked the same questions for every remaining adapter, so a multi-NIC host felt like it had shown the wrong interface.
+- Root cause: the text wizard always appended one `nic:` step per detected adapter and defaulted leftover adapters to `disabled` only after the operator answered each mode question. There was no bulk skip after the management choice.
+- Fix: after management selection, ask **Configure more network adapters?** (default no). No leaves every leftover adapter disabled and skips their questions; yes walks them with choices **skip**, **dhcp**, **static** (skip stored as `disabled` in the handoff). The management adapter is still always configured when one was chosen.
+- Regression: `tests/integration/installer-text-wizard.py` — default Enter path asks other-adapters then only the management NIC; `scenario_configure_other_adapter` walks leftovers with skip/dhcp/static; `scenario_management_not_first_nic` configures eth1 as management while eth0 stays disabled without a mode question. Command: `python3 tests/integration/installer-text-wizard.py`, run by the installer workflow copies. Untested on a real newt console / booted minimal ISO.
+- Avoid: walking every adapter as a mandatory step when only the management NIC is required for a normal install.
+
+## BUG-0443 — A mirror that lost one disk took the whole repository out of service
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; verified in the disposable ZFS lab (see Regression).
+- Symptom: offlining one member of a provisioned two-disk ZFS mirror made the repository report unreadable and unwritable with `ZFS pool health is DEGRADED`, so VM creation, start and migration were refused on it, while ZFS itself was still serving every read and write from the surviving disk. The 2026-09-19 ZFS rollout QA observed this and recorded it as accepted behaviour.
+- Root cause: `inspectZFS` (`internal/vmhost/storage_zfs.go`) treated every pool health other than `ONLINE` as an error, and `storageVerify` accepted only `Health == "healthy"`. Redundancy was therefore cosmetic: losing one disk of a mirror lost the repository until it was repaired, which is the exact failure the mirror exists to survive.
+- Fix: `inspectZFS` maps `ONLINE` → `healthy` and `DEGRADED` → `degraded` with access unchanged; `FAULTED`, `UNAVAIL`, `SUSPENDED` and `REMOVED` still fail with the health in the error. `storageVerify` asks the new `storageServesData` instead of comparing to one literal, so every caller (VM start, storage guard, registration and update) accepts a degraded pool through the same check. Core also reports `zpool status --json` detail — pool state, ZFS's own status/action sentences, the scrub or resilver, and each leaf by id with its error counts — on the per-host ZFS observation; the Controller passes it through and stores none of it. Decided in [the software RAID plan](plans/2026-09-22-software-raid.md).
+- Regression: `internal/vmhost/zfs_status_test.go` maps every pool health through `inspectZFS` (`DEGRADED` must stay readable, writable and acceptable to `storageServesData`; the four inaccessible states must still be refused) and decodes `zpool status --json` fixtures into the reported detail: two captured from a lab host (a mirror with one member offlined, and a resilver in progress) and one, `zpool-status-idle-derived.json`, derived from a capture of the same pool by removing what the running resilver added, because every capture taken of that pool had a resilver in flight. The derived file says so in its name and in the test comment. Commands: `go test ./internal/...` and `go vet ./internal/...`, both run by the `phase1` workflow copies; `npm --prefix web test` covers `zfsPoolSummary` and that a degraded pool stays placement eligible in the UI. Lab evidence, including the same offline-member check with a VM running and a second VM created on the degraded pool: [docs/qa/2026-09-22-zfs-degraded.md](qa/2026-09-22-zfs-degraded.md).
+- Avoid: treating a ZFS health string as a binary healthy/failed test, and gating access on one literal in each caller instead of one shared predicate. Do not read pool detail with a hand-written parser of `zpool status` text; the JSON output is stable and already installed.
+
+## BUG-0445 — A retried disk replacement would have wiped the disk the pool was resilvering onto
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped slice 2 code, so it never reached a host.
+- Symptom: none observed. `ZFSReplacer.Replace` is meant to adopt a pool that is already resilvering onto the replacement, so a retry after an interruption does nothing. The adoption never matched a real pool, so a retry of an operation that was interrupted after `zpool replace` had started would have run `wipefs --all` on the replacement disk again — a disk the pool was at that moment resilvering onto, and the only copy of the data the failed member no longer held.
+- Root cause: the adoption compared the replacement's whole-disk `/dev/disk/by-id/...` name against the pool's leaf name and path, and against the block device both resolve to. A provisioned pool names its leaves by the partition ZFS created on the selected disk (`...-part1`), so none of the three comparisons could ever match; the whole-disk-to-partition rule existed on the master (`internal/agent/zfs_replace.go`) but not in the host worker. With adoption missed, the failed leaf — still reported inside the `replacing-` vdev, which the observation flattens — looked like an ordinary non-`ONLINE` leaf and the destructive path continued.
+- Fix: `internal/vmhost/zfs_replace.go` matches the replacement with a new `zfsPoolHoldsDisk`, which accepts the disk itself or any partition of it, before anything is decided about the failed leaf. `zfsPoolLeaf` keeps matching the failed leaf exactly as the observation reports it, which is what the operator picked, and its unreachable resolved-path comparison is gone.
+- Regression: `internal/vmhost/zfs_replace_test.go` has two adoption checks that both fail without the fix — one against a hand-built observation whose leaves are `-part1` paths (it recorded `wipefs --all` on the live replacement), and one against `testdata/zpool-status-replacing-derived.json` decoded by the real decoder. Command: `go test ./internal/...`, run by the `phase1` workflow copies. The fixture is derived, not captured: the captured degraded output with its leaves renamed to by-id partition paths, the failed leaf and its replacement moved into a `replacing-0` vdev and the captured resilver's scan copied in. Re-running the interrupted-retry case on a host, with the interruption placed after `zpool replace` has started, is outstanding: [docs/qa/2026-09-22-zfs-replace.md](qa/2026-09-22-zfs-replace.md).
+- Avoid: comparing a selected whole disk against a ZFS leaf name without the partition rule, and putting a safety check behind a comparison no real observation can satisfy. When two processes encode the same naming rule, share it or test both against the same captured output.
+
+## BUG-0446 — md_arrays was never asserted in the host hardware report
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-007).
+- Symptom: none observed. Deleting `hw.MDArrays = vmhost.ReadMDArrays(root)` left every host page with an empty md_arrays section and Replace disk… unreachable, while `go test ./...` stayed green.
+- Root cause: `readHardware` wired ReadMDArrays with no agent test referencing MDArrays, so the wiring was invisible to CI.
+- Fix: regression only — assert `hw.MDArrays.Unavailable` on an empty fixture root, and assert a fixture md0 appears in `TestReadHardwareReportsEverySection`.
+- Regression: `TestReadHardwareWithoutSysfsOrProc` and `TestReadHardwareReportsEverySection` (`internal/agent/hardware_test.go`). Command: `go test ./internal/agent/ -count=1`. Removing the ReadMDArrays assignment fails both assertions.
+- Avoid: shipping a host-report section without an agent test that fails when its wiring line is deleted.
+
+## BUG-0447 — No agent-side test admitted or routed host-system-disk-replace
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-008).
+- Symptom: none observed. Dropping `host-system-disk-replace` from `managedCommand` or its `commandHost` case left every replacement discarded or failing host-identity admission, while agent tests stayed green.
+- Root cause: the agent admission, host addressing and ExecuteSystemDiskReplace guards had no tests, unlike the management-network precedent.
+- Fix: regression only — assert managed admission and HostID routing, and that nil-request and mismatched-operation-ID refusals fail without writing under the system-disk-replace state dir.
+- Regression: `TestSystemDiskReplaceCommandRoutingAndAdmission` and `TestSystemDiskReplaceRefusalsAreDefiniteResults` (`internal/agent/md_replace_test.go`). Command: `go test ./internal/agent/ -count=1`.
+- Avoid: adding a managed host command without the same routing and admission checks the management-network tests already provide.
+
+## BUG-0448 — System disk mirror rebuild and task polls never fired on the Stats tab
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-004, SR-084).
+- Symptom: on a host Stats tab (default Last 10 minutes), a rebuilding mirror's percentage stayed frozen and a submitted Replace disk… task never showed its success or failure notice until Retry was pressed by hand.
+- Root cause: Stats passed a fresh `onRetry={() => setHardwareAttempt(...)}` arrow on every render (every 5s from the history poll). SystemDiskMirror listed that callback (and `api`) in two `useEffect` dependency arrays, so the 10s rebuild interval and the 5s operations interval were cleared and recreated before they could fire.
+- Fix: hold `onReplaced` and `api` in refs inside SystemDiskMirror and depend only on `[rebuilding]` / `[task?.id, task?.status]`; give Stats a stable `useCallback` for the hardware reread and pass that as `onRetry`.
+- Regression: `web/src/md.test.mjs` asserts the intervals call `onReplacedRef.current` / `apiRef.current` and that the effect deps are only rebuilding and task id/status (not onReplaced/api). `web/src/stats.test.mjs` asserts `rereadHardware = useCallback(...)` is what HardwarePanel receives. Without the refs or with the old `[rebuilding, onReplaced]` deps, those asserts fail. Command: `npm --prefix web test` (md/stats); also `npm --prefix web run typecheck`.
+- Avoid: putting parent-render identity callbacks in long-interval effect deps when a ref to the latest function is enough; pairing that with an unstable inline arrow from a frequently re-rendering parent.
+
+## BUG-0449 — Empty Replace disk… picker always said every spare was too small
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-015, SR-005).
+- Symptom: opening Replace disk… on a host where every disk was in use showed "Every spare disk on this host is smaller than the remaining system disk …" instead of "This host reports no disk that can be used …". The guide's distinction between the two cases was unreachable.
+- Root cause: the empty-state ternary used `usable.every(small)` while the message rendered only when `usable.length === 0`. `Array.prototype.every` is vacuously true on an empty array, so the too-small branch always won; the too-small case that keeps a non-empty disabled list never showed that sentence either.
+- Fix: when `usable.length === 0` show the no-disk sentence; when usable is non-empty and every candidate is small, show the too-small sentence alongside the disabled picker. Guide troubleshooting already matched the intended wording; the system-disk replace QA record was annotated that the walkthrough's empty-state quote did not match the buggy shipped branch.
+- Regression: `web/src/md.test.mjs` asserts `usable.length === 0 ? "This host reports no disk…"` and that `const empty = usable.every(small)` is gone; without the length check the first pattern fails. Command: `npm --prefix web test`.
+- Avoid: using `every` to choose between empty-list messages; an empty list is not "every item failed the predicate".
+
+## BUG-0450 — System disk replacement journal was written without fsync
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped software-RAID code (SR-011), so it never reached a host.
+- Symptom: none observed. After a wipe started, a power loss could leave the journal truncated or empty so every later resume was refused ("journal is unreadable" or fingerprint mismatch) while the disk was already wiped.
+- Root cause: `saveSystemDiskJournal` hand-rolled temp+rename with `os.WriteFile` and no file or directory fsync. The package already had `atomicWrite` / `AtomicWrite`, which `saveZFSReplaceJournal` uses.
+- Fix: `saveSystemDiskJournal` marshals then calls `atomicWrite(path, raw)` like the ZFS replace journal.
+- Regression: `TestSaveSystemDiskJournalUsesAtomicWrite` in `internal/vmhost/md_replace_test.go` — the function body must call `atomicWrite` (and must not contain `WriteFile` / `.tmp`), and a round-trip read must recover the wipe-started journal. Command: `go test ./internal/vmhost/ -count=1 -run TestSaveSystemDiskJournalUsesAtomicWrite`.
+- Avoid: a second temp+rename writer in the same package when `atomicWrite` already exists for durable journals.
+
+## BUG-0451 — System disk replacement accepted OperationIDs that escape the journal directory
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped software-RAID code (SR-017), so it never reached a host.
+- Symptom: none observed. An `operation_id` containing path separators would be joined into the journal path and could write outside the state directory.
+- Root cause: `SystemDiskReplaceRequest.Valid` only required a non-empty bounded string for `OperationID`, not the opaque-ID charset used elsewhere for filename-safe identifiers.
+- Fix: reject `OperationID` values that do not match `storageOpaqueID` in `SystemDiskReplaceRequest.Valid`.
+- Regression: `TestSystemDiskReplaceRequestValidation` in `internal/protocol/systemdisk_test.go` — `../../../../etc/cron.d/nex` and `op/../evil` must be refused. Without the charset check those cases were accepted. Command: `go test ./internal/protocol/ -count=1 -run TestSystemDiskReplaceRequestValidation`.
+- Avoid: building journal paths from request fields that are only length-checked.
+
+## BUG-0452 — System disk replacement journal kept the previous failure after a successful retry
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped software-RAID code (SR-018), so it never reached a host.
+- Symptom: none observed. After a failed replace succeeded on retry, the journal still carried the earlier error string beside status `succeeded`.
+- Root cause: `SystemDiskReplacer.Replace` set status and ObservedAt on the success path but left `journal.Error` uncleared; `ZFSReplacer` already clears it.
+- Fix: on success set `journal.Error` to `""` with status and ObservedAt, matching the ZFS replacer.
+- Regression: `TestReplaceSystemDiskResumesAfterInterruptedWipe` in `internal/vmhost/md_replace_test.go` — after the successful retry the journal must be `succeeded` with an empty Error. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskResumesAfterInterruptedWipe`.
+- Avoid: writing a succeeded journal without clearing the previous failure field.
+
+## BUG-0453 — System disk UEFI-without-ESP refusal was not exercised
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped software-RAID code (SR-012), so it never reached a host.
+- Symptom: none observed. `TestReplaceSystemDiskOnBIOSWithoutAnESP` set `noESP=true` on a BIOS firmware stub that returns before `lsblk`, so the no-ESP fixture branch was dead.
+- Root cause: the test intended a missing-ESP case but left `mdFirmwareEFI` pointing at a non-existent path, so only the BIOS early return ran.
+- Fix: replace that test with `TestReplaceSystemDiskRefusesUEFIWithoutAnESP`, which points `mdFirmwareEFI` at a real directory, sets `noESP`, and asserts the refusal plus a `member-added` journal after the member is already added.
+- Regression: `TestReplaceSystemDiskRefusesUEFIWithoutAnESP` in `internal/vmhost/md_replace_test.go`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskRefusesUEFIWithoutAnESP`.
+- Avoid: stubbing a firmware/partition fixture that the code path under test never reads.
+
+## BUG-0452 — ZFS disk replacement accepted OperationIDs that escape the journal directory
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by independent review of unshipped software-RAID code (SR-034), so it never reached a host.
+- Symptom: none observed. An `operation_id` containing path separators would be joined into the ZFS replace journal path and could write outside the state directory.
+- Root cause: `ZFSReplaceRequest.Valid` only required a non-empty bounded string for `OperationID`, not the opaque-ID charset used elsewhere for filename-safe identifiers (including the sibling system-disk replace validator).
+- Fix: reject `OperationID` values that do not match `storageOpaqueID` in `ZFSReplaceRequest.Valid`.
+- Regression: `TestZFSReplaceRequestValidation` in `internal/protocol/storage_test.go` — `../../../../etc/cron.d/nex` and `op/../evil` must be refused. Without the charset check those cases were accepted. Command: `go test ./internal/protocol/ -count=1 -run TestZFSReplaceRequestValidation`.
+- Avoid: building journal paths from request fields that are only length-checked.
+
+## BUG-0453 — managedKind listed host-system-disk-replace though no host reports that outcome
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by independent review of unshipped software-RAID code (SR-016), so it never reached a host.
+- Symptom: none observed. The entry was unreachable: system disk replace settles via `protocol.Result` from `ExecuteSystemDiskReplace`, not via managed outcomes, so no host ever reports a `host-system-disk-replace` outcome for adoption to settle.
+- Root cause: `managedKind` gained the kind when the command was added, mirroring command admission, without a matching managed-engine outcome path.
+- Fix: drop `host-system-disk-replace` from `managedKind`. Outcome reporting would be the other correct fix if adoption via managed outcomes were required; the command already settles through results, so the dead filter entry was wrong rather than incomplete recovery.
+- Regression: covered by existing controller/protocol suites remaining green after the removal; no separate assertion of an absent switch case. Command: `go test ./internal/controller/ -count=1`.
+- Avoid: adding kinds to `managedKind` unless Core actually emits matching `ManagedOutcome` rows.
+
+## BUG-0470 — Version light pulsed green for non-Nex-Core OS strings
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-079).
+- Symptom: a host reporting plain Debian (or any digit-bearing PRETTY_NAME) showed a pulsing green "up to date" light beside Version when the archive major was 0. An apt candidate with an epoch or `-N` revision also mis-coloured up-to-date Nex Core hosts.
+- Root cause: `versionLight` scraped bare digit runs from any installed string and never required "Nex Core"; it also treated epoch/revision digits as version segments.
+- Fix: require a `Nex Core <version>` token before lighting; strip Debian epoch and package revision before the numeric compare.
+- Regression: `web/src/updates.test.mjs` — Debian/Ubuntu strings return undefined; `Nex Core 0.4.3` against `1:0.4.3-1` and `0.4.3-1` is current. Command: `node web/src/updates.test.mjs`.
+- Avoid: comparing host OS pretty-names as if they were Nex Core package versions.
+
+## BUG-0471 — Pre-release hosts read green when the matching final was in the archive
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-080).
+- Symptom: a host on `0.5.0~alpha1` showed green "up to date" against archive `0.5.0`; a final host against `0.4.3~rc1` showed orange as if an upgrade existed.
+- Root cause: digit scraping treated `~alpha1` leftover digits as equal-or-newer once the archive's segments matched; the reverse advertised a pre-release candidate as behind.
+- Fix: split pre-release on `~`, treat a pre-release host against a matching final as behind, leave a final host current against a pre-release candidate, and treat leftover base segments after a full archive match as behind.
+- Regression: `web/src/updates.test.mjs` — `0.5.0~alpha1` vs `0.5.0` is behind; `0.4.3` vs `0.4.3~rc1` is current; `0.5.0.1` vs `0.5.0` is behind. Command: `node web/src/updates.test.mjs`.
+- Avoid: treating extra digit runs from Debian pre-release suffixes as proof the host is current.
+
+## BUG-0472 — Version light survived sign-out for a non-administrator
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-082).
+- Symptom: after an administrator viewed a host (populating update state), signing out and signing in as a non-admin left the version light lit from the stale `core_available_version`.
+- Root cause: sign-out and 401 handling cleared session/data/token but not `update`.
+- Fix: `setUpdate(null)` beside the other clears on sign-out and on 401.
+- Regression: covered by the clear sites in `web/src/main.tsx`; no separate UI unit assertion. Command: `node web/src/updates.test.mjs` (versionLight suite remains green).
+- Avoid: leaving host-scoped fetch caches across account changes when the next role may not be allowed to refresh them.
+
+## BUG-0473 — Replace disk offered and accepted during an active md rebuild
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-014).
+- Symptom: none observed on a host. While recover/resync/reshape was running, the Stats panel still offered **Replace disk…** on a degraded array, and Core would accept a second replacement that fought the running copy.
+- Root cause: the UI gated the button only on `degraded` and Core only checked level/degraded/size/eligibility; neither consulted `sync_action`.
+- Fix: hide Replace while `sync_action` is recover, resync or reshape and say the rebuild must finish; Core refuses a fresh replace for those actions (adoption of an already-added member still proceeds so bootloader resume works).
+- Regression: `web/src/md.test.mjs` asserts `mdArrayRebuilding` and the button gate; `TestReplaceSystemDiskRefusesRunningRebuild` in `internal/vmhost/md_replace_test.go` refuses recover/resync/reshape without wipe and still adopts during recover. Commands: `node --test web/src/md.test.mjs` (or `npm --prefix web test`); `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskRefusesRunningRebuild`.
+- Avoid: offering or accepting a destructive md member add while the kernel is already copying.
+
+## BUG-0474 — Every md array summarised as a mirror
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-021).
+- Symptom: none observed on a host. A healthy non-raid1 array would still be described as "Mirror of N disks", and Replace disk… could appear on any degraded level if Core reported it.
+- Root cause: `mdArraySummary` hard-coded "Mirror"; the Replace button gated only on degraded, not `level === "raid1"` (Core already refused non-raid1).
+- Fix: summarise with `array.level`; offer Replace only for RAID1.
+- Regression: `web/src/md.test.mjs` asserts `raid1 of …` / `raid0 of …` summaries and the `level === "raid1"` button gate. Command: `node --test web/src/md.test.mjs` (or `npm --prefix web test`).
+- Avoid: operator copy that assumes every md array is a mirror.
+
+## BUG-0482 — System-disk and ZFS replace lacked a real host lock
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-001, SR-031).
+- Symptom: none observed on a host. Concurrent system-disk replace and ZFS replace (or a second peer replace) could both pass eligibility and wipe the same spare disk.
+- Root cause: each replacer used a per-instance mutex on a fresh value, which serializes nothing; only ZFS provision took a flock, and that flock was scoped to its own journal directory.
+- Fix: `withExclusiveDiskLock` on the host state directory (`.disk-ops.lock` beside `zfs-provision`, `zfs-replace` and `system-disk-replace`); drop the useless per-instance mutexes; provision uses the same helper.
+- Regression: `TestDiskOpsShareExclusiveLockAcrossReplacers`, `TestZFSReplaceTakesHostDiskOpsLock`. Command: `go test ./internal/vmhost/ -count=1 -run 'TestDiskOpsShareExclusiveLockAcrossReplacers|TestZFSReplaceTakesHostDiskOpsLock'`.
+- Avoid: guarding host-destructive work with a mutex on a value created per call.
+
+## BUG-0483 — Bootloader resume refused forever once the member reached in_sync
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-002, SR-010).
+- Symptom: none observed on a host. After mdadm --add succeeded and the bootloader step failed, once the kernel finished rebuilding the member became in_sync and every retry returned "already holds a working member".
+- Root cause: the in_sync refusal ran before the journal stage was consulted; member-added/bootable stages did not drive adoption.
+- Fix: adopt when the journal stage is member-added or bootable (or the live member is spare/rebuilding/replacement); keep the in_sync refusal only for a first attempt (empty stage).
+- Regression: `TestReplaceSystemDiskResumesBootloaderAfterMemberInSync`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskResumesBootloaderAfterMemberInSync`.
+- Avoid: treating live sync state alone as proof the operator picked the surviving disk after this operation already added the member.
+
+## BUG-0484 — Faulty attached member treated as an adopted replacement
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-009).
+- Symptom: none observed on a host. Naming a disk that still carried a faulty md member skipped wipe/add and reported success after only the bootloader step.
+- Root cause: any non-in_sync member on the chosen disk set adopted.
+- Fix: adopt only spare/rebuilding/replacement (or journal-recorded stages); refuse a faulty member on the chosen disk with its own sentence.
+- Regression: `TestReplaceSystemDiskRefusesFaultyMemberOnChosenDisk`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskRefusesFaultyMemberOnChosenDisk`.
+- Avoid: treating "not in_sync" as "already rebuilding onto this disk".
+
+## BUG-0485 — UEFI ESP copy failed when /boot/efi was the failed disk
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-003).
+- Symptom: none observed on a host. When fstab mounted /boot/efi from the failed disk, replace formatted the new ESP then failed at the copy with no usable source.
+- Root cause: nex-sync-esp and the inline copy both required /boot/efi/EFI; neither fell back to the surviving member's ESP.
+- Fix: when /boot/efi/EFI is absent, mount the surviving disk's ESP and copy from there; errors name the missing sources.
+- Regression: `TestReplaceSystemDiskCopiesESPFromSurvivingMemberWhenBootEFIMissing`. Command: `go test ./internal/vmhost/ -count=1 -run TestReplaceSystemDiskCopiesESPFromSurvivingMemberWhenBootEFIMissing`.
+- Avoid: assuming the failed disk's fstab ESP mount is still present after replacement starts.
+
+## BUG-0475 — Temperature gauge hid Warm/Critical from assistive tech
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-085).
+- Symptom: none observed on a host. A Critical or Warm temperature tile announced only the Celsius value; the state word lived inside the meter’s presentational subtree and the coloured bar was aria-hidden.
+- Root cause: the state span was moved inside the `role="meter"` element without folding it into `aria-valuetext`.
+- Fix: `gaugeValueText` appends Warm/Critical to `aria-valuetext`; the visible state span is `aria-hidden`.
+- Regression: `web/src/stats.test.mjs` asserts `gaugeValueText` and the meter markup. Command: `cd web && node src/stats.test.mjs`.
+- Avoid: putting the only non-visual threshold signal inside a meter without updating valuetext.
+
+## BUG-0476 — md_arrays null and unavailable both read as “single disk”
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-086).
+- Symptom: none observed on a host. An older Core (no md_arrays on the wire) and a current Core that set `unavailable` both showed “Single system disk, no redundancy”.
+- Root cause: `reported={!!hardware.md_arrays}` is always true after Controller remarsal, and `unavailable`/`reason` were never read.
+- Fix: `mdArraysView` treats `arrays:null` as unreported, `unavailable` as the host’s reason, and `arrays:[]` as the single-disk empty state.
+- Regression: `web/src/stats.test.mjs` asserts each `mdArraysView` branch. Command: `cd web && node src/stats.test.mjs`.
+- Avoid: treating a remarsalled zero-value section as proof the host reported arrays.
+
+## BUG-0477 — Hardware table header lost its bottom border
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-088).
+- Symptom: none observed on a host. Expanding Disks or PCI dropped the rule under the column headers.
+- Root cause: `.stats-hw-table tr:last-child` matched the sole thead row as well as the last body row.
+- Fix: scope to `tbody tr:last-child`.
+- Regression: `web/src/stats.test.mjs` asserts the tbody-scoped rule. Command: `cd web && node src/stats.test.mjs`.
+- Avoid: last-child rules on tables that have a thead.
+
+## BUG-0478 — System disk block and Healthy contrast on the Stats canvas
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-089, SR-090).
+- Symptom: none observed on a host. The md-arrays block sat uncarded on `#f7f8fa`, and `.md-healthy` was ~4.1:1 on that canvas.
+- Root cause: restyle carded every hardware section except `.md-arrays`; Healthy kept the old green.
+- Fix: give `.md-arrays` the same white card treatment; darken Healthy to `#166534`.
+- Regression: `web/src/stats.test.mjs` asserts card background and ≥4.5:1 contrast. Command: `cd web && node src/stats.test.mjs`.
+- Avoid: body text colours that only cleared 3:1 when the panel was white.
+
+## BUG-0479 — Replace disk offered without storage discovery caps
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-091).
+- Symptom: none observed on a host. A host with `host-system-disk-replace-v1` but without storage discovery still showed Replace disk…; opening it failed on `storage/discover`.
+- Root cause: the button gated only on the system-disk capability.
+- Fix: also require `storage-discovery-v1` and `storage-zfs-provision-v1` (`systemDiskReplaceSupported`).
+- Regression: `web/src/stats.test.mjs` asserts the three-cap gate. Command: `cd web && node src/stats.test.mjs`.
+- Avoid: offering a dialog whose first call needs capabilities the button did not check.
+
+## BUG-0475 — Storage guide Verification claimed unobserved disk-replace coverage
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-022).
+- Symptom: `docs/guide/storage-repositories.md` Verification said three-disk mirrors, hot spares and Replace a failed disk were walked through in the browser and through the API, named only two limits, and closed with "Everything else on this page about replacing a disk was observed", while `docs/qa/2026-09-22-zfs-replace.md` marks three-way/hot-spare as reported-not-evidence and lists outstanding browser and lab items.
+- Root cause: guide Verification was written ahead of the QA record's limits and treated planned or reported checks as observed.
+- Fix: state the actual limits — API mirror replacement observed with retained output; three-way mirror and hot-spare checks run without retained evidence; reworked disk tables, Spare column, layout fieldset, live summary, degraded host row and confirm button not seen in a browser; RAIDZ3, automatic spare engagement and post-`zpool replace` interrupted retry outstanding.
+- Regression: docs accuracy only; re-read the guide Verification against `docs/qa/2026-09-22-zfs-replace.md` Outstanding and Untested limits. No automated behaviour check.
+- Avoid: closing guide Verification with "everything else was observed" when the linked QA record still lists unexecuted or unevidenced items.
+
+## BUG-0476 — Degraded ZFS QA presented a derived idle fixture as a lab capture
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-029).
+- Symptom: `docs/qa/2026-09-22-zfs-degraded.md` and `docs/changes/2026-09-22-zfs-degraded.json` called all three `zpool status --json` fixtures captures from the lab host, including a healthy/idle mirror, while `zpool-status-idle-derived.json`, the test comment and BUG-0443 already label that file derived.
+- Root cause: QA and change verification text treated the three fixture files as the same kind of evidence.
+- Fix: say two fixtures are captured (degraded, resilvering) and the idle file is derived by removing an in-flight resilver; carry "capture a genuine idle ONLINE pool" into the QA limits.
+- Regression: docs accuracy only; re-read against `internal/vmhost/zfs_status_test.go` fixture comment and the derived filename. No automated behaviour check.
+- Avoid: describing a hand-edited or derived fixture as an untouched lab capture.
+
+## BUG-0480 — System disk replace submit covered only by source regexes
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-013).
+- Symptom: none observed on a host. The replace dialog's POST path, request_id replay and erase_confirmation gating were asserted only by matching `md.tsx` source text.
+- Root cause: no stub-driven submit helper; follow timers lived only inside `useEffect`.
+- Fix: export `mdReplaceSubmit`, `mdPollRebuild` and `mdPollOperation`; drive submit with a stub API and poll with injectable timers.
+- Regression: `web/src/md.test.mjs` asserts path `hosts/<id>/system-disk`, request_id reuse after a rejected call, erase_confirmation only for erase_required, and visibility/status behaviour of the poll helpers. Command: `node web/src/md.test.mjs`.
+- Avoid: treating source regexes as proof that the request body and retry identity are correct.
+
+## BUG-0481 — System disk replace duplicated ZFS disk picker helpers
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-019, SR-020).
+- Symptom: none observed on a host. Replace disk… kept its own size/shortName/dirty/BlockedDisks copies and a separate radio list instead of the shared ZFS table.
+- Root cause: helpers lived as private copies in `md.tsx` instead of imports from `zfs.tsx`.
+- Fix: export the shared picker helpers from `zfs.tsx`; system disk replace imports them and adds only the Fit column for the size requirement.
+- Regression: `web/src/md.test.mjs` asserts the zfs import and Fit column; `web/src/zfs.test.mjs` asserts the shared exports. Commands: `node web/src/md.test.mjs`; `node web/src/zfs.test.mjs`.
+- Avoid: copying disk-picker presentation between ZFS and system-disk dialogs.
+
+## BUG-0486 — ZFS replace guide pointed at the wrong panel
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-027).
+- Symptom: none observed on a host. The Replace a failed disk steps told operators to open the degraded repository row and select Replace disk there; that row has no such control.
+- Root cause: guide step 2 described the Pool storage repositories table; Replace disk is rendered only in the ZFS storage by host Action column, and only when the host is fresh and reports storage-zfs-replace-v1 plus storage-discovery-v1.
+- Fix: step 2 names ZFS storage by host, the Action column, and when the button is absent.
+- Regression: docs accuracy against web/src/storage.tsx Replace disk gate; no automated behaviour check.
+- Avoid: documenting a destructive action on a table that only shows pool status.
+
+## BUG-0487 — ZFS replace dialog hid the by-id erase confirmation target
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-028).
+- Symptom: none observed on a host. With a dirty replacement disk selected, the erase field required typing the by-id name but the dialog never printed that name beside the input (only a Serial cell title tooltip).
+- Root cause: ZFSReplaceDialog omitted the mono by-id span the system-disk dialog already renders next to its confirmation field.
+- Fix: show chosen.by_id beside the confirmation input in ZFSReplaceDialog.
+- Regression: web/src/zfs.test.mjs asserts the confirmation label includes `{chosen.by_id}`. Command: `node --test web/src/zfs.test.mjs` (or `npm --prefix web test`).
+- Avoid: requiring a typed exact string that is only available as a tooltip.
+
+## BUG-0488 — Registered ZFS repository hid pool detail from access.zfs_pool
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-041).
+- Symptom: none observed on a host. A registered (not Core-provisioned) ZFS dataset that went degraded showed only the status word; failed device, status/action and resilver from `access.zfs_pool` were unused.
+- Root cause: the TypeScript `access` type omitted `zfs_pool`, and `storageHosts` only rendered pool detail from `zfs_host_access` (provisioned path).
+- Fix: add `zfs_pool?: ZFSPoolStatus` to `access` and render `zfsPoolSummary` on `kind === "zfs"` rows with no `zfs_host_access`.
+- Regression: `web/src/storage.test.mjs` asserts the managed type spelling and `access?.zfs_pool` render path. Command: `node web/src/storage.test.mjs`.
+- Avoid: shipping a wire field that only the provisioned per-host path reads.
+
+## BUG-0489 — Resilver percentage and parenthetical sizes disagreed
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-042, SR-043).
+- Symptom: none observed on a host. A running resilver could read "49% (1.46G of 4.89G)" when the percentage came from issued (2.44G) while the parenthetical printed examined.
+- Root cause: `zfsScanProgress` used `issued ?? examined` for the percentage but always printed `examined` in the same string; the unit test froze that mismatch.
+- Fix: print the same quantity the percentage was derived from (`issued ?? examined`).
+- Regression: `web/src/storage.test.mjs` expects `49% (2.44G of 4.89G)`. Command: `node web/src/storage.test.mjs`.
+- Avoid: deriving a percentage from one ZFS counter and labelling it with another.
+
+## BUG-0490 — ONLINE pool with leaf errors or status stayed "Pool online"
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-044).
+- Symptom: none observed on a host. A pool ZFS reported ONLINE with non-zero checksum errors and a status sentence rendered as plain "Pool online" with no attention badge.
+- Root cause: `zfsPoolSummary` keyed attention only on vdev state strings and re-derived the failed-leaf list instead of using `zfsFailedDevices`.
+- Fix: treat non-zero read/write/checksum counts or a non-empty `pool.status` as attention; name the leaf with its counts; call `zfsFailedDevices`.
+- Regression: `web/src/storage.test.mjs` asserts checksum and status-only attention cases and that `zfsPoolSummary` calls `zfsFailedDevices`. Command: `node web/src/storage.test.mjs`.
+- Avoid: treating ONLINE leaf state as healthy when ZFS itself reports errors or a status sentence.
+
+## BUG-0491 — Hot spares and widened ZFS layouts sent without replace capability
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-023).
+- Symptom: none observed on a host. After a Controller-first upgrade, the wizard offered Spare and three-disk mirror / RAIDZ3 on a pool whose Core still lacked storage-zfs-replace-v1; Core could ignore spares or refuse the whole provision.
+- Root cause: provisionZFSStorage and the wizard gated only on storage-zfs-provision-v1.
+- Fix: require storage-zfs-replace-v1 on the pool master and every selected host when any host carries spares or a widened layout; gate the Spare column and those layout radios on the same capability.
+- Regression: `go test ./internal/protocol ./internal/controller -run 'ZFSProvisionNeedsReplace|ZFSProvisionRefusesSpares'`; `node web/src/zfs.test.mjs` asserts the replace-capable Spare/layout gates.
+- Avoid: treating an optional wire field as safe for older Core because omitempty hides it on empty requests only.
+
+## BUG-0492 — zfs_pool / pool inventory fields broke older Controllers
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-024, SR-025).
+- Symptom: none observed on a host. An upgraded Core reporting any ZFS repository included Access.zfs_pool and ZFSHostAccess.pool; a strict older Controller returned 400 on every report and the agent never downgraded (409-only fallback).
+- Root cause: the new observation fields had no Controller acknowledgement gate; zfsLegacyManagedProjection also kept non-provisioned ZFS entries that still carried zfs_pool.
+- Fix: acknowledge storage-zfs-replace-v1 through the existing storage_repositories support shape; strip zfs_pool and pool from reports until that ack (same pattern as storageClusterResultsForController).
+- Regression: `go test ./internal/agent -run ZFSPoolObservation`; `go test ./internal/controller -run ZFSCoreReceivesCapability`.
+- Avoid: adding inventory fields without a Controller-first acknowledgement and a strict-old-schema decode test.
+
+## BUG-0493 — Flattened ZFS vdev tree hid in-flight replacements and counted spares as failures
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-026).
+- Symptom: none observed on a host. During a replacing-0 resilver the Storage page still offered Replace disk for the offline leaf; a second submit wiped another disk then failed at zpool replace. A hot spare under the spares class container could also appear as a failed leaf.
+- Root cause: zfsPoolLeaves flattened every vdev map entry and discarded replacing/spare parentage; class containers beside the root were walked as data vdevs.
+- Fix: walk only the pool root; mark leaves under replacing/spare with parent; ignore class containers; drop empty name/state leaves; refuse OldDevice with that parent before wipe; UI shows being replaced / hides Replace.
+- Regression: `go test ./internal/vmhost/ -count=1 -run 'TestDecodeZFSPoolStatus(Ignores|Marks)|TestZFSReplaceRefusesOldDevice'`; `node web/src/storage.test.mjs`; `node web/src/zfs.test.mjs`.
+- Avoid: flattening a ZFS vdev tree without carrying the replacing/spare parent and without skipping class containers.
+
+## BUG-0494 — Healthy pool member adopted as a successful ZFS replace
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-038).
+- Symptom: none observed on a host. Naming a disk already in the pool as the replacement returned success with nothing executed, and the master could rewrite two failed slots onto one disk.
+- Root cause: zfsPoolHoldsDisk alone adopted any held disk before checking the failed leaf or a running resilver.
+- Fix: adopt only when OldDevice is absent or present with a SCANNING RESILVER; otherwise refuse "already part of the pool".
+- Regression: `go test ./internal/vmhost/ -count=1 -run 'TestZFSReplace(AdoptsAPoolAlready|RefusesAHealthyMember)'`.
+- Avoid: treating "disk is in the pool" as proof this replace already ran.
+
+## BUG-0495 — Replace disk stayed enabled during a ZFS resilver
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-045).
+- Symptom: none observed on a host. While a resilver ran the Action cell still offered Replace disk for the offline leaf.
+- Root cause: the button gated only on non-ONLINE leaves, which remain offline until resilver finishes.
+- Fix: show "resilvering" while scan.state is SCANNING; hide Replace for leaves with parent replacing/spare.
+- Regression: `node web/src/storage.test.mjs` asserts the scanning / beingReplaced / replaceable Action cell.
+- Avoid: offering Replace while the pool observation already shows a scan or replacing vdev.
+
+## BUG-0496 — Undersized ZFS replacement wiped before size check
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-040).
+- Symptom: none observed on a host. A too-small replacement was wipefs'd then refused by zpool replace.
+- Root cause: no size comparison against the failed leaf before wipe.
+- Fix: compare request.Device.SizeBytes to the failed (or ONLINE sibling) whole-disk size from discovery before wipe; carry zpool's reason in the replace error.
+- Regression: `go test ./internal/vmhost/ -count=1 -run TestZFSReplaceRefusesAnUndersizedReplacement`.
+- Avoid: running wipefs before every replace precondition that does not need a clear disk.
+
+## BUG-0497 — wipe-started resume skipped erase confirmation
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-039).
+- Symptom: none observed on a host. After wipe-started was journalled and wipefs failed, a redelivery with no erase confirmation could wipe a disk that had gained data.
+- Root cause: wipe-started skipped fingerprint and also skipped RequiresErase; no test asserted wipe-started before wipefs.
+- Fix: keep RequiresErase on the wipe-started resume path; record saveZFSReplaceJournal as a var and assert wipe-started precedes wipefs.
+- Regression: `go test ./internal/vmhost/ -count=1 -run TestZFSReplaceJournalsWipeStartedBeforeWipeAndKeepsEraseCheck`.
+- Avoid: relaxing every identity check when only the fingerprint cannot survive a wipe.
+
+## BUG-0498 — Hot spare skipped erase/eligibility re-check in provision tests
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-035).
+- Symptom: none observed on a host. Spares use the same selected() wipe and eligibility path as data disks, but no test covered a RequiresErase spare wipe or an ineligible spare refusal.
+- Root cause: provisionHarness cases only exercised Devices; a refactor back to Devices-only would stay green.
+- Fix: add harness cases that wipe a RequiresErase spare and refuse an ineligible spare before any destructive call.
+- Regression: `go test ./internal/vmhost/ -count=1 -run 'TestZFSProvision(WipesARequiresEraseSpare|RefusesAnIneligibleSpare)'`.
+- Avoid: treating hot spares as exempt from the data-disk erase and eligibility gates.
+
+## BUG-0499 — ZFS provision did not assert autoreplace=on for hot spares
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-036).
+- Symptom: none observed on a host. Provisioning already passes `-o autoreplace=on` with a spare vdev, but no runnable check inspected the zpool create argument list.
+- Root cause: create success alone was enough for green tests; dropping autoreplace would still pass.
+- Fix: assert the recorded create includes `-o autoreplace=on` and ends with `spare <by-id>`, and that a spare-free create omits the property.
+- Regression: `go test ./internal/vmhost/ -count=1 -run 'TestZFSProvisionCreate(EnablesAutoreplaceWhenSparesArePresent|OmitsAutoreplaceWithoutSpares)'`.
+- Avoid: shipping spare support without asserting the property that makes the spare engage.
+
+## BUG-0500 — Stale ZFS pool detail survived probe timeout and enabled Replace
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-037).
+- Symptom: none observed on a host. After a storage probe deadline, Status/Readable/Writable were downgraded but ZFSPool (failed disk, resilver %) stayed attached; the by-host UI rendered it as current with Replace enabled.
+- Root cause: both deadline branches mutated access in place without clearing ZFSPool or refreshing ObservedAt; the UI gated Replace only on host.connection.
+- Fix: clear ZFSPool and set ObservedAt on both deadline paths; prefix by-host pool lines with Last report when the host or observation is not fresh, and gate Replace on the same freshness (keep resilvering/being-replaced gates).
+- Regression: `go test ./internal/vmhost/ -count=1 -run TestStorageMonitorDeadlineClearsPlacementAccess`; `node web/src/storage.test.mjs`.
+- Avoid: leaving transient pool detail on an observation Core has already marked stale.
+
+## BUG-0501 — Spare redundancy rule bypassed by unticking a data disk
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-046).
+- Symptom: none observed on a host. Tick three disks, Spare on the third, untick a data disk — the wizard could submit a single-disk pool with a hot spare.
+- Root cause: toggleSpare gated the tick, but toggle and review did not re-apply the rule; zfsProvisionHosts sent whatever spare flags remained.
+- Fix: demote spares when unticking leaves fewer than two data disks; refuse the same case in review; drop spares in zfsProvisionHosts when data disks < 2. Guide states the three-data-disk Spare rule.
+- Regression: `node web/src/zfs.test.mjs`.
+- Avoid: enforcing a selection rule only on the control that sets a flag.
+
+## BUG-0502 — ZFS status/action sentences were hover-only and the badge did not wrap
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-056).
+- Symptom: none observed on a host. Pool status and action text lived only in a title attribute on a non-focusable badge; long degraded lines forced the table wide.
+- Root cause: title-only exposure plus .badge { white-space: nowrap }.
+- Fix: render status/action as a visible <small> under the summary; allow the summary badge to wrap.
+- Regression: `node web/src/storage.test.mjs`.
+- Avoid: putting operator instruction text only in title= on non-focusable elements.
+
+## BUG-0503 — Replace dialog kept a stale pool snapshot
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-057).
+- Symptom: none observed on a host. Opening Replace disk and leaving it open while the leaf returned ONLINE still listed the disk as failed; submit hit Core's "is online" refusal instead of the dialog empty state.
+- Root cause: replaceZFS state captured pool once on click and never refreshed from inventory.
+- Fix: keep only repositoryID/host in state; pass pool from the live storage prop; ignore a selected leaf the live pool no longer offers.
+- Regression: `node web/src/storage.test.mjs`; `node web/src/zfs.test.mjs`.
+- Avoid: snapshotting observation into dialog state when the parent already reloads it.
+
+## BUG-0504 — Guide misspelled resilvering and swallowed the erase placeholder
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-049, SR-051).
+- Symptom: none observed on a host. Guide said "resilving"; **Erase <disk> and replace** dropped the placeholder when rendered as HTML.
+- Root cause: typo; raw <disk> treated as an HTML tag.
+- Fix: resilvering; **Erase _disk_ and replace**.
+- Regression: wording in docs/guide/storage-repositories.md; `python3 scripts/check_docs.py --worktree`.
+- Avoid: angle-bracket placeholders in Markdown meant for HTML rendering.
+
+## BUG-0505 — Guide said nothing was erased for post-wipe replace failures
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-052).
+- Symptom: none observed on a host. Needs-attention recovery text covered only pre-wipe refusals, then said nothing was erased.
+- Root cause: post-wipe messages (could not be cleared / could not be replaced with) were omitted.
+- Fix: name those two outcomes and that the disk was wiped, the pool unchanged, and the same replacement finishes it.
+- Regression: wording in docs/guide/storage-repositories.md; `python3 scripts/check_docs.py --worktree`.
+- Avoid: a blanket "nothing was erased" after listing only the pre-wipe refusals.
+
+## BUG-0510 — Master forwarded widened ZFS provision to members without replace support
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-030).
+- Symptom: none observed on a host. In a mixed-version pool the master posted spares or a three-disk mirror / raidz3 to an older member; the member's strict peer decoder returned 400 and the operator saw only "selected ZFS host refused provisioning".
+- Root cause: `dispatchPoolZFSHost` forwarded the selection verbatim with no check that the member implements `storage-zfs-replace-v1`.
+- Fix: before posting a widened selection, probe the member's replace peer route; refuse with an upgrade sentence naming `storage-zfs-replace-v1` when the member answers as an older provision-only Core.
+- Regression: `go test ./internal/agent/ -count=1 -run TestPoolZFSProvisionRefusesWidenedSelectionOnAnOldMember`.
+- Avoid: treating Controller capability checks as the only gate once a command has reached the pool master.
+
+## BUG-0511 — ZFS replace membership and peer binding refusals were untested
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-032).
+- Symptom: none observed on a host. The API documents that replace requires a ready current member and that the peer route binds pool_id/host_id to the member itself; neither rule had a runnable check.
+- Root cause: missing regression coverage for the master membership refusal and the member peer binding.
+- Fix: assert pending/ejected members fail with "not a ready current member" without calling the local replacer, and assert a master-authenticated POST with a foreign pool_id or host_id returns 400 without running replace.
+- Regression: `go test ./internal/agent/ -count=1 -run 'TestPoolZFSReplaceRefusesAStaleOrJoiningMember|TestPoolZFSReplacePeerRefusesAForeignPoolOrHost'`.
+- Avoid: documenting authority rules for destructive peer routes without exercising them.
+
+## BUG-0512 — ZFS replace peer call used the 15s timeout and HTTP request context
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-033).
+- Symptom: none observed on a host. A slow `zpool replace` past 15 s made the master report the member unreachable, skip the repository-record update, and leave the member mid-wipe under a cancelled request context.
+- Root cause: `dispatchPoolZFSReplace` used the default peer client timeout and request context; the member handler ran wipe/replace under `r.Context()`.
+- Fix: give replace dispatch a 30-minute client budget detached from the command context, and run member-side work under a matching timeout detached from the HTTP request context.
+- Regression: `go test ./internal/agent/ -count=1 -run TestPoolZFSReplaceDetachesFromCommandCancelAndUsesALongPeerTimeout`.
+- Avoid: running destructive pool operations under the short generic peer RPC budget.
+
+## BUG-0513 — poolZFSMember duplicated poolMemberByID
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-053).
+- Symptom: none. `poolZFSMember` was a byte-identical copy of `poolMemberByID`.
+- Root cause: a new helper was added beside the existing package lookup.
+- Fix: delete `poolZFSMember` and call `poolMemberByID`.
+- Regression: covered by existing replace membership tests that exercise the shared lookup.
+- Avoid: copying a one-line package helper instead of reusing it.
+
+## BUG-0514 — Mirror rules worded differently across installer frontends
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-067).
+- Symptom: none observed on hardware. GTK summary, Continue refusal and text/nex-config each phrased the 10% rule differently.
+- Root cause: four independent string literals for the same capacity rule.
+- Fix: one shared sentence including the smallest-member reason in GTK summary, Continue, text Disk retry and nex-config.
+- Regression: `bash installer/check.sh`; `python3 tests/integration/installer-disk.py`; `python3 tests/integration/installer-text-wizard.py`.
+- Avoid: inventing a shorter summary phrasing that drifts from nex-config.
+
+## BUG-0515 — Mirror summary called raw disk capacity usable
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-068).
+- Symptom: none observed on hardware. Summary and guide said "128.0 GiB usable" for a full 128 GiB disk.
+- Root cause: summary formatted the smallest selected disk's whole capacity with the word usable.
+- Fix: say "smallest disk N GiB" and match the guide example.
+- Regression: `python3 tests/integration/installer-disk.py` (disk_summary_text harness).
+- Avoid: promising filesystem usable size without subtracting boot partitions and md metadata.
+
+## BUG-0516 — GTK listed disks under 16 GiB then refused them
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-069).
+- Symptom: none observed on hardware. An 8 GiB disk appeared in the graphical tick list but not in the text list.
+- Root cause: GTK `discover()` lacked the text frontend's MIN_SECTORS / 16 GiB filter.
+- Fix: skip disks below 16 GiB during discover so both frontends offer the same set.
+- Regression: `bash installer/check.sh`; `python3 tests/integration/installer-disk.py`.
+- Avoid: filtering eligibility only in the Continue path.
+
+## BUG-0517 — Text frontend called Disabled "skip"
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-070).
+- Symptom: none observed on hardware. Text mode offered "skip" while GTK offered "Disabled" for the same stored state.
+- Root cause: text wizard invented a second operator-facing word for mode=disabled.
+- Fix: use Disabled in the text choices, templates and guide; still store disabled in the handoff.
+- Regression: `python3 tests/integration/installer-text-wizard.py`.
+- Avoid: renaming a mode only in one frontend.
+
+## BUG-0518 — Text disk choices omitted the serial
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-071).
+- Symptom: none observed on hardware. Guide and README claimed both lists showed serial; text choices did not.
+- Root cause: text choice line built name/capacity/type/model/contents only.
+- Fix: append the serial to each text choice and assert it in check.sh and the text wizard fixture.
+- Regression: `bash installer/check.sh`; `python3 tests/integration/installer-text-wizard.py`.
+- Avoid: documenting shared facts without asserting both frontends emit them.
+
+## BUG-0519 — nex-sync-esp EXIT trap leaked mounted member ESPs
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-075).
+- Symptom: none observed on hardware. A failed ESP copy left the member ESP mounted; apt hooks could accumulate mounts.
+- Root cause: EXIT trap only rmdir'd the mktemp mountpoint.
+- Fix: umount then rmdir on EXIT, matching mdCopyESP.
+- Regression: `bash installer/check.sh` (trap assertion + heredoc syntax).
+- Avoid: mounting in a set -e script without unmounting in the EXIT trap.
+
+## BUG-0520 — Fresh UEFI lab hardcoded Arch-only OVMF paths
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-076).
+- Symptom: `FileNotFoundError` on Debian/Ubuntu when running `--uefi` without Arch edk2 paths.
+- Root cause: absolute `/usr/share/edk2/x64/...` paths with no probe or override.
+- Fix: probe the same OVMF candidates as iso-smoke, add `--uefi-code`, raise a clear missing-firmware error.
+- Regression: `python3 -m unittest tests.test_fresh_install_lab`.
+- Avoid: hardcoding one distribution's firmware path in a shared lab harness.
+
+## BUG-0521 — Text empty disk selection retry was untested
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-072).
+- Symptom: none. Empty multiselect answer path had no scenario.
+- Root cause: installer-text-wizard covered mismatch only.
+- Fix: script an empty disk answer, assert "Select at least one disk", then a valid handoff.
+- Regression: `python3 tests/integration/installer-text-wizard.py` (`empty_disk_selection_retried`).
+- Avoid: adding retry branches without an empty-input scenario.
+
+## BUG-0522 — Text handoff did not escape GKeyFile list separators
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-073).
+- Symptom: none observed on hardware. A serial containing `;` could split disk_serial and fail validation with an unactionable message.
+- Root cause: `ini()` escaped backslashes only.
+- Fix: `ini_list()` also escapes `;` for disk_serial and disk_major_minor.
+- Regression: `python3 tests/integration/installer-text-wizard.py` (`disk_serial_list_escape`).
+- Avoid: writing GKeyFile string lists without escaping the list separator.
+
+## BUG-0523 — Offline other-adapters template assumed a management adapter
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-074).
+- Symptom: none observed on hardware. Offline installs still said "A normal install only needs the management adapter" joined into one paragraph with the detail.
+- Root cause: fixed template body after `${detail}` with no `.` separator; management sentence not in the substituted detail.
+- Fix: move that sentence into the online detail; offline detail is accurate; add a debconf `.` separator.
+- Regression: `python3 tests/integration/installer-text-wizard.py` (navigation + offline detail asserts).
+- Avoid: putting branch-specific advice in a shared template body.
+
+## BUG-0524 — GTK Disk summary arithmetic was only string-matched
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-077).
+- Symptom: none. Changing smallest vs largest in the summary format would not fail CI.
+- Root cause: installer-disk.py grepped literals only.
+- Fix: extract `disk_summary_text` and compile a harness covering empty, one, equal, 5%-apart, over-10% and three-disk cases.
+- Regression: `python3 tests/integration/installer-disk.py`.
+- Avoid: treating source greps as proof of branching arithmetic.
+
+## BUG-0525 — 10% mirror rule lacked near-boundary coverage
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-078).
+- Symptom: none. Accepting only identical disks would still pass every test.
+- Root cause: fixtures used equal capacities or a 2:1 mismatch only.
+- Fix: ~5% accept and just-over-10% refuse cases in installer-disk.py; 5% accept in the text wizard.
+- Regression: `python3 tests/integration/installer-disk.py`; `python3 tests/integration/installer-text-wizard.py`.
+- Avoid: proving a tolerance with only equality cases.
+
+## BUG-0514 — Changelog omitted 0.4.3 RAID/replace/version-light features
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-092).
+- Symptom: none on a host. 0.4.3 notes named a Version-light bug fix but not mirrored install, disk replace, hot spares, or degraded ZFS staying in service (BUG-0443).
+- Root cause: operator-visible slice work landed without matching Minor Feature / Bug Fixes bullets.
+- Fix: add those bullets under 0.4.3 in CHANGELOG.md.
+- Regression: wording review; `python3 scripts/check_docs.py --worktree`.
+- Avoid: shipping a slice's UI/guide without a matching changelog entry in the same version heading.
+
+## BUG-0515 — API.md claimed older Controllers tolerate zfs_pool and store none of it
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-093, SR-101).
+- Symptom: none after capability gating (BUG-0492). Reference still said an older Controller sees an unknown status string for the new fields, and that the Controller stores none of the pool observation.
+- Root cause: docs described the pre-gate failure mode and omitted the disposable projection row.
+- Fix: document withhold-until-`storage-zfs-replace-v1` acknowledgement and Core-refreshed projection wording in docs/API.md.
+- Regression: wording review against `zfsPoolObservationForController` / storage protocol tests.
+- Avoid: documenting graceful unknown-field behaviour when DisallowUnknownFields is still in force.
+
+## BUG-0516 — ZFS/system-disk API reference listed phantom refusal and wrong master 404
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-094, SR-102–105).
+- Symptom: none on a host. docs/API.md and OpenAPI quoted `the replacement disk is not the one that was selected` (never emitted), omitted `cannot be safely observed` / surviving-member refusals / `system disk replacement requires a host`, claimed unknown pool master is 404 (code answers 409), used x-introduced-version 0.1.0, and lacked a machine-readable capability on host-system-disk-replace.
+- Root cause: reference text drifted from vmhost/controller refusals and OpenAPI metadata defaults.
+- Fix: align docs/API.md and docs/api/openapi.json / peer-openapi.json; regenerate HTML.
+- Regression: `python3 scripts/generate_api.py --check`; string review against `internal/vmhost/{zfs,md}_replace.go` and `internal/controller/zfs_replace.go`.
+- Avoid: copying refusal lists without grepping the tree for the exact sentence.
+
+## BUG-0517 — md_arrays and BIOS ESP docs contradicted remarsal and installer layout
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-095, SR-096).
+- Symptom: none on a host after UI mdArraysView fix. API.md said an older Core omits md_arrays; OpenAPI requires the field and Controller remarsals `arrays: null`. System-disk docs justified BIOS grub-install by claiming no ESP, while the installer writes an ESP on every member.
+- Root cause: docs described intended optional field / layout reasons instead of shipped remarsal and firmware branch.
+- Fix: document remarsal/`arrays: null` upgrade path and `/sys/firmware/efi` branch in docs/API.md and OpenAPI replaceSystemDisk description.
+- Regression: wording review against `web/src/stats.tsx` mdArraysView and `mdInstallBootloader`.
+- Avoid: documenting “omit the field” when the Go type has no omitempty.
+
+## BUG-0518 — Install/usage/plan/QA wording for mirror layout and lab evidence
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-098–100, SR-106–110).
+- Symptom: none on a host. Guide asserted unbooted mirror behaviour; platform plan said slices 2–3 had unit evidence only; software-RAID plan kept the superseded two-partition / grub-multi-install design; usage-history omitted System disk mirror; QA claimed BIOS ESP mkfs.vfat the shipped path cannot do. (NIC order and Erase disk(s) label were already correct.)
+- Root cause: design drafts and early lab notes outlived the implemented recipe and QA status.
+- Fix: soften install expected-result and link mirror QA; reword platform plan evidence line; update Slice 3 Layout/Boot; usage-history step 8; label QA BIOS observation.
+- Regression: `python3 scripts/check_docs.py --worktree`; cross-read of plan status vs QA records.
+- Avoid: stating boot-from-either-disk as fact while the QA record lists boot as outstanding.
+
+## BUG-0519 — ESP nofail guide pages contradicted each other
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-006).
+- Symptom: none on a host. install-nex-core said the ESP mount never holds up boot; replace-a-failed-system-disk told operators to add nofail by hand with no scope.
+- Root cause: troubleshooting copied the pre-fixail emergency case without naming which installs already mount with nofail.
+- Fix: scope troubleshooting to pre-this-build and hand-built mirrors; say this build mounts /boot/efi with nofail (unverified on a booted host); cross-link from install-nex-core.
+- Regression: wording in the two guide pages; `python3 scripts/check_docs.py --worktree`.
+- Avoid: absolute "never holds up boot" claims that only apply to one installer recipe.
+
+## BUG-0520 — Guide said an ONLINE disk appears in the failed-disk list
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-050).
+- Symptom: none on a host. Step 3 said a disk listed as online cannot be replaced, but the picker excludes ONLINE leaves.
+- Root cause: guide described a UI state the filter cannot produce.
+- Fix: say ONLINE disks are not offered; a missing disk means the pool does not consider it failed.
+- Regression: wording in docs/guide/storage-repositories.md; `python3 scripts/check_docs.py --worktree`.
+- Avoid: writing recovery steps for list states the UI filters out.
+
+## BUG-0521 — ZFS replace host capability and membership checks were untested
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-054).
+- Symptom: none observed on a host. Relay tests covered master-as-host old-Core only, not a joined member lacking replace or a foreign/revoked host_id.
+- Root cause: missing cases for the per-host capability loop and managedHost refusal.
+- Fix: TestZFSReplaceChecksSelectedHostCapabilityAndMembership joins a member without replace (409 naming the capability), a foreign-pool host, and a revoked member (409 freshness/membership).
+- Regression: `go test ./internal/controller/ -count=1 -run TestZFSReplaceChecksSelectedHostCapabilityAndMembership`.
+- Avoid: treating master-only old-Core coverage as proof both hosts in the capability loop are checked.
+
+## BUG-0522 — Spare-apart-from-layout protocol test accepted a padded mirror
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-055).
+- Symptom: none observed on a host. A two-disk mirror plus spare also passes if spares were counted toward the layout.
+- Root cause: the named test never asserted the asymmetric short-data cases.
+- Fix: refuse mirror with 1 data + 1 spare and raidz1 with 2 data + 1 spare.
+- Regression: `go test ./internal/protocol/ -count=1 -run TestValidateZFSProvisionCountsSparesApartFromTheLayout`.
+- Avoid: green-path-only tests for rules that fail only on asymmetric inputs.
+
+## BUG-0523 — Unreachable archive made GET /api/v1/updates run apt-get update twice
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-081).
+- Symptom: none observed on a host. An offline Controller selected a host; apt-get update timed out, then the nex-core-local check timed out again.
+- Root cause: CheckWithCache wrote the refresh stamp only on success.
+- Fix: stamp the attempt on failure too so the second package check skips apt-get update inside indexMaxAge.
+- Regression: `go test ./internal/nexupdate/ -count=1 -run TestCheckWithCacheFailedRefreshStampsAttempt`.
+- Avoid: pairing two CheckWithCache calls without a shared failed-refresh gate.
+
+## BUG-0524 — Version light state needed a mouse
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-083).
+- Symptom: none observed on a host. Host Version was an 8px colour-only dot with title/aria-label only.
+- Root cause: state lived only in colour and hover text.
+- Fix: show "· up to date / update available / major release behind" beside the version; keep the dot decorative (aria-hidden).
+- Regression: `node web/src/updates.test.mjs`.
+- Avoid: colour-only status on non-focusable empty spans.
+
+## BUG-0525 — Stats design plan still documented deleted accent tokens
+
+- Date: 2026-09-22. Status: fixed in the working tree; found by staged review (SR-087).
+- Symptom: none on a host. Plan token table still listed --stats-bg, --accent-* and gauge arcs after plain-stats removed them.
+- Root cause: plan not updated with the restyle change record.
+- Fix: rewrite the Visual style token table and Gauges paragraph to match web/src/stats.css; note the restyle under settled differences.
+- Regression: cross-read plan vs stats.css; `python3 scripts/check_docs.py --worktree`.
+- Avoid: leaving design-plan tokens that the CSS no longer defines.
+
+## BUG-0526 — host-system-disk-replace-v1 advertised before storage handshake
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-111).
+- Symptom: none observed on a host after UI three-cap gate (BUG-0479). Agent still advertised SystemDiskReplaceCapability before StorageProtocolReady.
+- Root cause: capability sat on the unconditional v2 list while discover needs the storage handshake.
+- Fix: advertise it from the StorageProtocolReady block with discovery and ZFS provision/replace.
+- Regression: `go test ./internal/agent/ -count=1 -run TestSystemDiskReplaceCapabilityFollowsStorageHandshake`.
+- Avoid: advertising a capability whose UI path depends on another gated capability set.
+
+## BUG-0527 — ZFS Blank state colour flipped when Spare column appeared
+
+- Date: 2026-09-22. Status: fixed in the working tree; regression added; found by staged review (SR-112).
+- Symptom: none observed on a host. Blank was body colour without Spare and muted with Spare; dead .zfs-layout label rule remained.
+- Root cause: td:last-child { color: inherit } overrode .muted when Blank was last.
+- Fix: delete .zfs-layout label; scope inherit to last-child:not(.muted):not(.zfs-old).
+- Regression: `node web/src/zfs.test.mjs`.
+- Avoid: last-child colour overrides that cancel intentional muted/state classes.

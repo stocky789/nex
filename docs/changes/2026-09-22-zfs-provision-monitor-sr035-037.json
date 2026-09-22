@@ -1,0 +1,40 @@
+{
+  "summary": "ZFS provision tests cover spare RequiresErase wipe, ineligible spare refusal, and autoreplace=on on create; storage monitor clears ZFSPool on probe deadline; ZFS-by-host UI marks stale pool lines Last report and gates Replace on observation freshness.",
+  "paths": [
+    "internal/vmhost/provision_zfs.go",
+    "internal/vmhost/provision_zfs_test.go",
+    "internal/vmhost/storage_monitor.go",
+    "internal/vmhost/storage_monitor_test.go",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "docs/guide/storage-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-zfs-provision-monitor-sr035-037.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Replace disk requires a current pool observation; a Last report prefix marks stale by-host pool lines.",
+    "pages": ["docs/guide/storage-repositories.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core contract change; probe overlay clears ephemeral ZFSPool on deadline and UI freshness gating uses existing observed_at and connection fields."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Regression coverage and observation honesty for existing ZFS provision/monitor behaviour."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Ephemeral access overlay and UI presentation only; durable pool state remains the zpool and existing provision journal."
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost/ -count=1 -run 'TestZFSProvision(WipesARequiresEraseSpare|RefusesAnIneligibleSpare|CreateEnablesAutoreplace|CreateOmitsAutoreplace)|TestStorageMonitorDeadlineClearsPlacementAccess'; node web/src/storage.test.mjs; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/vmhost/provision_zfs_test.go",
+      "internal/vmhost/storage_monitor_test.go",
+      "web/src/storage.test.mjs"
+    ]
+  }
+}

@@ -651,8 +651,52 @@ local registrations under the canonical ID for local VM operations. Controller a
 the master's aggregate and does not replace it with a member registration. Durable
 `Managed.zfs_provisions` outcomes do not establish current writable access.
 
-Strict older Controllers receive no new inventory fields until the upgraded Controller
-acknowledges `storage-zfs-provision-v1` through the existing `storage_repositories`
+API impact: **changed contract** — a ZFS repository whose zpool is `DEGRADED` reports
+`StorageAccess.status` `degraded` with `readable` and `writable` true. Redundancy is lost,
+the pool still serves every read and write, and Core keeps accepting VM creation, start
+and migration onto it until the failed device is replaced; `FAULTED`, `UNAVAIL`,
+`SUSPENDED` and `REMOVED` remain inaccessible with the health in the error, as before.
+Each `zfs_host_access` entry and `StorageAccess` also gains an optional `pool` /
+`zfs_pool` object: Core's `zpool status` observation of that host's pool, carrying the
+pool state, the `status`/`action` sentences ZFS itself prints, the running or last scrub
+or resilver, and the leaf devices of the pool's vdev tree by their `/dev/disk/by-id` path
+with their state and read/write/checksum counts. Only the devices nested under the pool's
+root vdev are reported; class containers (`spares`, `logs`, `l2cache`, `dedup`, `special`)
+beside the root are ignored so a hot spare is never counted as a failed data leaf.
+Leaves under an in-flight `replacing` or activated `spare` vdev carry
+`parent: "replacing"` or `parent: "spare"` so a second replace is refused before wipe and
+the UI shows being replaced instead of Replace disk. Empty name or state leaves are
+dropped. It is a transient observation. The Controller keeps it only in its disposable
+Core-refreshed projection with the rest of the mirrored storage registration and derives
+nothing from it; a fresh Controller sees it again on the next report. The additive
+`zfs_pool` / `pool` observation fields are withheld from reports until the Controller
+acknowledges `storage-zfs-replace-v1` through the existing `storage_repositories` support
+shape — a strict older Controller therefore never receives those fields and does not 400
+the whole report. The status value `degraded` itself is still sent once the host reports
+storage repositories: an older Controller that does not recognise it keeps showing the
+status text as reported.
+
+API impact: **changed contract** — the provisioning layout rules widen and each host's
+selection may carry hot spares. `mirror` now accepts two **or three** devices, so an
+operator can add a third disk to a mirror before removing a suspect one, and `raidz3` is
+accepted at five or more devices. `ZFSProvisionHost` gains an optional `spares` array of
+the same `ZFSProvisionDevice` shape as `devices`: those disks are erased exactly like the
+data disks, including the same eligibility, fingerprint and typed erase-confirmation rules,
+are passed to Core as `spare` vdevs, and the pool is created with `autoreplace=on` so ZFS
+resilvers onto a spare by itself when a data disk fails. Spares satisfy no part of the
+layout rule — the data disks alone must satisfy it — so a mirror still needs two or three
+`devices` however many spares accompany them. The field is optional and omitted when empty.
+Hot spares and the widened layouts (three-disk mirror, raidz3) require `storage-zfs-replace-v1`
+on the pool master and every selected host; the Controller refuses the request otherwise and
+the wizard does not offer the Spare column or those layout radios without that capability. The
+pool master also probes the selected member's replace peer route before posting a widened
+selection, and refuses with `hot spares and widened ZFS layouts need storage-zfs-replace-v1 on
+every selected host; upgrade Nex Core` when that Core is older, so an older Core never receives
+those fields.
+
+Strict older Controllers receive no ZFS-provision inventory until the upgraded Controller
+acknowledges `storage-zfs-provision-v1`, and no `zfs_pool` / `pool` observation fields until
+it acknowledges `storage-zfs-replace-v1`, through the existing `storage_repositories`
 support shape. This is an additive capability acknowledgement with wire protocol 2;
 upgrade Controller first. Debian packages retain the `storage-format-v2` compatibility
 marker and add `storage-format-v3` for ZFS records. The APT guard requires v3 only for
@@ -665,6 +709,122 @@ create or import a pool. Provisioning is a separate operation that creates a Cor
 pool and `vms` dataset with safe native defaults; detach never destroys a pool or dataset.
 Acceptance evidence and remaining native/delivery gates are tracked in
 [ZFS rollout verification](qa/2026-09-19-zfs-provisioning.md).
+
+### Replacing a failed pool disk (POST /api/v1/storage/zfs/replace)
+
+API impact: **new contract** — Controller `POST /api/v1/storage/zfs/replace`, the durable
+master command `storage-zfs-replace` carrying `ZFSReplaceRequest`, the pool-master-to-member
+peer route `POST /api/v1/pool/zfs-provision/replace`, and the `storage-zfs-replace-v1`
+capability. The pool's condition and the name of the failed device are read from the
+[per-host ZFS observation](#zfs-provisioning) above; this operation adds no query of its own.
+
+**State owner: Core.** The durable records are the pool itself — `zpool status` is what the
+pool's device set *is* — the executing host's replacement journal, keyed on the operation ID
+under its state directory, and the pool master's ZFS repository record, which the master
+updates to name the disk the repository now holds. The Controller keeps only what it keeps
+for provisioning: the request/operation relay row. A fresh Controller re-adopts the
+repository from the master's inventory and sees the current disks and any resilver in the
+next pool observation; nothing is re-entered.
+
+**Authorization.** Administrator session, same HTTPS Origin and `X-CSRF-Token` at the
+Controller. When the master forwards the work to a member, the member's peer route accepts
+only the current pool master certificate and only a request addressed to its own pool and
+host ID.
+
+**Request.** `{request_id, repository_id, pool_id, host_id, old_device,
+device:{by_id, serial, size_bytes, fingerprint, erase_confirmation?}}`. `old_device` is the
+failed leaf's `/dev/disk/by-id` path exactly as the pool observation reports it. `device` is
+one candidate from the host's own `POST /api/v1/storage/discover` listing with
+`kind: zfs-device` — the same listing, eligibility rules, fingerprint and typed erase
+confirmation the provisioning wizard uses; a device reported as holding old data must carry
+`erase_confirmation` equal to its own `by_id`. The Controller allocates the operation ID;
+`request_id` is the client's own retry key.
+
+**Controller refusals.** `400` for a missing `request_id` (`a stable request_id is
+required`), a repository, pool or host ID that is not an opaque ID (`ZFS disk replacement
+requires a repository, pool and host`), a failed device that is not a by-id path (`ZFS disk
+replacement names the failed device by its /dev/disk/by-id path`), a replacement equal to the
+failed disk (`the replacement must be a different disk from the failed one`), a replacement
+without a stable by-id path, serial, size or 64-hex fingerprint (`ZFS provision device is
+invalid`), and an erase confirmation naming another device (`ZFS erase confirmation must name
+the selected device`). `404` when the selected host is not a known host (`host not found`).
+`409` for an unknown pool (`pool not found`), a pool whose `master_host_id` no longer resolves
+to a host (`host not found`), a master or selected host that is revoked, stale or in another
+pool (`the selected host must be fresh, active and in the selected pool`), a master too old
+for ZFS work at all (`pool master does not support ZFS provisioning; upgrade Nex Core`),
+either the pool master or the selected host lacking this capability (`replacing a ZFS disk
+needs storage-zfs-replace-v1 on the pool master and the selected host; upgrade Nex Core`), and
+a `request_id` already used with another payload. These are only the refusals the Controller
+can already see from its own rows; every decision about the pool and the disks is Core's.
+
+**Core refusals.** They arrive as the operation's result, not as an HTTP status. The master
+reports `failed` when the command is not for its pool (`ZFS disk replacement targets another
+pool`), when this host is not the master (`only the pool master may replace a ZFS disk`),
+when its own repository record holds no such repository on that host (`this pool master has
+no ZFS repository of that ID on that host`), and when the named host is not a ready member at
+the current membership generation (`the selected ZFS host is not a ready current member`).
+The executing host's own refusals come back as `needs_attention` carrying its sentence: the
+named leaf is no longer in the pool (`<device> is no longer part of this pool; check the pool
+before replacing a disk`), the named leaf is `ONLINE` (`<device> is online, so there is
+nothing to replace`), the named leaf is already inside a replacing or spare vdev
+(`<device> is already being replaced; wait for the resilver`), the replacement is already
+an ordinary member of the pool without a matching running resilver (`this disk is already
+part of the pool`), the replacement is smaller than the failed disk (`the replacement disk
+is smaller than the failed disk (<new> bytes against <old>)`), discovery cannot re-list the
+disk (`the replacement disk cannot be safely observed`), the replacement is not as it was
+observed or is in use (`the replacement disk changed since it was selected, or is in use`,
+`this host no longer reports the selected replacement disk`), it holds old data without a
+typed confirmation (`the replacement disk holds old data and was not confirmed for erasure`),
+or a step failed (`the replacement disk could not be cleared`,
+`<old> could not be replaced with <new>` with ZFS's own reason when available). An unreachable or refusing member is reported by
+the master as `the selected ZFS host is unreachable` or `the selected ZFS host refused the
+disk replacement`. The master-to-member replace peer call uses a thirty-minute client budget
+sized for wipefs and `zpool replace`, not the ordinary fifteen-second peer timeout, and the
+member runs that work detached from the HTTP request context so a client disconnect cannot
+cancel an erase already in progress; the host journal still records the outcome.
+
+**Asynchronous result.** `202` returns `{repository_id, host_id, old_device, operation}`; an
+exact repeat of a `request_id` replays that operation with `200`, and a different payload
+under the same `request_id` is `409`. An accepted request is not proof that a disk was
+changed: follow the operation, then the repository's pool observation for the resilver.
+
+**What Core does.** The executing host observes the pool and the disk again, runs
+`wipefs --all` on the confirmed replacement and then
+`zpool replace <pool> <old-device> <new-device>`. The operation is done when `zpool replace`
+returns. The resilver that follows is ZFS's own work: it is reported by the ordinary per-host
+ZFS observation, it takes as long as the data on the pool needs, and ZFS retires the old
+device itself when it completes. Nothing detaches the old disk, and nothing waits on the
+Controller or an open browser. VMs on the pool keep running throughout.
+
+**Retries and interruption.** The `request_id` replays the Controller's row. On the host the
+operation ID keys the journal: a redelivered command replays its recorded outcome, a pool
+that already holds the replacement is adopted as success only when the failed leaf is gone
+or a RESILVER is still SCANNING onto that replacement — otherwise the disk is refused as
+already part of the pool — an operation ID reused for a different repository, failed leaf or replacement is
+refused (`this operation was already used for a different ZFS disk replacement`), and an
+agent interrupted after the wipe resumes from the journal's `wipe-started` stage, where the
+wiped disk can no longer match its fingerprint and the identity that survives a wipe — the
+same `by_id`, serial and size — is checked instead, while erase confirmation is still
+required if the live disk now holds old data. A replacement that is no longer exactly
+as observed is `needs_attention` and is never erased again. After the host reports success
+the master records the replacement disk on its repository record, so a re-adopting Controller
+never sees a repository still naming a disk ZFS has retired; a failure to write that record
+is `needs_attention` (`the disk was replaced but the repository record was not updated`) even
+though the pool itself is correct.
+
+Compatibility: shared upgrade rule — Controller before Core. The capability is checked on both
+the pool master and the selected host before the command is stored, so an old Core is refused
+at the API rather than sent a command it would reject. The exact request, response and refusal
+shapes are in the [machine-readable contract](api/openapi.json) and the
+[peer contract](api/peer-openapi.json).
+
+Verification: Go unit tests for the host worker (the command sequence, the adoption of a pool
+already resilvering onto the replacement, the `ONLINE` and missing-leaf refusals, the reused
+operation ID and the interrupted-wipe retry), the master aggregate's pool, master, repository
+and membership refusals, and Controller contract tests for the relay to the master, the exact
+replay, the changed-payload conflict, the CSRF requirement, the old-Core refusal and invalid
+input; the disposable-lab walkthrough is recorded in
+[replacing a failed pool disk](qa/2026-09-22-zfs-replace.md).
 
 ### Transient Core storage discovery
 
@@ -4295,6 +4455,20 @@ bounds (at most 64 memory modules, 128 disks, 256 PCI devices, 24 sensors — th
 enforces on itself); `503` the host did not dial within 20 s; `504` the host did not answer within
 10 s. Read-only, so every retry is safe.
 
+**Changed contract (2026-09-22): `md_arrays`.** The report gained a section for the Linux md
+arrays the kernel has assembled (`HardwareMDArrays`, with `MDArray` and `MDMember`), read straight
+from `/sys/block/md*/md/` — `level`, `raid_disks`, `degraded`, `sync_action` and the position in
+`sync_completed` as `sync_percent`, and for each `dev-*` entry the member's device, `slot` and
+`state`. `mdadm` is not parsed: the kernel's own files are the record, and reading them keeps the
+section testable against a fixture tree. A host with no arrays reports an empty list, not an
+unavailable section. The Controller re-checks the host's own bounds of at most 32 arrays of at most
+64 members each and stores none of it, so a mirrored system disk and its rebuild are visible to a
+replacement Controller the moment the host reports. The field is required on `HostHardware` and
+the Controller always remarsals it, so an older Core that never sent arrays yields
+`md_arrays: { arrays: null }` rather than an absent key; the host page treats that as
+unreported and asks for a Core upgrade instead of claiming a single unmirrored disk. An empty
+`arrays` list means the host reported and has no md arrays.
+
 Serial numbers (system, board and disk) are returned to authenticated administrators only. They are
 never logged and no diagnostic-bundle path collects the report.
 
@@ -4310,6 +4484,75 @@ and a failing tool, no sysfs or proc at all) and Controller relay tests for the 
 browser review against mocked replies. **The real-hardware walkthrough belongs to the project
 owner** (decision: project owner, 2026-09-22) and is outstanding: no sensor label, threshold,
 `drivetemp`, `dmidecode` or `lspci` output here has been observed on a real machine.
+
+## Replacing a failed system disk (POST /api/v1/hosts/{id}/system-disk)
+
+API impact: **new contract** — Controller `POST /api/v1/hosts/{id}/system-disk`, the durable
+managed command `host-system-disk-replace` carrying `SystemDiskReplaceRequest`, and the
+`host-system-disk-replace-v1` capability. The mirror's own state is read from the
+[host hardware report](#host-hardware); this operation adds no query of its own.
+
+**State owner: Core**, host-local. The durable record is the md array superblocks on the disks and
+`/etc/mdadm/mdadm.conf` written by the installer. Adding a member does not change the array's UUID,
+so nothing rewrites `mdadm.conf`, and the kernel assembles the mirror at boot with no Nex code. The
+Controller keeps only the task it keeps for every host operation. A fresh Controller sees the
+mirror, its members and any rebuild in the hardware report.
+
+**Request.** `{request_id, array, device:{by_id, serial, size_bytes, fingerprint,
+erase_confirmation?}}`. `array` names one array as the report does (`md0`). `device` is one
+candidate from the host's own `POST /api/v1/storage/discover` listing with `kind: zfs-device` — the
+same listing, eligibility rules, fingerprint and typed erase confirmation the ZFS wizard uses; a
+device reported `erase_required` must carry `erase_confirmation` equal to its own `by_id`.
+Administrator session and `X-CSRF-Token`. `202` returns `{host_id, array, operation}`; an exact
+repeat of a `request_id` replays that operation, and a different payload under the same
+`request_id` is `409`.
+
+**Refusals.** `400` for an array that is not an `mdN` name, a device that is not a
+`/dev/disk/by-id/` path, a missing serial, size or 64-hex fingerprint, an erase confirmation
+naming another device, or a host ID that is not an opaque ID (`system disk replacement requires
+a host`). `404` unknown host. `409` for a revoked host, a host that is not freshly
+connected, and an older Core: `replacing a system disk needs host-system-disk-replace-v1 on this
+host; upgrade Nex Core`. Core revalidates everything itself when it executes and reports a failed
+task with its own sentence: the arrays cannot be read (`Nex Core cannot read this host's RAID
+arrays`), the named array is missing (`this host has no array <mdN>`), the array is not degraded
+(`/dev/md0 is not degraded, so there is no member to replace`), it is not a RAID1 mirror, it has
+no working member to copy from, the chosen disk already holds a working member
+(`<disk> already holds a working member of <array>`), discovery cannot re-list the disk (`the
+replacement disk cannot be safely observed`), the disk changed or is in use, its old data was not
+confirmed for erasure, or it is smaller than the remaining system disk.
+
+**What Core does.** It observes the array and the disk again, then `wipefs --all` on the
+replacement, `sgdisk --replicate=<new> <surviving disk>` and `sgdisk -G <new>` so the copied
+partition identifiers are unique, `udevadm settle`, and `mdadm --add <array> <new>-part<n>`.
+Making the disk bootable then follows the host's firmware (`/sys/firmware/efi`), not whether an
+ESP partition exists on the disk: the installer writes a 512 MiB ESP onto every mirror member on
+both firmwares, but on BIOS that partition is left unreplicated for boot and Core only runs
+`grub-install --target=i386-pc` on the disk itself. On UEFI firmware Core finds the surviving
+disk's EFI system partition, formats the replacement's copy of it with `mkfs.vfat`, and populates
+it the way the installer does — Debian's `grub-efi-amd64` writes only the one mounted ESP, so Core
+runs the host's own `/usr/local/sbin/nex-sync-esp` copier, the same helper an APT hook re-runs
+after every GRUB update, and copies what GRUB maintains in `/boot/efi` itself when that helper is
+absent or reports that it copied nothing, including the removable fallback path the installer
+seeds. The ESP is looked for only on the UEFI path. The kernel then rebuilds the mirror; the
+host and its VMs keep running throughout and nothing waits on the Controller.
+
+**Retries and interruption.** The operation is journaled on the host under its state directory,
+keyed on the operation ID. A redelivered command replays its recorded outcome instead of acting
+again. An array that already has the replacement as a member is adopted: the disk is never wiped a
+second time and only the bootloader work is repeated. An agent interrupted after the wipe resumes
+from the journal's `wipe-started` stage, where the wiped disk can no longer match its fingerprint,
+and checks the identity that survives a wipe — the same `by_id`, serial and size — instead; nothing
+else about the selection is relaxed. A member whose disk the kernel no longer exposes is the failure
+being repaired, so it is passed over rather than turned into a refusal.
+
+Compatibility: shared upgrade rule — Controller before Core. The capability is checked before the
+command is stored, so an old Core is refused at the API rather than sent a command it would reject.
+
+Verification: Go unit tests for the sysfs reader against healthy, degraded and rebuilding fixture
+trees, and for the replacement's command sequence, every refusal above, the adoption path and the
+interrupted-wipe retry; Controller contract tests for the relay, the replay, the CSRF requirement,
+the old-Core refusal and invalid input; a UI check of the mirror states and the erase confirmation;
+and a [disposable-host run](qa/2026-09-22-system-disk-replace.md).
 
 ## Software updates
 
@@ -4337,6 +4580,9 @@ configured source offers is returned in
 the JSON `error` field with HTTP 200. While an apply runs, GET also returns `phase`,
 `progress` and `message` from `update-progress.json` in the service state directory.
 `progress` reports fixed steps rather than download percentage.
+The Controller's GET also returns `core_available_version`, the newest `nex-core-local` the
+same archive offers, so the host page can compare each host's reported version with it; the
+field is omitted when the archive does not offer the package.
 
 Controller apply writes `pending-update.json` under the state directory and returns
 202; the root `nex-controller-update` path unit runs `/usr/local/lib/nex/apply-update`,

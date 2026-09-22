@@ -384,6 +384,100 @@ func TestZFSProvisionWipesOnlySelectedDevicesAndNeverForcesPoolCreate(t *testing
 	}
 }
 
+// A hot spare is re-checked and wiped like a data disk: RequiresErase must reach wipefs, and an
+// ineligible spare must refuse before any destructive call (SR-035).
+func TestZFSProvisionWipesARequiresEraseSpare(t *testing.T) {
+	calls := provisionHarness(t, map[string]bool{"/dev/disk/by-id/spare-1": true}, nil)
+	request := testZFSProvision(storageMountRoot)
+	request.Layout = "mirror"
+	request.Devices = []zfsProvisionDevice{
+		{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+		{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+	}
+	request.Spares = []zfsProvisionDevice{{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, EraseConfirmed: true, Fingerprint: testZFSFingerprint}}
+	zfsProvisionDiscover = func(context.Context) ([]ZFSDeviceCandidate, error) {
+		return []ZFSDeviceCandidate{
+			{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, Eligible: true, RequiresErase: true, Fingerprint: testZFSFingerprint},
+		}, nil
+	}
+	result, err := NewZFSProvisioner(t.TempDir()).provision(context.Background(), request)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("spare wipe provision = %+v, %v", result, err)
+	}
+	if !provisionCall(*calls, "wipefs", "--all", "/dev/disk/by-id/spare-1") {
+		t.Fatalf("RequiresErase spare was not wiped: %#v", *calls)
+	}
+}
+
+func TestZFSProvisionRefusesAnIneligibleSpareBeforeAnyWipe(t *testing.T) {
+	calls := provisionHarness(t, nil, nil)
+	request := testZFSProvision(storageMountRoot)
+	request.Layout = "mirror"
+	request.Devices = []zfsProvisionDevice{
+		{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+		{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+	}
+	request.Spares = []zfsProvisionDevice{{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint}}
+	zfsProvisionDiscover = func(context.Context) ([]ZFSDeviceCandidate, error) {
+		return []ZFSDeviceCandidate{
+			{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, Eligible: false, Reason: "mounted", Fingerprint: testZFSFingerprint},
+		}, nil
+	}
+	result, err := NewZFSProvisioner(t.TempDir()).provision(context.Background(), request)
+	if err == nil || result.Status != "needs_attention" || !strings.Contains(result.Error, "changed or is in use") {
+		t.Fatalf("ineligible spare = %+v, %v", result, err)
+	}
+	if provisionCommandCalled(*calls, "wipefs") || provisionCall(*calls, "zpool", "create") {
+		t.Fatalf("ineligible spare still reached a destructive call: %#v", *calls)
+	}
+}
+
+// autoreplace=on is what makes a hot spare engage; assert it and the spare vdev on create, and
+// that a spare-free request does not carry the property (SR-036).
+func TestZFSProvisionCreateEnablesAutoreplaceWhenSparesArePresent(t *testing.T) {
+	calls := provisionHarness(t, nil, nil)
+	request := testZFSProvision(storageMountRoot)
+	request.Layout = "mirror"
+	request.Devices = []zfsProvisionDevice{
+		{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+		{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint},
+	}
+	request.Spares = []zfsProvisionDevice{{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, Fingerprint: testZFSFingerprint}}
+	zfsProvisionDiscover = func(context.Context) ([]ZFSDeviceCandidate, error) {
+		return []ZFSDeviceCandidate{
+			{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/disk-2", Serial: "disk-2", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+			{ByID: "/dev/disk/by-id/spare-1", Serial: "spare-1", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint},
+		}, nil
+	}
+	if result, err := NewZFSProvisioner(t.TempDir()).provision(context.Background(), request); err != nil || result.Status != "succeeded" {
+		t.Fatalf("spare provision = %+v, %v", result, err)
+	}
+	if !provisionCall(*calls, "zpool", "create", "-o", "ashift=12", "-O", "nex:repository=repo-1", "-m", "none", "-o", "autoreplace=on", "nex-repo-1", "mirror", "/dev/disk/by-id/disk-1", "/dev/disk/by-id/disk-2", "spare", "/dev/disk/by-id/spare-1") {
+		t.Fatalf("zpool create missing autoreplace/spare: %#v", *calls)
+	}
+}
+
+func TestZFSProvisionCreateOmitsAutoreplaceWithoutSpares(t *testing.T) {
+	calls := provisionHarness(t, nil, nil)
+	request := testZFSProvision(storageMountRoot)
+	zfsProvisionDiscover = func(context.Context) ([]ZFSDeviceCandidate, error) {
+		return []ZFSDeviceCandidate{{ByID: "/dev/disk/by-id/disk-1", Serial: "disk-1", SizeBytes: 1073741824, Eligible: true, Fingerprint: testZFSFingerprint}}, nil
+	}
+	if result, err := NewZFSProvisioner(t.TempDir()).provision(context.Background(), request); err != nil || result.Status != "succeeded" {
+		t.Fatalf("spare-free provision = %+v, %v", result, err)
+	}
+	for _, call := range *calls {
+		if call[0] == "zpool" && len(call) > 1 && call[1] == "create" && slices.Contains(call, "autoreplace=on") {
+			t.Fatalf("spare-free zpool create carried autoreplace: %#v", call)
+		}
+	}
+}
+
 // recordZFSProvisionStages makes every durable stage observable in order, so a
 // test can prove both halves of the wipe boundary: that "wipe-started" is on
 // disk before the first destructive command, and that it is never written when

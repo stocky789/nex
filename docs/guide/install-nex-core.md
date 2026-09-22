@@ -100,10 +100,25 @@ required, and the installed driver ISO is unchanged.
    replacing the management default route or DNS. **Offline (no management network)** is
    available; leave every adapter disabled for a fully offline host. These choices take
    effect on the installed host's first boot, not while the installer runs.
-6. On **Choose the installation disk**, explicitly select the **blank disposable disk**.
-   The GUI supports one writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disk of at
+6. On **Choose the installation disks**, explicitly select the **blank disposable disk**, or
+   two or more of them for a mirrored system disk.
+   The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
    least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
-   This path erases the selected disk and installs a whole-disk ext4 layout.
+   One disk erases that disk and installs a whole-disk ext4 layout. Two or more disks are
+   erased and installed as a Linux software RAID1 mirror (`md`) holding one ext4 root, with a
+   small boot partition and a 512 MiB EFI System Partition on each disk, so any of them can start
+   the host on either UEFI or legacy BIOS firmware. Every mirror
+   disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as
+   large as its smallest member; a mismatched selection is refused with that reason.
+   The list is a tick list in both installers: click the **Use** box, or move to a disk and press
+   Space. Each row names the device, capacity, type (SSD, HDD or NVMe), model, serial and whether
+   the disk already **Has partitions**, so you can tell which disk holds old data. The line under
+   the list says what your ticks will produce - `1 disk: single disk, ext4, no redundancy` or
+   `2 disks: RAID1 mirror, smallest disk 128.0 GiB, keeps running if one disk fails` - and turns red with
+   the reason if a ticked disk is too far from the smallest one. Disks under 16 GiB are not listed.
+   If the machine has
+   only one eligible disk it is ticked for you; a mirror is never assumed. The mirrored layout has
+   no swap partition; the single-disk layout is unchanged and still has one.
    A disk that held a previous installation is cleared first, including its partitions, LVM
    volumes and software RAID membership. If it was one member of a RAID array, the array is
    stopped and only the selected disk is cleared; the other member disks are not written, and
@@ -115,8 +130,8 @@ required, and the installed driver ISO is unchanged.
    bound to MAC addresses and become `nex0`, `nex1`, etc. on the installed host; the review
    shows each mapping. A tagged interface is named, for example, `nex0.100`.
    The selected management interface becomes a port of `br0`; its host IP is on `br0`.
-   Check **Erase all data on /dev/…**, which names the selected disk, then select
-   **Erase disk and install Nex Core** only when the target is certain. The checkbox starts
+   Check **Erase all data on /dev/…**, which names every selected disk, then select
+   **Erase disk(s) and install Nex Core** only when the targets are certain. The checkbox starts
    unchecked and resets whenever you return to Review. This is the
    destructive confirmation; do not expect another routine erase question.
 8. Let installation finish. A single Nex progress panel stays in place during and between backend steps.
@@ -139,8 +154,12 @@ required, and the installed driver ISO is unchanged.
 9. For **Minimal install**, the console first reports `Detecting installation media, disks and
    network adapters...` while the machine is examined, then the same questions are asked in a
    keyboard-only interface: host name, keyboard layout, timezone area and timezone (no zone
-   question for UTC), root password and confirmation, management adapter, then each adapter's
-   IPv4 mode, VLAN ID, address and gateway, DNS servers, and the installation disk. Use
+   question for UTC), root password and confirmation, management adapter, then a Yes/No
+   question asking whether to configure more adapters (default no), then each detected
+   adapter in turn — including the management adapter — for IPv4 mode, VLAN ID, address and
+   gateway. Answering yes walks every adapter in detection order; answering no leaves the
+   non-management adapters unconfigured. DNS servers and the
+   installation disk follow. Use
    **Go Back** to correct an earlier answer. The keyboard layout is applied to the console as
    soon as you choose it; if this console cannot load it, **Keyboard layout not applied**
    appears and the layout question is asked again, so the root password is never typed on a
@@ -148,9 +167,10 @@ required, and the installed driver ISO is unchanged.
    that adapter untagged. The management adapter list names each detected adapter with its MAC
    address and link state and ends with **Offline (no management network)**, the same choice
    the graphical wizard offers; choosing it installs without a management network, lets every
-   adapter be disabled and asks no gateway question. A machine with no detected adapter shows
+   adapter be left unconfigured and asks no gateway question. A machine with no detected adapter shows
    **No network adapter was detected**, skips the management question and installs offline.
-   The last screen reviews every setting, including an **Adapters:** line giving each adapter's
+   When more adapters are configured, each leftover adapter offers **Disabled**, **dhcp** or
+   **static**; Disabled leaves that adapter unconfigured. The last screen reviews every setting, including an **Adapters:** line giving each adapter's
    mode, address, gateway and VLAN, names the disk and asks whether to erase it; it defaults to
    no and resets whenever you change the disk. The same rules apply as in the graphical wizard:
    at least eight password characters, only writable nonremovable disks of at least 16 GiB,
@@ -159,6 +179,11 @@ required, and the installed driver ISO is unchanged.
    are rejected, the reason is shown, nothing is erased, and the questions return with every
    answer still filled in, so you correct the named setting and confirm the erase again. There
    are no separate partitioning or GRUB questions; accepted settings start the installation.
+   The disk question is a tick list: press Space on each disk of the mirror, then Enter. Each
+   choice names the device, capacity, type, model, serial and whether the disk already has partitions, in
+   the same order as the graphical list, and the review names every selected disk with its
+   capacity, serial and the resulting layout, including that one disk can fail without stopping
+   the host.
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
     to boot the installed disk. Apart from the installer's **Screenshot** button, **Restart now**
     is the only action on that screen: the disk has already been written, so there is nothing to
@@ -178,6 +203,20 @@ or DNS server; configure that separately if other machines should resolve the na
 Offline mode creates no management bridge. Selecting a management adapter creates `br0` in
 either installation mode, with MAC-bound `nexN` interface names. The installer does not enable a firewall policy. Keep this alpha isolated until
 you have validated access controls.
+
+A mirrored system disk appears as one `md` array holding `/`. The installer installs GRUB on
+every selected disk and is meant to boot from whichever member survives; when a mirror disk
+fails, the host is meant to keep running on the remaining disk with its virtual machines
+uninterrupted until the array is repaired. The EFI partition each disk carries is not part of
+the mirror. Installs from this build mount `/boot/efi` with `nofail` and a short device timeout
+so a missing ESP does not hold up a healthy mirror; that mount behaviour has not yet been
+confirmed on a booted host. Older or hand-built mirrors may still need the
+[emergency-mode steps](replace-a-failed-system-disk.md#troubleshooting).
+Replace a failed mirror member from Nex Controller with
+[Replace a failed system disk](replace-a-failed-system-disk.md). A mirror protects against one
+disk failing; it is not a backup, and it does not protect the data on your virtual machines.
+Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
+Verification.
 
 Root SSH login is disabled, so a fresh root-only installation has no SSH login account.
 Use the local console. Installation can work offline; later package updates require access
@@ -240,6 +279,12 @@ source; it may have no candidate until a compatible release is actually publishe
 The packaging efficiency checks and disposable offline-installation results are
 tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
 
+Mirrored system-disk installs (two or more disks): both wizards' Disk steps and two-disk
+installs have reached the base system in the lab, but no mirrored host has been booted,
+detached or checked for leftover arrays, and the current three-partition GPT layout has not
+had a completed install+boot walkthrough. Outstanding checks are listed in
+[installer mirror QA](../qa/iso/2026-09-22-installer-mirror.md).
+
 The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) verified
 its recorded ISO with BIOS/KVM and UEFI/TCG menu review, an automated offline
 BIOS installation, media-free first boot and reboot. This was serial automation,
@@ -262,13 +307,15 @@ longer asks.
 The text wizard's question order, **Go Back** navigation, device filtering and the settings
 handoff it writes are covered by `tests/integration/installer-text-wizard.py`, which drives the
 wizard against a fixture machine and decodes the handoff the way `nex-config` reads it. As of
-2026-09-21 it also covers the untagged VLAN default, the keyboard layout that cannot be applied
-and is asked again before the password, the offline choice, a machine with no adapter, the
-per-adapter review line, and a rejected settings check that keeps every answer. That is a
-simulated source-level check: the questions are answered by a script against a stand-in for the
-installer's question system, with stand-ins for the keyboard and validation tools, so real
-console rendering, real keyboard loading, real disk hardware, a booted ISO installation through
-the text interface and its installed networking all remain unverified.
+2026-09-22 it also covers the default **Configure more network adapters?** skip (BUG-0444),
+walking leftovers when that answer is yes, and configuring a management adapter that is not the
+first detected NIC. As of 2026-09-21 it covers the untagged VLAN default, the keyboard layout
+that cannot be applied and is asked again before the password, the offline choice, a machine
+with no adapter, the per-adapter review line, and a rejected settings check that keeps every
+answer. That is a simulated source-level check: the questions are answered by a script against a
+stand-in for the installer's question system, with stand-ins for the keyboard and validation
+tools, so real console rendering, real keyboard loading, real disk hardware, a booted ISO
+installation through the text interface and its installed networking all remain unverified.
 
 The [fresh local installation](../qa/fresh-install/checks.md) covers a graphical BIOS
 installation onto a blank disk through Controller deployment. Installer details are recorded in

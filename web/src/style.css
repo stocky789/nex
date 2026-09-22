@@ -160,6 +160,12 @@ aside nav a.selected { background: #d4e3ff; border-color: #7ea6ff; color: #10306
 .connection-dot.fresh { background: #22c55e; }
 .connection-dot.stale { background: #f59e0b; }
 .connection-dot.revoked { background: #ef4444; }
+.version-light { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: middle; }
+.version-light.current { background: #22c55e; animation: version-pulse 2s ease-in-out infinite; }
+.version-light.behind { background: #f59e0b; }
+.version-light.major { background: #ef4444; }
+@keyframes version-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .version-light.current { animation: none; } }
 .resource-icon { width: 16px; height: 16px; flex: 0 0 auto; }
 .tree-branch { margin-left: 5px; }
 .tree-branch > summary { display: flex; align-items: center; min-height: 25px; cursor: pointer; list-style: none; }
@@ -436,7 +442,14 @@ progress { width: 100%; accent-color: var(--blue); }
 .zfs-blocked { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .zfs-blocked > summary { cursor: pointer; }
 .zfs-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
-.zfs-layout label { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-weight: 400; }
+/* The disk lists are ordinary tables; only the tick column and the state colour differ from
+   the page tables, whose last column is muted and whose first column is wide. */
+.zfs-disk-table th:first-child, .zfs-disk-table td:first-child { width: 1%; min-width: 0; text-align: center; }
+/* Spare / Fit last cells need body colour; keep .muted and .zfs-old on the state column. */
+.zfs-disk-table td:last-child:not(.muted):not(.zfs-old) { color: inherit; }
+.zfs-disk-table td.zfs-old { color: #9a4a00; }
+.zfs-layouts { display: grid; gap: 2px; margin: 8px 0 0; padding: 6px 8px; border: 1px solid #d7dbe0; }
+.zfs-layouts > legend { padding: 0 4px; font-weight: 600; }
 .zfs-existing { margin-right: auto; }
 .zfs-dialog .actions { margin-top: 12px; }
 

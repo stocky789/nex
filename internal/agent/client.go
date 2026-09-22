@@ -204,6 +204,7 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 		// any repository commands or inventory extensions.
 		next.StorageProtocolReady = false
 		next.ZFSProvisionProtocolReady = false
+		next.ZFSReplaceProtocolReady = false
 		next.StorageClusterProtocolReady = false
 		next.StorageClusterSessionMonitorProtocolReady = false
 		next.StorageProtocolLegacy = false

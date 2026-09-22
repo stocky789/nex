@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -39,6 +38,7 @@ type zfsProvisionIntent struct {
 	MountPath    string               `json:"mount_path"`
 	Layout       string               `json:"layout"`
 	Devices      []zfsProvisionDevice `json:"devices"`
+	Spares       []zfsProvisionDevice `json:"spares,omitempty"`
 }
 
 type zfsProvisionResult struct {
@@ -60,10 +60,35 @@ type zfsProvisionJournal struct {
 // A new Controller can replay the same operation ID without repeating a wipe.
 type ZFSProvisioner struct {
 	stateDir string
-	mu       sync.Mutex
 }
 
 func NewZFSProvisioner(stateDir string) *ZFSProvisioner { return &ZFSProvisioner{stateDir: stateDir} }
+
+// withExclusiveDiskLock serializes destructive disk work on one host. Callers pass their
+// journal directory (zfs-provision, zfs-replace or system-disk-replace); the lock file sits
+// beside those siblings on the host state directory so concurrent lanes cannot wipe the same
+// disk. lockedErr is returned when the lock cannot be taken.
+func withExclusiveDiskLock(stateDir string, lockedErr error) (unlock func(), err error) {
+	hostDir := filepath.Dir(filepath.Clean(stateDir))
+	if hostDir == "." || hostDir == string(filepath.Separator) {
+		return nil, lockedErr
+	}
+	if err := os.MkdirAll(hostDir, 0700); err != nil {
+		return nil, lockedErr
+	}
+	lock, err := os.OpenFile(filepath.Join(hostDir, ".disk-ops.lock"), os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0600)
+	if err != nil {
+		return nil, lockedErr
+	}
+	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX) != nil {
+		_ = lock.Close()
+		return nil, lockedErr
+	}
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}, nil
+}
 
 // ZFSProvisionStorage returns the client-shaped registration for a dataset Core
 // has just created. The ordinary managed storage path still performs the native
@@ -93,10 +118,7 @@ var zfsProvisionEvalSymlinks = filepath.EvalSymlinks
 // Provision applies one host's selected devices. The caller owns pool-wide
 // dispatch; this method journals before every destructive boundary.
 func (p *ZFSProvisioner) Provision(ctx context.Context, operationID, repositoryID string, request protocol.ZFSProvisionRequest, host protocol.ZFSProvisionHost) (protocol.ZFSProvisionHostResult, error) {
-	intent := zfsProvisionIntent{OperationID: operationID, RepositoryID: repositoryID, Pool: "nex-" + repositoryID, Dataset: "vms", MountPath: filepath.Join(storageMountRoot, repositoryID), Layout: protocol.ZFSLayout(host.Layout, len(host.Devices))}
-	for _, d := range host.Devices {
-		intent.Devices = append(intent.Devices, zfsProvisionDevice{ByID: d.ByID, Serial: d.Serial, SizeBytes: d.SizeBytes, EraseConfirmed: d.EraseConfirmation == d.ByID, Fingerprint: d.Fingerprint})
-	}
+	intent := zfsProvisionIntentFor(operationID, repositoryID, host)
 	result, err := p.provision(ctx, intent)
 	return protocol.ZFSProvisionHostResult{RepositoryID: repositoryID, PoolID: request.PoolID, Name: request.Name, Scope: request.Scope, HostID: host.HostID, Layout: intent.Layout, Devices: host.Devices, Status: result.Status, Error: result.Error, PoolGUID: result.PoolGUID, DatasetGUID: result.DatasetGUID}, err
 }
@@ -106,10 +128,7 @@ func (p *ZFSProvisioner) Provision(ctx context.Context, operationID, repositoryI
 // than a failed registration record: that record alone must never manufacture
 // a repository after an unsuccessful create.
 func (p *ZFSProvisioner) HasSucceededZFSProvision(ctx context.Context, operationID, repositoryID string, request protocol.ZFSProvisionRequest, host protocol.ZFSProvisionHost) bool {
-	intent := zfsProvisionIntent{OperationID: operationID, RepositoryID: repositoryID, Pool: "nex-" + repositoryID, Dataset: "vms", MountPath: filepath.Join(storageMountRoot, repositoryID), Layout: protocol.ZFSLayout(host.Layout, len(host.Devices))}
-	for _, d := range host.Devices {
-		intent.Devices = append(intent.Devices, zfsProvisionDevice{ByID: d.ByID, Serial: d.Serial, SizeBytes: d.SizeBytes, EraseConfirmed: d.EraseConfirmation == d.ByID, Fingerprint: d.Fingerprint})
-	}
+	intent := zfsProvisionIntentFor(operationID, repositoryID, host)
 	journal, err := readZFSProvision(filepath.Join(p.stateDir, operationID+".json"))
 	if err != nil || !sameZFSProvision(journal.Request, intent) || journal.Result.Status != "succeeded" || (journal.Stage != "dataset" && journal.Stage != "adopted") {
 		return false
@@ -130,10 +149,7 @@ func (p *ZFSProvisioner) CanResumeZFSProvision(ctx context.Context, operationID,
 	if p.HasSucceededZFSProvision(ctx, operationID, repositoryID, request, host) {
 		return true
 	}
-	intent := zfsProvisionIntent{OperationID: operationID, RepositoryID: repositoryID, Pool: "nex-" + repositoryID, Dataset: "vms", MountPath: filepath.Join(storageMountRoot, repositoryID), Layout: protocol.ZFSLayout(host.Layout, len(host.Devices))}
-	for _, d := range host.Devices {
-		intent.Devices = append(intent.Devices, zfsProvisionDevice{ByID: d.ByID, Serial: d.Serial, SizeBytes: d.SizeBytes, EraseConfirmed: d.EraseConfirmation == d.ByID, Fingerprint: d.Fingerprint})
-	}
+	intent := zfsProvisionIntentFor(operationID, repositoryID, host)
 	journal, err := readZFSProvision(filepath.Join(p.stateDir, operationID+".json"))
 	if err != nil || !sameZFSProvision(journal.Request, intent) || (journal.Result.Status != "pending" && journal.Result.Status != "needs_attention") || (journal.Stage != "creating" && journal.Stage != "pool-created") {
 		return false
@@ -142,12 +158,23 @@ func (p *ZFSProvisioner) CanResumeZFSProvision(ctx context.Context, operationID,
 	return err == nil && owned
 }
 
+// zfsProvisionIntentFor is the one place a selected host becomes this worker's durable
+// intent, so the journal comparison that guards a retry cannot drift between callers.
+func zfsProvisionIntentFor(operationID, repositoryID string, host protocol.ZFSProvisionHost) zfsProvisionIntent {
+	intent := zfsProvisionIntent{OperationID: operationID, RepositoryID: repositoryID, Pool: "nex-" + repositoryID, Dataset: "vms", MountPath: filepath.Join(storageMountRoot, repositoryID), Layout: protocol.ZFSLayout(host.Layout, len(host.Devices))}
+	for _, d := range host.Devices {
+		intent.Devices = append(intent.Devices, zfsProvisionDevice{ByID: d.ByID, Serial: d.Serial, SizeBytes: d.SizeBytes, EraseConfirmed: d.EraseConfirmation == d.ByID, Fingerprint: d.Fingerprint})
+	}
+	for _, d := range host.Spares {
+		intent.Spares = append(intent.Spares, zfsProvisionDevice{ByID: d.ByID, Serial: d.Serial, SizeBytes: d.SizeBytes, EraseConfirmed: d.EraseConfirmation == d.ByID, Fingerprint: d.Fingerprint})
+	}
+	return intent
+}
+
 func (p *ZFSProvisioner) provision(ctx context.Context, request zfsProvisionIntent) (zfsProvisionResult, error) {
 	if err := validateZFSProvision(request); err != nil {
 		return failedZFSProvision(request.OperationID, err), err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if !filepath.IsAbs(p.stateDir) || filepath.Clean(p.stateDir) != p.stateDir {
 		return failedZFSProvision(request.OperationID, errors.New("unsafe ZFS provision journal directory")), errors.New("unsafe ZFS provision journal directory")
 	}
@@ -158,14 +185,11 @@ func (p *ZFSProvisioner) provision(ctx context.Context, request zfsProvisionInte
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return failedZFSProvision(request.OperationID, errors.New("unsafe ZFS provision journal directory")), errors.New("unsafe ZFS provision journal directory")
 	}
-	lock, err := os.OpenFile(filepath.Join(p.stateDir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0600)
-	if err != nil || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX) != nil {
-		if lock != nil {
-			_ = lock.Close()
-		}
-		return failedZFSProvision(request.OperationID, errors.New("ZFS provision journal is locked")), errors.New("ZFS provision journal is locked")
+	unlock, err := withExclusiveDiskLock(p.stateDir, errors.New("ZFS provision journal is locked"))
+	if err != nil {
+		return failedZFSProvision(request.OperationID, err), err
 	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); _ = lock.Close() }()
+	defer unlock()
 	path := filepath.Join(p.stateDir, request.OperationID+".json")
 	j, err := readZFSProvision(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -222,14 +246,14 @@ func (p *ZFSProvisioner) provision(ctx context.Context, request zfsProvisionInte
 	if j.Stage == "pool-created" || j.Stage == "dataset" {
 		return p.zfsProvisionAttention(path, j, errors.New("ZFS pool was changed after an interrupted provision"))
 	}
-	if err := checkZFSProvisionDevices(ctx, request.Devices); err != nil {
+	if err := checkZFSProvisionDevices(ctx, request.selected()); err != nil {
 		return p.zfsProvisionAttention(path, j, err)
 	}
 	j.Stage = "pre-wipe"
 	if err := saveZFSProvision(path, j); err != nil {
 		return failedZFSProvision(request.OperationID, err), err
 	}
-	for _, device := range request.Devices {
+	for _, device := range request.selected() {
 		// Same read-only inspection discovery uses: a column list is not portable
 		// across the supported util-linux releases, and an empty signature list is
 		// the authoritative blank-disk answer.
@@ -255,8 +279,13 @@ func (p *ZFSProvisioner) provision(ctx context.Context, request zfsProvisionInte
 			return p.zfsProvisionAttention(path, j, fmt.Errorf("wipe selected device: %w", err))
 		}
 	}
-	args := []string{"create", "-o", "ashift=12", "-O", "nex:repository=" + request.RepositoryID, "-m", "none", request.Pool}
-	args = append(args, zfsVdevArgs(request.Layout, request.Devices)...)
+	args := []string{"create", "-o", "ashift=12", "-O", "nex:repository=" + request.RepositoryID, "-m", "none"}
+	if len(request.Spares) > 0 {
+		// Without autoreplace a hot spare sits idle until an operator runs zpool replace.
+		args = append(args, "-o", "autoreplace=on")
+	}
+	args = append(args, request.Pool)
+	args = append(args, zfsVdevArgs(request.Layout, request.Devices, request.Spares)...)
 	j.Stage = "creating"
 	if err := saveZFSProvision(path, j); err != nil {
 		return failedZFSProvision(request.OperationID, err), err
@@ -302,7 +331,7 @@ func validateZFSProvision(v zfsProvisionIntent) error {
 		return errors.New("invalid ZFS provision layout")
 	}
 	seen := map[string]bool{}
-	for _, d := range v.Devices {
+	for _, d := range v.selected() {
 		if !strings.HasPrefix(d.ByID, "/dev/disk/by-id/") || d.Serial == "" || d.SizeBytes == 0 || !zfsProvisionFingerprint.MatchString(d.Fingerprint) || seen[d.ByID] {
 			return errors.New("invalid selected ZFS device")
 		}
@@ -311,25 +340,37 @@ func validateZFSProvision(v zfsProvisionIntent) error {
 	return nil
 }
 
-func zfsVdevArgs(layout string, devices []zfsProvisionDevice) []string {
+// selected is every disk this request claims: the data disks and the hot spares. Both are
+// erased and handed to zpool create; only the data disks satisfy the layout.
+func (v zfsProvisionIntent) selected() []zfsProvisionDevice {
+	return append(append([]zfsProvisionDevice{}, v.Devices...), v.Spares...)
+}
+
+func zfsVdevArgs(layout string, devices, spares []zfsProvisionDevice) []string {
 	paths := make([]string, len(devices))
 	for i := range devices {
 		paths[i] = devices[i].ByID
 	}
+	var out []string
 	switch layout {
 	case "single":
-		return paths
+		out = paths
 	case "mirror":
-		return append([]string{"mirror"}, paths...)
-	case "raidz1", "raidz2":
-		return append([]string{layout}, paths...)
+		out = append([]string{"mirror"}, paths...)
+	case "raidz1", "raidz2", "raidz3":
+		out = append([]string{layout}, paths...)
 	default:
-		out := []string{}
 		for i := 0; i < len(paths); i += 2 {
 			out = append(out, "mirror", paths[i], paths[i+1])
 		}
-		return out
 	}
+	if len(spares) > 0 {
+		out = append(out, "spare")
+		for _, spare := range spares {
+			out = append(out, spare.ByID)
+		}
+	}
+	return out
 }
 
 var zfsProvisionDiscover = DiscoverZFSDevices
@@ -439,9 +480,13 @@ func verifyZFSProvisionVdevs(ctx context.Context, request zfsProvisionIntent) er
 		if strings.HasPrefix(name, "raidz2") {
 			raidz = "raidz2"
 		}
+		if strings.HasPrefix(name, "raidz3") {
+			raidz = "raidz3"
+		}
 	}
-	expected := make([]string, len(request.Devices))
-	for i, device := range request.Devices {
+	selected := request.selected()
+	expected := make([]string, len(selected))
+	for i, device := range selected {
 		expected[i] = resolvedDevicePath(device.ByID)
 	}
 	for i := range actual {
@@ -465,7 +510,7 @@ func verifyZFSProvisionVdevs(ctx context.Context, request zfsProvisionIntent) er
 		if mirrors != len(request.Devices)/2 || raidz != "" {
 			return errors.New("tagged ZFS pool layout does not match request")
 		}
-	case "raidz1", "raidz2":
+	case "raidz1", "raidz2", "raidz3":
 		if raidz != request.Layout || mirrors != 0 {
 			return errors.New("tagged ZFS pool layout does not match request")
 		}

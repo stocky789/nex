@@ -237,3 +237,136 @@ func TestSMBMarkerIdentityIsCoreObserved(t *testing.T) {
 		t.Fatal("client registration supplied Core-observed SMB identity")
 	}
 }
+
+func TestValidZFSLayoutAcceptsThreeWayMirrorAndRAIDZ3(t *testing.T) {
+	for _, tc := range []struct {
+		layout  string
+		devices int
+		want    bool
+	}{
+		{"mirror", 1, false}, {"mirror", 2, true}, {"mirror", 3, true}, {"mirror", 4, false},
+		{"raidz3", 4, false}, {"raidz3", 5, true}, {"raidz3", 9, true},
+		{"raidz1", 2, false}, {"raidz2", 4, true}, {"single", 1, true}, {"striped_mirrors", 5, false},
+	} {
+		if got := ValidZFSLayout(tc.layout, tc.devices); got != tc.want {
+			t.Fatalf("ValidZFSLayout(%q, %d) = %v", tc.layout, tc.devices, got)
+		}
+	}
+}
+
+func TestZFSProvisionNeedsReplaceCapability(t *testing.T) {
+	base := ZFSProvisionRequest{Name: "storage", PoolID: "pool-1", Scope: "host", Hosts: []ZFSProvisionHost{{
+		HostID: "host-1", Layout: "mirror", Devices: []ZFSProvisionDevice{testZFSProvisionDevice("disk-1"), testZFSProvisionDevice("disk-2")},
+	}}}
+	if ZFSProvisionNeedsReplaceCapability(base) {
+		t.Fatal("two-disk mirror without spares must not require replace capability")
+	}
+	withSpare := base
+	withSpare.Hosts = append([]ZFSProvisionHost{}, base.Hosts...)
+	withSpare.Hosts[0].Spares = []ZFSProvisionDevice{testZFSProvisionDevice("disk-3")}
+	if !ZFSProvisionNeedsReplaceCapability(withSpare) {
+		t.Fatal("spares require replace capability")
+	}
+	threeMirror := base
+	threeMirror.Hosts = append([]ZFSProvisionHost{}, base.Hosts...)
+	threeMirror.Hosts[0].Devices = append(threeMirror.Hosts[0].Devices, testZFSProvisionDevice("disk-3"))
+	if !ZFSProvisionNeedsReplaceCapability(threeMirror) {
+		t.Fatal("three-disk mirror requires replace capability")
+	}
+	raidz3 := base
+	raidz3.Hosts = []ZFSProvisionHost{{HostID: "host-1", Layout: "raidz3", Devices: []ZFSProvisionDevice{
+		testZFSProvisionDevice("d1"), testZFSProvisionDevice("d2"), testZFSProvisionDevice("d3"),
+		testZFSProvisionDevice("d4"), testZFSProvisionDevice("d5"),
+	}}}
+	if !ZFSProvisionNeedsReplaceCapability(raidz3) {
+		t.Fatal("raidz3 requires replace capability")
+	}
+	autoThree := base
+	autoThree.Hosts = []ZFSProvisionHost{{HostID: "host-1", Devices: []ZFSProvisionDevice{
+		testZFSProvisionDevice("d1"), testZFSProvisionDevice("d2"), testZFSProvisionDevice("d3"),
+	}}}
+	if ZFSProvisionNeedsReplaceCapability(autoThree) {
+		t.Fatal("default three-disk raidz1 must not require replace capability")
+	}
+}
+
+func testZFSProvisionDevice(name string) ZFSProvisionDevice {
+	return ZFSProvisionDevice{ByID: "/dev/disk/by-id/" + name, Serial: name, SizeBytes: 1 << 30, Fingerprint: strings.Repeat("a", 64)}
+}
+
+// A hot spare is erased and passed to zpool like any other selected disk, but it satisfies
+// no part of the layout: two data disks and a spare are a mirror, not a three-way mirror.
+func TestValidateZFSProvisionCountsSparesApartFromTheLayout(t *testing.T) {
+	request := ZFSProvisionRequest{Name: "storage", PoolID: "pool-1", Scope: "host", Hosts: []ZFSProvisionHost{{
+		HostID:  "host-1",
+		Layout:  "mirror",
+		Devices: []ZFSProvisionDevice{testZFSProvisionDevice("disk-1"), testZFSProvisionDevice("disk-2")},
+		Spares:  []ZFSProvisionDevice{testZFSProvisionDevice("disk-3")},
+	}}}
+	if err := ValidateZFSProvision(request); err != nil {
+		t.Fatalf("a mirror with a spare was refused: %v", err)
+	}
+	// Spares must not pad a short data set into a valid layout: those cases pass if spares
+	// were counted toward the layout check.
+	for name, bad := range map[string]ZFSProvisionRequest{
+		"mirror with one data disk and a spare": {
+			Name: "storage", PoolID: "pool-1", Scope: "host", Hosts: []ZFSProvisionHost{{
+				HostID: "host-1", Layout: "mirror",
+				Devices: []ZFSProvisionDevice{testZFSProvisionDevice("disk-1")},
+				Spares:  []ZFSProvisionDevice{testZFSProvisionDevice("disk-2")},
+			}},
+		},
+		"raidz1 with two data disks and a spare": {
+			Name: "storage", PoolID: "pool-1", Scope: "host", Hosts: []ZFSProvisionHost{{
+				HostID: "host-1", Layout: "raidz1",
+				Devices: []ZFSProvisionDevice{testZFSProvisionDevice("disk-1"), testZFSProvisionDevice("disk-2")},
+				Spares:  []ZFSProvisionDevice{testZFSProvisionDevice("disk-3")},
+			}},
+		},
+	} {
+		if ValidateZFSProvision(bad) == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+	reused := request
+	reused.Hosts[0].Spares = []ZFSProvisionDevice{testZFSProvisionDevice("disk-2")}
+	if ValidateZFSProvision(reused) == nil {
+		t.Fatal("the same disk was accepted as both a mirror member and a spare")
+	}
+	unconfirmed := request
+	spare := testZFSProvisionDevice("disk-4")
+	spare.EraseConfirmation = "/dev/disk/by-id/disk-1"
+	unconfirmed.Hosts[0].Spares = []ZFSProvisionDevice{spare}
+	if ValidateZFSProvision(unconfirmed) == nil {
+		t.Fatal("a spare was accepted with an erase confirmation naming another disk")
+	}
+}
+
+func TestZFSReplaceRequestValidation(t *testing.T) {
+	valid := ZFSReplaceRequest{OperationID: "op-1", RepositoryID: "zfs-1", PoolID: "pool-1", HostID: "host-1", OldDevice: "/dev/disk/by-id/disk-1-part1", Device: testZFSProvisionDevice("disk-9")}
+	if err := valid.Valid(); err != nil {
+		t.Fatalf("a well-formed replacement was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*ZFSReplaceRequest){
+		"no operation":        func(r *ZFSReplaceRequest) { r.OperationID = "" },
+		"path operation":      func(r *ZFSReplaceRequest) { r.OperationID = "../../../../etc/cron.d/nex" },
+		"slash operation":     func(r *ZFSReplaceRequest) { r.OperationID = "op/../evil" },
+		"no repository":       func(r *ZFSReplaceRequest) { r.RepositoryID = "" },
+		"no host":             func(r *ZFSReplaceRequest) { r.HostID = "" },
+		"unstable old device": func(r *ZFSReplaceRequest) { r.OldDevice = "/dev/sdb" },
+		// A pool leaf is a partition of the disk it sits on, so naming that disk as the
+		// replacement is the failed disk itself.
+		"same disk": func(r *ZFSReplaceRequest) { r.Device = testZFSProvisionDevice("disk-1") },
+		"same whole disk": func(r *ZFSReplaceRequest) {
+			r.OldDevice, r.Device = "/dev/disk/by-id/disk-9", testZFSProvisionDevice("disk-9")
+		},
+		"no fingerprint":     func(r *ZFSReplaceRequest) { r.Device.Fingerprint = "" },
+		"wrong confirmation": func(r *ZFSReplaceRequest) { r.Device.EraseConfirmation = "/dev/disk/by-id/other" },
+	} {
+		request := valid
+		mutate(&request)
+		if request.Valid() == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+}

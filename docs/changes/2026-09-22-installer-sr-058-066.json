@@ -1,0 +1,41 @@
+{
+  "summary": "Confirm and fix staged-review installer findings SR-058–066: resilient mirrored ESP mount and fstab rewrite (nex-sync-esp + nofail timeout), repair installer-hostname render harness with real one/two/three-disk seed assertions, text Disk preselection, root-md-only mdadm.conf, heredoc syntax checks, GUI Use-column clicks, and multi-disk recheck wipe coverage. API impact: none.",
+  "paths": [
+    "installer/late-install.sh",
+    "installer/gui/nex-config.c",
+    "installer/gui/wizard-text.sh",
+    "installer/check.sh",
+    "tests/integration/installer-hostname.py",
+    "tests/integration/installer-handoff.py",
+    "tests/integration/fresh_install_gui.py",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-22-installer-sr-058-066.json",
+    "docs/qa/iso/2026-09-22-installer-mirror.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "docs/guide/install-nex-core.md already describes Use-column ticks, lone-disk preselection for both installers, and that the per-disk EFI mount must not hold up boot. This change makes the text installer and ESP tooling match that wording; no new operator step.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer-local late-install and wizard handoff only. No Controller or Core API contract changes; system-disk replace already had a surviving-ESP fallback (BUG-0485).",
+    "operations": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes within the existing mirrored-installer slice; no milestone status change."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "ESP fstab UUID, mdadm.conf and nex-sync-esp live on the installed host; a fresh Controller does not own them. Recovered by reading the host after install or replace.",
+    "record": "/etc/fstab /boot/efi line, /etc/mdadm/mdadm.conf, /usr/local/sbin/nex-sync-esp and the APT Post-Invoke hook on the installed host."
+  },
+  "verification": {
+    "method": "Confirmed each finding against source before fixing. python3 tests/integration/installer-hostname.py (compile + one/two/three-disk render). python3 tests/integration/installer-handoff.py (BUG-0413 + new two-disk wipe). bash installer/check.sh (heredoc sh -n, fstab sed fixture, root-md gate, text preselect assert). Other installer-*.py smoke that need no ISO. Booted host with ESP-owning disk detached and live GUI --mirror lab remain outstanding.",
+    "evidence": [
+      "docs/qa/iso/2026-09-22-installer-mirror.md"
+    ]
+  }
+}

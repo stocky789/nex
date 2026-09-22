@@ -213,7 +213,7 @@ func placementStorage(ctx context.Context, js []managedJournal, v protocol.VMCre
 		if s.PoolID != v.PoolID || s.HostID != v.HostID {
 			return nil, errors.New("storage scope does not match the VM")
 		}
-		s.Access = protocol.StorageAccess{Status: access.Health, Readable: true, Writable: !access.ReadOnly, TotalBytes: access.Total, AvailableBytes: &access.Available, ObservedAt: time.Now().UTC()}
+		s.Access = observedStorageAccess(access, time.Now().UTC())
 		out = append(out, s)
 	}
 	return out, nil

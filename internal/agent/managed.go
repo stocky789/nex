@@ -23,7 +23,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
 		return true
 	}
 	return false
@@ -178,7 +178,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			if lifecycleResult, handled, lifecycleErr := ExecutePoolZFSLifecycle(ctx, &Store{dir: dir, State: identity}, cmd); handled {
 				result = lifecycleResult
 				err = lifecycleErr
-			} else if (cmd.Kind != "storage-zfs-provision" && commandHost(cmd) != identity.HostID) || identity.HostID == "" {
+			} else if (!poolAddressedCommand(cmd.Kind) && commandHost(cmd) != identity.HostID) || identity.HostID == "" {
 				result.Error = "managed command host identity does not match enrolled host"
 			} else {
 				if cmd.Pool != nil {
@@ -224,12 +224,18 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					if err == nil && cmd.Kind != "pool-maintenance" && cmd.Kind != "pool-transfer" && cmd.Kind != "pool-promote" && cmd.Kind != "pool-fence-profile" && cmd.Kind != "pool-bmc-provisioning" && cmd.Kind != "pool-host-fencing" {
 						result = protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 					}
+				} else if cmd.Kind == "host-system-disk-replace" {
+					// Host-local and pool-free: this host's own mirror, its own disks
+					// and its own bootloader.
+					result = ExecuteSystemDiskReplace(ctx, dir, cmd)
 				} else if cmd.Kind == "management-network" {
 					// Host-scoped and pool-free: this host's own /etc files and its
 					// durable staged record, with no membership or storage fence.
 					result = ExecuteManagementNetwork(ctx, dir, cmd)
 				} else if cmd.Kind == "storage-zfs-provision" {
 					result, err = ExecutePoolZFSProvision(ctx, &Store{dir: dir, State: identity}, cmd)
+				} else if cmd.Kind == "storage-zfs-replace" {
+					result, err = ExecutePoolZFSReplace(ctx, &Store{dir: dir, State: identity}, cmd)
 				} else {
 					memberStore := &Store{dir: dir, State: identity}
 					// Core decides from its own journal how a media change is applied: on a
@@ -595,6 +601,13 @@ func commandReferencesRemoteStorage(ctx context.Context, s *Store, cmd protocol.
 	return false
 }
 
+// poolAddressedCommand names the commands the Controller sends to the pool master about
+// the pool's repositories: the master names the host inside the request and reaches it
+// itself. Every other managed command is addressed to the host that carries it out.
+func poolAddressedCommand(kind string) bool {
+	return kind == "storage-zfs-provision" || kind == "storage-zfs-replace"
+}
+
 func commandHost(cmd protocol.Command) string {
 	switch cmd.Kind {
 	case "storage-register":
@@ -632,6 +645,10 @@ func commandHost(cmd protocol.Command) string {
 	case "management-network":
 		if cmd.ManagementNetwork != nil {
 			return cmd.ManagementNetwork.HostID
+		}
+	case "host-system-disk-replace":
+		if cmd.SystemDiskReplace != nil {
+			return cmd.SystemDiskReplace.HostID
 		}
 	case "network-register":
 		if cmd.Network != nil {

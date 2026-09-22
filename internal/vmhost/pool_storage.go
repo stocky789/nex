@@ -75,8 +75,7 @@ func PreparePoolStorage(ctx context.Context, agentStateDir string, s protocol.St
 		}
 	}
 	s.Path, s.Identity = access.Path, access.Observed
-	available := access.Available
-	s.Access = protocol.StorageAccess{Status: "healthy", Readable: true, Writable: true, TotalBytes: access.Total, AvailableBytes: &available, ObservedAt: time.Now().UTC()}
+	s.Access = observedStorageAccess(access, time.Now().UTC())
 	return s, nil
 }
 
@@ -114,8 +113,7 @@ func ValidatePoolStorageAccess(ctx context.Context, s protocol.StorageRegistrati
 		}
 	}
 	s.Path, s.Identity = access.Path, access.Observed
-	available := access.Available
-	s.Access = protocol.StorageAccess{Status: "healthy", Readable: true, Writable: true, TotalBytes: access.Total, AvailableBytes: &available, ObservedAt: time.Now().UTC()}
+	s.Access = observedStorageAccess(access, time.Now().UTC())
 	return s, nil
 }
 

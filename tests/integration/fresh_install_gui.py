@@ -10,13 +10,14 @@ import argparse
 import json
 from pathlib import Path
 import time
-from fresh_install_lab import ROOT, key, type_text, click, capture, qmp, validate_target
+from fresh_install_lab import ROOT, key, type_text, click, capture, validate_target, lab_disks
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--lab-dir', type=Path, required=True)
     p.add_argument('--stage', choices=('configure', 'install', 'restart', 'console-key'), required=True)
+    p.add_argument('--mirror', action='store_true', help='also select the second offered disk, for a mirrored system disk')
     p.add_argument('--evidence', type=Path, default=ROOT / 'docs/qa/fresh-install')
     args = p.parse_args()
     lab = validate_target(args.lab_dir)
@@ -40,18 +41,25 @@ def main():
         click(lab, 500, 438); key(lab, 'home'); key(lab, 'down'); key(lab, 'ret')
         shot('installer-network')
         click(lab, 740, 543); time.sleep(.5)
-        click(lab, 300, 194)
+        # Tick the Use column (row highlight alone does nothing). Around x=180 on the 800x600 UI.
+        click(lab, 180, 217)
+        if args.mirror:
+            # Wait so GTK does not read the two ticks as one double click.
+            time.sleep(1)
+            click(lab, 180, 240)
         shot('installer-target')
         click(lab, 740, 543)
         shot('installer-review')
         click(lab, 740, 543)
         shot('installer-confirmation-required')
-        with (lab / 'host.raw').open('rb') as disk:
-            assert disk.read(1024 * 1024) == bytes(1024 * 1024), 'unconfirmed disk selection wrote target'
+        for target in lab_disks(lab):
+            with target.open('rb') as disk:
+                assert disk.read(1024 * 1024) == bytes(1024 * 1024), 'unconfirmed disk selection wrote target'
         print('Configured actual wizard; target remains blank after unconfirmed install. Inspect review before install stage.')
     elif args.stage == 'install':
-        with (lab / 'host.raw').open('rb') as disk:
-            assert disk.read(1024 * 1024) == bytes(1024 * 1024), 'installation stage only accepts the still-blank new lab target'
+        for target in lab_disks(lab):
+            with target.open('rb') as disk:
+                assert disk.read(1024 * 1024) == bytes(1024 * 1024), 'installation stage only accepts still-blank new lab targets'
         key(lab, 'alt', 'e')
         shot('installer-confirmed')
         click(lab, 740, 543)

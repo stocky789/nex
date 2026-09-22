@@ -14,19 +14,22 @@ const (
 	HardwareMaxDisks         = 128
 	HardwareMaxPCIDevices    = 256
 	HardwareMaxSensors       = 24
+	HardwareMaxMDArrays      = 32
+	HardwareMaxMDMembers     = 64
 )
 
 // HostHardware is what a host reads about itself on request. Nothing here is cached,
 // persisted or reported in a heartbeat: every field is observed when it is asked for.
 type HostHardware struct {
-	HostID     string          `json:"host_id,omitempty"` // set by the Controller relay
-	ObservedAt time.Time       `json:"observed_at"`
-	System     HardwareSystem  `json:"system"`
-	CPU        HardwareCPU     `json:"cpu"`
-	Memory     HardwareMemory  `json:"memory"`
-	Disks      HardwareDisks   `json:"disks"`
-	PCI        HardwarePCI     `json:"pci"`
-	Sensors    HardwareSensors `json:"sensors"`
+	HostID     string           `json:"host_id,omitempty"` // set by the Controller relay
+	ObservedAt time.Time        `json:"observed_at"`
+	System     HardwareSystem   `json:"system"`
+	CPU        HardwareCPU      `json:"cpu"`
+	Memory     HardwareMemory   `json:"memory"`
+	Disks      HardwareDisks    `json:"disks"`
+	PCI        HardwarePCI      `json:"pci"`
+	Sensors    HardwareSensors  `json:"sensors"`
+	MDArrays   HardwareMDArrays `json:"md_arrays"`
 }
 
 // HardwareSystem describes the machine, its board, chassis and firmware. Serial numbers are
@@ -127,4 +130,38 @@ type TemperatureSensor struct {
 	Label       string   `json:"label"`
 	MaxCelsius  *float64 `json:"max_celsius,omitempty"`
 	CritCelsius *float64 `json:"crit_celsius,omitempty"`
+}
+
+// HardwareMDArrays reports the Linux md arrays the kernel has assembled on this host, which
+// is how a mirrored system disk and its rebuild are seen. Nothing is stored: the arrays and
+// their members are read from sysfs when the report is asked for.
+type HardwareMDArrays struct {
+	Unavailable bool      `json:"unavailable,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+	Arrays      []MDArray `json:"arrays"`
+}
+
+// MDArray is one /sys/block/md*/md/ directory. SyncPercent is set only while the kernel
+// reports a position in a running action, so an idle array has no invented progress.
+type MDArray struct {
+	Name        string   `json:"name"`   // md0
+	Device      string   `json:"device"` // /dev/md0
+	Level       string   `json:"level"`  // raid1
+	RaidDisks   int      `json:"raid_disks"`
+	Degraded    int      `json:"degraded"`
+	SyncAction  string   `json:"sync_action,omitempty"` // idle, resync, recover, check
+	SyncPercent *float64 `json:"sync_percent,omitempty"`
+	// SyncSpeedKBs is the kernel's own current copy rate in KB/s while an action runs, so an
+	// operator can see a rebuild moving rather than only how far it has come.
+	SyncSpeedKBs int        `json:"sync_speed_kbs,omitempty"`
+	Members      []MDMember `json:"members"`
+}
+
+// MDMember is one dev-* entry of an array: the partition, the slot it fills and the state
+// the kernel reports for it (in_sync, spare, faulty, write_mostly, …).
+type MDMember struct {
+	Name   string `json:"name"`   // sda2
+	Device string `json:"device"` // /dev/sda2
+	Slot   string `json:"slot"`   // "0", or "none" for a spare or failed member
+	State  string `json:"state"`
 }

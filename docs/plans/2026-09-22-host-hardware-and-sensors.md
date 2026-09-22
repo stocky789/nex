@@ -123,37 +123,39 @@ VM Stats tabs gain no panel or gauge; a VM has no hardware of its own.
 
 Decision: project owner, 2026-09-22 — the Stats tab follows a styling reference the owner
 supplied: a soft, light surface with vivid accent colours, not the current muted palette. The
-reference image is not committed. The values below were sampled from it.
+reference image is not committed. A later plain-stats restyle (2026-09-22) dropped the
+accent-left-border cards, tinted backgrounds, half-circle gauge arcs and `--accent-*` aliases;
+the live tokens below are what `web/src/stats.css` actually defines.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--stats-bg` | `#ecf5f8` | Stats tab background behind the cards |
-| `--stats-card` / `--stats-border` | `#ffffff` / `#d1d9e6` | panels, gauges and charts: white cards, 1 px border, 6 px radius |
-| `--stats-muted` | `#67778d` | captions, units, small uppercase section labels |
-| `--stats-track` | `#e8e9eb` | the unfilled part of a gauge arc or bar |
-| `--accent-blue` | `#3273dc` | CPU |
-| `--accent-teal` | `#00d1b2` | memory |
-| `--accent-sky` | `#209cee` | network, NIC sensors |
-| `--accent-green` | `#23d160` | disk; a temperature inside its normal range |
-| `--accent-yellow` | `#ffdd57` | a temperature at or above the sensor's `max` |
-| `--accent-violet` | `#7c5cff` | GPU and other PCI sensors |
-| `--accent-rose` | `#ff3860` | a temperature at or above `crit`; errors |
+| (canvas) | `#f7f8fa` | Stats tab background behind the cards (`section.panel.stats`) |
+| card fill / `--stats-border` | `#ffffff` / `#dde3ea` | panels, gauges and charts: white cards, 1 px border, 6 px radius |
+| `--stats-muted` | `#67778d` | captions, units, row counts |
+| `--stats-line` | `#eef1f5` | gauge track and table row rules |
+| `--stats-ink` | `#1f2937` | headings and values |
+| `--series-1` | `#3273dc` | CPU |
+| `--series-2` | `#0e7490` | memory |
+| `--series-3` | `#1179b5` | network |
+| `--series-4` | `#0f8a5f` | disk |
+| `--series-5` | `#9a6700` | load / warm readings |
+| `--series-6` | `#7c5cff` | additional series |
+| `--series-7` | `#ff3860` | critical / error series |
+| `--series-8` | `#5b6570` | muted / inactive series |
 
-- **Cards.** Each Hardware section and each gauge is a white card with a 4 px left border in its
-  accent colour and a background tinted with about 6 % of that accent (`#f3f7fd` for blue,
-  `#f0fcfa` for teal, `#f2fcf5` for green), as `color-mix()` so no tint is hand-picked.
-- **Gauges.** A thick rounded arc in the accent over the `--stats-track` colour, the value in large
-  text, and the label beneath as a small uppercase caption in `--stats-muted`. State reads as a
-  rounded pill: dark text on the yellow fill for "Warm", white on rose for "Critical".
-- **Hardware summary.** Section headings are small uppercase captions; identifiers such as BIOS
-  version and part numbers sit in soft tinted pills; tables use the same quiet header row.
-- **Charts.** `--series-1` to `--series-7` become the seven accents, scoped to `.stats`, so the
-  existing charts, the new temperature chart and the gauges read as one system. `--series-8`
+- **Cards.** Each Hardware section, gauge and chart is a white card with a quiet border on the
+  `#f7f8fa` canvas. No accent left border or tinted card background.
+- **Gauges.** A short horizontal fill bar over `--stats-line`, the value in large text, and the
+  label above in `--stats-muted`. Warm and Critical are words beside the value in darkened amber
+  or red; there is no half-circle arc and no pill badge.
+- **Hardware summary.** Section headings are ordinary weight text; expandable cards show a row
+  count when collapsed. Tables use a quiet muted header row.
+- **Charts.** `--series-1` to `--series-7` are the chart colours, scoped to `.stats`, so the
+  existing charts, the temperature chart and the gauges read as one system. `--series-8`
   stays grey.
-- **Contrast is not traded away.** Teal, green and yellow are below 3:1 against white, so they
-  are used only for fills, arcs and borders. Every gauge also shows its number and a state word,
-  text on yellow is dark, and chart lines in those three hues are drawn 2 px wide with the
-  series always named in the legend and tooltip. Colour alone never carries a state.
+- **Contrast is not traded away.** Series 2–5 meet the 3:1 non-text minimum against white.
+  Every gauge also shows its number and a state word when Warm or Critical. Colour alone never
+  carries a state.
 - **Scope.** The tokens are defined under `.stats` in `web/src/stats.css` and restyle the Stats
   tabs only (host and VM, so the two do not diverge). Restyling the rest of the Controller UI is
   a separate decision and is not part of this plan.
@@ -187,6 +189,10 @@ Decisions: project owner delegated; taken as the smallest working change, 2026-0
 - **Fixtures.** Sysfs and procfs fixture trees are built in `t.TempDir` with stub tools on an
   isolated `PATH`, not committed under `testdata`, so no fictional vendor, serial or sensor value
   is carried in the repository as though it were a capture.
+- **Plain stats styling.** The accent-coloured left borders, tinted card backgrounds, half-circle
+  gauge arcs, uppercase captions, pill badges and `--accent-*` / `--stats-bg` / `--stats-track`
+  tokens were removed in favour of white cards on `#f7f8fa`, horizontal fill bars and the
+  `--series-*` table above. Follow `web/src/stats.css`, not the original reference palette.
 
 ## Acceptance gates
 
