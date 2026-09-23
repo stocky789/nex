@@ -36,8 +36,8 @@ function nexVersion(raw: string): { parts: number[]; prerelease: boolean } | und
 // The host page's version light: green when the host runs the newest Nex Core, orange when a
 // newer one exists, red when that is a new major version. Undefined when nothing is known.
 // ponytail: numeric-segment compare, not dpkg ordering; leftover base digits after a match read behind.
-export function versionLight(installed: string, available?: string): { level: "current" | "behind" | "major"; label: string; title: string } | undefined {
-  const token = installed.match(/Nex Core\s+(\S+)/i)?.[1];
+export function versionLight(installed: string | undefined, available?: string): { level: "current" | "behind" | "major"; label: string; title: string } | undefined {
+  const token = installed?.match(/Nex Core\s+(\S+)/i)?.[1];
   if (!token || !available) return undefined;
   const have = nexVersion(token), want = nexVersion(available);
   if (!have || !want) return undefined;

@@ -19,8 +19,8 @@ const readyVM = { id: "vm-1", status: "succeeded", protected: false, spec: {} };
 assert.equal(editBlocker({ ...readyVM, status: "queued" }), "Wait for the creation task to finish.");
 assert.equal(editBlocker({ ...readyVM, status: "dispatched" }), "Wait for the creation task to finish.");
 assert.notEqual(editBlocker(readyVM), "Wait for the creation task to finish.");
-// A create that ended failed or needs_attention has finished; Edit stays blocked but points to Task history.
-for (const status of ["failed", "needs_attention"]) assert.equal(editBlocker({ ...readyVM, status }), "The creation task did not succeed; check it in Task history.", status);
+// A create that ended failed or needs_attention has finished; Edit stays blocked but points to Tasks.
+for (const status of ["failed", "needs_attention"]) assert.equal(editBlocker({ ...readyVM, status }), "The creation task did not succeed; check it in Tasks.", status);
 // VMEDIT-3 follow-up: the VM listing reports each interface's effective MAC, including the one
 // derived for an automatic interface. The editor must show those interfaces as existing, with
 // that MAC in the field it submits, so removing or changing one names it unambiguously.
@@ -56,3 +56,18 @@ assert.doesNotMatch(failedHTML, /disabled="">Save changes/, "unknown recomputed 
 for (const state of ["running", "paused", "unknown"]) assert.match(renderCPU({ ...savedVM, state }, baselineHost), /CPU model<select required="" disabled=""/, "CPU/features change only on stopped VM");
 assert.match(renderCPU(savedVM, { ...baselineHost, capabilities: ["managed-vm-v1", "vm-update-v1"] }), /Upgrade Nex Core/);
 console.log("vm-edit pool CPU baseline check ok");
+
+// VM tags: PUT replaces the whole definition, so every edit must carry the VM's tags or saving a
+// hardware change would clear them.
+{
+  const { draftOf, updateBody, tagsBlocker } = await import(bundleTestModule(new URL("./vm-edit.tsx", import.meta.url), "vm-edit", true));
+  const tagged = { ...listed, spec: { ...listed.spec, tags: ["db", "web"] } };
+  assert.deepEqual(updateBody(tagged, draftOf(tagged)).tags, ["db", "web"], "an edit keeps the VM's tags");
+  assert.deepEqual(updateBody(listed, draftOf(listed)).tags, [], "a VM without tags sends an empty list");
+  const master = { id: "m", capabilities: ["vm-tags-v1"] };
+  const host = { ...baselineHost, capabilities: [...baselineHost.capabilities, "vm-tags-v1"] };
+  assert.equal(tagsBlocker(tagged, host, { id: "m", capabilities: [] }), "Requires Nex Core 0.4.8 or later on the pool master.");
+  assert.match(tagsBlocker(tagged, baselineHost, master), /on this VM's host/);
+  assert.equal(tagsBlocker(tagged, host, master), "");
+  console.log("vm-edit tags check ok");
+}

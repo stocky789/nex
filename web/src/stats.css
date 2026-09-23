@@ -52,11 +52,16 @@ section.panel.stats { background: var(--sunken); }
 /* An identifier broken across lines reads as two values ("1d0f:00 61"); the card scrolls instead. */
 .stats-id { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
 
+.stats-sparks { margin: 12px 12px 0; padding: 6px 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); }
+.spark-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 90px; gap: 10px; align-items: center; padding: 4px 0; }
+.spark-row .sparkline { width: 100%; }
+.spark-row b { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+
 .stats-legend { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 4px; }
 .stats-chip {
   display: inline-flex; align-items: center; gap: 6px;
   min-height: 22px; padding: 2px 8px;
-  border: 1px solid transparent; border-radius: 11px;
+  border: 1px solid transparent; border-radius: var(--radius-control);
   background: none; color: var(--text); font-size: 11px;
 }
 .stats-chip:hover { background: var(--select); border-color: var(--line-soft); }

@@ -2,18 +2,27 @@
 // The UI's colours live in tokens.css alone, no chrome surface is a gradient, and every
 // text/background token pair meets WCAG AA. run with: node src/tokens.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const read = (f) => readFileSync(new URL(`./${f}`, import.meta.url), "utf8");
 const tokens = read("tokens.css");
-for (const file of ["style.css", "stats.css", "console.css"]) {
+// Every Controller stylesheet (local.css is the Nex Core host page, outside the guide) follows the design guide: token colours only, no gradients (the
+// Overview's stale-host hatch is the one allowed), no coloured side stripes, corners of 2 or 3 px.
+for (const file of readdirSync(new URL(".", import.meta.url)).filter(f => f.endsWith(".css") && f !== "tokens.css" && f !== "local.css")) {
   const css = read(file);
-  assert.equal((css.match(/linear-gradient/g) || []).length, 0, `${file}: no gradients`);
-  const literals = css.match(/#[0-9a-f]{3,8}\b/gi) || [];
+  const gradients = (css.match(/linear-gradient/g) || []).length;
+  assert.equal(gradients, file === "overview.css" ? 1 : 0, `${file}: no gradients`);
+  const literals = css.match(/#[0-9a-f]{3,8}\b|\b(rgba?|hsla?)\(/gi) || [];
   assert.deepEqual(literals, [], `${file}: colours come from tokens.css; found ${literals.join(" ")}`);
+  // A 1 px neutral divider beside a nav or the slide-over is not a stripe; a thick or coloured one is.
+  assert.ok(!/border-(left|right)(-color)?\s*:[^;]*((?<![\d.])[2-9]px|--(accent|ok|warn|bad|info|danger))/.test(css), `${file}: no side stripes`);
+  assert.ok(!/border-radius:\s*([4-9]|\d{2,})px/.test(css), `${file}: corners are 2 or 3 px`);
 }
 
-const [light, dark = ""] = tokens.split("@media (prefers-color-scheme: dark)");
+const [light, media] = tokens.split("@media (prefers-color-scheme: dark)");
+const [dark, forced] = media.split(':root[data-theme="dark"]');
+const declarations = (block) => block.match(/--[\w-]+:[^;]+;/g).join("");
+assert.equal(declarations(forced), declarations(dark), "the system dark block and the forced dark block are the same values");
 const hex = (block, name) => {
   const m = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
   assert.ok(m, `token --${name} is defined`);
@@ -24,14 +33,14 @@ const luminance = (h) => {
   return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 };
 const ratio = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
-const pairs = [["text", "canvas"], ["text", "panel"], ["text", "sunken"], ["muted", "canvas"], ["muted", "panel"], ["muted", "sunken"], ["accent", "panel"], ["accent", "canvas"], ["on-accent", "accent"], ["on-topbar", "topbar"], ["on-danger", "danger"], ["ok", "ok-bg"], ["warn", "warn-bg"], ["bad", "bad-bg"], ["info", "info-bg"], ["neutral", "neutral-bg"]];
+const pairs = [["text", "canvas"], ["text", "panel"], ["text", "sunken"], ["text", "select"], ["muted", "canvas"], ["muted", "panel"], ["muted", "sunken"], ["accent", "panel"], ["accent", "canvas"], ["on-accent", "accent"], ["on-rail", "rail"], ["rail-hi", "rail"], ["on-danger", "danger"], ["ok", "ok-bg"], ["warn", "warn-bg"], ["bad", "bad-bg"], ["info", "info-bg"], ["neutral", "neutral-bg"]];
 for (const [fg, bg] of pairs) {
   assert.ok(ratio(hex(light, fg), hex(light, bg)) >= 4.5, `light ${fg} on ${bg}`);
-  if (dark) assert.ok(ratio(hex(dark, fg), hex(dark, bg)) >= 4.5, `dark ${fg} on ${bg}`);
+  assert.ok(ratio(hex(dark, fg), hex(dark, bg)) >= 4.5, `dark ${fg} on ${bg}`);
 }
 // Chart lines are graphics, so they need 3:1 against the panel they are drawn on.
-for (let i = 1; i <= 8; i++) {
-  assert.ok(ratio(hex(light, `series-${i}`), hex(light, "panel")) >= 3, `light series-${i} on panel`);
-  if (dark) assert.ok(ratio(hex(dark, `series-${i}`), hex(dark, "panel")) >= 3, `dark series-${i} on panel`);
+for (const series of ["s1", "s2", "s3", "s4", ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => `series-${i}`)]) {
+  assert.ok(ratio(hex(light, series), hex(light, "panel")) >= 3, `light ${series} on panel`);
+  assert.ok(ratio(hex(dark, series), hex(dark, "panel")) >= 3, `dark ${series} on panel`);
 }
 console.log("tokens ok");

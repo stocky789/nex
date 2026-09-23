@@ -1138,6 +1138,21 @@ broker round trip and deadline, the `400`/`404`/`409` matrix and both projection
 two-host join driven from the Controller, and a browser review of the Hosts tab, have **not** been
 executed for this contract; see [Join a pool](guide/join-a-pool.md#verification).
 
+### Member join time in the members projection (changed contract, 2026-09-23)
+
+API impact: **changed contract**, additive — `GET /api/v1/pools/{id}/members` gains
+`members[].joined_at`, an RFC 3339 UTC string: when the pool master admitted that member, or
+created the pool for its founding host. It is the `observed_at` of the member's row in the master's
+durable membership record (`PoolMember`), which Core sets on admission (and on re-admission after an
+eject) and which no master change, eject or maintenance write rewrites. No Core or peer change:
+every Core already records and reports it in `Inventory.managed.membership`. Like `peer_origin` it
+is a record, not an observation, so it is reported whether or not `authoritative` is true; it is
+`""` for a row with no recorded time (the synthesised single row of a master that reported no
+membership). **State owner: core** — the pool master's membership record; a fresh Controller reads
+it from the master's next inventory. Verification: `go test ./internal/controller -run
+TestPoolMembersReportsWhenEachMemberJoined`, `go test ./internal/agent -run
+TestNextPoolMembershipKeepsJoinTimes`. Introduced in development product 0.4.8.
+
 ### Host maintenance mode (POST /api/v1/pools/{id}/members/{host_id}/maintenance)
 
 API impact: **new contract**, implemented. One Controller route, one Core command kind
@@ -2164,7 +2179,7 @@ own replica and restriction while the master is gone.
 | Field | Source | Shown while the master is stale? |
 |---|---|---|
 | `status`, `error`, `maintenance`, `maintenance_since`, `access`, `failures`, `fence` | the master's membership or observations | **no** — unknown, `null` or empty |
-| `peer_origin` | the master's durable membership record | yes (unchanged) |
+| `peer_origin`, `joined_at` | the master's durable membership record | yes (unchanged) |
 | `connection`, `guests`, `join`, `transfer` | the host's own report | yes (unchanged) |
 | `restricted`, `checks`, `transfer_supported` | the host's own report | **yes (new)** |
 | `replica.generation`, `digest`, `verified`, `received_at` and its own `error` | the member's own report | **yes (new)** |
@@ -3964,6 +3979,43 @@ revision. Older Core without `vm-update-v1` is refused with 409 at request time.
 
 Evidence: [edit QA report](qa/vm-edit/checks.md).
 
+### VM tags
+
+API impact: **changed contract** — `VMCreateSpec` gains optional `tags` (JSON array of strings,
+omitted when empty), carried by `createVM`, `updateVM`, the `vm-create`/`vm-update` commands, the
+pool master's peer VM definition and `Inventory.managed.vms`, and returned in `spec.tags` on
+`GET /api/v1/vms`; new host capability `vm-tags-v1`.
+
+Each tag is 1 to 32 lowercase letters, digits or hyphens, at most 16 per VM. Controller sorts and
+de-duplicates the list before validating it; `protocol.ValidateVMSpec`, which Controller and Core
+both run, answers `400` `tag "<tag>" must be 1 to 32 lowercase letters, digits or hyphens`,
+`a VM allows at most 16 tags` or (Core only, for an undeduplicated list) `tag "<tag>" is repeated`.
+Tags are part of the complete definition: `updateVM` without `tags` clears them, so a client
+editing other fields sends the current `spec.tags` back. They change no guest device and apply
+to a running VM like the description. The usual `request_id` replay and `vm-update` operation
+semantics apply unchanged.
+
+Durable state is Core's: the host journals tags with each revision, the pool master keeps them
+in its pool VM record (`Spec`), and a fresh Controller adopts them from the host's reported
+definition like every other field. Nothing about tags is stored only by Controller. An older
+Core would decode and silently drop the field, so nonempty tags need `vm-tags-v1` on both the
+VM's host and its pool master; otherwise `409` "the VM's host or its pool master does not support
+VM tags; upgrade Nex Core" (`updateVM`) or "the selected host or its pool master does not
+support VM tags; upgrade Nex Core" (`createVM`), checked after the replay check. VMs on older
+Core report no tags. An older Controller does not clear tags: it decodes host reports strictly
+(unknown fields rejected), so it refuses the whole report of a host whose journal holds a tagged
+VM, and that host goes stale there until the Controller is upgraded. Upgrade the Controller before
+Core (the shared upgrade rule; a 0.4.8 Core's `uptime_seconds` and `speed_mbps` already make every
+report unreadable to an older Controller).
+
+Known limit: a planned master change or promotion to a host without `vm-tags-v1` can drop tags from
+the new master's pool VM record, because that Core decodes the definition without the field. The
+VM host's own journal keeps them. Upgrade every member before moving pool authority.
+
+Evidence: `go test ./internal/controller -run VMTags`,
+`go test ./internal/agent -run KeepsTags`,
+`go test ./internal/vmhost -run 'NeedsStopClassifies|CurrentAndApplied'`.
+
 ## VM deletion
 
 API impact: **new contract** — `deleteVM` (`DELETE /api/v1/vms/{id}`), the `vm-delete`
@@ -4484,6 +4536,21 @@ and a failing tool, no sysfs or proc at all) and Controller relay tests for the 
 browser review against mocked replies. **The real-hardware walkthrough belongs to the project
 owner** (decision: project owner, 2026-09-22) and is outstanding: no sensor label, threshold,
 `drivetemp`, `dmidecode` or `lspci` output here has been observed on a real machine.
+
+### Link speed and uptime in host inventory (changed contract, 2026-09-23)
+
+API impact: **changed contract**, additive — two optional report members, surfaced unchanged on
+`GET /api/v1/hosts`: `inventory.nics[].speed_mbps`, the negotiated link speed in Mb/s from
+`/sys/class/net/<name>/speed`, and `inventory.uptime_seconds`, whole seconds the host had been up
+at `inventory.observed_at`, from `/proc/uptime`. Each is omitted when unknown: virtual and
+link-down interfaces report `-1` or fail the read, and an unreadable `/proc/uptime` omits uptime.
+Older agents omit both. **State owner: none** — observed state read on every inventory probe;
+the Controller keeps only its existing copy of the last report. Compatibility: shared upgrade
+rule — Controller before Core, because report JSON is decoded strictly: an older Controller
+rejects the entire report of a Core that sends either field, and the host shows as stale until the
+Controller is upgraded. Introduced in development product 0.4.8. Verification: agent parse
+tests (`1000`, `-1`, missing file, `12345.67 54321.00`) and a Controller test that both fields
+reach `GET /api/v1/hosts`.
 
 ## Replacing a failed system disk (POST /api/v1/hosts/{id}/system-disk)
 

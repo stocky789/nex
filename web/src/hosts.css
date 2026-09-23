@@ -1,0 +1,44 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The host slide-over: cards, port and disk tiles, sparkline rows. Colours come from tokens.css. */
+/* Seven tabs: the host panel is wide enough to hold them on one line, and on a phone they wrap
+   rather than scroll sideways. */
+.slideover:has(.host-panel) .tabs { flex-wrap: wrap; gap: 0 14px; overflow: visible; }
+@media (min-width: 601px) { .slideover:has(.host-panel):not(.wide) { width: 540px; } }
+.host-card { margin-bottom: 10px; padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); font-variant-numeric: tabular-nums; }
+.host-card h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 10px; font-size: 13px; }
+.host-card h3 .muted { font-weight: 400; }
+.host-card > p { margin: 0; }
+.host-card-body { padding: 12px 14px; }
+.host-model { display: flex; gap: 12px; align-items: center; }
+.host-model b, .host-model .muted { display: block; overflow-wrap: anywhere; }
+.host-model b { font-size: 14px; }
+.host-glyph { display: grid; flex: none; place-items: center; width: 44px; height: 32px; border-radius: var(--radius-control); background: var(--sunken); color: var(--muted); }
+.host-ports { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.host-port { display: grid; place-items: center; min-width: 30px; height: 30px; padding: 0 5px; border-radius: var(--radius-control); font-size: 10px; font-weight: 700; }
+.host-port.up { background: var(--ok-bg); color: var(--ok); }
+.host-port.fast { background: var(--info-bg); color: var(--info); }
+.host-port.down { background: var(--line); color: var(--text); }
+.host-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 11px; }
+.host-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: var(--radius-control); }
+.host-legend i.up { background: var(--ok); }
+.host-legend i.fast { background: var(--info); }
+.host-legend i.down { background: var(--line); }
+.host-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 10px; }
+.host-links { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+.host-disks { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.host-disk { padding: 6px; border: 1px solid var(--line-soft); border-radius: var(--radius-control); font-size: 11px; }
+.host-disk b { display: block; font-size: 12px; }
+.host-disk span { display: block; }
+.host-disk .ok { color: var(--ok); }
+.host-disk .bad { color: var(--bad); }
+.host-vms td { padding: 5px 4px; }
+.host-vms td:first-child { padding-left: 0; }
+.host-vms tr:last-child td { border-bottom: 0; }
+.host-kv { display: grid; gap: 7px; margin: 0; }
+.host-kv div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
+.host-kv dt { color: var(--muted); }
+.host-kv dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.host-spark { display: grid; grid-template-columns: 70px minmax(0, 1fr) 90px; gap: 10px; align-items: center; padding: 4px 0; }
+.host-spark .sparkline { width: 100%; }
+.host-spark > :last-child { text-align: right; }
+.host-network > details > summary { padding: 8px 14px; cursor: pointer; }

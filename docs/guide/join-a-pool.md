@@ -2,8 +2,9 @@
 
 ## Status
 
-Development product 0.4.5. Add an enrolled Nex Core host to another host's pool from Nex
-Controller: pool detail → **Hosts** → **Add host to pool**. The pool master owns membership and
+Development product 0.4.8. Add an enrolled Nex Core host to another host's pool from Nex
+Controller: **Settings** → **Members** (with the pool chosen in the top-bar scope menu) →
+**Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared
 repositories); the joining host performs the join itself and reports its own progress, and
 Controller only asks and displays. The host-local procedure below remains available as the
@@ -12,7 +13,7 @@ recovery path when Controller is unavailable or the two hosts must be joined by 
 Known limits in this release:
 
 - **A join is not undone; it is reversed by an eject.** A host can be removed from a pool, and the
-  pool master can be changed, from pool detail → **Hosts** → **Actions** — see
+  pool master can be changed, from **Settings** → **Members** → **Actions** on the host's row — see
   [Pool authority and recovery](pool-authority-and-recovery.md). An ejected host becomes the master
   of its own new single-host pool rather than returning to the state it was in before the join, and
   putting it back is a new join. Automatic master succession, HA, live migration and automatic
@@ -23,6 +24,9 @@ Known limits in this release:
 - A host that has any virtual machine, or any storage that is not local to it, is refused.
 - The Controller-driven workflow has not yet been walked through on real hardware; see
   [Verification](#verification) before relying on these steps.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -44,9 +48,16 @@ Known limits in this release:
 
 ## Steps
 
-1. Open the pool that the host should join and select the **Hosts** tab. The table lists what the
-   pool master reports: host, role, connection, membership status, **Maintenance**, **Authority
-   copy** and convergence. Maintenance is covered in
+1. Choose the pool that the host should join in the top-bar scope menu, then select **Settings**
+   in the rail and **Members** in the settings navigation (`#/settings/members`). A pool status
+   strip (**Authority generation**, **Fencing**, **Host fencing** and, where the pool has one, its
+   **Watchdog cluster**) sits above one row per host the pool master reports. Each row shows the
+   host name, its role (**Pool master** or **Member**), its Nex Core version (with **Update** when a
+   newer one is available), **Joined** (when the pool master admitted it) and an **Actions** menu,
+   then a strip of status checks: **Connection**, **Membership**, **Maintenance**,
+   **Authority copy** (members only), **Convergence** and **Fencing**, each with one word such as
+   **OK**, **Stale** or **Unknown**. **Details** at the end of the strip opens the full text for
+   each check and the peer address. Maintenance is covered in
    [Put a pool host into maintenance](host-maintenance-mode.md); the authority copy each member
    holds is covered in [Pool authority and recovery](pool-authority-and-recovery.md). Both read
    *unknown* while the pool master is not fresh.
@@ -54,7 +65,7 @@ Known limits in this release:
    the master of its own single-host pool until it joins. A host that cannot join is shown as
    **cannot join** and cannot be selected. A host that has not enrolled yet is not listed: the
    dialog says *There is no other enrolled host at this site to add*. Enroll it first with
-   **Add host** in the toolbar, then return here once it reports.
+   **Add host** in the top-bar scope menu, then return here once it reports.
 3. Select a host and read its compatibility preview. Each row is a check (connection, version,
    capability, membership, VMs, storage, uplink, CPU) with a result:
    - **compatible** — nothing to do.
@@ -143,8 +154,8 @@ Messages below are the exact text the interface shows.
   invitation was never picked up by the joining host, so Controller ended the operation instead of
   redelivering an empty one. Nothing changed on either host. Select **Add host to pool** again.
 - **Master not current** — when the pool master is not fresh, membership, convergence, failure
-  detail and join progress are shown as **unknown** rather than as the last known state, and the
-  peer address column is blank. Restore the master's connection; do not read an unknown row as a
+  detail and join progress are shown as **Unknown** rather than as the last known state, and the
+  row details show no peer address. Restore the master's connection; do not read an unknown row as a
   healthy one.
 - **Member storage access is pending, stale or failed:** fix the member's server-side
   export/share access, identity, capacity, QEMU permissions or locking support. The member retries
@@ -228,6 +239,11 @@ exchange; the operator handles the CSR and the one-use offer instead of the Cont
 
 ## Verification
 
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
+
 - **G1 partial browser evidence.** Retained desktop and 360 px captures and raw requests bind a
   bootstrap join plus two typed eject/join cycles to accepted operations and terminal success.
   After each cycle, the returned host was ready and fresh with a verified current replica; NFS
@@ -247,8 +263,8 @@ exchange; the operator handles the CSR and the one-use offer instead of the Cont
   coverage unwalked. The implementation is also covered by Go unit
   tests (master invitation and CSR binding at redemption, staged join resumed from every stage,
   precheck refusals, concurrent joins under race detection, broker round trip and deadline, refusal
-  matrix, both projections), UI component tests and offline contract checks. The 0.4.2 Hosts-tab
-  layout (row actions in a trailing **Actions** column, no master-only-impossible actions on the
+  matrix, both projections), UI component tests and offline contract checks. The 0.4.2 layout of
+  the pool's former Hosts tab, now **Settings** → **Members** (row actions in an **Actions** menu, no master-only-impossible actions on the
   master's row, and the enroll-first empty state) was checked with component tests and simulated
   headless-browser captures of rendered markup, not against a live Controller. Network convergence,
   keyboard operation and hardware remain to be walked through.

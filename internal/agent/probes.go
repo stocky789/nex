@@ -163,6 +163,7 @@ func (m *Monitor) Results() []ProbeResult {
 type NativeInventory struct {
 	Hostname, OS, AgentVersion, Architecture, CPUModel string
 	CPUs                                               int
+	UptimeSeconds                                      uint64
 	MemoryBytes                                        uint64
 	CPUFlags                                           []string
 	NICs                                               []NativeNIC
@@ -170,7 +171,33 @@ type NativeInventory struct {
 
 type NativeNIC struct {
 	Name, MAC, State, Kind, Master, Parent string
+	SpeedMbps                              uint32
 	Addresses                              []string
+}
+
+// nicSpeed reads a sysfs speed file. Virtual and link-down interfaces report -1 or fail
+// the read; both mean unknown, reported as 0 so the field is omitted.
+func nicSpeed(path string) uint32 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	speed, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(speed)
+}
+
+// uptimeSeconds reads the whole seconds from /proc/uptime; 0 (omitted) when unreadable.
+func uptimeSeconds(path string) uint64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	field, _, _ := strings.Cut(string(b), ".")
+	seconds, _ := strconv.ParseUint(field, 10, 64)
+	return seconds
 }
 
 // nicTopology reports the bridge/bond a device is enslaved to and, for VLAN devices, the
@@ -564,6 +591,7 @@ func readInventory(version string) (NativeInventory, error) {
 			v.OS = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"'")
 		}
 	}
+	v.UptimeSeconds = uptimeSeconds("/proc/uptime")
 	v.NICs, err = readNICs()
 	return v, err
 }
@@ -600,6 +628,7 @@ func readNICs() ([]NativeNIC, error) {
 		if state, e := os.ReadFile("/sys/class/net/" + nic.Name + "/operstate"); e == nil {
 			n.State = strings.TrimSpace(string(state))
 		}
+		n.SpeedMbps = nicSpeed("/sys/class/net/" + nic.Name + "/speed")
 		addresses, e := nic.Addrs()
 		if e != nil {
 			return nil, e
@@ -614,7 +643,7 @@ func readNICs() ([]NativeNIC, error) {
 
 // reported is the NIC as the Controller and the managed engine see it.
 func (n NativeNIC) reported() protocol.NIC {
-	return protocol.NIC{Name: n.Name, MAC: n.MAC, Kind: n.Kind, Master: n.Master, Parent: n.Parent, State: n.State, Addresses: append([]string(nil), n.Addresses...)}
+	return protocol.NIC{Name: n.Name, MAC: n.MAC, Kind: n.Kind, Master: n.Master, Parent: n.Parent, State: n.State, SpeedMbps: n.SpeedMbps, Addresses: append([]string(nil), n.Addresses...)}
 }
 
 // HostNICs is the same interface observation the inventory probe reports, for callers that
@@ -688,6 +717,7 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			}
 			out.OSVersion = data.OS
 			out.AgentVersion = data.AgentVersion
+			out.UptimeSeconds = data.UptimeSeconds
 			for _, n := range data.NICs {
 				out.NICs = append(out.NICs, n.reported())
 			}

@@ -1,0 +1,64 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings sections, Tasks, Events, Backups and Containers. Tokens only; the rules are in
+   docs/design/controller-console/README.md. */
+.section .details { padding: 0; }
+.section > .note:last-child { margin-bottom: 0; }
+.gated { color: var(--muted); }
+.records strong { font-weight: 600; }
+.upload-progress progress { width: 90px; }
+.containers-empty { display: grid; justify-items: center; gap: 8px; color: var(--muted); }
+.containers-empty p { margin: 0; }
+/* A running master change or promotion inside the Members section: a block, not a second card. */
+.substrip { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--canvas); }
+.substrip > h3 { margin: 0; }
+.substrip p { margin: 0; }
+
+.records .pulse { display: inline-block; margin-right: 8px; vertical-align: middle; }
+/* On a phone the wide tables scroll inside their section rather than squeezing every column.
+   A task stacks instead: the task and its result on one line, when, by and progress under it. */
+@media (max-width: 600px) {
+  .records:not(.tasks) { min-width: 760px; }
+  .tasks thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  .tasks tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; column-gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+  .tasks td { padding: 0; border: 0; font-size: 12px; }
+  .tasks td:nth-child(1) { grid-area: 1 / 1 / 2 / 4; font-size: 13px; }
+  .tasks td:nth-child(4) { grid-area: 1 / 4; }
+  .tasks td:nth-child(3) { grid-area: 2 / 1; }
+  .tasks td:nth-child(2) { grid-area: 2 / 2; color: var(--muted); }
+  .tasks td:nth-child(5) { grid-area: 2 / 3 / 3 / 5; }
+}
+
+/* Members: the pool strip, then one compact row per host — name line, then a strip of status
+   checks that opens the row's details. Each check is a light, a label and a one-word result. */
+.pool-status, .pool-member-more { font-size: 12px; }
+.pool-status > summary, .pool-member-more > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; list-style: none; cursor: pointer; }
+.pool-status > summary::-webkit-details-marker, .pool-member-more > summary::-webkit-details-marker { display: none; }
+.pool-status { margin-bottom: 4px; padding: 7px 10px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--canvas); }
+.pool-check { display: inline-flex; align-items: center; white-space: nowrap; color: var(--muted); }
+.pool-check .dot { margin-right: 6px; }
+.pool-check strong { margin-left: 4px; font-weight: 600; color: var(--text); }
+.pool-check strong.ok { color: var(--ok); }
+.pool-check strong.warn { color: var(--warn); }
+.pool-check strong.bad { color: var(--bad); }
+.pool-more { margin-left: auto; color: var(--accent); white-space: nowrap; }
+.pool-more::after { content: " ▾"; }
+[open] > summary > .pool-more::after { content: " ▴"; }
+.pool-status-detail { display: grid; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.pool-status-detail .pool-host-fencing { margin: 0; }
+.pool-members { margin: 0; padding: 0; list-style: none; }
+.pool-member { padding: 8px 2px; border-bottom: 1px solid var(--line-soft); }
+.pool-member-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 4px; }
+.pool-member-head > a { font-weight: 600; }
+.pool-member-head > small { display: inline-flex; align-items: center; gap: 6px; }
+/* The row menu floats over the rows below instead of pushing them down. */
+.pool-member-head > .pool-row-actions { position: relative; margin-left: auto; }
+.pool-member-head > .pool-row-actions > div { position: absolute; top: 100%; right: 0; z-index: 5; margin-top: 4px; }
+.pool-member-detail { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px 12px; margin: 8px 0 2px; padding: 8px 10px; border-radius: var(--radius-panel); background: var(--sunken); }
+.pool-member-detail dt { color: var(--muted); }
+.pool-member-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pool-member > small { margin-top: 4px; }
+@media (max-width: 600px) {
+  .pool-member-detail { grid-template-columns: minmax(0, 1fr); }
+  .pool-member-detail dd { margin-bottom: 6px; }
+  .pool-check { white-space: normal; }
+}

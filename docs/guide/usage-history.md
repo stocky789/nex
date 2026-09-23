@@ -2,16 +2,21 @@
 
 ## Status
 
-Development build. Each VM and host page in Nex Controller has a **Stats** tab that charts CPU,
-memory, network and disk use over time, and load average for hosts. History is recorded and kept by
-the Nex Core host itself, up to one year back, so replacing or restarting Nex Controller does not
-lose it. The **General** tab still shows the current usage summary.
+Development build. Each VM and host panel in Nex Controller has a **Performance** tab that charts
+CPU, memory, network and disk use over time, and load average for hosts. History is recorded and
+kept by the Nex Core host itself, up to one year back, so replacing or restarting Nex Controller
+does not lose it. A VM's **Performance** tab starts with its current usage summary; a host's starts
+with **Last 10 minutes** sparklines for CPU, memory, disk and network.
 
-A host's **Stats** tab also shows what the machine is and how hot it is running: a **Hardware**
-panel above the charts, a row of **gauges** for CPU, memory and each temperature sensor, and a
-**Temperature** chart beside the others. The host reads its hardware fresh each time the tab is
-opened and stores none of it; temperatures are recorded in the same history as everything else.
-VM Stats tabs have no Hardware panel or gauges: a VM has no hardware of its own.
+A host panel also shows what the machine is and how hot it is running: its **Hardware** tab lists
+the hardware sections, and its **Performance** tab adds a row of **gauges** for CPU, memory and
+each temperature sensor and a **Temperature** chart beside the others. The host reads its hardware
+fresh each time the panel is opened and stores none of it; temperatures are recorded in the same
+history as everything else. VM panels have no Hardware tab or gauges: a VM has no hardware of its
+own.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 Known limits:
 
@@ -57,12 +62,13 @@ Known limits:
   of charts.
 - History exists only for time the host was running this Nex Core version; a VM records history
   only while it runs.
-- For the **Hardware** panel, a host running a Nex Core version that reports its hardware. An
-  older host simply has no panel.
+- For the **Hardware** tab, a host running a Nex Core version that reports its hardware. An
+  older host shows *This host does not report hardware details. Upgrade Nex Core on it.*
 
 ## Steps
 
-1. Select a VM or host in **Resources** and open its **Stats** tab.
+1. Select **VMs** or **Hosts** in the rail, select the VM's or host's row to open its panel,
+   and select the **Performance** tab.
 2. Wait for the charts. The first load for a host can take up to 30 seconds while
    **Connecting to host…** is shown; later loads are immediate.
 3. Choose a period in **Range**: **Last 10 minutes**, **Last 24 hours**, **Last 30 days** or
@@ -76,26 +82,35 @@ Known limits:
 6. Drag across a chart to zoom all charts to that period; double-click to zoom back out.
 7. Select a series name below a chart to hide or show that series (a hidden series is dimmed and
    struck through). Hidden series stay hidden while you refresh.
-8. On a host, read the **Hardware** panel above the charts. A **System disk mirror** block at
-   the top of the panel shows whether the system disk is mirrored and offers **Replace disk…**
-   when a member has failed ([Replace a failed system disk](replace-a-failed-system-disk.md)).
-   Below that, a summary line names the server, its CPU, installed memory and BIOS version.
-   Select a section — **System**, **CPU**, **Memory**, **Disks**, **PCI devices** or
-   **Temperature sensors** — to expand its table; collapsed sections that have rows show a
-   count. Select **Retry** in the panel if the host could not be reached.
-9. On a host with the **Last 10 minutes** range selected, read the gauges above the charts: CPU
+8. On a host, select the panel's **Hardware** tab. The host's model is also shown at the top of
+   its **Overview** tab. Select a section — **System**, **CPU**, **Memory**, **Disks**,
+   **PCI devices** or **Temperature sensors** — to expand its table; collapsed sections that
+   have rows show a count. **Read** shows when the report was read; select **Read again** to
+   reread it, for example if the host could not be reached. The **System disk** mirror, with
+   **Replace disk…** when a member has failed, is on the host panel's **Storage** tab
+   ([Replace a failed system disk](replace-a-failed-system-disk.md)).
+9. On a host's **Performance** tab with the **Last 10 minutes** range selected, read the gauges
+   above the charts: CPU
    and memory as a percentage, then one gauge per temperature sensor showing its reading in °C.
    A sensor at or above its warm threshold is marked **Warm**, and at or above its critical
    threshold **Critical**. A dash means no recent reading.
 10. Read the **Temperature** chart with the others to see how a sensor moved over the range.
-11. For a VM, open its **Console** tab (or its separate console window), expand **Realtime**
-   beneath the display and tick **Show realtime stats (1-second samples)**. The console stays
-   visible above the charts; **Stacked** in the drawer controls the live chart stacking. For a
-   host, **Realtime** remains at the top of its **Stats** tab. Compact charts of the last two
-   minutes update every second, with a **Live** marker and how long ago they updated. Untick
-   the box, close the drawer, or leave the console or host Stats tab to stop. Realtime pauses
+11. For a VM, select the **Console** quick action in its panel to open the full-screen console
+   page, expand **Realtime** beneath the display and tick **Show realtime stats (1-second
+   samples)**. The console stays visible above the charts; **Stacked** in the drawer controls
+   the live chart stacking. For a host, **Realtime** is on its **Performance** tab. Compact
+   charts of the last two minutes update every second, with a **Live** marker and how long ago
+   they updated. Untick the box, close the drawer, or leave the console page or the host's
+   **Performance** tab to stop. Realtime pauses
    while the browser page is hidden and turns itself off after 10 minutes; select **Resume**
    to continue.
+12. For the pool as a whole, select **Overview** in the rail. Its utilisation chart draws CPU,
+    memory and storage I/O from the same per-host history, with **1H**, **1D**, **1W** and
+    **1M** ranges. Point at the chart, or tap it, to read every line at that time; with the
+    chart focused, Left and Right step through the points and Escape hides the reading. On
+    **1D**, **1W** and **1M** each point averages the host samples in its interval, and the
+    reading says *Average of N samples*, so a short peak inside an interval is flattened; use a
+    host's **Performance** tab for its full detail.
 
 ## Expected result
 
@@ -114,7 +129,7 @@ network and disk are throughput per second, and disk also shows operations per s
   Nex Core and select **Retry**. Without a chart, reconnect Nex Core before retrying.
 - **"the host did not open a stats connection in time; check the host connection and retry"**, **"the
   host did not answer the usage history query in time; retry"** or **"the host stats connection
-  failed; retry"** — select **Retry**. If this repeats, check the host's connection in **Resources**
+  failed; retry"** — select **Retry**. If this repeats, check the host's status in **Hosts**
   and its agent service.
 - **"the host has no usage history for this VM"** or **No history recorded yet** — the VM has not
   run, or the host has not yet completed its first samples since the upgrade. Wait a minute and
@@ -132,14 +147,15 @@ network and disk are throughput per second, and disk also shows operations per s
   showing the last loaded history.* followed by the error.
 - **A hidden series in Stacked mode** is removed from the stack: the visible series stack directly
   on each other.
-- **No Hardware panel on a host** — that host runs an older Nex Core that cannot report its
-  hardware. Update the host ([software updates](software-updates.md)); the charts and the CPU and
-  memory gauges still work.
+- **"This host does not report hardware details. Upgrade Nex Core on it."** on the **Hardware**
+  tab — that host runs an older Nex Core that cannot report its hardware. Update the host
+  ([software updates](software-updates.md)); the charts and the CPU and memory gauges still work.
 - **A section reads "dmidecode failed" or "lsblk failed"** — only that section is missing; the rest
   of the report is what the host just read. Check the tool on the host.
-- **"the host is not freshly connected; its hardware cannot be read now"** — the host has not
-  reported recently. Reconnect Nex Core, then select **Retry**. A report already on screen stays,
-  marked as no longer current.
+- **"The host is not reporting, so its hardware cannot be read."** or **"Could not read the
+  hardware: …"** — the host has not reported recently or the read failed. Reconnect Nex Core,
+  then select **Read again**. A report already on screen stays, followed by *Showing the last
+  report read.*
 - **No temperature gauges or chart on a host** — the host exposes no sensors. Virtual hosts
   normally do not. On a physical host, missing disk temperatures usually mean the `drivetemp`
   module is not loaded.
@@ -148,9 +164,15 @@ network and disk are throughput per second, and disk also shows operations per s
 
 ## Verification
 
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout, where these charts were on a **Stats** tab, and still applies to
+the behaviour it describes.
+
 The console placement is checked separately in the [console realtime assessment](../changes/2026-09-17-console-realtime-stats.json), using a simulated API and guest display; this is not new host-sampling evidence.
 
-2026-09-16: the Stats tab and Realtime drawer were exercised in a real browser against a mocked
+2026-09-16: the charts (then on the Stats tab) and Realtime drawer were exercised in a real browser against a mocked
 Controller API (loading, empty, error, stale, stacked, hover, zoom, legend chips, keyboard, narrow
 layouts, realtime polling, pause while hidden, 10-minute auto-off, drawer close and 429). Go tests
 cover the host sampler, history files, realtime sampling, query channel and Controller relay.

@@ -73,12 +73,12 @@ assert.equal(ejectBlock(busy, member), "Another pool authority transfer is alrea
 
 // The row menu shows both actions with their reasons, and is a disclosure, not a column.
 const menu = renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {} }));
-assert.match(menu, /<details class="pool-row-actions"><summary>Actions<span class="sr-only"> for core-b<\/span><\/summary>/);
+assert.match(menu, /<details class="menu pool-row-actions menu-end"><summary>Actions<span class="sr-only"> for core-b<\/span><\/summary>/);
 assert.match(menu, /<button type="button">Make pool master<\/button>/);
 assert.match(menu, /<button type="button" class="danger">Eject from pool<\/button>/);
 // The row's other actions share the same disclosure, ahead of the destructive eject.
 assert.match(renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {}, extra: createElement("button", { type: "button" }, "Promote to pool master…") })),
-  /<div><button type="button">Promote to pool master…<\/button><button type="button">Make pool master<\/button><button type="button" class="danger">Eject from pool<\/button><\/div><\/details>/);
+  /<div class="menu-items"><button type="button">Promote to pool master…<\/button><button type="button">Make pool master<\/button><button type="button" class="danger">Eject from pool<\/button><\/div><\/details>/);
 assert.equal((renderToStaticMarkup(createElement(MemberActions, { report, member, onMasterChange: () => {}, onEject: () => {}, extra: createElement("span") })).match(/<details/g) || []).length, 1);
 // The master can never be made master or ejected, so its row does not offer either.
 const masterMenu = renderToStaticMarkup(createElement(MemberActions, { report, member: master, onMasterChange: () => {}, onEject: () => {} }));

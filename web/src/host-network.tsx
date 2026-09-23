@@ -25,13 +25,13 @@ export const MAX_WINDOW_MINUTES = 30;
 export const DEFAULT_WINDOW_MINUTES = 10;
 
 const stageText: Record<string, string> = {
-  none: "no change staged",
-  staged: "staged, not applied",
-  applied: "applied, waiting to be confirmed",
-  confirmed: "confirmed",
-  cancelled: "cancelled",
-  "rolled-back": "rolled back automatically",
-  unknown: "unknown",
+  none: "No change staged",
+  staged: "Staged, not applied",
+  applied: "Applied, waiting to be confirmed",
+  confirmed: "Confirmed",
+  cancelled: "Cancelled",
+  "rolled-back": "Rolled back automatically",
+  unknown: "Unknown",
 };
 // Text carries the state; the badge colour only repeats it.
 const stageBadges: Record<string, string> = { none: "", staged: "queued", applied: "warning", confirmed: "ok", cancelled: "", "rolled-back": "failed", unknown: "unknown" };
@@ -40,7 +40,7 @@ const stageBadges: Record<string, string> = { none: "", staged: "queued", applie
 // outcome they chose: the host reports which it was, and neither the wording nor the badge
 // calls a deliberate undo a failure.
 export function stageLabel(state: string, requested = false) {
-  if (state === "rolled-back" && requested) return { label: "rolled back at your request", badge: "" };
+  if (state === "rolled-back" && requested) return { label: "Rolled back at your request", badge: "" };
   return { label: stageText[state] || state, badge: stageBadges[state] ?? "" };
 }
 

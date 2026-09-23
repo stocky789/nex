@@ -24,6 +24,7 @@ assert.equal(await followUpdate(async () => ({ phase: "installing" }), () => {},
 
 assert.equal(versionLight("Nex Core 0.4.3", "0.4.3").level, "current");
 assert.equal(versionLight("Nex Core 0.4.3", "0.4.4").level, "behind");
+assert.equal(versionLight(undefined, "0.4.4"), undefined, "an inventory without os_version has no light, not a crash");
 assert.equal(versionLight("Nex Core 1.99.0", "1.100.0").level, "behind", "same major is orange whatever the minor");
 assert.equal(versionLight("Nex Core 1.99.0", "2.0.0").level, "major");
 assert.equal(versionLight("Nex Core 0.5.0", "0.4.9").level, "current", "a host ahead of the archive is not behind");
@@ -44,8 +45,8 @@ assert.equal(versionLight("Nex Core 0.4.3", "0.4.3").label, "up to date");
 assert.equal(versionLight("Nex Core 0.4.3", "0.4.4").label, "update available");
 assert.equal(versionLight("Nex Core 1.0.0", "2.0.0").label, "major release behind");
 // Visible text beside the version; the colour dot is decorative (SR-083).
-const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-assert.match(mainSource, /version-light \$\{light\.level\}.*aria-hidden="true"/s);
-assert.match(mainSource, /\{inv\.os_version\} · \{light\.label\}/);
+const hostPanelSource = readFileSync(new URL("./host-panel.tsx", import.meta.url), "utf8");
+assert.match(hostPanelSource, /version-light \$\{light\.level\}.*aria-hidden="true"/s);
+assert.match(hostPanelSource, /· \{light\.label\}/);
 
 console.log("ok");

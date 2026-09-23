@@ -19,12 +19,14 @@ the pool master is unavailable; this placement check does not add a power depend
 
 After creation the VM can be changed in place; see [Edit a virtual machine](edit-virtual-machine.md).
 An existing disk's storage, size and provisioning cannot be changed. To remove a stopped VM, see
-[Delete a virtual machine](delete-virtual-machine.md). To install the guest, open the VM's
-**Console** tab and use **Start VM** on the console toolbar, so the console is attached in time for
-the boot prompt; see [Open a VM console](vm-console.md). [Power controls](vm-power.md) start and
+[Delete a virtual machine](delete-virtual-machine.md). To install the guest, open the VM's console page (`#/console/<VM>`; the panel's **Console**
+button is unavailable while the VM is stopped) and use **Start VM** on the console toolbar, so the
+console is attached in time for the boot prompt; see [Open a VM console](vm-console.md). [Power controls](vm-power.md) start and
 stop the VM afterwards.
 An adopted Controller appliance remains protected and is not recreated by this workflow.
 Use an explicitly selected disposable lab host.
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -48,7 +50,7 @@ Use an explicitly selected disposable lab host.
   full size on creation but are not reserved afterwards, so later growth can still fill the
   filesystem.
 - For a VLAN network: the name of the host NIC that carries the VLAN (the installer names
-  NICs `nex0`, `nex1`, …; the host's **Networking** panel lists them with their kind) and a
+  NICs `nex0`, `nex1`, …; the **Networking** tab of the host's panel lists them with their kind) and a
   switch port that trunks that VLAN. Nex creates the guest bridge itself and never changes
   the management bridge, host addresses or routes. Use the same NIC names on every host.
 - Otherwise an existing Linux bridge such as the installer-created `br0`, or an active
@@ -77,20 +79,21 @@ Use an explicitly selected disposable lab host.
 
 ## Steps
 
-1. Sign in to Controller and, in **Resources**, select the pool that was created for the
-   host (it is named after the host, which its **General** panel shows as **Pool master**).
-2. Open **Storage**. The host registers its own **Local storage** (`/var/lib/libvirt/images`)
+1. Sign in to Controller and, in the top-bar scope menu, choose the pool that was created for
+   the host (it is named after the host; **Settings → Overview** shows it as the pool's
+   **Master**). The VM wizard and the pool sections below need that pool chosen.
+2. Select **Storage** in the rail. The host registers its own **Local storage** (`/var/lib/libvirt/images`)
    itself and reports it once connected; wait for its **Core access** to show `healthy`,
    readable and writable, then use it for ISO upload and VM disks. If that self-registration fails (the directory is missing or not
-   writable, for example), no **Storage** row appears: the failure is a failed task in
-   **Task history** naming the host's reason, and the host does not retry it. Correct the
+   writable, for example), no **Storage** row appears: the failure is a failed task on
+   **Tasks** naming the host's reason, and the host does not retry it. Correct the
    directory on the host, then register it yourself with **Register storage** below;
    a failed registration does not reserve its path. To add local, NFSv4, OpenZFS, SMB3 or iSCSI
    storage, select **Register storage**, then follow
    [Add VM storage repositories](storage-repositories.md). Wait for the row to show
-   `healthy`, readable and writable before using it; follow its link to **Task history** if it
+   `healthy`, readable and writable before using it; follow its task on **Tasks** if it
    remains queued or reports an error.
-3. Open **Networking**. The host registers its untagged network (for example **nex0 untagged**
+3. Select **Networks** in the rail. The host registers its untagged network (for example **nex0 untagged**
    on the installer-created `br0`) itself and reports it once connected, and adds one for any
    bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
    host. Under **Connection**, choose the host NIC that carries the network and enter its
@@ -104,13 +107,14 @@ Use an explicitly selected disposable lab host.
    `succeeded`. The table shows each network's connection, bridge and VM count. A bridge or
    libvirt network the host has already registered under another name is reported by the host
    as a failed task naming that registration; reuse it instead.
-4. Open **ISO library**, then **Upload ISO**. Choose the validated **Destination storage**
+4. Select **Storage** in the rail and scroll to **ISO library**, then select **Upload ISO**.
+   Choose the validated **Destination storage**
    (the host's own **Local storage** registration is fine), then choose **ISO source**:
    - **Upload from computer**: select or drop one **ISO file**, then select
      **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
-     appear in the **Tasks** strip at the bottom of the page (select it to expand; it shows the
-     last five tasks and a count of running and failed ones). You can close the form and keep
-     working while the upload runs, but keep the Controller browser tab open.
+     appear as an **Upload ISO** row on **Tasks**, and the top bar's activity pill counts it as
+     running. You can close the form and keep working while the upload runs, but keep the
+     Controller browser tab open.
    - **Download from public URL**: enter the direct **Public ISO URL**. **ISO name** is
      filled from the filename in that URL (edit it if you want; it must end in `.iso`),
      then select **Download ISO**. The selected host downloads and validates the image;
@@ -123,18 +127,18 @@ Use an explicitly selected disposable lab host.
    or cancel control for host downloads in this build. Each request targets the selected
    host's storage; it does not copy the image to every host. Disks can use any VM-ready
    repository on that host; they do not need to share storage with the ISO library.
-   To check one host, select it in **Resources**, open **Storage**, and look under
-   **Host ISO images**. Each row shows the ISO, destination storage/directory, size,
-   availability and transfer task. Return to the pool to continue creating the VM.
-5. Open **Virtual machines**, then **Create VM**; or select **New VM** in the toolbar or
-   **File** menu while the pool, one of its hosts or one of its VMs is selected, which opens
-   the pool's **Virtual machines** view with the wizard. The heading shows the current page, for
-   example **Create VM · 1 of 6: Identity**. **Next** moves on, **Back** corrects an earlier
-   page, and **Close** puts the wizard away. Nothing is submitted until the last page.
-   Selecting another view, including with **Open Storage**, **Open Networking** and
-   **Open ISO library** below, hides the wizard while you work there and shows it again,
-   with your entries, when you return to **Virtual machines**. The same applies to the
-   **Register network** and **Upload ISO** forms on their own views.
+   To check one host, select **Hosts** in the rail, select the host's row, open its panel's
+   **Storage** tab, and look under **Host ISO images**. Each row shows the ISO, destination
+   storage/directory, size, availability and transfer task.
+5. Select **VMs** in the rail, then **Create VM** below the list. The button is disabled with
+   *Choose a pool in the scope menu first.* until one pool is chosen. The wizard takes the
+   list's place; its heading shows the current page, for example **Create VM · 1 of 6:
+   Identity**. **Next** moves on, **Back** corrects an earlier page, and **Close** puts the
+   wizard away. Nothing is submitted until the last page. Going to another screen, including
+   with **Open Storage**, **Open Networks** and **Open ISO library** below, hides the wizard
+   while you work there; select **Create VM** on the **VMs** list again to show it with your
+   entries. The same applies to the
+   **Register network** and **Upload ISO** forms on their own sections.
    1. **Identity**
       - **VM name** — use a normal display name such as **Production Web 01** or
         **guest.example.test**. Spaces, mixed case, punctuation and Unicode are supported.
@@ -209,7 +213,7 @@ Use an explicitly selected disposable lab host.
         existing files are never reused or overwritten.
    4. **Networks** — zero to eight interfaces, each its own **Network interface N** block.
       - **Network** — a network registration validated on the selected host. Use
-        **Open Networking** if the host has none. A registration on the pool does not make a
+        **Open Networks** if the host has none. A registration on the pool does not make a
         host's network reachable from another host.
       - **Adapter model** — which network card the guest sees. The page explains each choice
         as you select it.
@@ -284,12 +288,14 @@ Use an explicitly selected disposable lab host.
       - **Start automatically when the host boots** — sets the VM's autostart property on the
         host. It does not start the VM now.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
-   selected) once. Controller opens the new VM's page for this creation task. Until the host
-   reports the VM, the page shows **Creation** followed by the task status, with *This VM appears
-   here after its host reports it.* and a **Task history** link. A queued task means the request
-   reached Core, not that placement succeeded. If the task fails, the page shows **Creation
-   failed** with Core's reason instead. Once the VM is reported, follow
-   **Creation task** to its result and inspect **Observed state** and its freshness independently.
+   selected) once. Controller returns to the **VMs** list and opens a **New VM** panel for this
+   creation task. Until the host reports the VM, the panel shows **Creation** followed by the task
+   status, with *This VM appears here after its host reports it.* and a **Tasks** link
+   to **Tasks**. A queued task means the request reached Core, not that placement succeeded. If
+   the task fails, the panel shows **Creation failed** with Core's reason instead. Once the VM is
+   reported, the panel becomes the VM's own panel; follow the creation task to its result on
+   **Tasks** and read the state badge beside the VM's name, which shows **Unknown** while its
+   host is not reporting.
 7. **If a warning appears with the accepted request**, read it but do not treat it as a refusal.
    It names a pool-shared repository, network or ISO whose access on the host you selected the
    pool master's last report does **not** show as current — for example *the pool master's last
@@ -309,7 +315,7 @@ Use an explicitly selected disposable lab host.
 
 A **Dedicated** VM created before physical reservation existed keeps its old definition until
 it is saved while stopped: upgrade Nex Core, [shut down the VM](vm-power.md), wait for
-**shut off**, open **General → VM details → Edit**, select **Save changes** with the same memory
+**shut off**, open the VM panel's **Configuration → Edit hardware**, select **Save changes** with the same memory
 mode and size, wait for the `vm-update` task to succeed, then start it. An agent upgrade, guest
 reboot or stop/start without saving changes nothing. See [Edit a virtual machine](edit-virtual-machine.md).
 
@@ -349,9 +355,9 @@ whether the VM starts when the host boots. A successful creation task means prov
 completed; fresh libvirt observations establish its current state separately.
 
 With **Start after creation** the creation task itself ends by starting the VM, so the VM's
-page can briefly show a stopped VM while the task finishes. No guest operating system is installed
-by this workflow: open the VM's **Console** tab, use **Start VM** on its toolbar, and install the
-guest from the attached ISO; see [Open a VM console](vm-console.md).
+panel can briefly show a stopped VM while the task finishes. No guest operating system is installed
+by this workflow: open the VM's console page (`#/console/<VM>`), use **Start VM** on the console
+toolbar, and install the guest from the attached ISO; see [Open a VM console](vm-console.md).
 
 **Host ISO images** lists Nex's transfer records for the selected host and pool, not a scan of
 every ISO on the host. **Transfer succeeded · not rescanned** means import succeeded, storage was
@@ -378,7 +384,7 @@ failed and uncertain transfers show their own status.
   new download. If the submission response was lost, keep the original entries and retry
   to reconcile that request before starting another.
 - **Core restarts during a download:** partial transfers are not resumed. Inspect
-  **Task history** after reconnecting; a complete published image is checked against its
+  **Tasks** after reconnecting; a complete published image is checked against its
   durable size/hash record before success is reported. For an incomplete transfer, resolve
   the reported result and submit a new request.
 
@@ -401,7 +407,7 @@ failed and uncertain transfers show their own status.
   correct networking separately with a recovery path.
 - **The default untagged network is missing:** the host registers it itself, at agent start
   and within a minute of a bridge on a physical NIC or bond appearing, and reports it on its
-  next connection. Check the host's **Networking** panel: each physical NIC lists what it
+  next connection. Check the **Networking** tab of the host's panel: each physical NIC lists what it
   carries; bridges, VLAN devices and VM ports are under **All interfaces**. If the host's own
   registration failed, its task shows the reason. A host running Nex Core from before this
   behaviour registers nothing itself; upgrade it.
@@ -417,7 +423,8 @@ failed and uncertain transfers show their own status.
 - **ISO is rejected or transfer fails:** use a complete `.iso` and check space at both
   ends. Controller receipt alone is not successful Core transfer. Length, ISO format and
   SHA-256 checks must pass before the image is available for VM creation.
-- **Host ISO availability is unknown or unavailable:** refresh Controller data and
+- **Host ISO availability is unknown or unavailable:** reload the page (or select **Retry** on
+  the inventory alert) and
   check host connectivity, access and storage verification. A prior successful
   transfer remains visible but does not establish current availability while the
   host is stale or revoked. Follow the transfer task for errors; uploading to one
@@ -431,7 +438,7 @@ failed and uncertain transfers show their own status.
   host. Reselect them before continuing.* appears when a storage target, network or ISO you
   picked has stopped being verified for this host — usually because the host went stale or a
   registration was re-checked. Reselect the resource, or go back to **Storage**,
-  **Networking** or **ISO library** and confirm its state before continuing.
+  **Networks** or the **ISO library** on **Storage** and confirm its state before continuing.
 - **The submission is refused immediately:** the selected host or pool master is stale,
   unauthorized, in a different pool, or has not been upgraded for master-owned placement.
   Restore the connection or finish the upgrade, then submit again.
@@ -441,7 +448,7 @@ failed and uncertain transfers show their own status.
   had no effect; reuse the original request while its outcome is uncertain.
 - **The creation task failed with a duplicate name, a used MAC or dedicated memory the host
   cannot promise:** the host checks its own record and libvirt, so these arrive as a failed
-  task in **Task history** with the conflicting VM named. Nothing was created and the name and
+  task on **Tasks** with the conflicting VM named. Nothing was created and the name and
   address are free again. Choose another name; clear the MAC field to take an automatic
   address, or choose another one (the host also checks the automatic addresses of its other
   VMs); or lower the dedicated size, free a dedicated VM, or use the **Maximum** memory mode.
@@ -457,8 +464,8 @@ failed and uncertain transfers show their own status.
   a VM with a TPM. Nothing was created. Until then, choose **TPM → None** — but a non-IoT
   Windows 11 edition will refuse to install.
 - **The VM was created but did not start:** the creation task shows `succeeded` and a
-  separate failed power task, *VM created but not started* with the host's reason, appears in
-  **Task history**. The VM exists with its disks, stopped, and is a normal managed VM; the
+  separate failed power task, *VM created but not started* with the host's reason, appears on
+  **Tasks**. The VM exists with its disks, stopped, and is a normal managed VM; the
   start is not retried by itself. Inspect the reason, then start it from the
   [Power controls](vm-power.md). *interrupted before the automatic start completed* means the
   host was interrupted at that step and did not find the VM running afterwards; start it the
@@ -495,15 +502,15 @@ failed and uncertain transfers show their own status.
   [Software updates](software-updates.md), or clear the **Driver disc** selection.
 - **"the driver disc ISO is not registered and verified on the selected host and pool":** the ISO
   chosen as the driver disc is still importing, failed to import, or is stored on another host.
-  Wait for the import to succeed in **Task history**, or import the ISO to the VM's host. After
+  Wait for the import to succeed on **Tasks**, or import the ISO to the VM's host. After
   creation you can also insert or eject the driver disc from the [VM console](vm-console.md).
-- **The response is lost or Controller disconnects:** inspect **Task history** and the
+- **The response is lost or Controller disconnects:** inspect **Tasks** and the
   existing resource before submitting another request. Preserve the original form while
   reconciling an uncertain response. This browser tab retains submitted request identities
   across refresh, and reopening **Create VM** restores those entries so the retry reconciles
   the same request; for uploads, use the original file. If you change the entries first, the
   wizard refuses with *An earlier submission has an uncertain outcome*: restore them, or
-  inspect **Task history** before starting another request.
+  inspect **Tasks** before starting another request.
   Do not create a differently named replacement to
   bypass an ambiguous task; unknown state does not prove that no disk or VM exists.
 - **A task reports `failed` or `needs_attention`:** inspect its error and the selected
@@ -517,6 +524,11 @@ failed and uncertain transfers show their own status.
   writable instance. Retain host-local recovery access.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
 unreleased admission change. Browser checks use simulated Core responses; native
@@ -540,8 +552,8 @@ Recorded checks and their limits:
   with TPM 2.0 and with an ISO attached, then installed Debian through the console. One test VM was
   created through the API only. In step 6 a host over-capacity create showed **Creation queued**,
   then **Creation dispatched**, then **Creation failed**, with no VM details, **Edit** or
-  **Delete** at any point and never "Object not found". Open cosmetic defects: the VM name, an
-  "Observed unknown" state line and the tabs still appear above the **Creation** panel, a "Your
+  **Delete** at any point and never "Object not found". Open cosmetic defects in that earlier layout: the VM name, an
+  "Observed unknown" state line and the tabs still appeared above the **Creation** panel, a "Your
   workspace" heading appears above **Creation failed**, and the failure shows only on the page's
   next 10 s refresh. Not walked: the maximum memory mode, a background upload after leaving the
   page, the host-side ISO free-space refusal and the failed-create **Edit** refusal wording.

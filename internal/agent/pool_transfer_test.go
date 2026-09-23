@@ -1297,3 +1297,15 @@ func TestHandedOffActivateFailureNamesRecovery(t *testing.T) {
 		t.Fatalf("handed-off activation error = %q", record.LastError)
 	}
 }
+
+// TestNextPoolMembershipKeepsJoinTimes: the Controller reports a member's observed_at as
+// when it joined, which holds only while a master change or eject leaves it alone.
+func TestNextPoolMembershipKeepsJoinTimes(t *testing.T) {
+	joined := time.Date(2026, 9, 1, 10, 30, 0, 0, time.UTC)
+	current := protocol.PoolMembership{PoolID: "pool-a", MasterHostID: "a", Generation: 4, Members: []protocol.PoolMember{
+		{HostID: "a", Status: "ready", ObservedAt: joined}, {HostID: "b", Status: "ready", ObservedAt: joined.Add(time.Hour)}}}
+	next := nextPoolMembership(current, "b", "a")
+	if !next.Members[0].ObservedAt.Equal(joined) || !next.Members[1].ObservedAt.Equal(joined.Add(time.Hour)) {
+		t.Fatalf("join times moved: %+v", next.Members)
+	}
+}

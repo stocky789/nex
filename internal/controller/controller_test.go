@@ -341,6 +341,27 @@ func TestReportRejectsInvalidInventory(t *testing.T) {
 	}
 }
 
+func TestHostsReportNICSpeedAndUptime(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	inventory := &protocol.Inventory{Hostname: "core", UptimeSeconds: 12345, NICs: []protocol.NIC{{Name: "nex0", SpeedMbps: 1000}, {Name: "virbr0"}}}
+	a.report(cert, protocol.ReportRequest{Version: 1, Sequence: 1, Inventory: inventory})
+	var hosts []struct {
+		Inventory struct {
+			UptimeSeconds *uint64 `json:"uptime_seconds"`
+			NICs          []struct {
+				SpeedMbps *uint32 `json:"speed_mbps"`
+			} `json:"nics"`
+		} `json:"inventory"`
+	}
+	read(t, a.call("GET", "/api/v1/hosts", nil, nil, 200), &hosts)
+	inv := hosts[0].Inventory
+	if inv.UptimeSeconds == nil || *inv.UptimeSeconds != 12345 || len(inv.NICs) != 2 || inv.NICs[0].SpeedMbps == nil || *inv.NICs[0].SpeedMbps != 1000 || inv.NICs[1].SpeedMbps != nil {
+		t.Fatalf("hosts = %+v", hosts)
+	}
+}
+
 func TestEnrollmentCreatesPoolWithMaster(t *testing.T) {
 	a := newClient(t)
 	site := a.site()

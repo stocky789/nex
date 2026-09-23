@@ -2,14 +2,18 @@
 
 ## Status
 
-Development product 0.4.5. Change a Nex Core host's own management addressing — which interface
+Development product 0.4.8. Change a Nex Core host's own management addressing — which interface
 carries management, DHCP or a static address, an optional management VLAN tag, the default gateway
 and the DNS servers — from Nex Controller, in a staged flow with a timed rollback the **host**
-performs by itself: host detail → **Networking** tab → the **Management network** panel.
+performs by itself: **Hosts** in the rail → the host's row → the panel's **Networking** tab → the
+**Management network** panel.
 
 This is the one edit that can make a host unreachable, so the whole operation belongs to the host:
 Nex Core renders the configuration, applies it, times it and restores the previous one if the
 change is not confirmed. Nex Controller submits one step at a time and shows what the host reports.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 If Controller is restarted, replaced or simply switched off in the middle, the host still finishes
 or rolls back on its own, and a replacement Controller reads the whole state back from the host.
 
@@ -35,13 +39,13 @@ What this workflow is **not**, in this release:
 
 ## Prerequisites
 
-- An administrator session in Nex Controller, and the host open at its **Networking** tab. All
+- An administrator session in Nex Controller, and the host's panel open at its **Networking** tab. All
   administrator sessions have Controller-wide scope; there is no narrower role for this action.
 - The host **connected and fresh**, and advertising the `management-network-v1` capability. Without
   it the panel says *This host does not support staged management network edits. They need
   management-network-v1 on this host; upgrade Nex Core.* and offers no control.
 - **Console access to the host, arranged before you start.** Physical access, a BMC/IPMI console or
-  the host's own **Console** tab in Nex Controller. The automatic rollback is designed to bring the
+  the **Console** tab of the host's panel in Nex Controller. The automatic rollback is designed to bring the
   host back without it, but a console is the only recovery if the rollback itself fails.
 - **The host must not be feeding a watchdog.** A pool's Corosync cluster runs on the management
   network, so interrupting it on an armed host is the same thing as partitioning that host, and an
@@ -63,7 +67,9 @@ What this workflow is **not**, in this release:
 
 ## Steps
 
-1. Open the host and select the **Networking** tab. The **Management network** panel is above the
+1. Select **Hosts** in the rail, select the host's row to open its panel, and select the
+   **Networking** tab (the **Interfaces** and **Bonds & VLANs** buttons on the panel's
+   **Overview** tab open it too). The **Management network** panel is above the
    read-only *Network interfaces* list. Its badge shows the current state — *no change staged*,
    *staged, not applied*, *applied, waiting to be confirmed*, *confirmed*, *cancelled*, *rolled
    back automatically* or *rolled back at your request* — and the configuration revision.
@@ -187,7 +193,7 @@ configuration at once and reports *rolled back at your request*.
 - *Rollback window must be between 2m0s and 30m0s.* — the window is out of range.
 - *Interface &lt;n&gt; does not exist on this host.* and *Interface &lt;n&gt; has hardware address
   &lt;a&gt; on this host, not &lt;b&gt;; the spec names a different card.* — the configuration names
-  a card this machine does not have, or names the wrong one. Reload the **Networking** tab so the
+  a card this machine does not have, or names the wrong one. Reopen the host panel's **Networking** tab so the
   interface list is the host's current one.
 - *Interface &lt;n&gt; carries registered guest networks (…) and cannot be disabled; remove those
   networks first.* and *&lt;port&gt; is already the port of a registered guest network; the
@@ -246,7 +252,7 @@ expected, and the host finishes the rollback by itself.
 **You are locked out of the host.** The automatic rollback is the designed recovery and needs
 nothing from you. If the host is still unreachable after the window has passed plus a minute or
 two, the rollback itself failed. Recover from the host's own console — physical, BMC, or the
-host's **Console** tab in Nex Controller if the Controller can still reach it:
+**Console** tab of the host's panel in Nex Controller if the Controller can still reach it:
 
 1. Sign in on the console as `root`.
 2. Read `/var/lib/nex-core-agent/management-network.json` (the agent state directory on a standard
@@ -274,6 +280,11 @@ the network is not what you assumed — wrong VLAN on the switch port, an addres
 gateway that does not route. Do not confirm. Let the host roll back, then correct the plan.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 - **G3 browser walkthrough.** In a disposable-host browser session, an operator staged, applied
   and confirmed the documented management-network baseline through this panel, then staged and

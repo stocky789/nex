@@ -1,0 +1,65 @@
+{
+  "summary": "Bump the changelog-derived project version to 0.4.8, one above v0.4.7, the newest tag on the forge (its main already holds 0.4.5 to 0.4.7 with other work), and move the Controller console redesign, VM tags, host NIC speed and uptime, and member join time entries under the new heading, since this batch needs Nex Core 0.4.8. The changelog is rebased on the forge main's history so 0.4.5 to 0.4.7 read as published there.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/changes/2026-09-23-version-0.4.8.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Working-version stamps on install, updates, publish and pool guide pages move to 0.4.8; operator workflows unchanged by the bump.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No operation is introduced, so no x-introduced-version changes. The new fields of this batch (VM spec tags, inventory uptime_seconds, NIC speed_mbps, PoolMemberView joined_at) state 'Introduced in development product 0.4.8.' in their OpenAPI descriptions, regenerated with scripts/generate_api.py.",
+    "pages": [
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ],
+    "operations": [
+      "POST /api/v1/vms",
+      "PUT /api/v1/vms/{id}",
+      "GET /api/v1/hosts",
+      "GET /api/v1/pools/{id}/members"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only; phase gates unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product setting or resource is introduced."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both returns 0.4.8 0.4.8 (installer/build.sh, packaging/controller/build.py and the release workflow read it); python3 -m unittest tests.test_release_version; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

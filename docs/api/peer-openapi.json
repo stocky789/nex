@@ -2765,7 +2765,8 @@
           },
           "observed_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "When the master admitted this member, or created the pool for its founding host. Nothing rewrites it afterwards; the Controller reports it as joined_at."
           },
           "error": {
             "type": "string"
@@ -4604,6 +4605,18 @@
           "autostart": {
             "type": "boolean",
             "description": "libvirt autostart, set while the stopped guest is defined so the host starts this VM on boot. It is not a start."
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,32}$"
+            },
+            "maxItems": 16,
+            "description": "Operator labels kept with the VM definition: each 1 to 32 lowercase letters, digits or hyphens, at most 16. Controller sorts and de-duplicates them before validation; an invalid tag is 400 naming it (tag \"<tag>\" must be 1 to 32 lowercase letters, digits or hyphens), more than 16 distinct tags is 400 (a VM allows at most 16 tags). Tags are part of the complete definition, so an edit that omits them clears them. Nonempty tags need vm-tags-v1 on both the VM's host and its pool master, because an older Core would drop them: 409 \"the VM's host or its pool master does not support VM tags; upgrade Nex Core\" on updateVM and \"the selected host or its pool master does not support VM tags; upgrade Nex Core\" on createVM, after the replay check. Core journals them with the definition, the pool master keeps them in its pool VM record, and a fresh Controller adopts them from the host's reported definition. Omitted when empty and from older Core. They change no guest device and apply to a running VM. Introduced in development product 0.4.8."
           },
           "revision": {
             "type": "integer",

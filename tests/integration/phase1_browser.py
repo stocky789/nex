@@ -27,10 +27,23 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             page.screenshot(path=str(captures / (name + '.png')), full_page=True)
 
         def menu_item(label, item):
-            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
+            """A button inside a top-bar menu (Scope, Account) or the VM panel's More menu."""
+            menu = page.locator('details.vm-more') if label == 'More' else page.locator(f'details.menu:has(> summary[aria-label^="{label}"])')
             if menu.get_attribute('open') is None:
                 menu.locator('summary').click()
             return menu.get_by_role('button', name=item, exact=True)
+
+        def no_page_scroll():
+            return page.evaluate("document.documentElement.scrollWidth <= window.innerWidth && "
+                                 "!(document.querySelector('.page')?.scrollWidth > document.querySelector('.page')?.clientWidth)")
+
+        rail = page.get_by_role('navigation', name='Sections', exact=True)
+        panel = page.locator('section.slideover')
+        quick = panel.locator('.quick')
+        tabs = panel.get_by_role('tablist')
+
+        def panel_tab(name):
+            tabs.get_by_role('tab', name=name, exact=True).click()
 
         def refresh_route(route):
             page.goto(lab.url + '/#/' + route)
@@ -64,7 +77,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('unauthorized')
         page.get_by_label('Password', exact=True).fill(password)
         page.keyboard.press('Enter')
-        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
+        expect(rail.get_by_role('link', name='Overview', exact=True)).to_have_attribute('aria-current', 'page')
         browser_cookie = browser_security(page, initial_response, '__Host-nex_session', lab.url + '/api/v1/sites')
         session_hash = hashlib.sha256(browser_cookie['value'].encode()).hexdigest()
         def session_idle(value=None):
@@ -77,18 +90,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert page.request.get(lab.url + '/api/v1/session').status == 200
         assert session_idle() == idle_deadline, 'GET polling extended idle session'
         expect(page.locator('[aria-label="Application menus"]')).to_have_count(0)
-        status = page.locator('.statusbar')
-        expect(status.get_by_role('link', name='API reference')).to_be_visible()
-        expect(status.get_by_role('link', name='Nex source code')).to_be_visible()
-        page.get_by_role('button', name='Create site', exact=True).first.click()
+        account = page.locator('details.account')
+        account.locator('summary').click()
+        expect(account.get_by_role('link', name='API reference')).to_be_visible()
+        expect(account.get_by_role('link', name='Nex source code')).to_be_visible()
+        page.keyboard.press('Escape')
+        menu_item('Scope', 'Create site').click()
         page.get_by_label('Site name').fill('Browser walkthrough')
         page.get_by_label('Site name').press('Enter')
-        expect(page.get_by_role('heading', name='Browser walkthrough', exact=True)).to_be_visible()
+        expect(page.locator('details.scope > summary')).to_contain_text('Browser walkthrough')
         assert session_idle() > idle_deadline, 'authenticated mutation did not renew idle session'
         # Pools are never created by hand: an empty site invites the first host.
         expect(page.get_by_role('heading', name='Add your first host', exact=True)).to_be_visible()
-        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
-        expect(tree.get_by_text('No hosts in this site.', exact=True)).to_be_visible()
+        expect(page.locator('details.scope > summary')).to_contain_text('0 hosts')
         expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
         expect(page.get_by_role('button', name='Add host', exact=True).first).to_be_enabled()
         capture('empty-site-desktop')
@@ -100,7 +114,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.get_by_role('button', name='Generate enrollment token', exact=True).click()
         expect(page.get_by_label('Single-use enrollment token')).not_to_have_value('')
         # Enrollment credentials are never written to capture artifacts.
-        page.get_by_role('button', name='Close', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Close', exact=True).click()
         expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
         # Simulated add-host-by-address flow: probe then confirm, both stubbed so no
         # real host is contacted; the host request must wait for fingerprint confirmation.
@@ -125,14 +139,14 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert not add_host_bodies, 'host add request sent before fingerprint was confirmed'
         capture('add-host-probe-desktop')
         page.get_by_role('button', name='Confirm and add host', exact=True).click()
-        expect(page.get_by_role('status').filter(has_text='Host host-sim enrolled in pool pool-sim; it appears in the tree after its first report.')).to_be_visible()
+        expect(page.get_by_role('status').filter(has_text='Host host-sim enrolled in pool pool-sim; it appears in the host list after its first report.')).to_be_visible()
         assert len(add_host_bodies) == 1, add_host_bodies
         body = add_host_bodies[0]
         assert body['address'] and body['fingerprint'] == fingerprint and body['controller_url'] and body['root_password'] == 'hunter2', body
         expect(page.get_by_label('Root password')).to_have_count(0)
         page.unroute('**/api/v1/hosts/probe')
         page.unroute('**/api/v1/sites/*/hosts')
-        page.get_by_role('button', name='Close', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Close', exact=True).click()
         lab.passed('browser add-host-by-address probe/confirm flow: host request withheld until fingerprint confirmed, root password reaches the request and is cleared from the form on success')
         # A delayed token belongs only to the site where it was requested.
         pending_tokens = []
@@ -147,24 +161,29 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert len(pending_tokens) == 1
         acceptance_pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
         acceptance_site = next(s for s in lab.api('/api/v1/sites') if s['id'] == acceptance_pool['site_id'])
-        page.get_by_role('button', name=re.compile(r'^Site: ')).click()
-        page.get_by_role('combobox', name='Search sites', exact=True).fill(acceptance_site['name'])
-        page.get_by_role('option', name=acceptance_site['name'], exact=True).click()
-        page.get_by_role('link', name=acceptance_pool['name'], exact=True).first.click()
+        # The dialog is modal, so the scope changes by navigation, as a deep link or Back would.
+        page.evaluate(f"location.hash = '#/pools/{pool_id}'")
         expect(page.get_by_role('heading', name=re.compile(r'^Add host to '))).to_have_count(0)
+        expect(page.locator('details.scope > summary')).to_contain_text(acceptance_pool['name'])
         pending_tokens[0][0].fulfill(response=pending_tokens[0][1])
         page.unroute('**/api/v1/enrollment-tokens')
-        page.get_by_role('button', name='Add host', exact=True).first.click()
+        menu_item('Scope', 'Add host').click()
+        expect(page.get_by_role('heading', name='Add host to ' + acceptance_site['name'], exact=True)).to_be_visible()
         expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
-        page.get_by_role('button', name='Close', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Close', exact=True).click()
         lab.passed('browser keyboard sign-in, invalid credentials, site creation, add-first-host empty state and ephemeral enrollment token')
 
         refresh_route('hosts/missing-browser-resource')
-        expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
-        expect(page.locator('details.menu').filter(has=page.locator('summary', has_text='Actions'))).to_have_count(0)
+        expect(panel.get_by_role('heading', name='Host not found', exact=True)).to_be_visible()
+        expect(quick).to_have_count(0)
         capture('invalid-object-desktop')
+        page.keyboard.press('Escape')
+        expect(panel).to_have_count(0)
+        assert page.evaluate('location.hash') == '#/hosts'
+        refresh_route('no-such-screen')
+        expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
         page.get_by_role('link', name='Return to overview', exact=True).click()
-        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
+        expect(rail.get_by_role('link', name='Overview', exact=True)).to_have_attribute('aria-current', 'page')
         # A single stale sample must recover on the next normal inventory poll.
         # The fixture's 2s freshness window can expire during runner contention;
         # inject that sample deterministically, then restore the live agent API.
@@ -179,118 +198,93 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', stale_sample)
         refresh_route('hosts/' + host_id)
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        expect(page.locator('.badge', has_text='Stale').first).to_be_visible()
+        expect(panel.locator('header .badge')).to_have_text('Stale')
         page.unroute('**/api/v1/hosts', stale_sample)
         # The default 5s assertion expires before the UI's 10s inventory poll.
-        expect(page.locator('.badge', has_text='Fresh')).to_be_visible(timeout=15000)
+        expect(panel.locator('header .badge')).to_have_text('Online', timeout=15000)
         lab.passed('browser injected stale connection recovers from live inventory on the next automatic poll')
         host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
         pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
         site = next(s for s in lab.api('/api/v1/sites') if s['id'] == pool['site_id'])
         assert pool['name'] == host['hostname'] and pool['master_host_id'] == host_id, pool
-        expect(page.locator('.host-overview').get_by_text('Pool master', exact=True)).to_be_visible()
+        expect(panel.locator('.sub')).to_contain_text('Master of ' + pool['name'])
         expect(page.get_by_text('Member', exact=True)).to_have_count(0)
         capture('host-desktop')
-        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
-        selected_host = tree.locator(f'a[href="#/hosts/{host_id}"]')
-        expect(selected_host).to_have_attribute('aria-current', 'page')
-        expect(selected_host).to_contain_text(host['hostname'] + ' · master')
-        resource_search = page.get_by_label('Search resources', exact=True)
-        resource_search.fill(host['hostname'].upper())
-        expect(selected_host).to_be_visible()
-        expect(tree.get_by_role('link', name=pool['name'], exact=True)).to_be_visible()
-        expect(page.get_by_role('button', name=re.compile(r'^Site: '))).to_have_accessible_name('Site: ' + site['name'])
-        expect(tree.get_by_role('link', name=site['name'], exact=True)).to_have_count(0)
-        expect(tree.get_by_role('link', name='Browser walkthrough', exact=True)).to_have_count(0)
-        resource_search.fill(pool['name'])
-        expect(selected_host).to_be_visible()
-        page.get_by_role('button', name=re.compile(r'^Site: ')).click()
-        page.get_by_role('combobox', name='Search sites', exact=True).fill(site['name'])
-        expect(selected_host).to_be_visible()
+        expect(rail.get_by_role('link', name='Hosts', exact=True)).to_have_attribute('aria-current', 'page')
+        row = page.locator('table.list tbody tr').filter(has=page.locator(f'a[href="#/hosts/{host_id}"]'))
+        expect(row).to_have_class(re.compile(r'\bsel\b'))
+        expect(row.get_by_text('Master', exact=True)).to_be_visible()
+        expect(page.locator('details.scope > summary')).to_have_accessible_name(
+            f"Scope: {site['name']}, {pool['name']}. Change scope")
+        # Global search: "/" focuses it, matching ignores case, Enter opens the match, Escape clears.
+        page.keyboard.press('/')
+        search = page.get_by_role('combobox', name='Search VMs, hosts, IP addresses and settings')
+        expect(search).to_be_focused()
+        search.fill(host['hostname'].upper())
+        expect(page.get_by_role('option', name=re.compile('^' + re.escape(host['hostname'])))).to_be_visible()
+        search.fill('no-such-resource-acceptance')
+        expect(page.get_by_role('listbox', name='Search results')).to_contain_text('No matches')
         page.keyboard.press('Escape')
-        resource_search.fill('no-such-resource-acceptance')
-        expect(tree.get_by_text('No matching resources in this site.', exact=True)).to_be_visible()
-        expect(selected_host).to_have_count(0)
-        expect(page.get_by_role('heading', name=host['hostname'], exact=True)).to_be_visible()
-        resource_search.fill('')
-        pool_summary = tree.locator('summary').filter(has=page.locator(f'a[href="#/pools/{pool_id}"]'))
-        pool_summary.focus()
+        expect(search).to_have_value('')
+        search.fill('members')
         page.keyboard.press('Enter')
-        expect(selected_host).not_to_be_visible()
-        page.keyboard.press('Enter')
-        expect(selected_host).to_be_visible()
-        tree.get_by_role('link', name=pool['name'], exact=True).click()
-        expect(tree.get_by_role('link', name=pool['name'], exact=True)).to_have_attribute('aria-current', 'page')
-        expect(selected_host).to_be_visible()
-        selected_host.click()
-        expect(selected_host).to_have_attribute('aria-current', 'page')
+        assert page.evaluate('location.hash') == '#/settings/members'
+        rail.get_by_role('link', name='Hosts', exact=True).click()
+        row.get_by_role('link', name=host['hostname'], exact=True).click()
+        expect(panel.get_by_role('heading', name=re.compile('^' + re.escape(host['hostname'])))).to_be_visible()
+        # Escape closes the panel and keeps the list.
+        page.keyboard.press('Escape')
+        expect(panel).to_have_count(0)
+        expect(row).to_be_visible()
+        row.get_by_role('link', name=host['hostname'], exact=True).click()
 
-        tabs = page.get_by_role('navigation', name='Resource views', exact=True)
-        tabs.get_by_role('button', name='Networking', exact=True).click()
-        expect(tabs.get_by_role('button', name='Networking', exact=True)).to_have_attribute('aria-current', 'page')
-        expect(page.get_by_role('heading', name='Network interfaces', exact=True)).to_be_visible()
-        expect(page.get_by_role('heading', name='Health checks', exact=True)).not_to_be_visible()
-        expect(page.get_by_role('heading', name='Disks', exact=True)).not_to_be_visible()
+        panel_tab('Networking')
+        expect(tabs.get_by_role('tab', name='Networking', exact=True)).to_have_attribute('aria-selected', 'true')
+        expect(panel.get_by_role('heading', name='Network interfaces', exact=True)).to_be_visible()
+        expect(panel.get_by_role('heading', name='Health checks', exact=True)).to_have_count(0)
+        expect(panel.get_by_role('heading', name='Disks', exact=True)).to_have_count(0)
         capture('networking-desktop')
-        tabs.get_by_role('button', name='Storage', exact=True).focus()
+        tabs.get_by_role('tab', name='Storage', exact=True).focus()
         page.keyboard.press('Enter')
-        expect(page.get_by_role('heading', name='Disks', exact=True)).to_be_visible()
-        expect(page.get_by_text('Observed device capacity.', exact=False)).to_be_visible()
-        expect(page.get_by_role('heading', name='Network interfaces', exact=True)).not_to_be_visible()
+        expect(panel.get_by_role('heading', name='Disks', exact=True)).to_be_visible()
+        expect(panel.get_by_text('Observed device capacity.', exact=False)).to_be_visible()
+        expect(panel.get_by_role('heading', name='Network interfaces', exact=True)).to_have_count(0)
         capture('storage-desktop')
-        tabs.get_by_role('button', name='Activity', exact=True).click()
-        expect(page.get_by_role('heading', name='Activity and health history', exact=True)).to_be_visible()
-        expect(page.get_by_role('heading', name='Host overview', exact=True)).not_to_be_visible()
-        expect(page.locator('.workspace-content')).not_to_contain_text('Browser walkthrough')
+        panel_tab('Activity')
+        expect(panel.get_by_role('heading', name='Activity and health history', exact=True)).to_be_visible()
+        expect(panel).not_to_contain_text('Browser walkthrough')
         capture('activity-desktop')
-        tabs.get_by_role('button', name='General', exact=True).click()
-        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        dock = page.locator('details.activity-dock')
-        dock.locator('summary').focus()
-        # The Tasks strip starts collapsed; Enter on its summary opens and closes it.
-        expect(dock).not_to_have_attribute('open', '')
-        page.keyboard.press('Enter')
-        expect(dock).to_have_attribute('open', '')
-        page.keyboard.press('Enter')
-        expect(dock).not_to_have_attribute('open', '')
-        capture('tasks-collapsed-desktop')
+        panel_tab('Overview')
+        expect(panel.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
         chrome = {name: page.locator(selector).bounding_box() for name, selector in {
-            'topbar': '.topbar', 'toolbar': '.toolbar', 'tree': 'aside', 'header': '.page-heading',
-            'main': '#main', 'tabs': '.detail-tabs', 'dock': '.activity-dock', 'status': '.statusbar',
+            'logo': '.logo', 'top': 'header.top', 'rail': 'nav.rail', 'main': '#main', 'panel': 'section.slideover',
         }.items()}
-        assert all(chrome.values()), 'desktop shell elements must be visible'
-        assert chrome['topbar']['y'] < chrome['toolbar']['y'] < chrome['header']['y'] < chrome['tabs']['y'], 'topbar/toolbar/header/tab order'
-        assert chrome['tree']['x'] + chrome['tree']['width'] <= chrome['main']['x'] + 1, 'resource tree must sit left of detail pane'
-        assert chrome['tabs']['y'] < chrome['dock']['y'] < chrome['status']['y'], 'tasks and status must sit below resource tabs'
-        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'desktop page overflow'
+        assert all(chrome.values()), 'console shell elements must be visible'
+        assert chrome['top']['y'] < chrome['main']['y'] and chrome['logo']['y'] < chrome['rail']['y'], 'top bar and logo above the content and rail'
+        assert chrome['rail']['x'] + chrome['rail']['width'] <= chrome['main']['x'] + 1, 'rail must sit left of the content'
+        assert chrome['panel']['x'] > chrome['main']['x'] and chrome['panel']['x'] + chrome['panel']['width'] <= 1441, 'slide-over sits on the right'
+        assert no_page_scroll(), 'desktop page overflow'
         capture('desktop-shell')
-        lab.passed('browser resource search with ancestors, site picker Escape, collapsible tree keyboard toggle and current selection, scoped General/Networking/Storage/Activity views, task dock keyboard toggle and desktop chrome bands')
-        # Fixed toolbar: VM power buttons stay in place, greyed with a reason, until a VM is selected.
-        toolbar = page.locator('.toolbar')
-        for name in ['Start', 'Shut down', 'Reboot', 'Force stop', 'Force reboot']:
-            button = toolbar.get_by_role('button', name=name, exact=True)
-            expect(button).to_be_disabled()
-            expect(button).to_have_attribute('title', 'Select a virtual machine in Resources.')
-        expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_enabled()
-        expect(toolbar.get_by_role('button', name='Add host', exact=True)).to_be_disabled()
-        expect(page.locator('.toolbar dialog')).not_to_be_visible()
-        page.locator('aside').get_by_role('link', name='Task history', exact=True).click()
-        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
-        expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_disabled()
-        toolbar.get_by_role('button', name='Back', exact=True).click()
-        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        toolbar.get_by_role('button', name='Forward', exact=True).click()
-        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
-        toolbar.get_by_role('button', name='Back', exact=True).click()
-        expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        toolbar.get_by_role('button', name='New VM', exact=True).click()
-        # Same matcher as storage_repositories_browser.py. Allow time for the host→pool
-        # hashchange to mount ManagedVMs and for the createVM effect to open the wizard.
+        lab.passed('browser global search ("/", case-insensitive, no-match, Escape, settings jump), scope label, host list selection, slide-over Escape, keyboard panel tabs Overview/Networking/Storage/Activity and desktop console layout')
+        # The activity pill opens Tasks; browser history moves between hash routes.
+        page.locator('a.activity').click()
+        expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
+        expect(rail.get_by_role('link', name='Tasks', exact=True)).to_have_attribute('aria-current', 'page')
+        page.go_back()
+        expect(panel.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
+        page.go_forward()
+        expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
+        page.go_back()
+        expect(panel.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
+        rail.get_by_role('link', name='VMs', exact=True).click()
+        create_vm = page.get_by_role('button', name='Create VM', exact=True)
+        expect(create_vm).to_be_enabled()
+        create_vm.click()
         expect(page.get_by_role('heading', name='Create VM · 1 of 6:', exact=False)).to_be_visible(timeout=15000)
-        expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
-        capture('toolbar-new-vm')
-        page.get_by_role('button', name='Close', exact=True).click()
-        lab.passed('browser fixed toolbar: greyed VM power buttons with reasons, Back/Forward history, contextual New VM opening the pool wizard')
+        capture('create-vm-wizard')
+        page.get_by_role('region', name='Create VM').get_by_role('button', name='Close', exact=True).click()
+        expect(create_vm).to_be_visible()
+        lab.passed('browser activity pill to Tasks, Back/Forward over hash routes, Create VM opening the scoped pool wizard')
         # An accepted create may include Core's advisory placement warning.  The create itself and
         # its observations are fixture responses: neither request reaches the disposable agent.
         warning_storage = {'id': 'warning-storage', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning storage',
@@ -309,8 +303,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/vms', lambda route: route.fulfill(status=202, json={
             'vm_id': 'warning-vm', 'operation': {'id': 'warning-create'}, 'warnings': ['Placement warning from Core fixture'],
         }) if route.request.method == 'POST' else route.continue_())
-        refresh_route('pools/' + pool_id)
-        tabs.get_by_role('button', name='Virtual machines', exact=True).click()
+        refresh_route('vms')
         page.get_by_role('button', name='Create VM', exact=True).click()
         page.get_by_label('VM name').fill('Warning fixture')
         page.get_by_label('Placement host').select_option(host_id)
@@ -326,15 +319,15 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(warning).to_be_visible()
         assert page.evaluate('location.hash') == '#/vms/warning-vm/warning-create', 'accepted create must navigate to its task route'
         warning_operation[0]['status'] = 'succeeded'
-        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(warning).not_to_be_visible()
+        # The next automatic inventory poll (every 10 s) sees the terminal task.
+        expect(warning).not_to_be_visible(timeout=15000)
         page.unroute('**/api/v1/vms')
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/networks')
         page.unroute('**/api/v1/storage')
         page.unroute('**/api/v1/pools/*/members')
         lab.passed('browser intercepted VM create keeps Core placement warning through its task-route hashchange and clears it only after the task is terminal')
-        # Simulated VM on the real host: the toolbar power group, its confirmation dialog and the
+        # Simulated VM on the real host: the VM panel's power actions, its confirmation dialog and the
         # rejected/accepted request paths are exercised without a guest. Labeled simulation.
         fixture_vm = {'id': 'fixture-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Toolbar fixture', 'operation_id': '',
                       'status': 'succeeded', 'state': 'running', 'freshness': 'fresh', 'role': 'guest', 'protected': False}
@@ -364,13 +357,16 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                 route.fulfill(json={'id': 'fixture-power', 'status': 'queued'})
         page.route('**/api/v1/vms/fixture-vm/power', power)
         refresh_route('vms/fixture-vm')
-        expect(page.get_by_role('heading', name='Toolbar fixture', exact=True)).to_be_visible()
-        expect(page.locator('#vm-power-status')).to_contain_text('Observed running · fresh')
-        expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_disabled()
-        for name in ['Shut down', 'Reboot', 'Force stop', 'Force reboot']:
-            expect(toolbar.get_by_role('button', name=name, exact=True)).to_be_enabled()
+        expect(panel.get_by_role('heading', name=re.compile('^Toolbar fixture'))).to_be_visible()
+        expect(panel.locator('header .badge')).to_have_text('Running')
+        power = quick.get_by_role('group', name='VM power')
+        expect(power.get_by_role('button', name='Start', exact=True)).to_be_disabled()
+        expect(power.get_by_role('button', name='Shut down', exact=True)).to_be_enabled()
+        for name in ['Reboot', 'Force stop', 'Force reboot']:
+            expect(menu_item('More', name)).to_be_enabled()
+        expect(quick.get_by_role('button', name='Migrate', exact=True)).to_be_disabled()
         expect(page.locator('.vm-power dialog')).not_to_be_visible()
-        toolbar.get_by_role('button', name='Force stop', exact=True).click()
+        menu_item('More', 'Force stop').click()
         dialog = page.get_by_role('dialog')
         expect(dialog).to_be_visible()
         expect(dialog).to_contain_text('Force stop Toolbar fixture?')
@@ -379,46 +375,46 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         dialog.get_by_role('button', name='Cancel', exact=True).click()
         expect(dialog).not_to_be_visible()
         assert power_requests == [], 'cancel must not submit'
-        toolbar.get_by_role('button', name='Reboot', exact=True).click()
+        menu_item('More', 'Reboot').click()
         expect(dialog).to_contain_text('Reboot Toolbar fixture?')
         page.keyboard.press('Escape')
         expect(dialog).not_to_be_visible()
         assert power_requests == [], 'escape must not submit'
-        toolbar.get_by_role('button', name='Force stop', exact=True).click()
+        menu_item('More', 'Force stop').click()
         dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
         expect(dialog.get_by_role('alert')).to_contain_text('host is unavailable')
         expect(dialog).to_be_visible()
         capture('power-confirm-rejected')
         dialog.get_by_role('button', name='Confirm force stop', exact=True).click()
         expect(dialog).not_to_be_visible()
-        expect(page.get_by_role('status')).to_contain_text('Force stop queued for Toolbar fixture')
+        expect(page.locator('.notice')).to_contain_text('Force stop queued for Toolbar fixture')
         assert [r['action'] for r in power_requests] == ['force-stop', 'force-stop']
         assert power_requests[0]['request_id'] == power_requests[1]['request_id'], 'retry must reuse the request identity'
         power_requests.clear()
-        toolbar.get_by_role('button', name='Force reboot', exact=True).click()
+        menu_item('More', 'Force reboot').click()
         expect(dialog).to_contain_text('Force reboot Toolbar fixture?')
         expect(dialog).to_contain_text('Hard-resets the guest immediately')
         expect(dialog.get_by_role('button', name='Confirm force reboot', exact=True)).to_have_class(re.compile(r'\bdanger\b'))
         dialog.get_by_role('button', name='Confirm force reboot', exact=True).click()
         expect(dialog).not_to_be_visible()
-        expect(page.get_by_role('status')).to_contain_text('Force reboot queued for Toolbar fixture')
+        expect(page.locator('.notice')).to_contain_text('Force reboot queued for Toolbar fixture')
         assert [r['action'] for r in power_requests] == ['force-reboot']
         # Start has no confirmation; a rejected Start opens the dialog as its error surface and retries from there.
         fixture_vm['state'] = 'shut off'
         power_requests.clear()
         reject_next.append(True)
-        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(page.locator('#vm-power-status')).to_contain_text('Observed shut off')
-        expect(toolbar.get_by_role('button', name='Force stop', exact=True)).to_be_disabled()
-        expect(toolbar.get_by_role('button', name='Force reboot', exact=True)).to_be_disabled()
-        toolbar.get_by_role('button', name='Start', exact=True).click()
+        expect(panel.locator('header .badge')).to_have_text('Shut off', timeout=15000)
+        expect(menu_item('More', 'Force stop')).to_be_disabled()
+        expect(menu_item('More', 'Force reboot')).to_be_disabled()
+        page.keyboard.press('Escape')
+        power.get_by_role('button', name='Start', exact=True).click()
         expect(dialog).to_contain_text('Start Toolbar fixture?')
         expect(dialog.get_by_role('alert')).to_contain_text('host is unavailable')
         capture('power-start-rejected')
         dialog.get_by_role('button', name='Confirm start', exact=True).click()
         expect(dialog).not_to_be_visible()
-        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture')
-        expect(toolbar.get_by_role('button', name='Start', exact=True)).to_be_focused()
+        expect(page.locator('.notice')).to_contain_text('Start queued for Toolbar fixture')
+        expect(power.get_by_role('button', name='Start', exact=True)).to_be_focused()
         assert [r['action'] for r in power_requests] == ['start', 'start'] and power_requests[0]['request_id'] == power_requests[1]['request_id']
         # A busy VM accepts Start once as a queued task; the browser never retries the request.
         power_requests.clear()
@@ -426,8 +422,11 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                                'request_id': 'fixture-edit', 'status': 'dispatched', 'actor': 'operator',
                                'created_at': '2026-09-11T00:00:00Z', 'updated_at': '2026-09-11T00:00:00Z'}]
         page.route('**/api/v1/operations', lambda route: route.fulfill(json=pending_operations))
-        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text(re.compile('dispatched', re.I))
+        page.reload()
+        tasks_row = lambda task: page.locator('table.records tr').filter(has_text=task)
+        rail.get_by_role('link', name='Tasks', exact=True).click()
+        expect(tasks_row('fixture-edit')).to_contain_text('Awaiting agent result')
+        page.go_back()
 
         def queued_power(route):
             power_requests.append(route.request.post_data_json)
@@ -436,12 +435,13 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             route.fulfill(status=202, json={'id': 'fixture-queued-start', 'status': 'queued'})
         page.unroute('**/api/v1/vms/fixture-vm/power')
         page.route('**/api/v1/vms/fixture-vm/power', queued_power)
-        toolbar.get_by_role('button', name='Start', exact=True).click()
-        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in the Tasks strip.')
+        power.get_by_role('button', name='Start', exact=True).click()
+        expect(page.locator('.notice')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in Tasks.')
         expect(dialog).not_to_be_visible()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-queued-start')).to_contain_text(re.compile('queued', re.I))
-        toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text(re.compile('dispatched', re.I))
+        expect(page.locator('a.activity')).to_have_text('2 tasks running')  # the pill counts every unfinished task, queued included
+        rail.get_by_role('link', name='Tasks', exact=True).click()
+        expect(tasks_row('fixture-queued-start')).to_contain_text('Waiting to be sent')
+        expect(tasks_row('fixture-edit')).to_contain_text('Awaiting agent result')
         expect(dialog).not_to_be_visible()
         assert [r['action'] for r in power_requests] == ['start'], 'queued Start must submit only once'
         capture('power-start-queued')
@@ -449,68 +449,88 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.unroute('**/api/v1/vms/fixture-vm/power')
         page.unroute('**/api/v1/hosts')
         page.unroute('**/api/v1/vms')
-        lab.passed('browser simulated VM power from the toolbar: state-dependent enablement, confirmation dialog cancel/escape, unavailable-host rejection and same-ID retry, rejected Start returning focus, one-click Start queued behind pending work without a dialog or browser retry')
+        lab.passed('browser simulated VM power from the VM panel: state-dependent enablement, confirmation dialog cancel/escape, unavailable-host rejection and same-ID retry, rejected Start returning focus, one-click Start queued behind pending work without a dialog or browser retry')
         refresh_route('pools/' + pool_id)
-        expect(page.get_by_role('heading', name=pool['name'], exact=True)).to_be_visible()
-        expect(page.get_by_text('The pool master controls the pool.', exact=False)).to_be_visible()
-        expect(page.locator('.metric').filter(has_text='Pool master')).to_contain_text(host['hostname'])
+        assert page.evaluate('location.hash') == '#/', '#/pools/{id} sets the scope and shows its overview'
+        expect(page.locator('details.scope > summary')).to_contain_text(pool['name'])
+        resilience = page.locator('section[aria-labelledby="ov-resilience"]')
+        expect(resilience.get_by_role('link', name=host['hostname'], exact=True)).to_have_attribute('href', '#/hosts/' + host_id)
+        rail.get_by_role('link', name='Settings', exact=True).click()
+        expect(page.get_by_text('Pool settings are stored on the pool master', exact=False)).to_be_visible()
+        expect(page.locator('nav.snav')).to_contain_text(f"{pool['name']} · master {host['hostname']}")
         capture('pool-master-desktop')
+        # BUG-0096: summaries keep the current Core observation rather than flattening every
+        # non-healthy result to "degraded". The pool's summary is the overview's Needs attention
+        # list. These are disposable browser fixtures; Core's sanitization is covered by its own
+        # agent regression test.
+        attention = page.locator('section[aria-labelledby="ov-attention"]')
+        host_row = attention.locator(f'a[href="#/hosts/{host_id}"]')
         checks = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)['inventory']['checks']
         expected_health = max((c['status'] if c['freshness'] == 'fresh' else c['freshness'] for c in checks),
                               key=lambda status: {'healthy': 0, 'unsupported': 1, 'degraded': 2, 'unknown': 3, 'stale': 4, 'failed': 5}[status])
-        expect(page.locator('tbody tr').first.locator('td').nth(2)).to_contain_text(expected_health)
-        # BUG-0096: summaries keep the current Core observation rather than flattening every
-        # non-healthy result to "degraded". These are disposable browser fixtures; Core's
-        # sanitization is covered by its own agent regression test.
+        refresh_route('')
+        if expected_health == 'healthy':
+            expect(host_row).to_have_count(0)
+        else:
+            expect(host_row).to_contain_text(re.compile(expected_health, re.I))
         summary_host = deepcopy(host)
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'degraded', 'freshness': 'fresh',
                                                 'observed_at': '2026-09-12T00:00:00Z',
                                                 'error': 'Core sanitized: libvirt response exceeded its deadline'}]
         page.route('**/api/v1/hosts', lambda route: route.fulfill(json=[summary_host]))
-        refresh_route('pools/' + pool_id)
-        pool_health = page.locator('.pool-health-summary')
-        expect(pool_health).to_contain_text(re.compile('degraded', re.I))
-        expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt response exceeded its deadline')
-        expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_attribute('href', '#/hosts/' + host_id)
-        expect(pool_health).not_to_contain_text('internal-token')
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' degraded')
+        expect(host_row).to_contain_text('Core sanitized: libvirt response exceeded its deadline')
+        expect(attention).not_to_contain_text('internal-token')
         summary_host['inventory']['checks'] = [
             {'name': 'libvirt', 'status': 'failed', 'freshness': 'fresh', 'observed_at': '2026-09-12T00:00:00Z', 'error': 'Core sanitized: libvirt is unavailable'},
             {'name': 'storage', 'status': 'unknown', 'freshness': 'fresh', 'observed_at': '2026-09-12T00:00:00Z', 'error': 'Core sanitized: storage probe timed out'},
         ]
-        refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text(re.compile('failed', re.I))
-        expect(pool_health).to_contain_text('2 checks need attention.')
-        expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt is unavailable')
-        expect(pool_health).to_contain_text('storage: Core sanitized: storage probe timed out')
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' failed')
+        expect(host_row).to_contain_text('Core sanitized: libvirt is unavailable')
+        expect(host_row).to_contain_text('Core sanitized: storage probe timed out')
+        expect(host_row).to_have_count(1)  # both affected checks in one row, not one per check
         capture('health-summary-multiple')
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'stale',
                                                 'observed_at': '2026-09-12T00:00:00Z',
                                                 'error': 'Core sanitized: last libvirt result is stale'}]
-        refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text(re.compile('stale', re.I))
-        expect(pool_health).to_contain_text('Core sanitized: last libvirt result is stale')
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' stale')
+        expect(host_row).to_contain_text('Core sanitized: last libvirt result is stale')
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'unknown', 'freshness': 'fresh',
                                                 'observed_at': '2026-09-12T00:00:00Z',
                                                 'error': 'Core sanitized: no current libvirt observation'}]
-        refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text(re.compile('unknown', re.I))
-        expect(pool_health).to_contain_text('Core sanitized: no current libvirt observation')
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' unknown')
+        expect(host_row).to_contain_text('Core sanitized: no current libvirt observation')
         summary_host['revoked'] = True
         summary_host['connection'] = 'revoked'
-        refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text(re.compile('revoked', re.I))
-        expect(pool_health).to_contain_text('Access revoked; this host is not reporting.')
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' not reporting')
+        expect(host_row.locator('.ov-icon')).to_have_class(re.compile(r'\bbad\b'))
         capture('health-summary-revoked')
+        # Revoked and stale both read "not reporting" in the summary; the host panel tells
+        # them apart, and only a revoked host is told to re-enroll.
+        revoked_notice = page.locator('.warning', has_text='Access revoked. Re-enroll this host to resume reporting.')
+        refresh_route(f'hosts/{host_id}')
+        expect(revoked_notice).to_be_visible()
         summary_host['revoked'] = False
+        summary_host['connection'] = 'stale'
+        refresh_route('')
+        expect(host_row).to_contain_text(host['hostname'] + ' not reporting')
+        expect(host_row.locator('.ov-icon')).to_have_class(re.compile(r'\bwarn\b'))
+        refresh_route(f'hosts/{host_id}')
+        expect(page.locator('.warning', has_text='VMs on this host are shown as Unknown, not stopped.')).to_be_visible()
+        expect(revoked_notice).to_have_count(0)
         summary_host['connection'] = 'fresh'
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'fresh',
                                                 'observed_at': '2026-09-12T00:00:00Z'}]
-        refresh_route('pools/' + pool_id)
-        expect(pool_health.locator('.badge', has_text='Healthy')).to_be_visible()
-        expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_count(0)
+        refresh_route('')
+        expect(host_row).to_have_count(0)
+        expect(attention).to_contain_text('Every host in scope is reporting and healthy.')
         page.unroute('**/api/v1/hosts')
-        refresh_route('pools/' + pool_id)
-        lab.passed('browser host and pool health summaries: compact healthy, current degraded/failed reasons, multiple affected checks, stale/unknown observations and revoked host')
+        lab.passed('browser pool Needs attention summary: healthy, current degraded/failed reasons, multiple affected checks in one row, stale/unknown observations, and a revoked host told apart from a stale one (bad vs warn row, Access revoked notice only on the revoked host panel)')
         refresh_route('hosts/' + host_id)
         def wait_probe(status):
             eventually(lambda: any(
@@ -524,7 +544,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.reload()
         libvirt = page.locator('.check').filter(has=page.get_by_text('libvirt', exact=True))
         expect(libvirt.locator('.badge', has_text='Failed')).to_be_visible()
-        expect(page.locator('.badge', has_text='Fresh')).to_be_visible()
+        expect(panel.locator('header .badge')).to_have_text('Online')
         capture('libvirt-failed-desktop')
         probe_mode('stalled')
         wait_probe('unknown')
@@ -536,36 +556,33 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.reload()
         expect(libvirt.locator('.badge', has_text='Healthy')).to_be_visible()
         lab.passed('browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks')
-        menu_item('Actions', 'Refresh inventory').click()
-        expect(page.get_by_role('status')).to_contain_text('Inventory refresh')
-        page.locator('aside').get_by_role('link', name='Task history', exact=True).click()
-        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
+        quick.get_by_role('button', name='Refresh inventory', exact=True).click()
+        expect(page.locator('.notice')).to_contain_text('Inventory refresh')
+        rail.get_by_role('link', name='Tasks', exact=True).click()
+        expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
         expect(page.locator('table').first).to_contain_text('root')
         capture('tasks-desktop')
 
         refresh_route('hosts/' + host_id)
-        menu_item('Actions', 'Revoke access').click()
+        quick.get_by_role('button', name='Revoke access', exact=True).click()
         page.get_by_label('Type the hostname to confirm').fill('incorrect host')
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
         expect(page.get_by_label('Type the hostname to confirm')).to_be_visible()
         capture('revoke-confirmation')
-        page.get_by_role('button', name='Close', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Close', exact=True).click()
 
         page.set_viewport_size({'width': 360, 'height': 800})
         capture('host-360')
-        actions_menu = page.locator('details.menu').filter(has=page.locator('summary', has_text='Actions'))
-        actions_menu.locator('summary').click()
-        bounds = actions_menu.locator('.menu-items').bounding_box()
-        assert bounds and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 360, 'Actions menu outside narrow viewport'
-        capture('actions-menu-360')
-        page.keyboard.press('Escape')
+        # At phone width the slide-over takes the full width and its quick actions stay on screen.
+        for box in (panel.bounding_box(), quick.bounding_box()):
+            assert box and box['x'] >= 0 and box['x'] + box['width'] <= 360, 'host panel outside narrow viewport'
         for tab_name, heading in [('Networking', 'Network interfaces'), ('Storage', 'Disks'), ('Activity', 'Activity and health history')]:
-            tabs.get_by_role('button', name=tab_name, exact=True).click()
-            expect(page.get_by_role('heading', name=heading, exact=True)).to_be_visible()
-            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), f'360px {tab_name} overflow'
+            panel_tab(tab_name)
+            expect(panel.get_by_role('heading', name=heading, exact=True)).to_be_visible()
+            assert no_page_scroll(), f'360px {tab_name} overflow'
             capture(tab_name.lower() + '-360')
-        tabs.get_by_role('button', name='General', exact=True).click()
-        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px page overflow'
+        panel_tab('Overview')
+        assert no_page_scroll(), '360px page overflow'
 
         # U7/U10: Core owns CIDR validation; the UI only projects the refusal. Keep this
         # browser-only fixture at the API boundary: no host configuration is submitted or changed.
@@ -591,23 +608,23 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             route.fulfill(json=network_view('none', None))
 
         page.route(network_route, network_fixture)
-        tabs.get_by_role('button', name='Networking', exact=True).click()
+        panel_tab('Networking')
         page.locator('#mode-ens3').select_option('static')
         page.locator('#address-ens3').fill('192.0.2.999/24')
         page.get_by_role('button', name='Stage this configuration').click()
         expect(page.get_by_role('alert')).to_contain_text('interface ens3 needs a usable IPv4 address in CIDR form')
-        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px management-network validation overflow'
+        assert no_page_scroll(), '360px management-network validation overflow'
         capture('management-network-validation-360')
         page.unroute(network_route)
 
         rolled_back = network_view('rolled-back', {'revision': 4, 'stage': 'rolled-back', 'operation_id': 'browser-rollback',
             'spec': network_spec, 'requested_rollback': True, 'last_error': 'rolled back at operator request'})
         page.route(network_route, lambda route: route.fulfill(json=rolled_back))
-        tabs.get_by_role('button', name='General', exact=True).click()
-        tabs.get_by_role('button', name='Networking', exact=True).click()
-        expect(page.get_by_role('status')).to_contain_text('because you asked it to')
+        panel_tab('Overview')
+        panel_tab('Networking')
+        expect(page.get_by_role('status').filter(has_text='because you asked it to')).to_be_visible()
         assert not page.get_by_text('Host check management-network', exact=False).count()
-        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), '360px requested management-network rollback overflow'
+        assert no_page_scroll(), '360px requested management-network rollback overflow'
         capture('management-network-rollback-360')
         page.unroute(network_route)
 
@@ -620,16 +637,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         # Browser network failure injection checks honest retained-observation messaging.
         page.route('**/api/v1/hosts', lambda route: route.abort())
         page.reload()
-        expect(page.get_by_role('alert')).to_contain_text('Inventory may be out of date')
+        expect(page.get_by_role('alert').filter(has_text='Inventory may be out of date')).to_be_visible()
         capture('network-error-360')
+        expect(panel.get_by_role('heading', name='Host unavailable')).to_be_visible()
+        expect(panel).to_contain_text('This host cannot be shown until the inventory loads.')
         page.unroute('**/api/v1/hosts')
-        page.get_by_role('button', name='Retry', exact=True).click()
+        # At 360px the panel covers the page alert, so the panel carries its own Retry.
+        panel.get_by_role('button', name='Retry', exact=True).click()
         expect(page.get_by_role('alert')).to_have_count(0)
         stop_agent()
         page.wait_for_timeout(2300)
         page.reload()
-        expect(page.locator('.badge', has_text='Stale').first).to_be_visible()
-        expect(page.get_by_text('workload execution is unknown.', exact=False)).to_be_visible()
+        expect(panel.locator('header .badge')).to_have_text('Stale')
+        expect(panel.get_by_text('VMs on this host are shown as Unknown, not stopped.', exact=False)).to_be_visible()
         capture('stale-host-360')
         # Capture an older periodic read, revoke via a newer read, then release
         # the old response; it must not resurrect pre-revocation UI state.
@@ -642,22 +662,22 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', hold_first)
         page.wait_for_timeout(10500)
         assert len(older) == 1
-        menu_item('Actions', 'Revoke access').click()
-        hostname = page.locator('h1').inner_text()
-        page.get_by_label('Type the hostname to confirm').fill(hostname)
+        quick.get_by_role('button', name='Revoke access', exact=True).click()
+        page.get_by_label('Type the hostname to confirm').fill(host['hostname'])
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
-        expect(menu_item('Actions', 'Re-enroll host')).to_be_enabled()
-        page.keyboard.press('Escape')
+        reenroll = quick.get_by_role('button', name='Re-enroll', exact=True)
+        expect(reenroll).to_be_enabled()
         older[0][0].fulfill(response=older[0][1])
         page.unroute('**/api/v1/hosts')
         page.wait_for_timeout(200)
-        expect(menu_item('Actions', 'Re-enroll host')).to_be_enabled()
-        expect(menu_item('Actions', 'Refresh inventory')).to_be_disabled()
+        expect(reenroll).to_be_enabled()
+        expect(quick.get_by_role('button', name='Refresh inventory', exact=True)).to_be_disabled()
         capture('revoked-host-360')
-        menu_item('Actions', 'Re-enroll host').click()
+        reenroll.click()
+        expect(page.get_by_role('heading', name='Re-enroll ' + host['hostname'], exact=True)).to_be_visible()
         page.get_by_text('Manual enrollment', exact=True).click()
         expect(page.get_by_role('button', name='Generate enrollment token', exact=True)).to_be_visible()
-        page.get_by_role('button', name='Close', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Close', exact=True).click()
         # Advance only this disposable browser session's stored deadline, not the host clock.
         session_idle(int(time.time()) - 1)
         page.reload()
@@ -666,8 +686,9 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.get_by_label('Username').fill('root')
         page.get_by_label('Password', exact=True).fill(password)
         page.get_by_role('button', name='Sign in', exact=True).click()
-        expect(page.get_by_role('button', name='Sign out', exact=True)).to_be_visible()
-        page.get_by_role('button', name='Sign out', exact=True).click()
+        sign_out = menu_item('Account', 'Sign out')
+        expect(sign_out).to_be_visible()
+        sign_out.click()
         expect(page.get_by_label('Username')).to_be_visible()
         assert not any(c['name'] == '__Host-nex_session' for c in context.cookies()), 'logout retained cookie'
         assert context.request.get(lab.url + '/api/v1/sites').status == 401

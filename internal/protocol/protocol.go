@@ -34,6 +34,8 @@ type NIC struct {
 	Parent    string   `json:"parent,omitempty"`
 	Addresses []string `json:"addresses"`
 	State     string   `json:"state"`
+	// SpeedMbps is the negotiated link speed; absent when the kernel does not know it.
+	SpeedMbps uint32 `json:"speed_mbps,omitempty"`
 }
 type Disk struct {
 	Name           string  `json:"name"`
@@ -174,7 +176,9 @@ type Inventory struct {
 	Virtualization []string     `json:"virtualization"`
 	OSVersion      string       `json:"os_version"`
 	AgentVersion   string       `json:"agent_version"`
-	NICs           []NIC        `json:"nics"`
+	// UptimeSeconds is how long the host had been up at observed_at; absent from older agents.
+	UptimeSeconds uint64 `json:"uptime_seconds,omitempty"`
+	NICs          []NIC  `json:"nics"`
 	// Managed is the pool-scoped configuration this host has durably applied, reported from
 	// the Core journal. Controller mirrors it: any entry it does not hold is adopted with the
 	// same identity and name, so a replaced Controller recovers a pool from its master.

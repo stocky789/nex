@@ -6,28 +6,104 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.4` →
-> Debian `0.4.4`).
+> development software. Builds use the newest numbered changelog heading (`0.4.8` →
+> Debian `0.4.8`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
-## [0.4.5] — 2026-09-23
+## [0.4.8] — 2026-09-23
 
-> **Development working-tree record, not a published release.** The web UI changes below were
-> checked with unit tests, the phase 1 browser lab and before/after captures against a labeled
-> simulated inventory ([QA checks](docs/qa/controller-ui-modernization/checks.md)). No real host,
-> hardware or console connection was exercised.
+> **Development working-tree record, not a published release.** The console redesign below was
+> checked with unit and Go tests, the phase 1 browser lab, the CI browser checks and captures
+> against a labelled simulated inventory ([QA checks](docs/qa/controller-console-redesign/checks.md)).
+> No real host was exercised, and the tags Controller-replacement lab check has not run.
 
 ### Minor Feature
 
-- Controller web UI modernization: one design-token sheet with a dark theme, flat surfaces on the
-  brand palette, a slimmer header with an **Actions** menu replacing the menubar, a collapsed
-  **Tasks** strip that announces failures, an off-canvas resource tree and icon toolbar on narrow
-  screens, operator labels instead of internal identifiers, relative times, a grouped console
-  toolbar with **Focus mode**, and a fuller Updates page. Status badges keep their square
-  dot-and-text form.
+- Controller web UI design tokens: one token sheet with a dark theme that follows the system
+  setting (with a toggle), flat surfaces on the brand palette, operator labels instead of internal
+  identifiers, relative times, and a grouped console toolbar with **Focus mode**. Status badges
+  keep their square dot-and-text form.
+- Controller console redesign: a labelled icon rail (Overview, VMs with Containers under it,
+  Hosts, Storage, Networks, Backups, Tasks, Events, Settings), a top bar with the site and pool
+  scope menu, global search and a running-tasks indicator, a pool overview with usage, placement
+  and a **Needs attention** list, filterable VM and host lists whose details open in a side panel,
+  bulk VM start and shut down, and pool settings. **Storage** and **Networks** show each
+  repository's and network's health with a light per host, and the VM list can be filtered by
+  network. Overview sections can be collapsed, and the usage chart can be read point by point
+  (longer ranges show averages). Pool members show short status checks with details on request,
+  VM guest tools show a compact status grid, and long explanations sit behind **About** links.
+  VMs can carry tags, kept on the pool master (needs Nex Core 0.4.8 or later there). Hosts
+  show uptime and network link speed where Nex Core reports them, and the pool members report says when each host joined. Backups,
+  containers, snapshots, migration and high availability appear in their place but stay
+  unavailable until their phase lands. The toolbar, resource tree and **Tasks** strip are gone;
+  see [Navigate the Controller console](docs/guide/navigate-the-controller-console.md). Upgrade
+  Nex Controller before Nex Core: an older Controller cannot read a 0.4.8 host's reports and
+  shows it as stale.
+
+## [0.4.7] — 2026-09-23
+
+### Bug Fixes
+
+- Pool members now take on large shared ISOs, such as a Windows installer, instead of
+  reporting `pool-media-reconciliation deadline` forever (BUG-0541).
+- A pool master no longer reports its members' authority replica as stale a minute after
+  every successful push (BUG-0542).
+
+## [0.4.6] — 2026-09-23
+
+### Bug Fixes
+
+- A host that has never run a VM can report its VMs to the pool, and a VM creation it refuses
+  is recorded so the pool master frees the name (BUG-0539).
+- A Controller deployment interrupted while copying the appliance disk now starts again on
+  **Retry deployment** or after the host service restarts, instead of staying stuck with a
+  half-copied disk (BUG-0540).
+
+### Miscellaneous
+
+- The installable host and its Controller bootstrap passed the whole chain in disposable
+  virtual machines, including a Controller deployment interrupted part-way, and master-owned
+  VM placement passed its fault and recovery checks. Real Intel and AMD hardware remains
+  untested.
+
+## [0.4.5] — 2026-09-23
+
+### Minor Feature
+
+- **Add host to pool** fills in the joining host's address by itself: each host reports the
+  address a pool master can reach it at, and the dialog shows only that address, prefilled.
+  The `https://` and the port are never typed; change the address only if the master must
+  reach the host another way.
+
+### Bug Fixes
+
+- The installer's disk list spreads its columns across the available width, and dragging a
+  column divider now actually resizes the column instead of doing nothing (BUG-0529).
+- Both installer wizards now show and record the serial of SATA, SAS, SCSI and virtio disks;
+  previously only NVMe disks had one, so the erase review and the last-moment "serial changed"
+  guard were blank for most hardware (BUG-0530).
+- **Add host** now works against a bundled Controller deployed with DHCP when the Controller
+  address is given by IP: the host is told the hostname the Controller's certificate carries,
+  instead of failing with "cannot validate certificate ... doesn't contain any IP SANs". The
+  manual `nex-core-agent enroll` gains `--server-name` for the same case (BUG-0531).
+- **Add host to pool** no longer looks like the place to add a brand-new host: it explains that
+  it joins a host already enrolled in the site, offers **Enroll a new host…** when there is none,
+  and asks for the peer address only after a host is chosen (BUG-0532).
+- The ISO builds again: the pinned UEFI firmware package is fetched from a fixed Debian snapshot
+  instead of Debian's moving development suite, which had dropped that version (BUG-0533).
+- A freshly installed host can upload ISOs to its **Local storage** again; the media folder the
+  host created for the bundled driver disc was unreadable to the hypervisor (BUG-0534). Hosts
+  installed from 0.3.0 onward can be repaired with `chmod 0711 /var/lib/libvirt/images/nex-media`.
+- After a host joins a pool, its own untagged network is shown in that pool instead of under the
+  removed single-host pool (BUG-0535).
+- A VM creation interrupted before any disk was made now ends as a plain failure that frees the
+  name, instead of leaving a VM that could neither be used nor deleted and that blocked removing
+  its host from the pool (BUG-0536).
+- An edit that lost the pool master's reply, and a VM deleted while such an edit was unresolved,
+  no longer leave the pool master holding that VM for ever (BUG-0537, BUG-0538).
 
 ## [0.4.4] — 2026-09-22
 
@@ -39,9 +115,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
-- The Nex Core installer can put the system disk on a **Linux md RAID1 mirror**: tick two or more
-  disks at install time. The host keeps running if one of those disks fails; replace the failed
-  disk from the host's **Stats** tab.
+- The Nex Core installer can put the system disk on a **Linux md RAID1 mirror** with an **ext4**
+  root: tick two or more disks at install time. The host keeps running if one of those disks
+  fails; replace the failed disk from the host's **Stats** tab.
 - **Replace disk** on a degraded ZFS repository (or a degraded system mirror) clears a spare and
   rebuilds onto it from Nex Controller. ZFS pools may also take hot spares and a three-disk mirror
   or RAIDZ3 when every selected host supports disk replace.

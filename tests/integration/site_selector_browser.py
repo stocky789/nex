@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Browser regression for site-scoped navigation using explicit API route fixtures.
+"""Browser regression for the scope menu (site/pool navigation) using explicit API route fixtures.
 
 Serves the real built Controller UI locally; 500 sites, hosts and VMs are simulated
 JSON responses. No Controller, host, disk, network configuration or VM is mutated.
@@ -87,16 +87,18 @@ def acceptance(url, evidence):
                     'authoritative': True,
                     'members': [{'host_id': host_id, 'status': 'active', 'maintenance': False}],
                 })
+            elif route.request.method == 'GET' and path.endswith('/stats'):
+                # Lists and Overview read each online host's usage history; the fixture has none.
+                route.fulfill(status=404, json={'error': 'no usage history in this fixture'})
             elif route.request.method == 'GET' and path in data:
                 route.fulfill(json=data[path])
             else:
                 raise AssertionError(f'Unexpected API fixture request: {route.request.method} {path}')
 
         page.route('**/api/v1/**', route_api)
-        selector = page.get_by_role('button', name=re.compile(r'^Site: '))
-        search = page.get_by_role('combobox', name='Search sites', exact=True)
-        options = page.get_by_role('listbox', name='Sites', exact=True)
-        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
+        scope = page.locator('summary[aria-label^="Scope: "]')
+        menu = page.locator('details.scope')
+        items = menu.locator('.menu-items')
 
         def capture(name):
             name += '.png'
@@ -107,131 +109,133 @@ def acceptance(url, evidence):
             checks.append(message)
             print('PASS:', message, flush=True)
 
-        def selected(number):
+        def selected(number, site_name=None):
+            # A site with one pool is that pool, so the scope names both and counts its one host.
             suffix = f'{number:03}'
-            expect(selector).to_have_accessible_name('Site: Site ' + suffix)
-            for kind in ('pools', 'hosts', 'vms'):
-                singular = {'pools': 'pool', 'hosts': 'host', 'vms': 'vm'}[kind]
-                expect(tree.locator(f'a[href="#/{kind}/{singular}-{suffix}"]')).to_have_count(1)
-                expect(tree.locator(f'a[href^="#/{kind}/"]')).to_have_count(1)
-            expect(tree.locator(f'a[href="#/hosts/host-{suffix}"]')).to_contain_text(f'host-{suffix} · master')
-            expect(tree.get_by_role('link', name=f'Site {suffix}', exact=True)).to_have_count(0)
+            expect(scope).to_have_accessible_name(f'Scope: {site_name or "Site " + suffix}, Pool {suffix}. Change scope')
+            expect(scope).to_contain_text('1 host')
 
-        def open_picker():
-            selector.click()
-            expect(search).to_be_focused()
-            expect(selector).to_have_attribute('aria-expanded', 'true')
+        def listed(number):
+            # The lists show only the chosen site's pool: its master host and its VM.
+            suffix = f'{number:03}'
+            page.goto(url + '/#/hosts')
+            rows = page.locator('table.list tbody tr')
+            expect(rows).to_have_count(1)
+            expect(rows.get_by_role('link', name=f'host-{suffix}', exact=True)).to_be_visible()
+            expect(rows).to_contain_text('Master')
+            page.goto(url + '/#/vms')
+            rows = page.locator('table.list tbody tr[data-vm]')
+            expect(rows).to_have_count(1)
+            expect(rows.get_by_role('link', name=f'Guest {suffix}', exact=True)).to_be_visible()
+
+        def open_menu():
+            scope.click()
+            expect(menu).to_have_attribute('open', '')
 
         def pick(name):
-            open_picker()
-            search.fill(name)
-            options.get_by_role('option', name=name, exact=True).click()
-            expect(search).to_have_count(0)
-            expect(selector).to_be_focused()
+            open_menu()
+            items.get_by_role('button', name=name, exact=True).click()
+            expect(menu).not_to_have_attribute('open', '')
 
         page.goto(url)
         selected(0)
-        expect(search).to_have_count(0)
-        expect(selector).to_have_attribute('aria-expanded', 'false')
+        expect(menu).not_to_have_attribute('open', '')
+        listed(0)
         capture('desktop-500-sites')
-        open_picker()
-        expect(options.get_by_role('option')).to_have_count(500)
-        assert options.evaluate('(e) => e.scrollHeight > e.clientHeight && e.clientHeight <= 360'), '500-site popup must scroll within a bounded height'
+        open_menu()
+        expect(items.get_by_role('button', name=re.compile(r' · all pools$'))).to_have_count(500)
+        expect(items.locator('button.indent')).to_have_count(500)
+        assert items.evaluate('(e) => e.scrollHeight > e.clientHeight && e.clientHeight <= innerHeight * 0.7 + 1'), '500-site menu must scroll within a bounded height'
         capture('dropdown-500-sites')
-        search.fill('sItE 49')
-        expect(options.get_by_role('option')).to_have_count(10)
-        selected(0)
-        capture('search-matches')
-        search.fill('no such site')
-        expect(page.get_by_text('No matching sites.', exact=True)).to_be_visible()
-        expect(options.get_by_role('option')).to_have_count(0)
-        page.keyboard.press('Enter')
-        selected(0)
-        capture('search-no-matches')
-        search.fill('')
-        expect(options.get_by_role('option')).to_have_count(500)
-        page.keyboard.press('Escape')
-        expect(search).to_have_count(0)
-        expect(selector).to_be_focused()
-        selected(0)
-        open_picker()
-        search.fill('Site 49')
-        page.keyboard.press('ArrowDown')
-        active_down = search.get_attribute('aria-activedescendant')
-        assert active_down, 'ArrowDown must identify its active option'
-        page.keyboard.press('ArrowUp')
-        active_up = search.get_attribute('aria-activedescendant')
-        assert active_up and active_up != active_down, 'ArrowUp must move the active option'
-        active_name = page.locator('[id="' + active_up + '"]').inner_text().strip()
-        page.keyboard.press('Enter')
-        selected(int(active_name.removeprefix('Site ')))
-        expect(search).to_have_count(0)
-        expect(selector).to_be_focused()
-        passed('One closed control opens focused popup search; 500 options scroll within bounds; search/clear/no-match and arrows/Enter/Escape preserve correct selection and focus')
-
-        open_picker()
-        outside = page.get_by_role('button', name='Refresh view', exact=True)
-        outside.click()
-        expect(search).to_have_count(0)
-        expect(outside).to_be_focused()
-        open_picker()
+        # Keyboard: the menu items are buttons in tab order; Escape closes and returns focus.
         page.keyboard.press('Tab')
-        expect(search).to_have_count(0)
-        passed('Outside click and Tab dismiss the popup without trapping or stealing keyboard focus')
-        pick('Site 499')
-        open_picker()
-        expect(options.get_by_role('option')).to_have_count(500)
-        expect(search).to_be_focused()
-        active_id = search.get_attribute('aria-activedescendant')
-        active_box = page.locator('[id="' + active_id + '"]').bounding_box()
-        list_box = options.bounding_box()
-        assert active_box['y'] >= list_box['y'] and active_box['y'] + active_box['height'] <= list_box['y'] + list_box['height'] + 1, 'Last active site must scroll into view on reopen'
+        expect(items.get_by_role('button').first).to_be_focused()
+        page.keyboard.press('Escape')
+        expect(menu).not_to_have_attribute('open', '')
+        expect(scope).to_be_focused()
+        selected(0)
+        scope.press('Enter')
+        expect(menu).to_have_attribute('open', '')
+        page.keyboard.press('Tab')
+        page.keyboard.press('Tab')
+        focused = page.evaluate('document.activeElement.textContent')
+        assert focused == 'Pool 000', focused
+        page.keyboard.press('Tab')
+        page.keyboard.press('Enter')
+        selected(1, data['sites'][1]['name'])
+        expect(menu).not_to_have_attribute('open', '')
+        passed('One closed scope control opens a menu listing all 500 sites and their pools, scrolling within a bounded height; Tab/Enter choose a site and Escape closes with focus back on the control')
+
+        open_menu()
+        outside = page.get_by_role('combobox', name='Search VMs, hosts, IP addresses and settings')
+        outside.click()
+        expect(menu).not_to_have_attribute('open', '')
+        expect(outside).to_be_focused()
+        passed('Outside click dismisses the menu without trapping or stealing keyboard focus')
+        pick('Site 499 · all pools')
+        selected(499)
+        open_menu()
+        expect(items.get_by_role('button', name='Pool 499', exact=True)).to_have_attribute('aria-current', 'true')
+        items.get_by_role('button', name='Pool 499', exact=True).scroll_into_view_if_needed()
         capture('last-site-reopened')
         page.keyboard.press('Escape')
-        pick('Site 123')
+        pick('Pool 123')
         selected(123)
-        resource_search = page.get_by_role('searchbox', name='Search resources', exact=True)
-        resource_search.fill('Guest 123')
-        selected(123)
-        resource_search.fill('host-000')
-        expect(tree.get_by_text('No matching resources in this site.', exact=True)).to_be_visible()
-        expect(tree.locator('a')).to_have_count(0)
-        resource_search.fill('')
+        listed(123)
+        vm_search = page.get_by_role('searchbox', name='Search name, IP address or tag', exact=True)
+        vm_search.fill('Guest 123')
+        expect(page.locator('table.list tbody tr[data-vm]')).to_have_count(1)
+        vm_search.fill('Guest 000')
+        expect(page.get_by_text('No VMs match this view and these filters.', exact=True)).to_be_visible()
+        expect(page.locator('table.list tbody tr[data-vm]')).to_have_count(0)
+        vm_search.fill('')
         page.goto(url + '/#/tasks')
         selected(123)
-        expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='Tasks', level=1)).to_be_attached()
         page.reload()
         selected(123)
-        passed('Explicit site changes filter all three resource levels; global task navigation and reload preserve selected site')
+        passed('Explicit scope changes filter the host and VM lists and VM search to that site; global task navigation and reload preserve the chosen scope')
 
-        for path, number in [('pools/pool-222', 222), ('hosts/host-333', 333), ('vms/vm-444', 444)]:
-            page.goto(url + '/#/' + path)
-            selected(number)
+        page.goto(url + '/#/pools/pool-222')
+        selected(222)
+        expect(page).to_have_url(url + '/#/')
+        page.goto(url + '/#/sites/site-321')
+        selected(321)
         page.reload()
-        selected(444)
-        page.evaluate("location.hash = '/hosts/host-055'")
+        selected(321)
+        # VM and host links open their panel over the list without changing the chosen scope.
+        for path, name in [('hosts/host-333', 'host-333'), ('vms/vm-444', 'Guest 444')]:
+            page.goto(url + '/#/' + path)
+            expect(page.get_by_role('region', name=name, exact=True)).to_be_visible()
+            selected(321)
+        page.evaluate("location.hash = '/pools/pool-055'")
         selected(55)
         capture('deep-link')
-        passed('Pool, host and VM deep links select their owning site on navigation/reload; in-page route change also updates the tree')
+        passed('Site and pool deep links choose their scope on navigation/reload and in-page route change; host and VM links open their panel without changing scope')
 
         page.set_viewport_size({'width': 360, 'height': 800})
-        open_picker()
-        search.fill('Site 001')
+        page.goto(url + '/#/')
+        open_menu()
         long_name = data['sites'][1]['name']
-        expect(options.get_by_role('option', name=long_name, exact=True)).to_be_visible()
-        assert options.bounding_box()['width'] <= 360
+        long_button = items.get_by_role('button', name=long_name + ' · all pools', exact=True)
+        long_button.scroll_into_view_if_needed()
+        expect(long_button).to_be_visible()
+        box = items.bounding_box()
+        assert box['x'] >= 0 and box['x'] + box['width'] <= 360, ('scope menu outside the viewport', box)
         capture('narrow-long-name')
-        options.get_by_role('option', name=long_name, exact=True).click()
-        expect(selector).to_have_accessible_name('Site: ' + long_name)
+        long_button.click()
+        expect(menu).not_to_have_attribute('open', '')
+        selected(1, long_name)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'long selected site overflows'
-        open_picker()
-        search.fill('Site 07')
+        open_menu()
+        items.get_by_role('button', name='Pool 079', exact=True).scroll_into_view_if_needed()
         capture('narrow-dropdown')
-        options.get_by_role('option', name='Site 079', exact=True).click()
+        items.get_by_role('button', name='Pool 079', exact=True).click()
         selected(79)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'narrow viewport overflows'
         capture('narrow-selected-site')
-        passed('Popup search, long names and selection remain reachable at 360px without horizontal page overflow')
+        passed('The scope menu, long names and selection remain reachable at 360px without horizontal page overflow')
+        page.set_viewport_size({'width': 1440, 'height': 1000})
 
         # Simulated removal on a global page must not leave an orphaned selection.
         page.goto(url + '/#/tasks')
@@ -244,31 +248,37 @@ def acceptance(url, evidence):
         data.update(inventory(0))
         page.goto(url + '/#/')
         page.reload()
-        expect(page.get_by_text('No sites yet. Create a site to get started.', exact=True)).to_be_visible()
-        expect(tree.locator('a[href^="#/pools/"]')).to_have_count(0)
+        expect(page.get_by_role('heading', name='Start with a site', exact=True)).to_be_visible()
+        expect(scope).to_have_accessible_name('Scope: no site, all pools. Change scope')
+        open_menu()
+        expect(items.locator('button.indent')).to_have_count(0)
+        expect(items.get_by_role('button', name='Add host', exact=True)).to_be_disabled()
+        page.keyboard.press('Escape')
         capture('empty-sites')
-        page.get_by_role('button', name='Create site', exact=True).first.click()
+        page.get_by_role('button', name='Create site', exact=True).click()
         page.get_by_label('Site name', exact=True).fill('First site')
-        page.locator('form').get_by_role('button', name='Create site', exact=True).click()
-        expect(selector).to_have_accessible_name('Site: First site')
-        expect(page).to_have_url(url + '/#/sites/site-created')
-        expect(tree.locator('a[href^="#/pools/"]')).to_have_count(0)
+        page.get_by_role('dialog', name='Create site').get_by_role('button', name='Create site', exact=True).click()
+        expect(scope).to_have_accessible_name('Scope: First site, all pools. Change scope')
+        expect(page).to_have_url(url + '/#/')
+        open_menu()
+        expect(items.locator('button.indent')).to_have_count(0)
+        page.keyboard.press('Escape')
         capture('first-site-created')
-        passed('Empty inventory offers site creation; successful fixture creation selects its new route without unrelated resources')
+        passed('Empty inventory offers site creation; successful fixture creation chooses the new site without unrelated pools')
         for path in ('/', '/tasks'):
             page.goto(url + '/#' + path)
-            expect(selector).to_have_accessible_name('Site: First site')
-            expect(tree.get_by_text('No hosts in this site.', exact=True)).to_be_visible()
-            page.get_by_role('link', name='Site overview', exact=True).click()
-            expect(page).to_have_url(url + '/#/sites/site-created')
+            expect(scope).to_have_accessible_name('Scope: First site, all pools. Change scope')
+            expect(scope).to_contain_text('0 hosts')
+            page.get_by_role('navigation', name='Sections').get_by_role('link', name='Overview', exact=True).click()
+            expect(page).to_have_url(url + '/#/')
             expect(page.get_by_role('heading', name='Add your first host', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Add host', exact=True).first).to_be_enabled()
             expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
         capture('only-site-overview')
-        passed('The sole default site with no hosts can open Site overview from workspace/tasks, shows Add your first host and exposes Add host without any Create pool action')
-        # A refused Add host must stay visible in its panel across the 10 s inventory poll.
+        passed('The sole default site with no hosts opens Overview from the rail on workspace/tasks, shows Add your first host and exposes Add host without any Create pool action')
+        # A refused Add host must stay visible in its dialog across the 10 s inventory poll.
         page.get_by_role('button', name='Add host', exact=True).first.click()
-        panel = page.get_by_role('region', name='Add host', exact=True)
+        panel = page.get_by_role('dialog', name='Add host', exact=True)
         panel.get_by_label('Host address', exact=True).fill('192.0.2.10')
         panel.get_by_label('Root password', exact=True).fill('fixture-password')
         panel.get_by_role('button', name='Connect', exact=True).click()
@@ -283,9 +293,11 @@ def acceptance(url, evidence):
         expect(alert).to_contain_text('host-enrolled')
         expect(page.get_by_role('button', name='Retry', exact=True)).to_have_count(0)
         capture('add-host-409-after-poll')
-        passed('A 409 already enrolled from Add host stays in the Add host panel with its host ID after an inventory poll')
+        passed('A 409 already enrolled from Add host stays in the Add host dialog with its host ID after an inventory poll')
+        panel.get_by_role('button', name='Close', exact=True).click()
         # A failed update apply is an operator request error, so the inventory poll must not clear it.
         page.goto(url + '/#/updates')
+        expect(page).to_have_url(url + '/#/settings/updates')
         page.get_by_role('button', name='Update', exact=True).click()
         failure = page.get_by_role('alert').filter(has_text='fixture apt failure')
         expect(failure).to_be_visible()
@@ -300,7 +312,7 @@ def acceptance(url, evidence):
         browser.close()
     assert assets == {name: hashlib.sha256((ROOT / 'web/dist' / name).read_bytes()).hexdigest()
                       for name in assets}, 'Built UI changed during browser acceptance'
-    return {'environment': 'Real built React UI in Chromium; explicit API route fixtures with 500 sites, one pool/host/VM per site. All inventory and creation responses simulated; no Controller or libvirt execution.',
+    return {'environment': 'Real built React UI in Chromium; scope menu with explicit API route fixtures of 500 sites, one pool/host/VM per site. All inventory and creation responses simulated; no Controller or libvirt execution.',
             'recorded_at': datetime.now(timezone.utc).isoformat(), 'checks': checks, 'captures': captures,
             'ui_sha256': assets,
             'limits': ['Browser navigation/presentation only; no backend authorization or native-host claim', 'No deployment or hosted CI execution']}

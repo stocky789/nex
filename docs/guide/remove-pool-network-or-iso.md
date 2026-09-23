@@ -3,9 +3,10 @@
 ## Status
 
 Development workflow for Nex Core 0.3.6 and a matching Nex Controller. A pool VLAN guest network
-can be renamed or removed, and an imported ISO can be removed, from the pool's **Networking** and
-**ISO library** views. The pool master's Nex Core does the work, records it durably and every
-member host converges to it on its next pass.
+can be renamed or removed, and an imported ISO can be removed, from the pool's **Networks** screen
+and the **ISO library** on its **Storage** screen. The pool master's Nex Core does the work, records it durably and
+every member host converges to it on its next pass. Navigation on this page follows the development
+build 0.4.8 console layout; see [Navigate the Controller console](navigate-the-controller-console.md).
 
 Limits in this build:
 
@@ -39,10 +40,12 @@ Limits in this build:
 
 ### Rename a pool VLAN network
 
-1. Sign in to Controller, select the pool in **Resources**, then open **Networking**.
-2. Find the pool VLAN row (its **Scope** cell reads **Pool VLAN**) and select **Rename** in the
+1. Sign in to Controller, choose the pool in the top-bar scope menu, then select **Networks** in
+   the rail (`#/networks`). The **Networks** section lists the pool's networks.
+2. Find the pool VLAN row (*Pool VLAN* under its name) and select **Rename** in the
    **Actions** column. If the button is disabled, its tooltip names the reason; see
-   **Troubleshooting**.
+   **Troubleshooting**. **About changing networks**, below the table, summarises what can be
+   changed here.
 3. The dialog **Rename `<name>`** explains that the pool master records the new name and every
    host picks it up on its next pass, and that the VLAN tag, the uplink NIC and the VMs on this
    network are unchanged. Edit **Network name** (up to 100 characters, no slashes or control
@@ -55,7 +58,8 @@ A pool VLAN network or a storage repository the pool master **refused** to regis
 created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
 **discarded**, exactly as a failed ISO import already was.
 
-1. Open the pool's **Networking** view (for a network) or **Storage** view (for a repository) and
+1. With the pool chosen in the scope menu, select **Networks** (for a network) or **Storage** (for
+   a repository) in the rail and
    find the row whose task shows **failed**.
 2. Its only action is **Discard failed registration**. Rename, Remove, Recheck, Update and Detach
    are not offered on a failed row, because there is nothing on a host to act on.
@@ -70,7 +74,8 @@ discard.
 
 ### Remove a pool VLAN network
 
-1. Open the pool's **Networking** view and select **Remove** on the pool VLAN row.
+1. With the pool chosen in the scope menu, select **Networks** in the rail and select **Remove**
+   on the pool VLAN row.
 2. The dialog **Remove network `<name>`?** states that the pool master removes this VLAN bridge
    from every host in the pool and records the removal durably, that Nex Core refuses while any VM
    still uses this network, running or stopped, and that **the management network is never
@@ -83,7 +88,9 @@ discard.
 
 ### Remove an imported ISO
 
-1. Open the pool's **ISO library** view.
+1. With the pool chosen in the scope menu, select **Storage** in the rail (`#/storage`; the older
+   `#/settings/iso` link opens the same screen) and scroll to **ISO library** below the
+   repositories. **About removing ISOs**, below the ISO table, summarises the rules below.
 2. On a row whose transfer task shows `succeeded`, select **Remove ISO**. (A **failed** import is
    only a Controller request record; it keeps the separate **Discard failed import** action, which
    asks no host to do anything — the same model a refused network or storage registration now
@@ -94,13 +101,13 @@ discard.
 
 ## Expected result
 
-The dialog closes and a notice appears at the top of the view, for example *"Removal accepted for
+The dialog closes and a notice appears at the top of the section, for example *"Removal accepted for
 `<name>`. The pool master removes the VLAN bridge from every host in the pool; the network
 disappears from this list once the master reports the removal."* A rename says *"Rename accepted
 for `<name>`. The new name appears once the pool master reports it."*
 
 The row does **not** disappear immediately. Acceptance means the request reached the pool master's
-Nex Core, not that the work is done. Watch the request in **Task history**; the row leaves the list
+Nex Core, not that the work is done. Watch the request on **Tasks** (the rail item, or the activity pill in the top bar); the row leaves the list
 (or shows its new name) when the master reports the result, normally within a few seconds.
 
 On member hosts the change is applied on the ordinary member pull pass — the same tick that pulls
@@ -114,7 +121,8 @@ copy, so only the host that imported it — the master, for a pool library — u
 file to disappear when the master has converged, not when a member has.
 
 Each member's result is visible in its **pool-network-reconciliation** and
-**pool-media-reconciliation** health checks on the host's view.
+**pool-media-reconciliation** health checks under **Health checks** on the **Overview** tab of
+that host's panel (**Hosts** in the rail, then the host's row).
 
 Nothing else changes: the uplink NIC, the management bridge, host addresses and routes, and VM
 disks are never touched by either operation.
@@ -122,7 +130,8 @@ disks are never touched by either operation.
 ## Troubleshooting
 
 - **The buttons are disabled.** The tooltip gives the reason, in this order: *Controller inventory
-  may be out of date. Refresh the view before changing this pool resource.* — reload the view;
+  may be out of date. Use Retry above to reload it before changing this pool resource.* — select **Retry** on the inventory alert
+  or reload the page;
   *Wait for Nex Core to confirm this resource before changing it.* — the registration or import has
   not succeeded yet; *The pool master is not freshly connected. Reconnect it before changing this
   pool resource.* — see [Set up Nex Controller and enroll a host](manage-controller.md); *This Nex
@@ -155,7 +164,7 @@ disks are never touched by either operation.
 - **The task fails with "only pool VLAN networks can be removed".** The network is a bridge or
   libvirt network registration. It is also the refusal for renaming such a network.
 - **The task fails with "network generation is no longer current; refresh and retry".** The network
-  changed (usually a rename) after the view you acted on was loaded. Reload the view and submit
+  changed (usually a rename) after the list you acted on was loaded. Reload the page and submit
   again.
 - **A member's `pool-network-reconciliation` check reads `failed: network <id> is still used by VM
   <uuid> on this host`** (the media check reads `failed: ISO <id> is still attached to VM <uuid> on
@@ -208,11 +217,16 @@ disks are never touched by either operation.
   accepted.** Submit the identical request again. The same unchanged request replays the original
   operation and its result instead of starting a second removal. Only a *changed* request (a
   different new name, for example) is a new request.
-- **The removal was accepted but nothing happened.** Check **Task history** for that operation.
+- **The removal was accepted but nothing happened.** Check **Tasks** for that operation.
   Nex Core does not report a removal as succeeded unless it completed; an interrupted teardown is
   re-run and settles, because every step is safe to repeat.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 Unit and race tests cover the Core teardown, ownership proof, dependency refusals, the master's
 pool-wide refusal, member convergence, the Controller relay and the UI gating, and a

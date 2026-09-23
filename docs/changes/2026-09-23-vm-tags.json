@@ -1,0 +1,49 @@
+{
+  "summary": "Add optional VM tags to the VM definition: validated and de-duplicated by Controller, gated on the vm-tags-v1 capability of the VM's host and its pool master, carried by the existing vm-create/vm-update commands, journaled by Core, kept in the master's pool VM record and adopted by a fresh Controller from host inventory.",
+  "paths": [
+    "internal/protocol/managed.go",
+    "internal/controller/managed.go",
+    "internal/controller/vm_tags_test.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/API.md",
+    "docs/changes/2026-09-23-vm-tags.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow exists yet: the tag editor, list column and Tags facet are built by the console redesign UI slice, and the guide pages that describe them change with that slice (slice 7 of docs/plans/2026-09-23-controller-console-redesign.md).",
+    "pages": []
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "VMCreateSpec gains optional tags on createVM, updateVM, GET /api/v1/vms spec, the vm-create/vm-update commands, the peer VM definition and Inventory.managed.vms; new host capability vm-tags-v1 gates nonempty tags with 409 on older Core. Request-id replay and asynchronous operation semantics are unchanged.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Implements the VM tags contract already recorded in docs/plans/2026-09-23-controller-console-redesign.md; no phase or gate changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Tags describe a pool resource, so they live in the VM definition Core already owns. Controller only validates, normalizes and forwards them, and mirrors what hosts report; it keeps no tag table, cache or mapping.",
+    "record": "VMCreateSpec.tags in the host's managed-vms journal entry for each vm-create/vm-update revision, and in the pool master's pool VM record (poolVMRecord.Spec in pool-vms.json) committed from exact update evidence. A fresh Controller recovers them through normal VM inventory adoption: the host reports its current definition, tags included, in Inventory.managed.vms and adoptManaged stores that definition as the VM's mirror."
+  },
+  "verification": {
+    "method": "go test ./internal/controller -run VMTags (valid round trip through update and host report to GET /api/v1/vms, invalid/too-many tags 400 naming the tag, de-duplication, same request_id replay, missing CSRF 403 and session 401, older Core 409 while untagged edits still work, fresh-Controller adoption of reported tags); go test ./internal/agent -run KeepsTags (master pool VM record keeps tags after update commit); go test ./internal/vmhost -run 'NeedsStopClassifies|CurrentAndApplied' (tags apply live and the journal reports them); python3 -m unittest tests.test_api_contract; python3 scripts/generate_api.py --check. Lab Controller-replacement proof (delete the Controller database, re-adopt the master, tags return) is outstanding for the redesign acceptance gate.",
+    "evidence": [
+      "internal/controller/vm_tags_test.go",
+      "internal/agent/pool_vm_test.go",
+      "internal/vmhost/managed_update_test.go"
+    ]
+  }
+}

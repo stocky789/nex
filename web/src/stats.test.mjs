@@ -200,3 +200,19 @@ assert.equal(statsFailure(failure("the host agent does not report hardware; upgr
 }
 
 console.log("stats helpers ok");
+
+// The VM panel's spark rows: one series per resource, byte rates summed, IOPS never added to bytes.
+{
+  const { sparkRows } = await import(moduleURL);
+  const rows = sparkRows({ object: "vm", id: "vm-1", range: "10m", step_seconds: 5, start: "2026-09-16T00:00:00Z", series: [
+    s("cpu.total", "cpu", "percent", [10, null, 30]), s("cpu.vcpu.0", "cpu", "percent", [4, null, 10]),
+    s("memory.assigned", "memory", "bytes", [8, 8, 8]), s("memory.host", "memory", "bytes", [2, 4, 4]),
+    s("disk.vda.read_bytes", "disk", "bytes_per_second", [1024, 0, 1024]), s("disk.vda.write_bytes", "disk", "bytes_per_second", [1024, 0, 1024]),
+    s("disk.vda.read_iops", "disk", "iops", [500, 500, 500]),
+  ] });
+  assert.deepEqual(rows.map(r => r.text), ["30%", "4 B", "2.0 KiB/s", "—"]);
+  assert.deepEqual(rows[0].values, [10, 30], "a gap is left out, not drawn as zero");
+  assert.equal(rows[1].detail, "memory.host", "host resident, not assigned plus host");
+  assert.deepEqual(rows[2].values, [100, 0, 100]);
+  console.log("stats spark rows ok");
+}

@@ -152,6 +152,9 @@ option as approval. These instructions cannot enable a question UI the client la
   with the simplest working UI first. Never name another product as the source of a design in code,
   documentation, commit messages, or the UI; never copy another product's branding, artwork, or
   wording; and do not present documentation-only research as inspected visual behavior.
+- Controller UI work follows the [console design guide](docs/design/controller-console/README.md)
+  and its reference page: rail, top bar, filterable lists with slide-over panels, the listed
+  tokens, 2–3 px corners, and no coloured side stripes. Decision: project owner, 2026-09-23.
 - Container Services use Docker Swarm in Nex-managed node VMs, with the full lifecycle in Nex Controller;
   not LXC or Docker directly on Nex Core. Keep this after the VM foundation and preserve the agreed
   colorful application/service icons. Follow Phase 10 for storage ownership, recovery, and quorum rules.

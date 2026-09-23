@@ -30,7 +30,8 @@ writeFileSync(outfile, stubbed);
 // Badge/statusLabel are transformed the same way, so console.tsx's badge renders through the
 // real Badge component rather than a second stub of its tone logic.
 writeFileSync(`${outdir}/labels.mjs`, transformSync(readFileSync(new URL("./labels.ts", import.meta.url), "utf8"), { loader: "ts", format: "esm" }).code);
-writeFileSync(`${outdir}/ui.mjs`, transformSync(readFileSync(new URL("./ui.tsx", import.meta.url), "utf8"), { loader: "tsx", format: "esm", jsx: "automatic" }).code.replace('from "./labels"', 'from "./labels.mjs"'));
+writeFileSync(`${outdir}/icons.mjs`, transformSync(readFileSync(new URL("./icons.tsx", import.meta.url), "utf8"), { loader: "tsx", format: "esm", jsx: "automatic" }).code);
+writeFileSync(`${outdir}/ui.mjs`, transformSync(readFileSync(new URL("./ui.tsx", import.meta.url), "utf8"), { loader: "tsx", format: "esm", jsx: "automatic" }).code.replace('from "./labels"', 'from "./labels.mjs"').replace('from "./icons"', 'from "./icons.mjs"'));
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 const { typedKey, typedEvents, Console } = await import(`file://${outfile}`);
 

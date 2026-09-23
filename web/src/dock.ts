@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The bottom task strip: counts for its collapsed line, the failures to announce, and the
-// per-browser open/closed preference. localStorage is a convenience: any failure to read or
-// write it leaves the default in place.
-const running = new Set(["pending", "dispatched"]);
+// Task activity for the top bar: running and failed counts, the failures to announce, and
+// per-browser preferences (theme, scope, last-seen event time). localStorage is a convenience:
+// any failure to read or write it leaves the default in place.
+// Every status an operation holds before its outcome: the Controller creates it queued, hands it
+// to the agent (dispatched) and the host reports it pending while it runs.
+export const unfinished = new Set(["queued", "dispatched", "pending", "running"]);
 const failed = new Set(["failed", "needs_attention"]);
 
 export function taskCounts(ops: { status: string }[]): { running: number; failed: number } {
-  return { running: ops.filter(o => running.has(o.status)).length, failed: ops.filter(o => failed.has(o.status)).length };
+  return { running: ops.filter(o => unfinished.has(o.status)).length, failed: ops.filter(o => failed.has(o.status)).length };
 }
 
 export function newFailures<T extends { id: string; status: string }>(previous: T[], next: T[]): T[] {
@@ -15,9 +17,9 @@ export function newFailures<T extends { id: string; status: string }>(previous: 
   return next.filter(o => failed.has(o.status) && before.get(o.id) !== o.status);
 }
 
-export function readPreference(key: string, fallback: boolean): boolean {
-  try { const v = localStorage.getItem(key); return v === null ? fallback : v === "1"; } catch { return fallback; }
+export function readPreference(key: string): string {
+  try { return localStorage.getItem(key) ?? ""; } catch { return ""; }
 }
-export function writePreference(key: string, value: boolean): void {
-  try { localStorage.setItem(key, value ? "1" : "0"); } catch { /* preference not kept */ }
+export function writePreference(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* preference not kept */ }
 }

@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { confirmMatches } from "./managed";
 import { hostName } from "./pool-authority";
 import { Badge } from "./ui";
+import { capitalize } from "./labels";
 
 export type PromotionCheck = { name: string; status: "passed" | "blocked" | "unknown"; reason?: string; hosts?: string[]; vms?: string[] };
 export type PromotionHost = {
@@ -281,10 +282,10 @@ export function bmcReenableOffered(member: PromotionMember, authoritative: boole
   return authoritative && Boolean(member.fence?.provisioning_disabled);
 }
 
-// ------------------------------------------------------------------ the Fencing column
+// ------------------------------------------------------------------ the Fencing check
 
 // How a host would be shut out, said in the fewest words that are true, with the reasons
-// underneath. Every judgement here is the pool master's: this only chooses the wording.
+// in the row's details. Every judgement here is the pool master's: this only chooses the wording.
 //
 //   - The master is not reporting            → unknown. Its record is the only one.
 //   - It reports no readiness at all         → not reported. An older Core; never ready.
@@ -365,24 +366,21 @@ export function watchdogText(member: PromotionMember, authoritative: boolean) {
   return `Watchdog: ${method.reason || method.state}`;
 }
 
-// The Fencing cell: one badge whose text carries the state, and behind **Why** the reasons,
-// the fence device and what every other host's last look at it found. Nothing here is colour
-// alone, and nothing is hidden behind a hover.
-export function FencingCell({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
+// The Fencing details under a member's row: the state in full, the reasons, the fence device
+// and what every other host's last look at it found. The row's status strip carries the short
+// result; nothing here is colour alone.
+export function FencingDetail({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
   const fencing = fencingText(member, authoritative);
   const checks = fenceCheckLines(member, authoritative);
-  // "not reported" is the pool master's answer for every row; the notice above the table says it once.
+  // "not reported" is the pool master's answer for every row; the pool strip says it once.
   const reasons = fencing.label === "not reported" ? [] : fencing.reasons;
   return <>
-    <Badge value={fencing.badge} label={fencing.label} />
-    <details className="fold">
-      <summary>Why<span className="sr-only"> for {member.name || member.host_id}</span></summary>
-      {reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
-      <small>{fenceText(member, authoritative)}</small>
-      {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
-      {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
-      {checks.length > 0 && <ul className="pool-fence-checks">{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>}
-    </details>
+    <small className={fencing.badge === "failed" ? "task-error" : undefined}>{capitalize(fencing.label)}</small>
+    {reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
+    <small>{fenceText(member, authoritative)}</small>
+    {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
+    {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
+    {checks.length > 0 && <ul className="pool-fence-checks">{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>}
   </>;
 }
 
@@ -467,8 +465,8 @@ export function PromotionActions({ report, member, authoritative, onPromote, onF
   const promote = promotionBlock(report, member);
   const fence = fenceProfileBlock(report, member);
   return <>
-    {/* What the fence device is and what Nex Core found on the controller is in the
-        Fencing column; this is only what an operator can do about it. */}
+    {/* What the fence device is and what Nex Core found on the controller is in the row's
+        Fencing details; this is only what an operator can do about it. */}
     {/* One entry point to this host's fence device. On a host Nex Core configured itself
         there is nothing to type, so it opens on the device that is there and its Clear
         action — which is also what removes the account Core created. */}
@@ -669,8 +667,8 @@ export function PromotionStrip({ report }: { report: PromotionReport }) {
   const promotion = report.promotion;
   const last = lastPromotionText(report.last_promotion);
   if (!promotion && !last) return null;
-  return <section className="panel pool-promotion-strip" aria-label="Pool master promotion">
-    <div className="section-heading"><h3>Pool master promotion</h3></div>
+  return <section className="substrip pool-promotion-strip" aria-label="Pool master promotion">
+    <h3>Pool master promotion</h3>
     {promotion && <>
       <p>
         Candidate <strong>{hostName(report, promotion.host_id)}</strong> ·

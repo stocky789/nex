@@ -18,7 +18,7 @@ def main():
     server.block_on_close = False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     hosts = [{"id": f"core-{n}", "pool_id": "pool-qa", "hostname": f"core-{n}", "connection": "fresh", "revoked": False,
-              "capabilities": ["managed-vm-v1", "storage-clustered-iscsi-v2", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}} for n in range(1, 4)]
+              "capabilities": ["managed-vm-v1", "storage-clustered-iscsi-v2", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}} for n in range(1, 4)]
     cluster = {"pool_id": "pool-qa", "host_id": "core-1", "status": "needs_attention", "operations": [{
         "request_id": "cluster-apply-1", "membership_generation": 2, "status": "awaiting_fencing", "updated_at": "2026-09-12T00:00:00Z",
         "config": {"repository_id": "gfs2-lun", "cluster_id": "qa-cluster", "generation": 4, "lock_table": "qa_lock",
@@ -88,7 +88,9 @@ def main():
             else:
                 cluster["operations"][0]["config"]["fence_proofs"] = [{"request_id": request.post_data_json["request_id"], "host_id": "core-1", "status": "unverified", "target_id": "00000000-0000-0000-0000-000000000001", "exclusion_verified": False, "observed_at": "2026-09-12T00:00:01Z"}]
                 route.fulfill(status=202, json={"status": "accepted"})
-        elif request.method == "GET": route.fulfill(json=data.get(path.split("?", 1)[0], []))
+        # Reads this fixture does not simulate (usage history, pool members) are unavailable.
+        elif request.method == "GET" and path.split("?", 1)[0] in data: route.fulfill(json=data[path.split("?", 1)[0]])
+        elif request.method == "GET": route.fulfill(status=404, json={"error": "not simulated"})
         else: route.fulfill(status=204)
 
     try:
@@ -106,7 +108,13 @@ def main():
             page.route("**/api/v1/**", api)
             page.goto(f"http://127.0.0.1:{server.server_port}/#/pools/pool-qa")
             page.wait_for_load_state("networkidle")
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
+            rail = page.get_by_role("navigation", name="Sections", exact=True)
+
+            def refresh():
+                # The console has no manual refresh; wait for its next automatic inventory poll.
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "GET", timeout=15000):
+                    pass
+            rail.get_by_role("link", name="Storage", exact=True).click()
             # A cancelled picker must ignore a late successful Core response instead
             # of recreating its native dialog with stale draft data.
             page.get_by_role("button", name="Register storage", exact=True).click()
@@ -203,7 +211,7 @@ def main():
             assert fence_button.get_attribute("title") == "Core is reconciling the existing fence request; Nex will not retry it automatically."
             cluster["operations"][0]["config"]["fence_proofs"][0].update({"status": "passed", "exclusion_verified": True, "observed_at": "2026-09-12T00:00:02Z"})
             page.get_by_role("button", name="Refresh Core status", exact=True).click()
-            expect(panel.get_by_text("passed", exact=True)).to_be_visible()
+            expect(panel.get_by_text("Passed", exact=True)).to_be_visible()
             expect(panel).to_contain_text("Core recorded the target as excluded.")
             reverify = panel.get_by_role("button", name="Reverify power fence", exact=True)
             expect(reverify).to_be_enabled()
@@ -214,11 +222,11 @@ def main():
             expect(reverify).to_be_disabled()
             expect(reverify).to_have_attribute("title", "Wait for Core to derive cluster metadata before destructive fencing.")
             page.screenshot(path=str(ROOT / ".cache/cluster-storage-browser.png"), full_page=True)
-            expect(panel.get_by_text("passed", exact=True)).to_be_visible()
+            expect(panel.get_by_text("Passed", exact=True)).to_be_visible()
             cluster["operations"][0]["config"]["mount_path"] = "/var/lib/nex-storage/gfs2-qa"
             cluster["operations"][0]["config"]["fence_proofs"][0].update({"status": "uncertain", "exclusion_verified": False, "error": "survivor transport needs reconciliation"})
             page.get_by_role("button", name="Refresh Core status", exact=True).click()
-            expect(panel.get_by_text("uncertain", exact=True)).to_be_visible()
+            expect(panel.get_by_text("Uncertain", exact=True)).to_be_visible()
             expect(reverify).to_be_enabled()
             reverify.click()
             reverify_dialog = page.get_by_role("dialog", name="Reverify power fence for core-1?", exact=True)
@@ -306,7 +314,7 @@ def main():
                 button = clustered_row.get_by_role("button", name=action, exact=True)
                 expect(button).to_be_disabled()
                 expect(button).to_have_attribute("title", lifecycle_reason)
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Virtual machines", exact=True).click()
+            rail.get_by_role("link", name="VMs", exact=True).click()
             page.get_by_role("button", name="Create VM", exact=True).click()
             wizard = page.get_by_role("region", name="Create VM", exact=True)
             page.get_by_label("VM name", exact=True).fill("clustered-member-vm")
@@ -321,10 +329,10 @@ def main():
             # Exercise the actual expiry guard with controlled time, independent
             # of how long the previous UI checks took on this runner.
             page.clock.set_fixed_time("2026-09-18T00:00:31Z")
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(disk_storage.locator('option[value="gfs2-lun"]')).to_have_count(0)
             page.clock.set_fixed_time(observed_now)
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(disk_storage.locator('option[value="gfs2-lun"]')).to_have_count(1)
             disk_storage.select_option("gfs2-lun")
             expect(disk_storage).to_have_value("gfs2-lun")
@@ -352,24 +360,30 @@ def main():
                 {"id": "cached-smb-iso", "pool_id": "pool-qa", "host_id": "core-1", "storage_id": "cached-smb", "name": "cached-smb.iso", "size_bytes": 65536, "sha256": "b" * 64, "operation_id": "media-smb", "status": "succeeded"},
             ]
             for host in hosts: host["connection"] = "stale"
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            rail.get_by_role("link", name="Storage", exact=True).click()
+            refresh()
             stale_actions = len(requests)
             stale_reason = "Assigned Core is not freshly connected. Reconnect it before changing this repository."
             # core-2 reported this GFS2 member access moments ago, but its Core is now stale;
             # show it strictly as the last report instead of present access.
             clustered_last_member = page.get_by_role("row").filter(has_text="Clustered GFS2")
-            expect(clustered_last_member.get_by_text("core-2 · last report / not current", exact=False)).to_be_visible()
+            # Its Host access light is the hollow Unknown one, never Accessible.
+            expect(clustered_last_member.get_by_role("link", name="core-2: Unknown. The host is not reporting, so its access is not current.")).to_be_visible()
+            expect(clustered_last_member.get_by_role("link", name="core-2: Accessible", exact=False)).to_have_count(0)
             cached_nfs_row = page.locator('tr[data-storage-id="cached-nfs"]')
             historical_nfs_row = page.locator('tr[data-storage-id="cached-nfs-historical"]')
             expect(cached_nfs_row).to_have_count(1)
             expect(historical_nfs_row).to_have_count(1)
-            expect(cached_nfs_row).to_contain_text("NFSv4 export · nfs.example.test:/exports/vms")
-            expect(historical_nfs_row).to_contain_text("NFSv4 export · nfs.example.test:/exports/vms")
+            # The backend type and its source now sit in separate cells of the row.
+            for row in (cached_nfs_row, historical_nfs_row):
+                expect(row).to_contain_text("NFSv4 export")
+                expect(row).to_contain_text("nfs.example.test:/exports/vms")
             for storage_id, update in (("cached-nfs", "Update"), ("cached-smb", "Update / rotate credentials")):
                 row = page.locator(f'tr[data-storage-id="{storage_id}"]')
-                expect(row.get_by_text("last report", exact=True)).to_be_visible()
-                expect(row.get_by_text("Assigned Core is unavailable; read/write values are not current.", exact=True)).to_be_visible()
+                # Health reads Unknown over the last report, never the cached Healthy.
+                expect(row.locator(".badge", has_text="Unknown")).to_be_visible()
+                expect(row.get_by_text("Healthy", exact=True)).to_have_count(0)
+                expect(row.get_by_text("Assigned Core is not reporting; showing its last report.", exact=True)).to_be_visible()
                 for action in ("Recheck", update, "Detach"):
                     button = row.get_by_role("button", name=action, exact=True)
                     expect(button).to_be_disabled()
@@ -377,7 +391,7 @@ def main():
                     button.click(force=True)
             assert not any("/recheck" in request or "/detach" in request for request in requests[stale_actions:]), requests[stale_actions:]
             page.screenshot(path=str(ROOT / ".cache/cluster-storage-owner-stale-browser.png"), full_page=True)
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="ISO library", exact=True).click()
+            # The ISO library sits below the repositories on Storage.
             page.get_by_role("button", name="Upload ISO", exact=True).click()
             upload = page.get_by_role("region", name="Upload ISO", exact=True)
             destination = upload.get_by_role("combobox", name="Destination storage", exact=True)
@@ -387,11 +401,11 @@ def main():
             upload.get_by_role("button", name="Close", exact=True).click()
 
             hosts[0]["connection"] = "fresh"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
+            refresh()
+            rail.get_by_role("link", name="Storage", exact=True).click()
             for storage_id, update in (("cached-nfs", "Update"), ("cached-smb", "Update / rotate credentials")):
                 row = page.locator(f'tr[data-storage-id="{storage_id}"]')
-                expect(row.get_by_text("healthy", exact=True)).to_be_visible()
+                expect(row.get_by_text("Healthy", exact=True)).to_be_visible()
                 expect(row.get_by_role("button", name="Recheck", exact=True)).to_be_enabled()
                 expect(row.get_by_role("button", name=update, exact=True)).to_be_enabled()
                 expect(row.get_by_role("button", name="Detach", exact=True)).to_be_enabled()
@@ -405,8 +419,8 @@ def main():
             expect(update_form).to_be_visible()
             hosts[0]["connection"] = "stale"
             race_start = len(requests)
-            page.get_by_role("button", name="Refresh view", exact=True).click(force=True)
-            expect(cached_nfs.get_by_text("last report", exact=True)).to_be_visible()
+            refresh()
+            expect(cached_nfs.get_by_text("Assigned Core is not reporting; showing its last report.", exact=True)).to_be_visible()
             # Refresh correctly disables the visible submit control. Submit the form directly
             # to exercise the handler's second guard for a just-staled Core.
             update_form.locator("form").evaluate("form => form.requestSubmit()")
@@ -415,7 +429,7 @@ def main():
             update_form.get_by_role("button", name="Close", exact=True).click()
 
             hosts[0]["connection"] = "fresh"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             cached_smb = page.locator('tr[data-storage-id="cached-smb"]')
             cached_smb.get_by_role("button", name="Update / rotate credentials", exact=True).click()
             smb_update = page.get_by_role("region", name="Update storage", exact=True)
@@ -439,8 +453,8 @@ def main():
             expect(smb_update.get_by_role("button", name="Submitting…", exact=True)).to_be_disabled()
             pending_credentials, _ = take_deferred(page, deferred_credentials, "SMB credential handoff")
             hosts[0]["connection"] = "stale"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
-            expect(cached_smb.get_by_text("last report", exact=True)).to_be_visible()
+            refresh()
+            expect(cached_smb.get_by_text("Assigned Core is not reporting; showing its last report.", exact=True)).to_be_visible()
             pending_credentials.fulfill(json={"receipt": "core-only-race-receipt"})
             expect(page.get_by_role("alert")).to_contain_text(stale_reason)
             assert not any("storage/cached-smb/update" in request for request in requests[race_start:]), requests[race_start:]
@@ -448,17 +462,17 @@ def main():
             mode["credential_deferred"] = False
 
             hosts[0]["connection"] = "fresh"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             cached_nfs = page.locator('tr[data-storage-id="cached-nfs"]')
             cached_nfs.get_by_role("button", name="Detach", exact=True).click()
             detach_dialog = page.get_by_role("dialog", name="Detach Cached NFS?", exact=True)
             expect(detach_dialog).to_be_visible()
             hosts[0]["connection"] = "stale"
             race_start = len(requests)
-            # A modal correctly blocks toolbar clicks; wait for the normal inventory poll to
+            # A modal correctly blocks page clicks; wait for the normal inventory poll to
             # deliver the disconnect while the confirmation remains open.
             page.wait_for_timeout(10500)
-            expect(cached_nfs.get_by_text("last report", exact=True)).to_be_visible()
+            expect(cached_nfs.get_by_text("Assigned Core is not reporting; showing its last report.", exact=True)).to_be_visible()
             detach_dialog.get_by_label("Repository name", exact=True).fill("Cached NFS")
             detach_dialog.get_by_role("button", name="Detach storage", exact=True).click()
             expect(detach_dialog).to_contain_text(stale_reason)
@@ -467,8 +481,8 @@ def main():
             detach_dialog.get_by_role("button", name="Cancel", exact=True).click()
 
             hosts[0]["connection"] = "fresh"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="ISO library", exact=True).click()
+            refresh()
+            # The ISO library sits below the repositories on Storage.
             page.get_by_role("button", name="Upload ISO", exact=True).click()
             upload = page.get_by_role("region", name="Upload ISO", exact=True)
             destination = upload.get_by_role("combobox", name="Destination storage", exact=True).locator("option").all_text_contents()

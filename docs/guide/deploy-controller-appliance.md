@@ -10,7 +10,8 @@ bridge created by current GUI installations; hosts installed by an older ISO nee
 management bridge. Login/session rules are described in [secure web access](secure-web-access.md).
 
 Rebuilding media does not update an already deployed Controller VM. Use a private management
-network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided.
+network or VPN, with no direct Internet exposure. Automatic Controller failover is not provided. Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -96,10 +97,10 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
    beside the ready link before accepting its trust warning. DHCP uses a hostname certificate
    while the link uses its discovered IP, so the browser may also report a name mismatch.
-   Check that the chosen Site, the automatically created pool showing this host as
-   **Pool master**, and the enrolled host appear in Controller. The appliance
-   remains visible in the host-local **Virtual machines** list and in Controller's
-   inventory under its host. Select it in Controller to inspect its VM identity;
+   Check that the chosen Site and the automatically created pool appear in Controller's scope
+   menu, and that the enrolled host appears under **Hosts** with the **Master** role. The
+   appliance remains visible in the host-local **Virtual machines** list and in Controller's
+   **VMs** list and host panel. Select its row in **VMs** to inspect its VM identity;
    adoption retains the existing appliance UUID instead of creating another VM.
 
 7. For local power recovery, return to **Virtual machines** on the host. The appliance this
@@ -301,6 +302,11 @@ relocate the original appliance's inventory record. Verify actual placement and 
 original exclusion.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) booted
 the exact bundled appliance separately in a disposable VM and verified DHCP,

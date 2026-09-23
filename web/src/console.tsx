@@ -245,7 +245,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   }
   const live = phase === "connected";
   const view = effective(prefs);
-  const connectionBadge = <Badge value={live ? "fresh" : phase === "connecting" ? "queued" : "stale"} label={live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"} />;
+  const connectionBadge = <Badge value={live ? "fresh" : phase === "connecting" ? "queued" : "stale"} label={live ? "Connected" : phase === "connecting" ? "Connecting" : phase === "closed" ? "Disconnected" : "Not connected"} />;
   const clipboardHint = !guest ? "Clipboard readiness is unknown for this VM; sending works when spice-vdagent runs in the guest."
     : guest.clipboard === "ready" ? "Guest clipboard is ready: text you send appears in the VM and VM copies appear here."
     : guest.clipboard === "waiting" ? "The VM has a clipboard channel but the guest is not running both qemu-guest-agent and spice-vdagent. Install the guest tools, or use Type into VM."

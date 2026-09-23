@@ -20,7 +20,7 @@ func TestNeedsStopClassifiesEdits(t *testing.T) {
 	cur.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}, {NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}}
 	hot := cur
 	// Ejecting the ISO keeps the CD drive in the boot order; only the media changes.
-	hot.Description, hot.GuestOS, hot.Autostart, hot.MediaID = "notes", "windows", true, ""
+	hot.Description, hot.GuestOS, hot.Autostart, hot.MediaID, hot.Tags = "notes", "windows", true, "", []string{"web"}
 	hot.Disks = append(hot.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 5, Bus: "scsi"})
 	// The first interface is dropped and the second, named by its MAC, keeps its settings.
 	hot.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}, {NetworkID: "n", Model: "virtio"}}
@@ -100,7 +100,7 @@ func TestManagedCurrentAndAppliedFollowRevisions(t *testing.T) {
 	v0 := managedTestVM()
 	v1, v2, failed := v0, v0, v0
 	v1.Revision, v1.Description = 1, "first edit"
-	v2.Revision, v2.Description = 2, "second edit"
+	v2.Revision, v2.Description, v2.Tags = 2, "second edit", []string{"prod", "web"}
 	failed.Revision, failed.Description = 3, "never landed"
 	for op, entry := range map[string]managedJournal{
 		"op-create": {Command: protocol.Command{OperationID: "op-create", Kind: "vm-create", VM: &v0}, Result: protocol.Result{OperationID: "op-create", Status: "succeeded"}, Disks: []string{"/d0"}},
@@ -122,7 +122,7 @@ func TestManagedCurrentAndAppliedFollowRevisions(t *testing.T) {
 		t.Fatalf("current %+v %v", cur.Command.VM, err)
 	}
 	applied, _ := e.Applied(context.Background())
-	if len(applied.VMs) != 1 || applied.VMs[0].Revision != 2 {
+	if len(applied.VMs) != 1 || applied.VMs[0].Revision != 2 || strings.Join(applied.VMs[0].Tags, ",") != "prod,web" {
 		t.Fatalf("applied %+v", applied.VMs)
 	}
 	// Creation journals predate target names; they are derived the way creation assigned them.

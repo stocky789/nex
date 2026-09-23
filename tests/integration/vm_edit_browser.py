@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Browser walkthrough of editing a VM in place on its General tab against a simulated host.
+"""Browser walkthrough of editing a VM in place on its panel's Configuration tab against a simulated host.
 
 The VM and its references are created through the API so the walkthrough proves the editor
 alone: an edit while stopped (rename, description, a new disk out of the boot order, a new
@@ -65,14 +65,22 @@ def walkthrough(lab, config, password, evidence):
         page.get_by_label('Username').fill('root')
         page.get_by_label('Password', exact=True).fill(password)
         page.keyboard.press('Enter')
-        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
+        expect(page.get_by_role('navigation', name='Sections', exact=True)).to_be_visible()
+
+        def edit(vm_id=None):
+            if vm_id:
+                page.goto(url + '/#/vms/' + vm_id)
+            page.get_by_role('tab', name='Configuration', exact=True).click()
+            page.get_by_role('button', name='Edit hardware', exact=True).click()
+
+        definition = page.get_by_role('region', name='VM definition', exact=True)
         page.goto(url + '/#/vms/' + vm['id'])
-        expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
-        expect(page.locator('.details')).to_contain_text('CD drive empty')
+        page.get_by_role('tab', name='Configuration', exact=True).click()
+        expect(definition).to_contain_text('CD drive empty')
         capture('details-before')
 
         # Edit while stopped.
-        page.get_by_role('button', name='Edit', exact=True).click()
+        page.get_by_role('button', name='Edit hardware', exact=True).click()
         editor = page.get_by_role('form', name='Edit VM')
         expect(editor.get_by_text('every field can be changed', exact=False)).to_be_visible()
         expect(editor.get_by_label('Name', exact=True)).to_be_focused()
@@ -118,18 +126,19 @@ def walkthrough(lab, config, password, evidence):
         assert [d['name'] for d in edited['spec']['disks']] == ['system', 'simulated-browser-host-edit-vm-2'] and edited['spec']['disks'][1]['boot_order'] == 0, edited['spec']
         assert len(edited['spec']['nics']) == 2 and all(n['mac'] for n in edited['spec']['nics']) and edited['spec']['nics'][0]['mac'] == vm['spec']['nics'][0]['mac'], edited['spec']
         page.reload()
-        expect(page.locator('.details')).to_contain_text('edited while stopped', timeout=30000)
-        expect(page.get_by_role('heading', name='edit-vm-renamed', exact=True)).to_be_visible()
+        page.get_by_role('tab', name='Configuration', exact=True).click()
+        expect(definition).to_contain_text('edited while stopped', timeout=30000)
+        expect(page.get_by_role('region', name='edit-vm-renamed', exact=True)).to_be_visible()
         capture('details-after-stopped-edit')
         ops = [o for o in lab.api('/api/v1/operations') if o['kind'] == 'vm-update']
         assert len(ops) == 1 and ops[0]['status'] == 'succeeded' and ops[0]['actor'] == 'root', ops
-        passed('Edit while stopped from General: UEFI to BIOS warns that the variable store is deleted and holds Save until acknowledged; rename, description, second disk out of the boot order and second interface saved; repeated boot order refused in place; existing disk size locked; first interface keeps its MAC; vm-update succeeded and details follow the host report; 360px editor without overflow')
+        passed('Edit while stopped from Configuration: UEFI to BIOS warns that the variable store is deleted and holds Save until acknowledged; rename, description, second disk out of the boot order and second interface saved; repeated boot order refused in place; existing disk size locked; first interface keeps its MAC; vm-update succeeded and details follow the host report; 360px editor without overflow')
 
         # Edit while running: stop-first fields are locked with the reason; a device change goes through.
         config['control']['state'] = 'running'
         eventually(lambda: current()['state'] == 'running' or None, 'running observed')
         page.reload()
-        page.get_by_role('button', name='Edit', exact=True).click()
+        edit()
         editor = page.get_by_role('form', name='Edit VM')
         expect(editor.get_by_text('The VM is running', exact=False)).to_be_visible()
         for label in ('Name', 'Virtual CPUs', 'Memory (MiB)'):
@@ -155,7 +164,7 @@ def walkthrough(lab, config, password, evidence):
         eventually(lambda: current()['state'] == 'shut off' or None, 'stopped observed')
         page.reload()
         page.route('**/api/v1/agent/report', lambda route: route.abort())
-        page.get_by_role('button', name='Edit', exact=True).click()
+        edit()
         editor = page.get_by_role('form', name='Edit VM')
         editor.get_by_label('Description').fill('third')
         editor.get_by_role('button', name='Save changes', exact=True).click()
@@ -174,8 +183,7 @@ def walkthrough(lab, config, password, evidence):
         created = lab.api('/api/v1/vms', spec, expected=202)
         fresh = eventually(lambda: next((v for v in lab.api('/api/v1/vms') if v['id'] == created['vm_id'] and v['status'] == 'succeeded' and v['state'] == 'shut off'), None), 'two-interface VM created and observed stopped', timeout=30)
         assert fresh['spec']['revision'] == 0 and all(n['mac'] for n in fresh['spec']['nics']), fresh['spec']
-        page.goto(url + '/#/vms/' + fresh['id'])
-        page.get_by_role('button', name='Edit', exact=True).click()
+        edit(fresh['id'])
         editor = page.get_by_role('form', name='Edit VM')
         expect(editor.get_by_role('group', name='Network interface 2', exact=True).get_by_label('MAC address')).to_have_value(fresh['spec']['nics'][1]['mac'])
         editor.get_by_role('button', name='Remove network interface 1', exact=True).click()
@@ -190,7 +198,8 @@ def walkthrough(lab, config, password, evidence):
         assert [(n['mac'], n['model']) for n in nics[:1]] == [(fresh['spec']['nics'][1]['mac'], 'e1000e')] and len(nics) == 2, dropped['spec']
         assert nics[1]['model'] == 'rtl8139' and nics[1]['mac'] not in {n['mac'] for n in fresh['spec']['nics']}, dropped['spec']
         page.reload()
-        expect(page.locator('.details')).to_contain_text(fresh['spec']['nics'][1]['mac'], timeout=30000)
+        page.get_by_role('tab', name='Configuration', exact=True).click()
+        expect(definition).to_contain_text(fresh['spec']['nics'][1]['mac'], timeout=30000)
         capture('remove-first-nic-details')
         passed('Never-edited VM with two automatic interfaces: the editor shows both listed MACs, removing interface 1 and adding an rtl8139 interface in one save is accepted, and the host-reported revision 1 keeps the second interface with its original MAC plus the new interface with a fresh MAC')
         assert not errors, errors

@@ -405,3 +405,37 @@ func TestCPUBaselineProbeDeadlineAndFailedObservation(t *testing.T) {
 		t.Fatal("failed discovery retained successful baseline")
 	}
 }
+
+func TestNICSpeedAndUptimeParsing(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if got := nicSpeed(write("speed", "1000\n")); got != 1000 {
+		t.Fatalf("speed = %d", got)
+	}
+	if got := nicSpeed(write("virtual", "-1\n")); got != 0 {
+		t.Fatalf("unknown speed = %d", got)
+	}
+	if got := nicSpeed(filepath.Join(dir, "missing")); got != 0 {
+		t.Fatalf("missing speed = %d", got)
+	}
+	if got := uptimeSeconds(write("uptime", "12345.67 54321.00\n")); got != 12345 {
+		t.Fatalf("uptime = %d", got)
+	}
+	if got := uptimeSeconds(filepath.Join(dir, "missing")); got != 0 {
+		t.Fatalf("missing uptime = %d", got)
+	}
+	m := NewMonitor(time.Second, map[string]Probe{"inventory": func(context.Context) (any, error) {
+		return NativeInventory{UptimeSeconds: 12345, NICs: []NativeNIC{{Name: "nex0", SpeedMbps: 1000}}}, nil
+	}})
+	m.Tick(context.Background())
+	waitProbe(t, m, "inventory", "healthy")
+	if inv := m.Snapshot(); inv.UptimeSeconds != 12345 || len(inv.NICs) != 1 || inv.NICs[0].SpeedMbps != 1000 {
+		t.Fatalf("inventory = %+v", inv)
+	}
+}

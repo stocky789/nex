@@ -1,0 +1,598 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Visual reference for the Controller console layout. Open it in a browser; everything is inline and
+     every name, address and figure is fictional example data. Read README.md in this folder first:
+     it says which parts are the design contract and which panels are illustrative only. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nex Controller console reference</title>
+<style>
+body { margin: 0; }
+:root {
+  --canvas: #F6F7FC; --panel: #FFFFFF; --sunken: #EDF0F7; --line: #C6CEE4; --line-soft: #E1E5F0;
+  --text: #17233B; --muted: #5B6478; --accent: #2456D9; --accent-hover: #3478FF; --on-accent: #FFFFFF;
+  --select: #E4ECFF; --rail: #17233B; --on-rail: #AAB5C8; --rail-hi: #FFFFFF; --spark: #7A9A12; --focus: #2456D9;
+  --ok: #176B42; --ok-bg: #DDF5E6; --warn: #8A4B00; --warn-bg: #FFF1D6; --bad: #B42318; --bad-bg: #FDE2E1;
+  --info: #2456D9; --info-bg: #E4ECFF; --neutral: #5B6478; --neutral-bg: #E5E8F3;
+  --s1: #2456D9; --s2: #7C5CC4; --s3: #0E7490; --s4: #7A9A12;
+  --shadow-pop: 0 12px 32px rgba(23,35,59,.18), 0 1px 2px rgba(23,35,59,.08);
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --canvas: #111820; --panel: #18222C; --sunken: #1F2B36; --line: #2C3B48; --line-soft: #22303C;
+  --text: #E5E8F3; --muted: #9AA6B8; --accent: #5B93FF; --accent-hover: #7DAAFF; --on-accent: #0B1220;
+  --select: #1C3350; --rail: #0B1419; --on-rail: #7F8C9E; --rail-hi: #E5E8F3; --spark: #B5D43B; --focus: #7DAAFF;
+  --ok: #7FD8A4; --ok-bg: #173226; --warn: #F2C067; --warn-bg: #362A12; --bad: #F1A8A2; --bad-bg: #3F2022;
+  --info: #9CC0EA; --info-bg: #1C3350; --neutral: #9AA6B8; --neutral-bg: #22303C;
+  --s1: #5B93FF; --s2: #B79CF2; --s3: #5EC4D6; --s4: #B5D43B;
+  --shadow-pop: 0 12px 32px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111820; --panel: #18222C; --sunken: #1F2B36; --line: #2C3B48; --line-soft: #22303C;
+  --text: #E5E8F3; --muted: #9AA6B8; --accent: #5B93FF; --accent-hover: #7DAAFF; --on-accent: #0B1220;
+  --select: #1C3350; --rail: #0B1419; --on-rail: #7F8C9E; --rail-hi: #E5E8F3; --spark: #B5D43B; --focus: #7DAAFF;
+  --ok: #7FD8A4; --ok-bg: #173226; --warn: #F2C067; --warn-bg: #362A12; --bad: #F1A8A2; --bad-bg: #3F2022;
+  --info: #9CC0EA; --info-bg: #1C3350; --neutral: #9AA6B8; --neutral-bg: #22303C;
+  --s1: #5B93FF; --s2: #B79CF2; --s3: #5EC4D6; --s4: #B5D43B;
+  --shadow-pop: 0 12px 32px rgba(0,0,0,.55);
+}
+html, body { height: 100%; }
+body { background: var(--canvas); color: var(--text); font: 13px/1.45 var(--font); }
+* { box-sizing: border-box; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+a, .link { color: var(--accent); text-decoration: none; cursor: pointer; background: none; border: 0; padding: 0; }
+a:hover, .link:hover { color: var(--accent-hover); }
+
+/* shell */
+.app { display: grid; grid-template-columns: 68px 1fr; grid-template-rows: 48px 1fr; height: 100%; }
+.logo { grid-row: 1; background: var(--rail); display: grid; place-items: center; }
+.logo span { width: 30px; height: 30px; border-radius: 3px; background: #3478FF; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 18px; letter-spacing: -.04em; }
+.top { display: flex; align-items: center; gap: 10px; background: var(--canvas); border-bottom: 1px solid var(--line-soft); padding-inline: 14px; min-width: 0; }
+.crumb { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+.crumb button { border: 0; background: none; cursor: pointer; padding: 5px 8px; border-radius: 2px; display: flex; gap: 6px; align-items: center; }
+.crumb button:hover { background: var(--sunken); }
+.crumb .sepc { color: var(--line); }
+.crumb b { font-weight: 600; }
+.gsearch { flex: 1; max-width: 460px; margin-inline: auto; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 3px; background: var(--panel); color: var(--muted); }
+.gsearch input { flex: 1; border: 0; outline: 0; background: none; color: var(--text); font: inherit; min-width: 0; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 2px; padding: 0 5px; color: var(--muted); }
+.top .tools { display: flex; gap: 6px; align-items: center; }
+.activity { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 4px 10px; border-radius: 2px; background: var(--sunken); border: 0; cursor: pointer; white-space: nowrap; }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--spark); box-shadow: 0 0 0 0 var(--spark); animation: pulse 1.8s infinite; }
+@keyframes pulse { 70% { box-shadow: 0 0 0 6px transparent; } }
+.iconbtn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 2px; border: 0; background: none; cursor: pointer; color: var(--muted); }
+.iconbtn:hover { background: var(--sunken); color: var(--text); }
+.rail { background: var(--rail); display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 6px 10px; }
+.rail .sep { flex: 1; }
+.rail button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 0 6px; border: 0; border-radius: 3px; background: none; color: var(--on-rail); cursor: pointer; font-size: 10px; letter-spacing: .01em; }
+.rail button:hover { color: var(--rail-hi); background: rgba(255,255,255,.06); }
+.rail button[aria-current="page"] { color: var(--rail-hi); background: rgba(255,255,255,.08); }
+.rail button .dot { position: absolute; top: 5px; right: 14px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+main { overflow: hidden; display: flex; min-width: 0; position: relative; }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+
+/* filter sidebar */
+.side { width: 250px; flex: none; border-right: 1px solid var(--line-soft); overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.search { display: flex; align-items: center; gap: 6px; background: var(--sunken); border-radius: 2px; padding: 0 8px; height: 32px; color: var(--muted); }
+.search input { border: 0; background: none; outline: none; color: var(--text); font: inherit; width: 100%; }
+.toggle-row { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; padding: 6px 0; }
+.switch { width: 30px; height: 16px; border-radius: 3px; background: var(--line); border: 0; position: relative; cursor: pointer; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--panel); transition: left .15s; }
+.switch[aria-pressed="true"] { background: var(--accent); }
+.switch[aria-pressed="true"]::after { left: 16px; }
+.facet { border-top: 1px solid var(--line-soft); padding: 8px 0; }
+.facet h4 { margin: 0 0 6px; font-size: 12px; display: flex; justify-content: space-between; }
+.facet label { display: flex; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+.facet input { accent-color: var(--accent); margin: 0; }
+.side .foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; align-items: flex-start; }
+
+/* tables */
+.content { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px; }
+table { border-collapse: collapse; width: 100%; font-size: inherit; }
+th { text-align: left; font-weight: 600; font-size: 12px; padding: 8px 10px; white-space: nowrap; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--canvas); }
+td { padding: 7px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--sunken); }
+tbody tr.sel { background: var(--select); }
+tr.group td { background: var(--sunken); font-weight: 600; font-size: 12px; cursor: default; }
+.st { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+.st.ok { background: var(--ok); } .st.warn { background: var(--warn); } .st.bad { background: var(--bad); } .st.off { background: var(--neutral); opacity: .6; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
+.badge.ok { color: var(--ok); background: var(--ok-bg); } .badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.bad { color: var(--bad); background: var(--bad-bg); } .badge.info { color: var(--info); background: var(--info-bg); } .badge.neutral { color: var(--neutral); background: var(--neutral-bg); }
+.bar { display: inline-block; width: 60px; height: 5px; background: var(--sunken); border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--s1); }
+.bar i.hot { background: var(--warn); }
+.pager { display: flex; gap: 12px; align-items: center; color: var(--muted); padding: 10px 0; font-size: 12px; }
+.bulk { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; background: var(--select); border-radius: 2px; padding: 6px 10px; margin-bottom: 8px; }
+.btn { height: 30px; padding: 0 12px; border-radius: 2px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* slide-over */
+.panel { position: absolute; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100%; background: var(--canvas); border-left: 1px solid var(--line); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; z-index: 10; }
+.panel header { display: grid; grid-template-columns: 32px 1fr 32px; align-items: center; padding: 10px 12px 0; }
+.panel header h2 { margin: 0; text-align: center; font-size: 14px; }
+.ptabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: var(--panel); margin: 10px 12px; padding: 4px; border-radius: 3px; }
+.ptabs button { border: 0; background: none; height: 32px; border-radius: 2px; cursor: pointer; color: var(--muted); display: grid; place-items: center; }
+.ptabs button[aria-selected="true"] { background: var(--sunken); color: var(--accent); }
+.pbody { overflow-y: auto; padding: 0 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.card { background: var(--panel); border-radius: 3px; padding: 14px; }
+.card h3 { margin: 0 0 10px; font-size: 13px; display: flex; justify-content: space-between; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.head { display: flex; gap: 12px; align-items: center; }
+.head .glyph { width: 44px; height: 32px; border-radius: 2px; background: var(--sunken); display: grid; place-items: center; color: var(--muted); }
+.head b { display: block; font-size: 14px; }
+.console { aspect-ratio: 16 / 9; border-radius: 2px; background: #05070B; color: #9fb3c8; font: 11px/1.5 var(--mono); padding: 10px; overflow: hidden; position: relative; }
+.console .open { position: absolute; right: 8px; bottom: 8px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.actions .btn { justify-content: center; }
+.why { font-size: 12px; color: var(--warn); background: var(--warn-bg); border-radius: 2px; padding: 8px 10px; }
+.ports { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.port { width: 30px; height: 30px; border-radius: 3px; display: grid; place-items: center; font-size: 9px; font-weight: 700; color: #fff; }
+.port.p25 { background: #3F8F5A; } .port.p10 { background: #2C7FB8; } .port.p1 { background: #5FA84B; } .port.down { background: var(--line); color: var(--muted); }
+.legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; font-size: 11px; color: var(--muted); }
+.legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 2px; }
+.disks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.disk { border: 1px solid var(--line-soft); border-radius: 2px; padding: 6px; font-size: 11px; }
+.disk b { display: block; font-size: 12px; }
+.meter { height: 8px; background: var(--sunken); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.meter i { display: block; height: 100%; background: var(--s1); }
+
+/* dashboard */
+.dash { display: grid; grid-template-columns: 260px 1fr; gap: 12px; padding: 12px; overflow: auto; width: 100%; align-content: start; }
+.tile { background: var(--panel); border-radius: 3px; padding: 12px 14px; min-width: 0; }
+.tile h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.alert { display: flex; gap: 8px; align-items: center; color: var(--warn); font-weight: 600; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.chartbar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; }
+.chartbar .seg { display: flex; gap: 2px; margin-left: auto; }
+.chartbar .seg button { border: 0; background: none; padding: 2px 6px; cursor: pointer; color: var(--muted); border-radius: 2px; }
+.chartbar .seg button[aria-pressed="true"] { color: var(--accent); background: var(--sunken); }
+.chartbar label { display: flex; gap: 6px; align-items: center; }
+.chartbar label i { width: 14px; height: 2px; display: inline-block; }
+svg.chart { width: 100%; height: 240px; display: block; }
+svg.chart text { fill: var(--muted); font-size: 10px; font-family: var(--font); }
+svg.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chips { display: flex; gap: 10px; flex-wrap: wrap; }
+.chip { width: 64px; text-align: center; cursor: pointer; font-size: 11px; color: var(--muted); border: 0; background: none; padding: 0; }
+.chip .ic { width: 40px; height: 40px; margin: 0 auto 4px; border-radius: 3px; background: var(--sunken); display: grid; place-items: center; color: var(--text); position: relative; }
+.chip .ic small { position: absolute; top: -6px; right: -6px; font-size: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--text); }
+.chip span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; }
+.hbars div { height: 26px; border-radius: 2px; display: flex; align-items: flex-end; justify-content: center; font-size: 10px; font-weight: 700; padding-bottom: 2px; color: var(--on-accent); }
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+
+/* settings */
+.snav { width: 230px; flex: none; border-right: 1px solid var(--line-soft); padding: 12px; overflow-y: auto; }
+.snav button { display: flex; gap: 10px; align-items: center; width: 100%; border: 0; background: none; padding: 7px 10px; border-radius: 2px; cursor: pointer; text-align: left; }
+.snav button:hover { background: var(--sunken); }
+.snav button[aria-current="true"] { background: var(--select); color: var(--accent); }
+.snav h5 { margin: 12px 10px 4px; font-size: 11px; color: var(--muted); font-weight: 600; }
+.section { background: var(--panel); border-radius: 3px; padding: 14px 16px; margin-bottom: 14px; }
+.section > h3 { margin: 0 0 8px; display: flex; gap: 8px; align-items: center; font-size: 14px; font-weight: 600; }
+.section th { background: var(--panel); }
+.section tbody tr { cursor: default; }
+.links { display: flex; gap: 12px; padding-top: 10px; }
+.links span { color: var(--line); }
+.note { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+
+@media (max-width: 900px) {
+  .side, .snav { display: none; }
+  .dash { grid-template-columns: 1fr; }
+  .row3 { grid-template-columns: 1fr; }
+  .gsearch, .activity { display: none; }
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .mid, .poolmap { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* v2 dashboard */
+.dash { display: flex; flex-direction: column; gap: 12px; padding: 14px; overflow: auto; width: 100%; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 3px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: end; }
+.kpi .lbl { grid-column: 1 / -1; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; }
+.kpi .val { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.kpi .val small { font-size: 12px; color: var(--muted); font-weight: 400; }
+.kpi svg { width: 84px; height: 28px; }
+.tile { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 3px; padding: 12px 14px; min-width: 0; }
+.tile h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.mid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
+.att { display: flex; flex-direction: column; }
+.att button { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; text-align: left; border: 0; background: none; padding: 9px 4px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+.att button:hover { background: var(--sunken); }
+.att button > svg:first-child { align-self: start; margin-top: 2px; }
+.att small { display: block; color: var(--muted); font-size: 11px; }
+.poolmap { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.hcol { border: 1px solid var(--line-soft); border-radius: 3px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--canvas); }
+.hcol header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; }
+.hcol .cap { height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
+.hcol .cap i { display: block; height: 100%; background: var(--s1); }
+.hcol.stale { background: repeating-linear-gradient(135deg, var(--canvas) 0 8px, var(--warn-bg) 8px 10px); }
+.vmblocks { display: flex; flex-wrap: wrap; gap: 4px; }
+.vmb { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-soft); border-radius: 2px; padding: 3px 7px; font-size: 11px; cursor: pointer; background: var(--panel); color: var(--text); text-align: left; }
+.vmb .st { margin: 0; width: 6px; height: 6px; flex: none; }
+.vmb.unknown { color: var(--warn); }
+.vmb.stopped { color: var(--muted); background: none; border-style: dashed; }
+.vmb:hover { border-color: var(--accent); }
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.chart-legend { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--muted); }
+.chart-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+/* v2 panel + sections */
+.ptabs { display: flex; gap: 18px; margin: 4px 14px 10px; padding: 0; background: none; border-bottom: 1px solid var(--line-soft); border-radius: 0; }
+.ptabs button { height: 34px; border: 0; background: none; padding: 0; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.ptabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); background: none; }
+.panel header { grid-template-columns: 1fr 32px; padding: 14px 14px 4px; }
+.panel header h2 { text-align: left; font-size: 16px; display: flex; gap: 8px; align-items: center; }
+.panel .sub { padding: 0 14px; color: var(--muted); font-size: 12px; }
+.panel .quick { display: flex; gap: 6px; padding: 10px 14px 0; flex-wrap: wrap; }
+.card { border: 1px solid var(--line-soft); border-radius: 3px; }
+.spark-row { display: grid; grid-template-columns: 90px 1fr 60px; gap: 10px; align-items: center; padding: 6px 0; }
+.spark-row svg { width: 100%; height: 30px; }
+.section { border: 1px solid var(--line-soft); }
+.section > h3 { justify-content: space-between; }
+.section > h3 .sh { display: flex; gap: 8px; align-items: center; }
+.section > h3 .sa { display: flex; gap: 6px; }
+.btn.sm { height: 26px; padding: 0 10px; font-size: 12px; }
+.views { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid var(--line-soft); }
+.views button { border: 0; background: none; padding: 7px 10px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.views button[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.views .count { font-size: 11px; background: var(--sunken); border-radius: 2px; padding: 0 6px; margin-left: 4px; }
+.views .count.warn { background: var(--warn-bg); color: var(--warn); }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="logo"><span aria-label="Nex">n</span></div>
+  <div class="top">
+    <div class="crumb">
+      <button><span class="st ok"></span><b>Example Site</b></button><span class="sepc">/</span>
+      <button><b>prod-a</b> <span class="badge info">3 hosts</span><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <label class="gsearch"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><input placeholder="Jump to a VM, host, IP or setting" aria-label="Search everything"><kbd>/</kbd></label>
+    <div class="tools">
+      <button class="activity" data-go="tasks"><span class="pulse"></span>1 task running</button>
+      <button class="iconbtn" id="themeBtn" aria-label="Toggle theme"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4v16a8 8 0 0 0 0-16z" fill="currentColor"/></svg></button>
+      <button class="iconbtn" aria-label="Account"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="9" r="4"/><path d="M4 20c1.5-4 5-5 8-5s6.5 1 8 5"/></svg></button>
+    </div>
+  </div>
+  <nav class="rail" id="rail" aria-label="Sections"></nav>
+  <main id="main"></main>
+</div>
+
+<script>
+const I = {
+  dash: '<path d="M4 13a8 8 0 1 1 16 0"/><path d="M12 13l4-4"/><path d="M4 17h16"/>',
+  vm: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
+  host: '<rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/>',
+  storage: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+  net: '<circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5M5 17v-3h14v3"/>',
+  backup: '<path d="M4 12a8 8 0 1 0 2.3-5.6"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>',
+  apps: '<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>',
+  events: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  overview: '<circle cx="7" cy="14" r="4"/><circle cx="17" cy="14" r="4"/><path d="M11 13h2M5 10l2-5h2M19 10l-2-5h-2"/>',
+  chart: '<path d="M5 20V10M10 20V4M15 20v-7M20 20v-4"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  play: '<path d="M7 5l12 7-12 7z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+  migrate: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
+  snap: '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M8 7l1.5-3h5L16 7"/>',
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
+  term: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
+};
+const ic = (n, s = 18) => `<svg class="i" viewBox="0 0 24 24" style="width:${s}px;height:${s}px">${I[n]}</svg>`;
+
+// Example data only: fictional pools, hosts and VMs.
+const POOLS = ['prod-a', 'lab'];
+const HOSTS = [
+  { name: 'nex-01', pool: 'prod-a', role: 'Master', fresh: 'ok', cpu: 38, mem: 61, cores: 32, ram: 256, uptime: '41d 3h', ver: '0.4.5', ip: '192.0.2.11' },
+  { name: 'nex-02', pool: 'prod-a', role: 'Member', fresh: 'ok', cpu: 71, mem: 78, cores: 32, ram: 256, uptime: '41d 2h', ver: '0.4.5', ip: '192.0.2.12' },
+  { name: 'nex-03', pool: 'prod-a', role: 'Member', fresh: 'warn', cpu: null, mem: null, cores: 32, ram: 256, uptime: '—', ver: '0.4.4', ip: '192.0.2.13', stale: 'Last report 3 min ago' },
+  { name: 'lab-01', pool: 'lab', role: 'Master', fresh: 'ok', cpu: 12, mem: 34, cores: 16, ram: 64, uptime: '6d 20h', ver: '0.4.5', ip: '198.51.100.21' },
+];
+const OS = ['Debian 13', 'Ubuntu 24.04', 'Windows Server 2025', 'Rocky 10', 'FreeBSD 14'];
+const VMS = [
+  ['web-01', 'nex-01', 'running', 0, 4, 8, 23, '203.0.113.21', ['web']],
+  ['web-02', 'nex-02', 'running', 1, 4, 8, 19, '203.0.113.22', ['web']],
+  ['db-primary', 'nex-02', 'running', 3, 8, 32, 64, '203.0.113.40', ['db', 'critical']],
+  ['db-replica', 'nex-01', 'running', 3, 8, 32, 31, '203.0.113.41', ['db']],
+  ['ad-dc1', 'nex-01', 'running', 2, 2, 8, 6, '203.0.113.5', ['identity']],
+  ['file-srv', 'nex-03', 'unknown', 2, 4, 16, null, '203.0.113.60', ['storage']],
+  ['ci-runner-1', 'nex-03', 'unknown', 0, 8, 16, null, '203.0.113.111', ['ci']],
+  ['ci-runner-2', 'nex-02', 'running', 0, 8, 16, 88, '203.0.113.112', ['ci']],
+  ['mail-gw', 'nex-01', 'running', 1, 2, 4, 4, '203.0.113.25', []],
+  ['monitoring', 'nex-02', 'running', 1, 4, 8, 17, '203.0.113.30', ['ops']],
+  ['build-cache', 'nex-01', 'stopped', 0, 4, 8, 0, '—', ['ci']],
+  ['swarm-node-1', 'nex-01', 'running', 0, 4, 8, 29, '203.0.113.211', ['containers']],
+  ['swarm-node-2', 'nex-02', 'running', 0, 4, 8, 33, '203.0.113.212', ['containers']],
+  ['test-win', 'lab-01', 'running', 2, 4, 8, 9, '198.51.100.51', []],
+  ['scratch', 'lab-01', 'paused', 4, 2, 4, 0, '198.51.100.52', []],
+].map(([name, host, state, os, vcpu, mem, cpu, ip, tags]) => ({ name, host, pool: HOSTS.find(h => h.name === host).pool, state, os: OS[os], vcpu, mem, cpu, ip, tags }));
+
+const STATE = { view: 'dash', vmSel: null, hostSel: null, checked: new Set(), filters: {}, group: false, q: '', ptab: 0, range: '1D', setting: 'overview' };
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const NAV = [
+  ['dash', 'Overview', 'dash'], ['vms', 'Virtual machines', 'vm', 'VMs'], ['hosts', 'Hosts', 'host'],
+  ['storage', 'Storage', 'storage'], ['networks', 'Networks', 'net'], ['backups', 'Backups', 'backup'],
+  ['apps', 'Containers', 'apps'], ['sep'],
+  ['tasks', 'Tasks', 'tasks'], ['events', 'Events', 'events'], ['settings', 'Settings', 'settings'],
+];
+function renderRail() {
+  $('#rail').innerHTML = NAV.map(n => n[0] === 'sep' ? '<div class="sep"></div>' :
+    `<button data-go="${n[0]}" ${STATE.view === n[0] ? 'aria-current="page"' : ''}>${ic(n[2], 20)}${n[3] || n[1]}${n[0] === 'events' ? '<span class="dot"></span>' : ''}</button>`).join('');
+}
+
+const stateBadge = s => ({ running: ['ok', 'Running'], stopped: ['off', 'Stopped'], paused: ['warn', 'Paused'], unknown: ['warn', 'Unknown'] })[s];
+const bar = v => v == null ? '<span class="muted">—</span>' : `<span class="bar"><i class="${v > 80 ? 'hot' : ''}" style="width:${v}%"></i></span>${v}%`;
+
+// ---------- dashboard ----------
+function series(seed, n, base, amp) {
+  let x = seed, out = [];
+  for (let i = 0; i < n; i++) { x = (x * 9301 + 49297) % 233280; const r = x / 233280; out.push(Math.max(2, Math.min(98, base + Math.sin(i / 7 + seed) * amp + (r - .5) * amp * 1.2 + (i > n * .55 && i < n * .6 ? 30 : 0)))); }
+  return out;
+}
+function chart() {
+  const W = 1000, H = 240, P = { l: 34, r: 10, t: 10, b: 22 }, n = 96;
+  const lines = [['CPU', 'var(--s1)', series(3, n, 42, 12)], ['Memory', 'var(--s2)', series(11, n, 64, 4)], ['Storage I/O', 'var(--s3)', series(7, n, 22, 14)]];
+  const X = i => P.l + i / (n - 1) * (W - P.l - P.r), Y = v => P.t + (1 - v / 100) * (H - P.t - P.b);
+  const grid = [0, 25, 50, 75, 100].map(v => `<line class="grid" x1="${P.l}" x2="${W - P.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${P.l - 6}" y="${Y(v) + 3}" text-anchor="end">${v}%</text>`).join('');
+  const labels = { '1H': ['-60m', '-45m', '-30m', '-15m', 'Now'], '1D': ['6 AM', '12 PM', '6 PM', '12 AM', 'Now'], '1W': ['Mon', 'Wed', 'Fri', 'Sun', 'Now'], '1M': ['W1', 'W2', 'W3', 'W4', 'Now'] }[STATE.range];
+  const xt = labels.map((l, i) => `<text x="${X(i / 4 * (n - 1))}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}">${l}</text>`).join('');
+  const paths = lines.map(([, c, d], k) => `${k === 0 ? `<path d="M${X(0)},${Y(0)} ${d.map((v, i) => `L${X(i)},${Y(v)}`).join(' ')} L${X(n - 1)},${Y(0)}Z" fill="${c}" opacity=".12"/>` : ''}<path d="${d.map((v, i) => `${i ? 'L' : 'M'}${X(i)},${Y(v)}`).join(' ')}" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="${X(n - 1)}" cy="${Y(d[n - 1])}" r="3" fill="${c}"/>`).join('');
+  const thr = `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(85)}" y2="${Y(85)}" stroke="var(--warn)" stroke-dasharray="4 4" stroke-width="1"/><text x="${W - P.r}" y="${Y(85) - 4}" text-anchor="end" style="fill:var(--warn)">85% placement limit</text>`;
+  return { svg: `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Pool utilisation">${grid}${xt}${thr}${paths}</svg>`, lines };
+}
+function spark(d, c, w = 84, h = 28) {
+  const X = i => i / (d.length - 1) * w, Y = v => h - 2 - (v / 100) * (h - 4);
+  const p = d.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${p}L${w},${h}L0,${h}Z" fill="${c}" opacity=".15"/><path d="${p}" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="${X(d.length - 1)}" cy="${Y(d[d.length - 1])}" r="2.5" fill="${c}"/></svg>`;
+}
+function renderDash() {
+  const run = VMS.filter(v => v.state === 'running').length, { svg, lines } = chart();
+  const kpi = (l, v, sub, d, c, extra = '') => `<div class="kpi"><div class="lbl">${l}${extra}</div><div class="val">${v} <small>${sub}</small></div>${spark(d, c)}</div>`;
+  const att = [
+    ['warn', 'nex-03 not reporting', '2 VMs shown as Unknown · fencing armed', 'data-host="nex-03"'],
+    ['bad', 'Backup offsite: file-srv failed', 'Yesterday 02:31 · timeout', 'data-go="backups"'],
+    ['warn', 'offsite never restore-tested', 'A backup is not proof of restore', 'data-go="backups"'],
+    ['warn', 'ci-runner-2 at 88% CPU', 'Sustained for 40 min', 'data-vm="ci-runner-2"'],
+    ['info', 'nex-03 on Nex Core 0.4.4', '0.4.5 available', 'data-go="settings"'],
+  ];
+  const cls = { ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)', info: 'var(--info)' };
+  return `<div class="dash">
+    <div class="kpis">
+      ${kpi('Hosts', '3<small>/4</small>', 'online', series(2, 24, 90, 2), 'var(--s1)', '<span class="badge warn">1 stale</span>')}
+      ${kpi('Virtual machines', run, `running of ${VMS.length}`, series(5, 24, 70, 6), 'var(--s4)')}
+      ${kpi('CPU', '41%', '84 / 192 vCPU', series(3, 24, 42, 12), 'var(--s1)')}
+      ${kpi('Memory', '68%', '520 / 768 GiB', series(11, 24, 64, 4), 'var(--s2)')}
+      ${kpi('Storage', '38%', '6.1 / 16 TiB', series(9, 24, 36, 1), 'var(--s3)')}
+    </div>
+    <div class="mid">
+      <div class="tile">
+        <h3>prod-a utilisation
+          <span class="chart-legend">${lines.map(([l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('')}</span>
+          <span class="chartbar" style="margin:0"><span class="seg">${['1H', '1D', '1W', '1M'].map(r => `<button data-range="${r}" aria-pressed="${STATE.range === r}">${r}</button>`).join('')}</span></span>
+        </h3>
+        ${svg}
+      </div>
+      <div class="tile"><h3>Needs attention <span class="badge warn">${att.length}</span></h3>
+        <div class="att">${att.map(([c, t, d, a]) => `<button ${a}>${ic(c === 'bad' ? 'close' : c === 'info' ? 'tasks' : 'warn', 16).replace('<svg', `<svg style="color:${cls[c]}"`)}<span>${t}<small>${d}</small></span>${ic('chev', 14).replace('<svg', '<svg style="transform:rotate(-90deg);width:14px;height:14px"')}</button>`).join('')}</div>
+      </div>
+    </div>
+    <div class="tile"><h3>Placement <span class="muted" style="font-weight:400">Where every VM runs right now · block width follows memory</span></h3>
+      <div class="poolmap">${HOSTS.map(h => {
+        const vms = VMS.filter(v => v.host === h.name), used = vms.reduce((a, v) => a + v.mem, 0);
+        return `<div class="hcol ${h.fresh !== 'ok' ? 'stale' : ''}"><header><button class="link" data-host="${h.name}" style="color:var(--text);font-weight:600"><span class="st ${h.fresh}"></span>${h.name}</button><span class="badge ${h.role === 'Master' ? 'info' : 'neutral'}">${h.role}</span></header>
+          <div class="cap" title="${used} of ${h.ram} GiB assigned"><i style="width:${Math.round(used / h.ram * 100)}%"></i></div>
+          <span class="muted" style="font-size:11px">${h.pool} · ${used} / ${h.ram} GiB · ${h.fresh === 'ok' ? `CPU ${h.cpu}%` : h.stale}</span>
+          <div class="vmblocks">${vms.map(v => `<button class="vmb ${v.state}" data-vm="${v.name}" style="flex-grow:${v.mem}"><span class="st ${stateBadge(v.state)[0]}"></span>${v.name}</button>`).join('')}</div></div>`;
+      }).join('')}</div>
+    </div>
+    <div class="row3">
+      <div class="tile"><h3>Recent tasks <button class="link" data-go="tasks">History</button></h3>
+        <dl class="kv"><dt><span class="pulse" style="display:inline-block;margin-right:6px"></span>Snapshot db-primary</dt><dd>62%</dd><dt>Migrate db-replica → nex-01</dt><dd><span class="badge ok">Done</span></dd><dt>Snapshot web-01</dt><dd><span class="badge ok">Done</span></dd><dt>Reconcile nex-03</dt><dd><span class="badge warn">Waiting</span></dd></dl></div>
+      <div class="tile"><h3>Backups, last 14 nights <button class="link" data-go="backups">Repositories</button></h3>
+        <div class="hbars" style="grid-template-columns:repeat(14,1fr)">${Array.from({ length: 14 }, (_, i) => `<div title="Night ${i + 1}" style="background:${i === 12 ? 'var(--bad)' : 'var(--ok)'};opacity:${i === 12 ? 1 : .7}"></div>`).join('')}</div>
+        <dl class="kv" style="margin-top:10px"><dt>Last run</dt><dd>02:00 · 14/14 OK</dd><dt>Last restore test</dt><dd>3 days ago · passed</dd></dl></div>
+      <div class="tile"><h3>Resilience</h3>
+        <dl class="kv"><dt>Survives loss of 1 host</dt><dd style="color:var(--ok)">Yes</dd><dt>Fencing</dt><dd><span class="badge ok">Armed</span></dd><dt>Shared storage</dt><dd>2 of 2 healthy</dd><dt>Master</dt><dd><button class="link" data-host="nex-01">nex-01</button></dd></dl></div>
+    </div>
+  </div>`;
+}
+
+// ---------- VM list ----------
+const FACETS = [
+  ['Status', v => ({ running: 'Running', stopped: 'Stopped', paused: 'Paused', unknown: 'Unknown (host stale)' })[v.state]],
+  ['Pool', v => v.pool], ['Host', v => v.host], ['Guest OS', v => v.os],
+];
+function vmFiltered() {
+  const vv = STATE.vview || 'all';
+  return VMS.filter(v => (vv === 'all' || v.state === vv || (vv === 'stopped' && v.state === 'paused')) && (!STATE.q || (v.name + v.ip + v.tags.join(' ')).toLowerCase().includes(STATE.q.toLowerCase()))
+    && FACETS.every(([f, fn]) => !STATE.filters[f]?.size || STATE.filters[f].has(fn(v))));
+}
+function facetHtml() {
+  return FACETS.map(([f, fn]) => {
+    const counts = {}; VMS.forEach(v => { const k = fn(v); counts[k] = (counts[k] || 0) + 1; });
+    return `<div class="facet"><h4>${f}${ic('chev', 14)}</h4>${Object.entries(counts).map(([k, c]) =>
+      `<label><input type="checkbox" data-facet="${f}" value="${esc(k)}" ${STATE.filters[f]?.has(k) ? 'checked' : ''}> ${esc(k)} <span class="muted">(${c})</span></label>`).join('')}</div>`;
+  }).join('');
+}
+function renderVMs() {
+  const rows = vmFiltered(), n = STATE.checked.size;
+  const row = v => { const [c, l] = stateBadge(v.state); return `<tr data-vm="${v.name}" class="${STATE.vmSel === v.name ? 'sel' : ''}">
+    <td><input type="checkbox" data-check="${v.name}" ${STATE.checked.has(v.name) ? 'checked' : ''} aria-label="Select ${v.name}"></td>
+    <td><span class="st ${c}"></span>${v.name}</td><td>${v.state === 'unknown' ? `<span class="badge warn">${l}</span>` : l}</td>
+    <td>${v.pool}</td><td><button class="link" data-host="${v.host}">${v.host}</button></td><td class="mono">${v.ip}</td><td>${v.os}</td>
+    <td>${v.vcpu}</td><td>${v.mem} GiB</td><td>${bar(v.cpu)}</td><td>${v.tags.map(t => `<span class="badge neutral">${t}</span>`).join(' ')}</td></tr>`; };
+  const body = STATE.group ? HOSTS.map(h => { const r = rows.filter(v => v.host === h.name); return r.length ? `<tr class="group"><td colspan="11">${h.pool} › ${h.name} ${h.fresh !== 'ok' ? '<span class="badge warn">Stale</span>' : ''}</td></tr>${r.map(row).join('')}` : ''; }).join('') : rows.map(row).join('');
+  return `<aside class="side">
+      <label class="search">${ic('search', 16)}<input id="q" placeholder="Search name, IP, tag" value="${esc(STATE.q)}"></label>
+      <div class="toggle-row">Group by host <button class="switch" data-toggle="group" aria-pressed="${STATE.group}" aria-label="Group by host"></button></div>
+      ${facetHtml()}
+      <div class="foot"><button class="link" data-clear>Clear filters</button><button class="link">Customize columns</button></div>
+    </aside>
+    <div class="content">
+      <div class="views">${[['all', 'All', VMS.length], ['running', 'Running', VMS.filter(v => v.state === 'running').length], ['unknown', 'Needs attention', 2, 'warn'], ['stopped', 'Stopped', 2]].map(([k, l, c, w]) => `<button data-view="${k}" aria-pressed="${(STATE.vview || 'all') === k}">${l}<span class="count ${w || ''}">${c}</span></button>`).join('')}</div>
+      ${n ? `<div class="bulk"><b>${n} selected</b><button class="btn">${ic('play', 14)} Start</button><button class="btn">${ic('stop', 14)} Shut down</button><button class="btn">${ic('snap', 14)} Snapshot</button><button class="btn">${ic('migrate', 14)} Migrate</button><button class="link" data-uncheck style="margin-left:auto">Clear</button></div>` : ''}
+      <table><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th>Name</th><th>State</th><th>Pool</th><th>Host</th><th>IP address</th><th>Guest OS</th><th>vCPU</th><th>Memory</th><th>CPU</th><th>Tags</th></tr></thead>
+      <tbody>${body}</tbody></table>
+      <div class="pager"><span>1–${rows.length} of ${rows.length} virtual machines</span><button class="btn primary" style="margin-left:auto">${ic('vm', 14)} Create VM</button></div>
+    </div>${STATE.vmSel ? vmPanel(VMS.find(v => v.name === STATE.vmSel)) : ''}`;
+}
+function vmPanel(v) {
+  const h = HOSTS.find(x => x.name === v.host), stale = h.fresh !== 'ok', [c, l] = stateBadge(v.state);
+  const tabs = ['Overview', 'Performance', 'Snapshots', 'Configuration'];
+  let body;
+  if (STATE.ptab === 0) body = `
+    ${stale ? `<div class="why">${h.name} has not reported for 3 minutes. The VM may still be running; power actions are held until the host reconnects or is fenced.</div>` : ''}
+    <div class="console">${v.state === 'running' ? `${v.name} login: _<br><span class="muted">${v.os} · tty1</span>` : `<span class="muted">${stale ? 'Console unavailable while host is stale' : 'VM is not running'}</span>`}<button class="btn open" ${v.state !== 'running' ? 'disabled' : ''}>${ic('term', 14)} Open console</button></div>
+    <div class="card"><dl class="kv">
+      <dt>Guest OS</dt><dd>${v.os}</dd><dt>IP address</dt><dd class="mono">${v.ip}</dd>
+      <dt>vCPU / Memory</dt><dd>${v.vcpu} / ${v.mem} GiB</dd><dt>Disk</dt><dd>vda 80 GiB · nfs-vmstore</dd><dt>Network</dt><dd>prod (VLAN 30)</dd>
+      <dt>Guest agent</dt><dd>${v.state === 'running' ? '<span class="badge ok">Connected</span>' : '—'}</dd><dt>Last backup</dt><dd>Today 02:04 · verified</dd>
+      <dt>Firmware</dt><dd>UEFI · Secure Boot</dd><dt>Tags</dt><dd>${v.tags.map(t => `<span class="badge neutral">${t}</span>`).join(' ') || '—'}</dd></dl></div>`;
+  else if (STATE.ptab === 1) body = `<div class="card">${[['CPU', 'var(--s1)', v.cpu ?? 0, `${v.cpu ?? '—'}%`], ['Memory', 'var(--s2)', 62, `${Math.round(v.mem * .62)} GiB`], ['Disk read', 'var(--s3)', 30, '12 MB/s'], ['Network', 'var(--s4)', 20, '48 Mb/s']]
+      .map(([n, col, b, t], k) => `<div class="spark-row"><span class="muted">${n}</span>${spark(series(k + 4, 30, b, 10), col, 200, 30)}<b class="num" style="text-align:right">${t}</b></div>`).join('')}</div>`;
+  else if (STATE.ptab === 2) body = `<div class="card"><dl class="kv"><dt>pre-upgrade</dt><dd>2 days ago · 3.1 GiB</dd><dt>nightly-auto</dt><dd>Today 01:00 · 0.4 GiB</dd></dl></div>
+    <div class="actions"><button class="btn" ${stale ? 'disabled' : ''}>${ic('snap', 14)} Take snapshot</button><button class="btn" ${stale ? 'disabled' : ''}>Revert…</button></div>`;
+  else body = `<div class="card"><dl class="kv"><dt>Name</dt><dd>${v.name}</dd><dt>Start on boot</dt><dd>Yes</dd><dt>HA restart</dt><dd>Priority 2</dd><dt>Placement</dt><dd>Prefer nex-01, nex-02</dd></dl></div>
+    <div class="actions"><button class="btn">Edit hardware</button><button class="btn danger" ${stale ? 'disabled' : ''}>Delete VM…</button></div>`;
+  return `<aside class="panel" aria-label="${v.name} details"><header><h2>${ic('vm', 18)} ${v.name} <span class="badge ${c === 'off' ? 'neutral' : c}">${l}</span></h2><button class="iconbtn" data-closepanel aria-label="Close">${ic('close')}</button></header>
+    <div class="sub">on <button class="link" data-host="${v.host}">${v.host}</button> · ${v.pool}</div>
+    <div class="quick">
+      <button class="btn sm primary" ${stale || v.state !== 'running' ? 'disabled' : ''}>${ic('term', 14)} Console</button>
+      <button class="btn sm" ${stale || v.state === 'running' ? 'disabled' : ''}>${ic('play', 14)} Start</button>
+      <button class="btn sm" ${stale || v.state !== 'running' ? 'disabled' : ''}>${ic('stop', 14)} Shut down</button>
+      <button class="btn sm" ${stale ? 'disabled' : ''}>${ic('migrate', 14)} Migrate</button>
+    </div>
+    <div class="ptabs" role="tablist">${tabs.map((t, i) => `<button role="tab" data-ptab="${i}" aria-selected="${STATE.ptab === i}">${t}</button>`).join('')}</div>
+    <div class="pbody">${body}</div></aside>`;
+}
+
+// ---------- hosts ----------
+function renderHosts() {
+  return `<div class="content"><table><thead><tr><th>Name</th><th>Pool</th><th>Role</th><th>Status</th><th>IP address</th><th>CPU</th><th>Memory</th><th>VMs</th><th>Nex Core</th><th>Uptime</th></tr></thead><tbody>
+    ${HOSTS.map(h => `<tr data-host="${h.name}" class="${STATE.hostSel === h.name ? 'sel' : ''}"><td><span class="st ${h.fresh}"></span>${h.name}</td><td>${h.pool}</td>
+      <td><span class="badge ${h.role === 'Master' ? 'info' : 'neutral'}">${h.role}</span></td>
+      <td>${h.fresh === 'ok' ? 'Online' : `<span class="badge warn">Stale</span> <span class="muted">${h.stale}</span>`}</td><td class="mono">${h.ip}</td>
+      <td>${bar(h.cpu)}</td><td>${bar(h.mem)}</td><td>${VMS.filter(v => v.host === h.name).length}</td>
+      <td>${h.ver}${h.ver !== '0.4.5' ? ' <span class="badge warn">Update</span>' : ''}</td><td>${h.uptime}</td></tr>`).join('')}
+  </tbody></table></div>${STATE.hostSel ? hostPanel(HOSTS.find(h => h.name === STATE.hostSel)) : ''}`;
+}
+function hostPanel(h) {
+  const nics = [['p25', '25G'], ['p25', '25G'], ['p10', '10G'], ['down', ''], ['p1', '1G'], ['p1', 'IPMI']];
+  return `<aside class="panel" aria-label="${h.name} details"><header><h2>${ic('host', 18)} ${h.name} <span class="badge ${h.fresh === 'ok' ? 'ok' : 'warn'}">${h.fresh === 'ok' ? 'Online' : 'Stale'}</span></h2><button class="iconbtn" data-closepanel aria-label="Close">${ic('close')}</button></header>
+    <div class="sub">${h.role} of ${h.pool} · ${h.ip}</div><div class="ptabs">${['Overview', 'Hardware', 'Performance'].map((t, i) => `<button aria-selected="${i === 0}">${t}</button>`).join('')}</div>
+    <div class="pbody">
+      <div class="card"><div class="head"><div class="glyph">${ic('host', 22)}</div><div><b>Example 1U server</b><span class="muted">${h.role} of ${h.pool}</span></div></div></div>
+      ${h.fresh !== 'ok' ? `<div class="why">${h.stale}. VMs on this host are shown as Unknown, not stopped. Fence or wait for reconnect before restarting them elsewhere.</div>` : ''}
+      <div class="card"><h3>Network interfaces</h3><div class="ports">${nics.map(([c, l], i) => `<div class="port ${c}" title="eno${i + 1}">${l}</div>`).join('')}</div>
+        <div class="legend"><span><i style="background:#3F8F5A"></i>25 GbE</span><span><i style="background:#2C7FB8"></i>10 GbE</span><span><i style="background:#5FA84B"></i>1 GbE</span><span><i style="background:var(--line)"></i>No link</span></div>
+        <div class="actions" style="margin-top:12px"><button class="btn">Interfaces</button><button class="btn">Bonds &amp; VLANs</button></div></div>
+      <div class="card"><h3>Disks</h3><div class="disks">${['nvme0', 'nvme1', 'sda', 'sdb'].map((d, i) => `<div class="disk"><b>${d}</b>${i < 2 ? '1.9 TB NVMe' : '8 TB HDD'}<br><span style="color:var(--ok)">${i < 2 ? 'mirror' : 'raidz'}</span></div>`).join('')}</div></div>
+      <div class="card"><h3>Memory <span class="muted num">${h.mem ?? '—'}% of ${h.ram} GiB</span></h3><div class="meter"><i style="width:${h.mem || 0}%"></i></div></div>
+      <div class="card"><h3>Virtual machines</h3><table><tbody>${VMS.filter(v => v.host === h.name).map(v => `<tr data-vm="${v.name}"><td><span class="st ${stateBadge(v.state)[0]}"></span>${v.name}</td><td>${v.vcpu} vCPU</td><td>${v.mem} GiB</td></tr>`).join('')}</tbody></table></div>
+      <div class="card"><dl class="kv"><dt>IP address</dt><dd class="mono">${h.ip}</dd><dt>CPU</dt><dd>${h.cores} threads · EPYC-class</dd><dt>Nex Core</dt><dd>${h.ver}</dd><dt>Uptime</dt><dd>${h.uptime}</dd><dt>Fencing</dt><dd>IPMI · verified</dd></dl></div>
+    </div></aside>`;
+}
+
+// ---------- pool settings (stacked sections) ----------
+const SNAV = [['overview', 'Overview', 'overview'], ['networks', 'Networks', 'net'], ['storage', 'Storage', 'storage'], ['backups', 'Backup repositories', 'backup'], ['members', 'Members', 'host'], ['ha', 'High availability', 'dash'], ['updates', 'Updates', 'tasks']];
+function section(icon, title, head, rows, links) {
+  return `<div class="section"><h3><span class="sh">${ic(icon, 18)} ${title} <span class="badge neutral">${rows.length}</span></span><span class="sa">${links.map((l, i) => `<button class="btn sm ${i ? '' : 'primary'}">${l}</button>`).join('')}</span></h3><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    </div>`;
+}
+function renderSettings(only) {
+  const S = {
+    networks: section('net', 'Networks', ['Name', 'VLAN', 'Uplink', 'Hosts with access', 'VMs'], [
+      ['<span class="st ok"></span>mgmt', 'untagged', 'bond0', '3 / 3', 0], ['<span class="st ok"></span>prod', 30, 'bond0', '3 / 3', 9],
+      ['<span class="st ok"></span>ci', 40, 'bond0', '3 / 3', 2], ['<span class="st ok"></span>swarm', 50, 'bond0', '3 / 3', 2],
+      ['<span class="st warn"></span>storage', 60, 'eno3', '2 / 3 <span class="badge warn">nex-03 unknown</span>', 0]], ['Create New', 'Manage']),
+    storage: section('storage', 'Storage', ['Name', 'Type', 'Scope', 'Used', 'Hosts with access', 'Status'], [
+      ['<span class="st ok"></span>nfs-vmstore', 'NFS', 'Shared', `${bar(38)} 6.1 / 16 TiB`, '3 / 3', '<span class="badge ok">Healthy</span>'],
+      ['<span class="st ok"></span>nfs-iso', 'NFS', 'Shared', `${bar(12)} 0.2 / 2 TiB`, '3 / 3', '<span class="badge ok">Healthy</span>'],
+      ['<span class="st ok"></span>local-zfs', 'ZFS', 'Per host', `${bar(51)} per host`, 'nex-01, nex-02', '<span class="badge ok">Healthy</span>']], ['Add Storage', 'Manage']),
+    backups: section('backup', 'Backup repositories', ['Name', 'Target', 'Retention', 'Last run', 'Last restore test'], [
+      ['<span class="st ok"></span>nightly', 'nfs://backup.example.net/nex', '14 daily · 8 weekly', 'Today 02:00 · 14/14', '<span class="badge ok">Passed 3d ago</span>'],
+      ['<span class="st warn"></span>offsite', 's3://example-bucket', '12 monthly', 'Yesterday · 13/14', '<span class="badge warn">Never</span>']], ['Create New', 'Policies', 'Restore']),
+    members: section('host', 'Members', ['Host', 'Role', 'Status', 'Nex Core', 'Joined'], HOSTS.filter(h => h.pool === 'prod-a').map(h => [`<span class="st ${h.fresh}"></span>${h.name}`, h.role, h.fresh === 'ok' ? 'Online' : '<span class="badge warn">Stale</span>', h.ver, '2026-08-02'])
+      , ['Join Host', 'Change Master', 'Eject']),
+  };
+  const body = only ? S[only] : Object.values(S).join('');
+  return `<nav class="snav"><label class="search">${ic('search', 16)}<input placeholder="Search settings"></label>
+    <div style="height:8px"></div>${SNAV.map(([k, l, i]) => `<button data-setting="${k}" aria-current="${STATE.setting === k}">${ic(i, 16)} ${l}</button>`).join('')}
+    <h5>prod-a · master nex-01</h5><p class="note" style="margin:0 10px">Settings are stored on the pool master.</p></nav>
+    <div class="content">${body || `<div class="section"><h3>${SNAV.find(s => s[0] === only)?.[1] || ''}</h3><p class="note">Not mocked yet.</p></div>`}</div>`;
+}
+
+function renderTasks(events) {
+  const rows = events
+    ? [['warn', 'Host nex-03 stopped reporting', 'nex-03', '4 min ago'], ['ok', 'Backup nightly completed 14/14', 'prod-a', '2:14 AM'], ['bad', 'Backup offsite: file-srv failed (timeout)', 'prod-a', 'Yesterday'], ['ok', 'nex-02 updated to 0.4.5', 'nex-02', '2 days ago']]
+    : [['ok', 'Migrate db-replica to nex-01', 'admin', '12 min ago'], ['ok', 'Snapshot web-01', 'admin', '1 h ago'], ['warn', 'Reconcile nex-03 (waiting for host)', 'system', '4 min ago'], ['ok', 'Start ci-runner-2', 'admin', '3 h ago']];
+  return `<div class="content"><table><thead><tr><th>${events ? 'Event' : 'Task'}</th><th>${events ? 'Source' : 'By'}</th><th>When</th><th>Result</th></tr></thead><tbody>
+    ${rows.map(([s, t, b, w]) => `<tr><td><span class="st ${s}"></span>${t}</td><td>${b}</td><td>${w}</td><td><span class="badge ${s}">${{ ok: 'OK', warn: 'Attention', bad: 'Failed' }[s]}</span></td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function render() {
+  renderRail();
+  const v = STATE.view, m = $('#main');
+  m.innerHTML = v === 'dash' ? renderDash() : v === 'vms' ? renderVMs() : v === 'hosts' ? renderHosts()
+    : v === 'settings' ? renderSettings(STATE.setting === 'overview' ? null : STATE.setting)
+    : v === 'storage' || v === 'networks' || v === 'backups' ? renderSettings(v)
+    : v === 'tasks' ? renderTasks(false) : v === 'events' ? renderTasks(true)
+    : `<div class="content"><div class="section"><h3>${ic('apps')} Container services</h3><p class="note">Swarm clusters, stacks and services with their application icons. Not mocked in this prototype.</p></div></div>`;
+  const q = $('#q'); if (q) q.oninput = e => { STATE.q = e.target.value; render(); const n = $('#q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-go],[data-vm],[data-host],[data-ptab],[data-closepanel],[data-toggle],[data-clear],[data-uncheck],[data-range],[data-setting],[data-view],[data-check],[data-checkall],[data-facet]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.check !== undefined) { e.stopPropagation(); STATE.checked.has(d.check) ? STATE.checked.delete(d.check) : STATE.checked.add(d.check); }
+  else if (d.checkall !== undefined) { const all = vmFiltered().map(v => v.name); STATE.checked = t.checked ? new Set(all) : new Set(); }
+  else if (d.facet) { const s = STATE.filters[d.facet] ??= new Set(); t.checked ? s.add(t.value) : s.delete(t.value); }
+  else if (d.go) { STATE.view = d.go; STATE.vmSel = STATE.hostSel = null; if (d.go === 'settings') STATE.setting = 'overview'; if (['storage', 'networks', 'backups'].includes(d.go)) STATE.setting = d.go; }
+  else if (d.vm) { STATE.view = 'vms'; STATE.vmSel = d.vm; STATE.hostSel = null; STATE.ptab = 0; }
+  else if (d.host) { e.stopPropagation(); STATE.view = 'hosts'; STATE.hostSel = d.host; STATE.vmSel = null; }
+  else if (d.ptab) STATE.ptab = +d.ptab;
+  else if (d.closepanel !== undefined) STATE.vmSel = STATE.hostSel = null;
+  else if (d.toggle) STATE.group = !STATE.group;
+  else if (d.clear !== undefined) { STATE.filters = {}; STATE.q = ''; }
+  else if (d.uncheck !== undefined) STATE.checked.clear();
+  else if (d.range) STATE.range = d.range;
+  else if (d.setting) STATE.setting = d.setting;
+  else if (d.view) STATE.vview = d.view;
+  render();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && (STATE.vmSel || STATE.hostSel)) { STATE.vmSel = STATE.hostSel = null; render(); } });
+$('#themeBtn').onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+};
+document.documentElement.dataset.theme = 'dark';
+render();
+</script>
+</body>
+</html>

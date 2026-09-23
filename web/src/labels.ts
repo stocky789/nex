@@ -2,7 +2,7 @@
 // Operator-facing names for the identifiers Core and the Controller report. Unknown values fall
 // back to a readable form of the raw string, so a newer Core never renders as a blank label;
 // the raw identifier stays available beside the label where an operator may need to grep it.
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+export const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const humanize = (s: string) => capitalize(s.replaceAll(/[-_.]+/g, " ").trim());
 
 const operations: Record<string, string> = {

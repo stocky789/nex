@@ -417,7 +417,7 @@ export function VMWizard({ poolID, poolName, hosts, placement, storage, networks
         {staleNICs && <p className="warning">{staleText}</p>}
         <div className="actions"><button type="button" disabled={busy || draft.nics.length >= 8} onClick={() => edit({ nics: [...draft.nics, { network_id: hostNetworks.length === 1 ? hostNetworks[0].id : "", model: "virtio", mac: "", mtu: 0 }] })}>Add network interface</button></div>
         <p className="help">A VM may have up to 8 interfaces.</p>
-        {!hostNetworks.length && <p className="help">No verified network on this host. <button type="button" onClick={() => setTab("Networking")}>Open Networking</button></p>}
+        {!hostNetworks.length && <p className="help">No verified network on this host. <button type="button" onClick={() => setTab("Networking")}>Open Networks</button></p>}
       </>}
       {step === 4 && <>
         <div className="vm-fields">
@@ -476,7 +476,7 @@ export function VMWizard({ poolID, poolName, hosts, placement, storage, networks
           <p className="help">The host starts the VM once, as the last step of the creation task. If that start fails, creation still succeeds and a separate failed power task records why the VM stayed stopped.</p>
           <label className="console-option"><input type="checkbox" checked={draft.autostart} onChange={e => edit({ autostart: e.target.checked })} /> Start automatically when the host boots</label>
         </fieldset>
-        <p>Follow the durable task to see validation and creation results. A creation task that does not report a result is uncertain, not failed; check Task history before retrying.</p>
+        <p>Follow the durable task to see validation and creation results. A creation task that does not report a result is uncertain, not failed; check Tasks before retrying.</p>
         {(staleDisks || staleNICs || staleMedia) && <p className="warning">{staleText}</p>}
       </>}
       {cpuIssue && <p className="warning" role="alert">{cpuIssue}</p>}

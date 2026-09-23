@@ -3,11 +3,8 @@
 /* Keys, media and view: three groups split by a hairline. */
 .console-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .console-group + .console-group { padding-left: 16px; border-left: 1px solid var(--line-soft); }
-/* Focus mode: only the console is left on screen. */
-body.console-focus :is(.topbar, .toolbar, aside, .activity-dock, .statusbar, .detail-tabs, .page-heading) { display: none; }
-body.console-focus .shell { grid-template-columns: minmax(0, 1fr); }
 .console-toolbar .muted { font-size: 11px; }
-.console-status { margin: 0; padding: 6px 10px; font-size: 12px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--warn); }
+.console-status { margin: 0; padding: 6px 10px; font-size: 12px; background: var(--warn-bg); color: var(--warn); }
 /* The screen takes the room the controls leave instead of pushing them out of the pane: its
    clamp is the size it asks for, and flex lets it grow into spare space or give space back
    when the clipboard is open or a drawer below the console is expanded (BUG-0207). */
@@ -56,7 +53,7 @@ section.console:fullscreen .console-screen { flex: 1; height: auto; min-height: 
 /* A window height, not just a floor: with only a minimum the console grew past the viewport
    and the separate window scrolled, which put its own status note below the fold. */
 .console-page { min-height: 100vh; height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: var(--canvas); font-family: var(--font); }
-.console-page-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.console-page-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 /* The separate console window is nothing but the console: it takes the whole page, with no
    panel margin to subtract and no cap to fit inside. */
 .console-page section.console { flex: 1; display: flex; flex-direction: column; margin: 0; border: 0; max-height: none; }
@@ -69,7 +66,7 @@ section.console:fullscreen .console-screen { flex: 1; height: auto; min-height: 
 .guest-advisory .help { margin: 0 0 6px; }
 
 .console-toolbar-edge { position: relative; height: 0; z-index: 1; flex-shrink: 0; }
-.console .console-toolbar-toggle { position: absolute; top: 0; left: 10px; display: grid; place-items: center; width: 32px; height: 24px; min-height: 0; padding: 0; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 5px 5px; background: var(--canvas); color: var(--text); cursor: pointer; }
+.console .console-toolbar-toggle { position: absolute; top: 0; left: 10px; display: grid; place-items: center; width: 32px; height: 24px; min-height: 0; padding: 0; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius-control) var(--radius-control); background: var(--canvas); color: var(--text); cursor: pointer; }
 .console-toolbar-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .console-toolbar-edge .badge { position: absolute; top: 3px; right: 10px; pointer-events: none; }
 

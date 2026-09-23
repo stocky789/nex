@@ -8,6 +8,7 @@ access.  The optional disposable-Core lab mode is added by the storage lab owner
 """
 import argparse
 import json
+import re
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +31,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     host = {"id": "core-qa", "pool_id": "pool-qa", "hostname": "core-qa", "connection": "fresh", "revoked": False,
-            "capabilities": ["managed-vm-v1", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
+            "capabilities": ["managed-vm-v1", "storage-repositories-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}}
     healthy = {"id": "core-assigned-repository", "pool_id": "pool-qa", "host_id": "core-qa", "name": "VM share", "kind": "smb",
                "source": {"smb": {"server": "files.example.test", "share": "vms"}}, "identity": "files.example.test/vms",
                "generation": 1, "status": "succeeded", "operation_id": "storage-register-core", "credential_present": True,
@@ -72,7 +73,8 @@ def main():
             route.fulfill(json=data["session"])
             return
         if request.method == "GET":
-            route.fulfill(json=data.get(path, []))
+            # Reads this fixture does not simulate (usage history, pool members) are unavailable.
+            route.fulfill(json=data[path]) if path in data else route.fulfill(status=404, json={"error": "not simulated"})
             return
         body = request.post_data_json
         submissions.append((path, body))
@@ -131,21 +133,28 @@ def main():
             url = f"http://127.0.0.1:{server.server_port}/#/pools/pool-qa"
             page.goto(url)
             page.wait_for_load_state("networkidle")
-            expect(page.get_by_role("heading", name="QA pool", exact=True)).to_be_visible()
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
+            # The pool link chooses that pool as the scope; the rail then opens its Storage screen.
+            expect(page.get_by_label(re.compile(r"^Scope: .*, QA pool\. Change scope$"))).to_be_visible()
+            rail = page.get_by_role("navigation", name="Sections", exact=True)
+
+            def refresh():
+                # The console has no manual refresh; wait for its next automatic inventory poll.
+                with page.expect_response(lambda r: r.url.endswith("/api/v1/storage") and r.request.method == "GET", timeout=15000):
+                    pass
+            rail.get_by_role("link", name="Storage", exact=True).click()
             expect(page.get_by_text("No storage repositories reported.", exact=False)).to_be_visible()
             page.screenshot(path=str(args.evidence / "empty.png"), full_page=True)
             checks.append("Empty repository state renders in the built UI")
 
             host["connection"] = "stale"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             page.get_by_role("button", name="Register storage", exact=True).click()
             stale_form = page.get_by_role("region", name="Register storage", exact=True)
             expect(stale_form.get_by_label("Host", exact=True).locator("option")).to_have_count(1)
             expect(stale_form.get_by_role("button", name="Register and check access", exact=True)).to_be_disabled()
             stale_form.get_by_role("button", name="Close", exact=True).click()
             host["connection"] = "fresh"
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             checks.append("A stale Core is excluded from registration placement")
 
             page.get_by_role("button", name="Register storage", exact=True).click()
@@ -346,14 +355,17 @@ def main():
             expect(page.get_by_role("region", name="Register storage")).to_have_count(0)
             assert secret not in page.content() and secret not in page.evaluate("Object.values(sessionStorage).join(' ')")
             expect(page.get_by_text("VM share", exact=True)).to_be_visible()
-            expect(page.get_by_text("queued", exact=True)).to_be_visible()
+            # The queued Core registration task is listed on Tasks (the old bottom task strip is gone).
+            rail.get_by_role("link", name="Tasks", exact=True).click()
+            expect(page.get_by_role("row").filter(has_text="storage-register-core")).to_contain_text("Waiting to be sent")
+            rail.get_by_role("link", name="Storage", exact=True).click()
             pending_row = page.get_by_role("row").filter(has_text="VM share")
             for action in ("Recheck", "Update / rotate credentials", "Detach"):
                 expect(pending_row.get_by_role("button", name=action, exact=True)).to_be_disabled()
             page.screenshot(path=str(args.evidence / "pending-core-id.png"), full_page=True)
             # Core's next report projects its allocated ID/generation before lifecycle controls open.
             data["storage"] = [healthy]
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(page.get_by_role("row").filter(has_text="VM share").get_by_role("button", name="Recheck", exact=True)).to_be_enabled()
             checks.append("NFS, ZFS, SMB and iSCSI forms expose their typed fields; SMB secrets stay in the transient handoff; pending Core-assignment rows cannot run lifecycle actions")
 
@@ -365,7 +377,7 @@ def main():
             expect(page.get_by_text("Access recheck queued", exact=False)).to_be_visible()
             expect(page.get_by_role("button", name="Detach", exact=True)).to_be_disabled()
             data["storage"] = [healthy]
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(page.get_by_role("button", name="Detach", exact=True)).to_be_enabled()
             checks.append("A Core recheck error remains visible; retry queues a new Core operation and waits for Core confirmation before another lifecycle action")
 
@@ -384,12 +396,12 @@ def main():
             # VM placement only receives repositories Core currently reports writable and capable.
             synthetic = {**healthy, "id": "synthetic-core-id", "name": "Synthetic repository", "generation": 0}
             data["storage"] = [healthy, unsuitable, synthetic]
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(page.get_by_text("Read-only NFS", exact=True)).to_be_visible()
             synthetic_row = page.get_by_role("row").filter(has_text="Synthetic repository")
             for action in ("Recheck", "Update / rotate credentials", "Detach"):
                 expect(synthetic_row.get_by_role("button", name=action, exact=True)).to_be_disabled()
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Virtual machines", exact=True).click()
+            rail.get_by_role("link", name="VMs", exact=True).click()
             page.get_by_role("button", name="Create VM", exact=True).click()
             expect(page.get_by_role("heading", name="Create VM · 1 of 6:", exact=False)).to_be_visible()
             page.get_by_label("VM name", exact=True).fill("storage-picker")
@@ -405,19 +417,19 @@ def main():
             checks.append("VM disk picker excludes read-only or unhealthy repositories; narrow layout has no overflow")
 
             page.set_viewport_size({"width": 1440, "height": 1000})
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
+            rail.get_by_role("link", name="Storage", exact=True).click()
             # UI-1: queued and failed registrations have no repository id yet (id ""). When the
             # queued one becomes healthy with a real id, its old row must not stay behind.
             # Core has not checked access for a registration it has not accepted yet.
             pending = lambda record, **fields: {**{k: v for k, v in record.items() if k != "access"}, "id": "", **fields}
             failed = [pending(unsuitable, name=f"Failed repository {n}", status="failed", operation_id=f"storage-register-failed-{n}", error="export not found") for n in (1, 2)]
             data["storage"] = [pending(healthy, status="queued"), *failed]
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             storage_rows = page.locator("tr[data-storage-id]")
             expect(storage_rows).to_have_count(3)
-            expect(storage_rows.filter(has_text="VM share")).to_contain_text("queued")
+            expect(storage_rows.filter(has_text="VM share")).to_contain_text(re.compile("queued", re.I))
             data["storage"] = [healthy, *failed]
-            page.get_by_role("button", name="Refresh view", exact=True).click()
+            refresh()
             expect(page.locator('tr[data-storage-id="core-assigned-repository"]')).to_be_visible()
             expect(storage_rows).to_have_count(3)
             expect(page.locator("tr[data-storage-id] .badge").filter(has_text="queued")).to_have_count(0)

@@ -2,11 +2,12 @@
 
 ## Status
 
-Development product 0.4.5. This page covers what a pool member holds as a copy of the pool
-master's authority and how to read that copy's state (pool detail → **Hosts** → the **Authority
-copy** column), how to **change which host is the pool master**, how to **eject a host from a
-pool**, how Nex Core **configures each host's own management controller** for fencing, how to record
-one by hand, how to read the **Fencing** column and what to do about each thing it says, what each host's
+Development product 0.4.8. This page covers what a pool member holds as a copy of the pool
+master's authority and how to read that copy's state (**Settings** → **Members** → each host's
+**Authority copy** check), how to **change which host is the pool master**, how to **eject a host
+from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
+record one by hand, how to read each host's **Fencing** check and what to do about each thing it
+says, what each host's
 **watchdog** line means and what the pool's **Host fencing** setting does, how to **promote a
 surviving member when the pool master is lost**, and what a **restricted** host is.
 
@@ -25,7 +26,7 @@ What exists today:
 - **Continuous checks that those devices still work.** Every host reads every other host's
   management controller every few minutes, without powering anything off, and the pool master
   reports whether each host could be shut out and by whom. See
-  [The Fencing column](#the-fencing-column).
+  [Read each host's fencing](#read-each-hosts-fencing).
 - **Each host's watchdog, reported, and the pool's Host fencing setting.** Nex Core finds the
   watchdog hardware on every host, forms the pool's own cluster, arms it where the pool's
   prerequisites hold, and gives the pool a switch that governs it. **An armed host that loses this
@@ -83,11 +84,19 @@ authority key already draws — a member that can become master can already sign
 authority — and it is inherent to fence-verified promotion, not a defect. Admit only hosts you
 trust with that.
 
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md). Every pool step below starts
+in **Settings** → **Members** (`#/settings/members`) with the pool chosen in the top-bar scope
+menu; this section held the pool's former **Hosts** tab, and a host panel's **Maintenance** quick
+action opens it for that host's pool.
+
 ## Prerequisites
 
-- An administrator session in Nex Controller, and the pool open at its **Hosts** tab.
+- An administrator session in Nex Controller, and the pool's **Settings** → **Members** section
+  open.
 - A pool with at least one member besides the master. A single-host pool has no member to hold a
-  copy, and the column is not shown when the master does not support the copy at all.
+  copy, and no host shows an **Authority copy** check when the master does not support the copy
+  at all.
 - The pool master and the member both advertising the `pool-authority-replica-v1` capability. A
   member without it holds nothing and is reported as **not supported — upgrade**.
 - Both hosts able to reach each other on their pool peer addresses. The master pushes the copy to
@@ -155,10 +164,15 @@ For a fence device or a promotion, additionally:
 
 ### Read the authority copy
 
-1. Open the pool and select the **Hosts** tab.
-2. Read the **Authority copy** column for each member. The pool master's own row has no value:
-   the master holds the authority, not a copy of it.
-3. Read the state word:
+1. Choose the pool in the top-bar scope menu, then open **Settings** → **Members**. Each host has
+   one row with a strip of status checks under its name: **Connection**, **Membership**,
+   **Maintenance**, **Authority copy**, **Convergence** and **Fencing**, each a light, the label
+   and one word (**OK**, **Stale**, **Failed**, **Unknown**, **Not reported** and so on). Point at
+   a check for its full sentence, or select **Details** at the end of the strip to open the row's
+   details, where each check has its own entry.
+2. Read the **Authority copy** check for each member. The pool master's row has no such check:
+   the master holds the authority, not a copy of it; its details say *Holds the pool records*.
+3. Open the member's **Details** and read the state under **Authority copy**:
    - **current** — the member holds the master's latest observed authority, verified against the
      pool's own certificate authority, and no other member of this pool is known to hold a newer
      one.
@@ -178,21 +192,23 @@ For a fence device or a promotion, additionally:
      and for a member that is not fresh.
 4. Read the times under the state — *Received …* is the member's own record of when it stored the
    copy, *Acknowledged …* is when the master last saw it acknowledge one.
-5. Read the **Authority copy** entry in the same row's **Convergence** column. That is each host's
+5. Read the **Authority copy** entry under **Convergence** in the same details. That is each host's
    own health judgement over its last two reporting intervals, and it can briefly disagree with
    the state word, which is a comparison of two reports. Both are shown on purpose; neither is
    reconciled into the other.
-6. Read the sentence under the table: *The pool authority is at generation N.* That is the pool
-   master's own number, reported by the master and by nobody else, and it is what each member's
-   copy is measured against. When the master is not fresh the sentence instead says that the master
-   is not reporting one, and that how far behind a copy is cannot be said. A member whose copy is
-   older also shows *N generations behind* in its **Authority copy** cell.
+6. Read **Authority generation** on the pool status strip above the host rows; select **About** on
+   that strip for the sentence *The pool authority is at generation N.* That is the pool master's
+   own number, reported by the master and by nobody else, and it is what each member's copy is
+   measured against. When the master is not fresh the strip reads **Unknown** and the sentence
+   instead says that the master is not reporting one, and that how far behind a copy is cannot be
+   said. A member whose copy is older also shows *N generations behind* under **Authority copy** in
+   its details.
 
 ### Change the pool master
 
 Do this with the current pool master still working. It is a planned hand-over, not a recovery.
 
-1. Open the pool, select the **Hosts** tab and check that the member you intend to promote shows
+1. Open the pool's **Settings** → **Members** section and check that the member you intend to promote shows
    **Authority copy: current** and a fresh connection.
 2. Open **Actions** on that member's row and select **Make pool master**. If the button is
    disabled, the reason is printed beside it — see [Troubleshooting](#troubleshooting).
@@ -214,8 +230,8 @@ Do this with the current pool master still working. It is a planned hand-over, n
 
 ### Eject a host from a pool
 
-1. Open the pool, select the **Hosts** tab, open **Actions** on the member's row and select
-   **Eject from pool**.
+1. Open the pool's **Settings** → **Members** section, open **Actions** on the member's row and
+   select **Eject from pool**.
 2. Read the dialog. The host leaves this pool and becomes the pool master of its own new
    single-host pool, keeping its host identity, its local virtual machines and its local storage;
    the pool's shared networks, storage registrations and ISO library are removed from it.
@@ -297,10 +313,12 @@ The row's one entry point to a host's fence device is the same button either way
 access…** where Nex Core could not configure the controller itself, and **Clear fence device…**
 where it did.
 
-### The Fencing column
+### Read each host's fencing
 
-The **Hosts** tab has a **Fencing** column. It answers one question per host: *if this host were
-lost, could another host shut it out?* Every word of it comes from the pool master, which keeps the
+Each host's row in **Members** has a **Fencing** check. It answers one question per host: *if this
+host were lost, could another host shut it out?* The check gives one word — **OK**, **Stale**,
+**Failed**, **Unknown** or **Not reported** — and the row's **Details** → **Fencing** entry gives
+the full answer from the table below. Every word of it comes from the pool master, which keeps the
 fence devices and collects what the other hosts found. Nex Controller stores none of it.
 
 **The hosts check each other, and never power anything off.** Every few minutes each host signs in
@@ -309,14 +327,14 @@ manages and reads that machine's power state. That is the whole check. There is 
 a power-off: a check cannot switch a machine off by accident, by a bug in this page, or at all. A
 host never checks itself — the question is whether *somebody else* could shut it out.
 
-| The column says | What it means | What to do |
+| **Details** → **Fencing** says | What it means | What to do |
 |---|---|---|
 | **BMC · checked from 2 hosts** | A fence device is recorded and that many other hosts confirmed, just now, that its controller answers and names this machine. | Nothing. |
 | **virsh lab device** | A laboratory `virsh` device is recorded. It is usable, but Nex Core does not check it continuously the way it checks a management controller. | Nothing, in a laboratory. Do not rely on it anywhere else. |
 | **BMC · stale** | There is a device and the last check of it is older than Nex Core will vouch for (about fifteen minutes). Usually the other hosts stopped reporting, or the pool master restarted. | Check that the other hosts are reporting. It clears itself within a few minutes once they are. **Stale is never treated as ready.** |
-| **Not protected — BMC not reachable from host-b** | `host-b` could reach the controller's address but got no answer. Network, or the controller itself. | Check that host-b can reach that controller's address. The column names every host that tried. |
+| **Not protected — BMC not reachable from host-b** | `host-b` could reach the controller's address but got no answer. Network, or the controller itself. | Check that host-b can reach that controller's address. The entry names every host that tried. |
 | **Not protected — …rejected the recorded account** | The controller no longer accepts the account the pool recorded. Somebody changed or removed it. | Let the host configure the controller again, or use **Set BMC access…** with a working account. |
-| **Not protected — no other host has checked… yet**, right after you changed a device | Replacing a fence device discards the checks taken against the one before it, so the column is honest about the new one from the moment you record it. | Wait one check interval. |
+| **Not protected — no other host has checked… yet**, right after you changed a device | Replacing a fence device discards the checks taken against the one before it, so the entry is honest about the new one from the moment you record it. | Wait one check interval. |
 | **Not protected — …reports a different machine…** | The controller at that address now answers for a *different* machine. This is not a network fault and Nex Core will never power anything off on it. | Find out what changed — a reused address, a moved cable, a replaced board. Clear the fence device and record the right one. |
 | **Not protected — …presented a different certificate…** | Only for a Redfish device you recorded by hand. The endpoint is not the one the profile is pinned to. | Compare the fingerprint on the controller's own page. If the change is yours, clear the device and record it again. |
 | **Not protected — no fence device is recorded for this host** | There is nothing to check. | [Let Nex configure it](#let-nex-configure-the-management-controller-the-normal-path), or [set BMC access](#set-bmc-access-for-a-host). |
@@ -326,21 +344,22 @@ host never checks itself — the question is whether *somebody else* could shut 
 | **not reported** | This pool master's Nex Core is too old to report fencing readiness. | Upgrade the pool master. Until then nothing here knows, so nothing here claims it. |
 | **unknown** | The pool master is not reporting. It keeps this record, so nothing else can answer for it. | See [when the pool master is gone](#promote-a-surviving-member). This does **not** mean the hosts cannot be shut out; it means nothing here knows. |
 
-**Why** under a row's badge expands to the reasons behind it, the recorded fence device, the
-host's watchdog and management-controller access, and one line per checking host with what it saw
-and when that was last confirmed.
+Under the first line, the same **Fencing** entry gives the reasons behind it, the recorded fence
+device, the host's watchdog and management-controller access, and one line per checking host with
+what it saw and when that was last confirmed.
 
-Above the table, **Fencing: ready for N of M hosts** is the pool's own line, and it names the hosts
-that are not. The pool master counts it, over the pool's hosts: a host you ejected is not one of
-them and is not counted. It is the number to look at before you rely on a pool surviving the loss of
-its master. It does not decide anything by itself — the promotion below decides, by fencing — but a
-pool master whose controller nobody can reach today is very unlikely to be fenceable on the day it
-is lost, which is the whole reason to look.
+On the pool status strip above the host rows, **Fencing** reads **OK (N of M)** or
+**Not ready (N of M)**; **About** on that strip opens the pool's own line, *Fencing: ready for N of
+M hosts*, which names the hosts that are not. The pool master counts it, over the pool's hosts: a
+host you ejected is not one of them and is not counted. It is the number to look at before you rely
+on a pool surviving the loss of its master. It does not decide anything by itself — the promotion
+below decides, by fencing — but a pool master whose controller nobody can reach today is very
+unlikely to be fenceable on the day it is lost, which is the whole reason to look.
 
 **These checks decide nothing.** They are shown to you, not acted on. A promotion is decided by the
 live fence Nex Core performs and verifies at the moment it promotes, exactly as it was before this
-column existed: a host whose checks are stale can still be promoted over, and a host shown as
-protected can still fail its fence on the day. The column exists so you find out now rather than
+check existed: a host whose checks are stale can still be promoted over, and a host shown as
+protected can still fail its fence on the day. The check exists so you find out now rather than
 then.
 
 **A pool master that restarts forgets these checks**, and says so rather than repeating what it
@@ -356,12 +375,12 @@ way to shut out a host that is hung rather than merely unreachable — nothing o
 reached to ask.
 
 **Nex Core arms these watchdogs itself**, where the pool's prerequisites hold, and a host that is
-armed and loses this pool's quorum **resets itself**. What each host is doing is on its row, under
-the fence device:
+armed and loses this pool's quorum **resets itself**. What each host is doing is in its row's
+**Details** → **Fencing** entry, under the fence device:
 
 | The watchdog line says | What it means | What to do |
 |---|---|---|
-| *Watchdog · armed* (as the row's **Fencing** badge) | This host is feeding a watchdog that will reset it if it loses the pool's quorum. If a management controller is also confirmed, the badge shows that instead and the watchdog gets its own line. | Nothing. |
+| *Watchdog · armed* (as the first line of the **Fencing** entry; the check reads **OK**) | This host is feeding a watchdog that will reset it if it loses the pool's quorum. If a management controller is also confirmed, the first line shows that instead and the watchdog gets its own line. | Nothing. |
 | *Watchdog · armed (emulated)* | The same, on a host that is itself a virtual machine. The hypervisor really does reset it, so it counts for that host — but it is evidence about a hypervisor, never about hardware, and Nex Core labels every proof that rests on one. | Nothing, in a laboratory. On real hardware this should never appear. |
 | *this host is not running this pool's Pacemaker cluster, so there is no quorum for it to lose* | The pool's cluster is not up on this host yet. A watchdog needs something to tell it that the majority has gone. | Nothing. Nex Core forms the pool's cluster itself within a reconcile pass. |
 | *this pool is arming its hosts one at a time and it is `<host>`'s turn* | Arming restarts a host's cluster services, so exactly one host in a pool does it at a time. | Wait. If it does not move on, the named host's own row says what stopped it. |
@@ -376,12 +395,13 @@ the fence device:
 | *this host reports no watchdog device* | No watchdog is present or no driver is loaded. As above, the host is still one of this pool's cluster's votes and **still reboots if it ends up in the minority**; it simply cannot be proved excluded. | Check the host's firmware settings. |
 | *a watchdog needs three or more hosts to have a majority side* | This pool has one or two hosts. A watchdog works by a host noticing it has lost the pool's majority, and two hosts have no majority. | Nothing. This is not a gap: two-host pools are shut out through their management controllers. |
 | *this host armed its watchdog under an earlier record of this pool* | A host joined or left since this host last reported. The set of hosts that makes a majority has changed under it, so the old report is not evidence about the pool as it is now. | Nothing. It corrects itself within a reconcile pass. |
-| *Host fencing is turned off for this pool* | The switch below the table is off. | Nothing, unless you want it on. |
+| *Host fencing is turned off for this pool* | The **Host fencing** switch is off. | Nothing, unless you want it on. |
 | *this host does not report whether it has a watchdog; upgrade it* | That host's Nex Core is too old to look. | Upgrade the host. |
 | *this host stops feeding its watchdog the next time its cluster stops…* | You turned host fencing off. The pool already records this host as not armed, so no promotion can rest on it — but the machine is still feeding the timer, and Nex Core will not stop a service under a running cluster to change that. | Put the host in **maintenance mode** and restart it when you can. Until then it still resets itself if it loses this pool's quorum. |
 | *this host's watchdog driver was built with nowayout…* | The same, made permanent by the kernel: closing the watchdog device does not stop the timer on this host. | Reboot the host when you can. |
 
-**The Host fencing switch** is under the members table. It is **on** for every pool, unless you turn
+**The Host fencing switch** is under **About** on the pool status strip, and the strip's
+**Host fencing** check reads **On** or **Off**. It is **on** for every pool, unless you turn
 it off, and turning it on arms nothing by itself: Nex Core arms a host's watchdog only where every
 line of the checklist beside the switch holds. The checklist is the pool master's, not this page's:
 
@@ -505,8 +525,8 @@ would ever want to promote another host over — in practice, for the pool maste
 device recorded after the master is lost is impossible: it is part of the membership record the
 master keeps. A device you record here is never replaced by automatic provisioning.
 
-1. Open the pool, select the **Hosts** tab, open **Actions** on the host's row and select
-   **Set BMC access…**. The row's note says whether a device is already recorded.
+1. Open the pool's **Settings** → **Members** section, open **Actions** on the host's row and
+   select **Set BMC access…**. The row's note says whether a device is already recorded.
 2. Choose **Redfish** or **IPMI**, then fill in the controller's **address**, the **Redfish system
    identifier** or **IPMI plug** it manages, the **account** with power control, and that account's
    **password**.
@@ -555,14 +575,16 @@ authority. If the old master is still working, close the dialog and use
 nothing off. Nex Core enforces that — it refuses a promotion whose old master answers and still
 holds the pool's authority.
 
-1. Open the pool and select the **Hosts** tab. When the pool master is not reporting, the tab opens
+1. Open the pool's **Settings** → **Members** section. When the pool master is not reporting, the
+   section opens
    with a plain sentence saying so and giving the time it was last heard from. Its virtual machines
    have **not** necessarily stopped; an unreachable host is unknown, never proven down.
    If Nex Controller was replaced after the master was lost, enroll the surviving hosts first. The
-   tab then says the pool master *has never reported to this Controller* and lists the hosts as
+   section then says the pool master *has never reported to this Controller* and lists the hosts as
    the survivors last recorded them, and a surviving member can be promoted as below.
-2. Choose the surviving member to promote. Read its **Authority copy** column: a member with no
-   copy, or an unverified one, cannot be promoted, and Nex Core says so rather than guessing.
+2. Choose the surviving member to promote. Read its **Authority copy** check and details: a
+   member with no copy, or an unverified one, cannot be promoted, and Nex Core says so rather
+   than guessing.
 3. Open **Actions** on that member's row and select **Promote to pool master…**.
 4. **Step 1 — what Nex Core reports.** The dialog asks that host to check the pool and lists what
    it found. The answer comes on the host's next report, so it can take up to a minute; **Check
@@ -755,7 +777,7 @@ After a **master change**:
 - The pool keeps its ID and its name. Every network, storage registration, ISO library entry and
   virtual machine keeps its identity and its name, and virtual machines that were running never
   stopped. Nothing has to be re-entered anywhere.
-- The pool authority generation shown under the table is one higher than before.
+- **Authority generation** on the pool status strip is one higher than before.
 - Pool changes that were refused while the change ran can simply be submitted again. They were
   refused, not queued, so nothing runs by itself afterwards.
 - Losing or replacing Nex Controller during the change makes no difference. The two hosts finish it
@@ -763,7 +785,7 @@ After a **master change**:
 
 After an **eject**:
 
-- The host is gone from this pool's **Hosts** tab and appears as its own single-host pool, in the
+- The host is gone from this pool's **Members** section and appears as its own single-host pool, in the
   same site, with the same host name and the same host identity. Its local virtual machines and
   local storage are still its own.
 - Its access to this pool's shared networks, shared storage and ISO library is gone.
@@ -796,8 +818,8 @@ After a **promotion**:
   master's record of that host is the older one, or the host has not caught up with what the
   master recorded. A member that is not receiving copies usually cannot be reached by the master
   on its pool peer address; check that address and the network between the two hosts. The pool
-  master's own authority generation, under the table, is the absolute number to compare against;
-  a member can also be shown as behind because another fresh member of the same pool is
+  master's own **Authority generation**, on the pool status strip, is the absolute number to
+  compare against; a member can also be shown as behind because another fresh member of the same pool is
   acknowledged at a higher number.
 - **A member shows *refused*.** Read the reason on the row. A copy that names another pool, is not
   from the current master, is addressed to another host, is not signed by the pool's certificate
@@ -841,7 +863,7 @@ change** panel in its own words. What each one means:
 - **"Another pool authority transfer is already in progress on this pool."** Wait for the one on the
   panel to finish, or cancel it.
 - **"The pool master reports membership generation N; reload the pool and retry."** The membership
-  moved under you. Reload and look again before retrying — that is the point of the message.
+  moved under you. Select **Refresh** in the **Members** section and look again before retrying — that is the point of the message.
 - **"Pool authority is frozen for a master change; retry when it completes."** This is the one
   message you retry **unchanged** once the change finishes. Nothing was queued.
 - **"Host `<id>` still owns pool VM records (…); move or delete them before ejecting it."** Move
@@ -862,7 +884,8 @@ change** panel in its own words. What each one means:
   it is still working, and `needs_attention` names a local VM or other blocker. Once the cause is
   cleared, the host resumes and finishes by itself, with no master connection or manual state edit.
 - **"Pool authority was handed to another host; this host is no longer the pool master."** You
-  addressed a host that has already given the authority away. Reload the pool.
+  addressed a host that has already given the authority away. Select **Refresh** in the
+  **Members** section.
 
 ### A promotion or a fence device is refused
 
@@ -976,6 +999,11 @@ timeout, and there is never a moment when two hosts both accept pool authority w
 
 ## Verification
 
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
+
 - **Partial native evidence; walkthrough remains open.** Retained disposable-lab runs now include
   scoped master-change interruption recovery: one source cycle at the durable activate-before-
   handoff boundary and one target cycle after durable master persistence. Both transfers converged
@@ -986,7 +1014,7 @@ timeout, and there is never a moment when two hosts both accept pool authority w
   confirmation and explicit fence acknowledgement, retained one queued operation through terminal
   success, and observed the requested candidate as fresh authoritative master at 1280 px and
   360 px. It does not establish returned-master recovery, resource reconciliation or all failure
-  paths. Browser review remains outstanding for the **Authority copy** column and stale state,
+  paths. Browser review remains outstanding for the **Authority copy** check and stale state,
   **Pool master change** panel, recovery view, conflict banner, **Restricted** badge and other
   confirmation dialogs.
 - **Fence evidence is still partial.** Reviewed disposable-lab evidence includes a scoped fence
@@ -1073,7 +1101,7 @@ timeout, and there is never a moment when two hosts both accept pool authority w
   records outgrow that reports the copy check as failed and can no longer be promoted; there is
   nothing in the interface to raise it.
 - Automated tests and the reviewed 1280 px/360 px captures are not a complete walkthrough.
-  Browser review remains open for the authority-copy column and stale state, transfer/recovery and
+  Browser review remains open for the authority-copy check and stale state, transfer/recovery and
   conflict views, the restricted badge and the remaining confirmation states, as does any behaviour
   on real hardware.
 - Offline contract checks in `tests/test_api_contract.py` hold both peer routes, the three

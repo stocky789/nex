@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Guest } from "./console";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import type { ConsoleMedia, Guest } from "./console";
 import { Icon } from "./icons";
 import { VMWizard, adapterNames, busNames, cpuNames, describeNetwork, guestNames, readyHost, secureBootText, tpmText, type DiskRow, type NICRow, type PlacementState } from "./vm-create";
 import { VMEditor, editBlocker } from "./vm-edit";
 import { StorageRepositories, discardConfirmText, registrationDiscardable, storageOwnerFresh, storageServesData } from "./storage";
-import { Badge } from "./ui";
+import { About, AccessLights, Badge, Menu, Section, type HostAccess } from "./ui";
+import { capitalize } from "./labels";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
 export type StorageSource = { nfs?: { server: string; export: string; directory?: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string; directory?: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean; mode?: "exclusive" | "clustered_gfs2"; cluster_id?: string; lock_table?: string; eligible_host_ids?: string[] } };
@@ -23,7 +24,7 @@ export type Media = Registration & { storage_id: string; size_bytes: number; sha
 // drivers_media_id is the ISO in the VM's second CD drive, empty when that drive is empty.
 export type CPUFeature = { name: string; policy: "require" | "disable" };
 export type VMCPU = { count: number; sockets: number; cores: number; threads: number; model: string; features?: CPUFeature[] | null };
-export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: VMCPU; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number; secure_boot?: string; tpm?: string }; media_id: string; drivers_media_id?: string; start_after_create: boolean; autostart: boolean };
+export type VMSpec = { revision?: number; description: string; guest_os: string; cpu: VMCPU; memory: { mode: string; size_mib: number }; disks: DiskRow[] | null; nics: NICRow[] | null; boot: { firmware: string; machine: string; media_boot_order: number; secure_boot?: string; tpm?: string }; media_id: string; drivers_media_id?: string; start_after_create: boolean; autostart: boolean; tags?: string[] | null };
 export type VMUsage = { observed_at?: string; sample_window_ms?: number; cpu_percent?: number | null; memory_assigned_bytes?: number; memory_maximum_bytes?: number; memory_host_bytes?: number | null; disk_used_bytes?: number | null; disk_capacity_bytes?: number | null };
 export type VM = Registration & { spec?: VMSpec; state: string; freshness: string; role: string; protected: boolean; guest?: Guest | null; usage?: VMUsage | null };
 type NIC = { name: string; mac: string; kind?: string; master?: string; parent?: string; state: string; addresses?: string[] | null };
@@ -31,14 +32,15 @@ type NIC = { name: string; mac: string; kind?: string; master?: string; parent?:
 // carry the last state the host reported for each VM.
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { observed_at?: string; cpu_count: number; cpu_models?: string[] | null; cpu_baseline?: { model: string; features: CPUFeature[] | null; machine: string; generation: number; member_count: number; observed_at: string; error?: string } | null; memory_bytes: number; nics?: NIC[] | null; vms?: { id: string; state: string }[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
-type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; createVM: boolean; onCreateVMShown: () => void; onNotice?: (text: string, operationID?: string) => void };
+type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; creating: boolean; onCloseCreate: () => void; onNotice?: (text: string, operationID?: string) => void };
 const GiB = 1024 ** 3;
 // sentence ends a message with a full stop when it has no terminal punctuation of its own.
 export const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`;
-const task = (value: Registration) => <><Badge value={value.status} />{value.error && <p className="task-error">{value.error}</p>}{value.operation_id && <small><a href="#/tasks">Task {value.operation_id}</a></small>}</>;
+const task = (value: Registration) => <><Badge value={value.status} />{value.error && <p className="task-error">{value.error}</p>}{value.operation_id && <small><a className="task-link" href="#/tasks" title={`Task ${value.operation_id}`}>Task {value.operation_id}</a></small>}</>;
 
-// Each registration form belongs to the pool tab that opens it; "" means no form is open.
-export const formTab = (form: string) => ({ vm: "Virtual machines", network: "Networking", iso: "ISO library" })[form] || "";
+// Each registration form belongs to the screen that opens it; "" means no form is open. The ISO
+// library sits under Storage.
+export const formTab = (form: string) => ({ vm: "Virtual machines", network: "Networking", iso: "Storage" })[form] || "";
 
 // Last path segment of a direct download URL, for prefilling the ISO name field.
 export function isoNameFromURL(raw: string): string {
@@ -69,9 +71,9 @@ export function isoTransferNotice(name: string, status?: string, source: "upload
     case "succeeded":
       return `${name} is on the host and can be used as install media or a driver disc.`;
     case "failed":
-      return `The ${work} of ${name} failed, so it cannot be used by a VM. Read the reason in Task history.`;
+      return `The ${work} of ${name} failed, so it cannot be used by a VM. Read the reason in Tasks.`;
     case "needs_attention":
-      return `The ${work} of ${name} needs attention: the host did not confirm it, so whether the file is usable is unknown. Check it in Task history before using it or sending it again.`;
+      return `The ${work} of ${name} needs attention: the host did not confirm it, so whether the file is usable is unknown. Check it in Tasks before using it or sending it again.`;
     case undefined:
       return `${name} has no ${work} record yet. It is not usable by a VM until one reports succeeded.`;
     default:
@@ -121,7 +123,7 @@ export const renameChanged = (current: string, next: string) => validResourceNam
 // the most fundamental reason, so an operator is not told to reconnect a host when the view they
 // are looking at is the stale part.
 export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean; capable: boolean }): string {
-  if (o.unavailable) return "Controller inventory may be out of date. Refresh the view before changing this pool resource.";
+  if (o.unavailable) return "Controller inventory may be out of date. Use Retry above to reload it before changing this pool resource.";
   if (!o.ready) return "Wait for Nex Core to confirm this resource before changing it.";
   if (!o.hostFresh) return "The pool master is not freshly connected. Reconnect it before changing this pool resource.";
   if (!o.capable) return "This Nex Core cannot remove pool networks or ISOs yet; upgrade Nex Core.";
@@ -159,6 +161,26 @@ export function networkMemberState(n: Network, a: NonNullable<Network["member_ac
   return a.uplink_present ? "ready" : "pending";
 }
 
+// One access light per pool host for a network. The host that registered it (the pool master,
+// for a pool VLAN) confirms it with the registration; the master reports each member's apply of
+// a pool VLAN; a host network exists only on its own host. No current report is Unknown.
+export function networkHostAccess(n: Network, hosts: Host[]): HostAccess[] {
+  const owner = hosts.find(h => h.id === n.host_id)?.hostname || n.host_id;
+  return hosts.map(host => {
+    const light = (tone: HostAccess["tone"], label: string, detail = "") => ({ host, tone, label, detail });
+    if (n.kind !== "vlan" && host.id !== n.host_id) return light("neutral", "No access", `Host network on ${owner}; it exists only there.`);
+    if (host.revoked || host.connection !== "fresh") return light("unknown", "Unknown", "The host is not reporting, so its network state is not current.");
+    const a = n.kind === "vlan" ? n.member_access?.find(item => item.host_id === host.id) : undefined;
+    if (!a && host.id === n.host_id) return n.status === "succeeded" ? light("ok", "Ready", "Confirmed by this host when the network was registered.") : light("unknown", "Unknown", "The host has not confirmed this network yet.");
+    if (!a) return light("unknown", "Unknown", "The pool master has not reported this host's state for this network.");
+    const state = networkMemberState(n, a);
+    return state === "ready" ? light("ok", "Ready", `Bridge ${a.bridge || "present"} on uplink ${n.uplink || "—"}.`)
+      : state === "converging" ? light("warn", "Converging", "This host has not applied the current settings yet.")
+      : state === "pending" ? light("warn", "Uplink missing", `This host does not report the uplink NIC${n.uplink ? ` ${n.uplink}` : ""}.`)
+      : light("bad", "Error", state);
+  });
+}
+
 type Lifecycle = { scope: string; resource: "network" | "media"; action: "remove" | "rename"; id: string; name: string; base: Record<string, unknown>; note?: string };
 
 type Pending = Record<string, { payload: string; id: string }>;
@@ -170,7 +192,7 @@ function pendingRequests(key: string): Pending {
   return {};
 }
 
-export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, createVM, onCreateVMShown, onNotice }: Props) {
+export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, creating, onCloseCreate, onNotice }: Props) {
   const hosts = allHosts.filter(h => h.pool_id === poolID);
   const hostIDs = hosts.map(host => host.id).join(",");
   const storage = allStorage.filter(s => s.pool_id === poolID);
@@ -239,7 +261,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
   const bridges = nics.filter(n => n.kind === "bridge");
   function requestID(scope: string, payload: unknown) {
     const encoded = JSON.stringify(payload);
-    if (requests.current[scope] && requests.current[scope].payload !== encoded) throw new Error("An earlier submission has an uncertain outcome. Restore its original entries and retry to reconcile that request, or inspect Task history before starting another request.");
+    if (requests.current[scope] && requests.current[scope].payload !== encoded) throw new Error("An earlier submission has an uncertain outcome. Restore its original entries and retry to reconcile that request, or inspect Tasks before starting another request.");
     requests.current[scope] ??= { payload: encoded, id: crypto.randomUUID() };
     persist();
     return requests.current[scope].id;
@@ -269,8 +291,8 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     finally { if (blocking) { lock.current = false; setBusy(false); } }
   }
   function open(name: string) { setForm(name); setError(""); setNotice(""); }
-  // The toolbar's New VM lands here after navigating to the pool; show the wizard once.
-  useEffect(() => { if (createVM) { setTab("Virtual machines"); open("vm"); onCreateVMShown(); } }, [createVM]);
+  // Create VM on the VMs screen shows the wizard; an open one keeps its progress.
+  useEffect(() => { if (creating) open("vm"); }, [creating]);
   function chooseFile(value: File | null) {
     if (busy || uploading) return;
     setFile(null); setError("");
@@ -298,7 +320,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     void run(kind, async () => {
       const result = await api<Registration>(kind === "storage" ? "storage" : "networks", "POST", { ...payload, request_id: requestID(kind, payload) });
       clearRequest(kind);
-      setForm(""); await reload(); setNotice(`Registration ${result.status}. Follow host validation in Task history; registration does not make local storage shared.`);
+      setForm(""); await reload(); setNotice(`Registration ${result.status}. Follow host validation in Tasks; registration does not make local storage shared.`);
     });
   }
   async function create(payload: Record<string, unknown>) {
@@ -397,26 +419,22 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       setNotice(`Discarded the failed import for ${media.name}. Submit the download again to retry.`);
     });
   }
-  const vmTab = tab === "Virtual machines";
-  const relevant = ["Virtual machines", "Storage", "Networking", "ISO library"].includes(tab);
+  const relevant = ["Virtual machines", "Storage", "Networking"].includes(tab);
+  const shows = (section: string) => tab === section;
   // An open form stays mounted across tab switches so restored entries and wizard progress survive
-  // a trip to another tab (the wizard sends the operator to Storage, Networking and ISO library),
+  // a trip to another tab (the wizard sends the operator to Storage and Networks),
   // but it is only shown on the tab that opened it instead of sitting on top of an unrelated one.
-  const showForm = formTab(form) === tab;
+  const showForm = Boolean(form) && shows(formTab(form));
   // The banner for an ISO the operator just sent follows that record's own status.
   const transferStatus = transfer && media.find(m => m.id === transfer.id)?.status;
   return <div hidden={!relevant}>
-    {error && <p className="alert" role="alert">{sentence(error)} Your entries are retained. Review Task history before retrying an uncertain result.</p>}
-    {notice && <p className="notice" role="status">{notice} <a href="#/tasks">Task history</a></p>}
+    {error && <p className="alert" role="alert">{sentence(error)} Your entries are retained. Review Tasks before retrying an uncertain result.</p>}
+    {notice && <p className="notice" role="status">{notice} <a href="#/tasks">Tasks</a></p>}
     {transfer && <p className={transferStatus === "failed" ? "alert" : transferStatus === "needs_attention" ? "warning" : "notice"} role="status">
-      {isoTransferNotice(transfer.name, transferStatus || undefined, transfer.source)} <a href="#/tasks">Task history</a>
+      {isoTransferNotice(transfer.name, transferStatus || undefined, transfer.source)} <a href="#/tasks">Tasks</a>
       <button type="button" onClick={() => setTransfer(null)}>Dismiss</button>
     </p>}
-    {unavailable && <p className="warning">Controller inventory may be out of date. Refresh the view before submitting changes.</p>}
-    {(tab === "Networking" || tab === "ISO library") && <div className="managed-actions actions">
-      {tab === "Networking" && <button disabled={busy || unavailable} onClick={() => open("network")}>Register network</button>}
-      {tab === "ISO library" && <button disabled={busy || unavailable} onClick={() => open("iso")}>Upload ISO</button>}
-    </div>}
+    {unavailable && <p className="warning">Controller inventory may be out of date. Use Retry above to reload it before submitting changes.</p>}
     {form === "network" && <section className="panel form-panel" aria-label="Register network" hidden={!showForm}>
       <div className="section-heading"><h2>Register guest network</h2><button disabled={busy} onClick={() => setForm("")}>Close</button></div>
       <form onSubmit={e => register(e, "network")}>
@@ -479,31 +497,30 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
           <p className="help">Drop one .iso image here or use the file picker. The Controller and host validate its content and available space.</p>
           {file && <p className="iso-filename">{file.name} · {(file.size / GiB).toFixed(2)} GiB</p>}
         </div>}
-        {uploading && <p className="help" role="status">Upload running · see the Tasks strip</p>}
+        {uploading && <p className="help" role="status">Upload running · see Tasks</p>}
         {!isoReadyStorage.length && <p className="help">Register storage and wait for its assigned Core to report current ISO access first.</p>}
         <button className="primary" disabled={busy || uploading || unavailable || !isoReadyStorage.some(s => s.id === uploadStorage) || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
       </form>
     </section>}
-    {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} placement={placement} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
-    {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><div className="actions"><span className="muted">{vms.length} in pool</span><button className="primary" disabled={busy || unavailable} onClick={() => open("vm")}>Create VM</button></div></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td><Badge value={v.state} label={stateText(v.state)} /></td><td><Badge value={v.freshness} /></td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
-    {tab === "Storage" && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
-    {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Scope</th><th>Connection</th><th>VMs</th><th>Host check</th><th>Actions</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => {
+    {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} placement={placement} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => { setForm(""); onCloseCreate(); }} /></div>}
+    {shows("Networking") && <Section icon="network" title="Networks" count={networks.length} actions={<button type="button" className="sm primary" disabled={busy || unavailable} onClick={() => open("network")}>Register network</button>}>{networks.length ? <div className="table-scroll"><table className="records resources"><thead><tr><th>Name</th><th>VLAN</th><th>Uplink</th><th>Host access</th><th>VMs</th><th>Status</th><th>Actions</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => {
       const scope = `network:${n.id || n.operation_id}`;
       const blocker = lifecycleState(masterHostID, n.id, n.status, scope);
       const users = vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length;
-      return <tr key={n.id || `op:${n.operation_id}`}><td>{n.name}</td><td>{n.kind === "vlan" ? <>Pool VLAN{n.member_access?.length ? <small>{n.member_access.map(a => `${hostName(a.host_id)}: ${networkMemberState(n, a)}`).join(" · ")}</small> : null}</> : hostName(n.host_id)}</td><td>{describeNetwork(n)}<small className="mono">{n.source}</small></td><td>{users}</td><td>{task(n)}</td><td>{registrationDiscardable(n) ? <div className="actions">
-        <button type="button" title="Remove this Controller record of a registration the pool master refused." disabled={busy || unavailable} onClick={() => discardNetwork(n)}>Discard failed registration</button>
-      </div> : networkRemovable(n) ? <div className="actions">
-        <button type="button" title={blocker || "Change this pool network's name on the pool master."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:rename`, resource: "network", action: "rename", id: n.id, name: n.name, base: networkRemoveBody(n, poolID) })}>Rename</button>
-        <button type="button" className="danger" title={blocker || "Remove this pool VLAN network from every host in the pool."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:remove`, resource: "network", action: "remove", id: n.id, name: n.name, base: networkRemoveBody(n, poolID), note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still use this network, so Nex Core will refuse the removal. Detach the network in each VM first.` : "" })}>Remove</button>
-      </div> : <small>Host network · created and managed on {hostName(n.host_id)}</small>}</td></tr>;
-    })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<p className="panel-note">Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again. A registration the master refused is only a request record and is discarded instead.</p></section>}
-    {tab === "ISO library" && <section className="panel"><div className="section-heading"><h2>Guest ISO library</h2></div>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
+      return <tr key={n.id || `op:${n.operation_id}`}><td><strong>{n.name}</strong><small>{n.kind === "vlan" ? "Pool VLAN" : `Host network on ${hostName(n.host_id)}`}</small></td><td>{n.kind !== "vlan" ? "—" : n.vlan ? n.vlan : "Untagged"}</td><td>{n.uplink ? <span className="mono">{n.uplink}</span> : describeNetwork(n)}</td><td><AccessLights items={networkHostAccess(n, hosts)} /></td><td>{users ? <a href={`#/vms?network=${encodeURIComponent(n.name)}`} title={`Show the VMs attached to ${n.name}`}>{users}</a> : 0}</td><td>{task(n)}</td><td>{registrationDiscardable(n) ? <div className="actions row-actions">
+        <button type="button" className="sm" title="Remove this Controller record of a registration the pool master refused." disabled={busy || unavailable} onClick={() => discardNetwork(n)}>Discard failed registration</button>
+      </div> : networkRemovable(n) ? <div className="actions row-actions">
+        <button type="button" className="sm" title={blocker || "Change this pool network's name on the pool master."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:rename`, resource: "network", action: "rename", id: n.id, name: n.name, base: networkRemoveBody(n, poolID) })}>Rename</button>
+        <button type="button" className="sm danger" title={blocker || "Remove this pool VLAN network from every host in the pool."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:remove`, resource: "network", action: "remove", id: n.id, name: n.name, base: networkRemoveBody(n, poolID), note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still use this network, so Nex Core will refuse the removal. Detach the network in each VM first.` : "" })}>Remove</button>
+      </div> : <small>Managed on {hostName(n.host_id)}</small>}</td></tr>;
+    })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<About title="About changing networks"><p>Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again. A registration the master refused is only a request record and is discarded instead.</p></About></Section>}
+    {shows("Storage") && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
+    {shows("Storage") && <Section icon="storage" title="ISO library" count={media.length} actions={<button type="button" className="sm primary" disabled={busy || unavailable} onClick={() => open("iso")}>Upload ISO</button>}>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
       const scope = `media:${m.id || m.operation_id}:remove`;
       const blocker = lifecycleState(m.host_id, m.id, m.status, scope);
       const users = vms.filter(v => v.spec?.media_id === m.id || v.spec?.drivers_media_id === m.id).length;
-      return <tr key={m.id || `op:${m.operation_id}`}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}{mediaRemovable(m) && <button type="button" className="danger" title={blocker || "Delete this ISO file from its storage on the host."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope, resource: "media", action: "remove", id: m.id, name: m.name, base: {}, note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still have this ISO in a CD drive, so Nex Core will refuse the removal. Eject it in each VM first.` : "" })}>Remove ISO</button>}</td></tr>;
-    })}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}<p className="panel-note">Removing an ISO deletes the file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive; a failed import is only a request record and is discarded instead.</p></section>}
+      return <tr key={m.id || `op:${m.operation_id}`}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" className="sm" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}{mediaRemovable(m) && <button type="button" className="sm danger" title={blocker || "Delete this ISO file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope, resource: "media", action: "remove", id: m.id, name: m.name, base: {}, note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still have this ISO in a CD drive, so Nex Core will refuse the removal. Eject it in each VM first.` : "" })}>Remove ISO</button>}</td></tr>;
+    })}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}<About title="About removing ISOs"><p>Removing an ISO deletes the file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive; a failed import is only a request record and is discarded instead.</p></About></Section>}
     <dialog ref={lifecycleDialog} className="confirm-dialog" aria-labelledby="pool-lifecycle-title" onClose={() => { setLifecycle(null); setConfirmText(""); setRenameText(""); setLifecycleError(""); lifecycleOpener.current?.focus(); }}>
       {lifecycle && (lifecycle.action === "rename"
         ? <form onSubmit={e => { e.preventDefault(); void submitLifecycle(); }}>
@@ -562,44 +579,63 @@ export function ejectInstallOffer(vm: VM, host?: Host): boolean {
   return Boolean(host && !host.revoked && host.connection === "fresh" && host.capabilities?.includes("vm-media-v1"));
 }
 
-type DetailProps = { vm: VM; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void; installMedia?: { busy: boolean; note: string; onEject: () => void } };
-
-// VMDetails shows the definition and observed state; Edit turns the same panel into the
-// editor, so a VM is read and changed in one place.
-export function VMDetails({ vm, hosts, storage, networks, media, api, reload, busy, unavailable, onNotice, installMedia }: DetailProps) {
-  const spec = vm.spec;
-  const host = hosts.find(h => h.id === vm.host_id);
-  const [editing, setEditing] = useState(false);
-  const blocker = editBlocker(vm, host);
-  const offerEject = !editing && Boolean(installMedia) && ejectInstallOffer(vm, host);
-  // The VM listing reports "unknown" while the host is not fresh; the host's stored inventory
-  // still holds the last state it reported.
+// staleNote is what an operator is told about a VM whose host has not reported recently: the
+// host's stored inventory still holds the last state it reported, which is not the current one.
+export function staleNote(vm: VM, host?: Host): string {
   const lastReport = host?.inventory?.vms?.find(v => v.id === vm.id);
   const reportedAt = host?.inventory?.observed_at ? new Date(host.inventory.observed_at) : null;
-  return <><section className="panel"><div className="section-heading"><h2>VM details</h2><span className="actions"><Badge value={vm.freshness} />{!editing && <button type="button" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => setEditing(true)}>Edit</button>}{!editing && <VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} />}</span></div>
-    {vm.freshness !== "fresh" && <p className="warning">Current execution state is unknown. Last reported state: {lastReport?.state || "unknown"}{lastReport && reportedAt && !isNaN(reportedAt.getTime()) ? ` at ${reportedAt.toLocaleString()}` : ""}. An unreachable host does not prove that this VM stopped.</p>}
-    {offerEject && installMedia && <div className="warning install-media-offer" role="status">
-      <p><strong>The install ISO is still in the CD drive, ahead of the disks in the boot order.</strong> Every start boots the ISO first: the installer starts again, or waits at a prompt such as “Press any key to boot from CD or DVD” where a key press starts it again. Eject it once the guest is installed; the VM then boots from its disk. The ISO stays in the library and can be inserted again from the Console tab.</p>
+  return `Current execution state is unknown. Last reported state: ${lastReport?.state || "unknown"}${lastReport && reportedAt && !isNaN(reportedAt.getTime()) ? ` at ${reportedAt.toLocaleString()}` : ""}. An unreachable host does not prove that this VM stopped; power actions wait until the host reports again.`;
+}
+
+type DetailProps = { vm: VM; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void; editing: boolean; onEditing: (editing: boolean) => void };
+
+// VMDetails is the VM's definition; Edit hardware turns the same card into the editor, so a VM
+// is read and changed in one place.
+export function VMDetails({ vm, hosts, storage, networks, media, api, reload, busy, unavailable, onNotice, editing, onEditing }: DetailProps) {
+  const spec = vm.spec;
+  const host = hosts.find(h => h.id === vm.host_id);
+  const blocker = editBlocker(vm, host);
+  return <section className="tile" aria-label="VM definition">
+    <h2>Definition{!editing && <span className="actions"><button type="button" className="sm" disabled={busy || unavailable || Boolean(blocker)} title={blocker || undefined} onClick={() => onEditing(true)}>Edit hardware</button><VMDelete vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} /></span>}</h2>
+    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => onEditing(false)} /> : <dl className="details"><dt>Name</dt><dd>{vm.name}</dd><dt>VM identity</dt><dd className="mono">{vm.id}</dd><dt>Observed state</dt><dd>{capitalize(stateText(vm.state))}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Start on boot</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd><dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · the host locks this much RAM while the VM runs, and keeps the capacity committed to this VM while it is stopped" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Driver disc</dt><dd>{spec.drivers_media_id ? media.find(m => m.id === spec.drivers_media_id)?.name || spec.drivers_media_id : "None · second CD drive empty"}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Secure Boot</dt><dd>{secureBootText(spec.boot)}{spec.boot.firmware === "uefi" && !spec.boot.secure_boot && <small>Not recorded in this definition: a UEFI VM defined before the choice existed boots with the enrolled-keys firmware. Edit and save the VM to record it.</small>}</dd><dt>TPM</dt><dd>{tpmText(spec.boot)}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
+    {!vm.protected && !editing && <p className="note">To install a guest, open the console and use Start VM on its toolbar so the console is attached in time for the boot prompt. Changes a running guest can take apply while it runs.</p>}
+  </section>;
+}
+
+// InstallMedia is the VM's CD drives: the ISO in each, insert and eject, and the offer to eject
+// an install disc that would otherwise boot again ahead of the installed disk.
+export function InstallMedia({ vm, host, drives, eject, busy, unavailable }: { vm: VM; host?: Host; drives: ConsoleMedia; eject: { busy: boolean; note: string; onEject: () => void }; busy: boolean; unavailable: boolean }) {
+  const off = busy || unavailable || Boolean(drives.busy);
+  return <section className="tile" aria-label="Install media">
+    <h2>Install media</h2>
+    {ejectInstallOffer(vm, host) && <div className="warning install-media-offer" role="status">
+      <p><strong>The install ISO is still in the CD drive, ahead of the disks in the boot order.</strong> Every start boots the ISO first: the installer starts again, or waits at a prompt such as “Press any key to boot from CD or DVD” where a key press starts it again. Eject it once the guest is installed; the VM then boots from its disk. The ISO stays in the library and can be inserted again here or from the console.</p>
       <p className="help">Do not eject while an installer is still running in this VM.</p>
-      {installMedia.note && <p className="task-error" role="alert">{installMedia.note}</p>}
-      <div className="actions"><button type="button" disabled={busy || unavailable || installMedia.busy} onClick={installMedia.onEject}>{installMedia.busy ? "Ejecting…" : "Eject install media"}</button></div>
+      {eject.note && <p className="task-error" role="alert">{eject.note}</p>}
+      <div className="actions"><button type="button" disabled={busy || unavailable || eject.busy} onClick={eject.onEject}>{eject.busy ? "Ejecting…" : "Eject install media"}</button></div>
     </div>}
-    {editing && spec ? <VMEditor vm={vm} host={host} poolName={host?.hostname || ""} storage={storage} networks={networks} media={media} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} onClose={() => setEditing(false)} /> : <dl className="details"><dt>VM identity</dt><dd>{vm.id}</dd><dt>Assigned host</dt><dd><a href={`#/hosts/${vm.host_id}`}>{hosts.find(h => h.id === vm.host_id)?.hostname || vm.host_id}</a></dd><dt>Observed state</dt><dd>{stateText(vm.state)}</dd><dt>Role</dt><dd>{vm.protected ? "Protected Controller appliance" : "Guest VM"}</dd>{spec && <>{spec.description && <><dt>Description</dt><dd>{spec.description}</dd></>}<dt>Guest OS</dt><dd>{guestNames[spec.guest_os] || "Not recorded"}</dd><dt>Virtual CPUs</dt><dd>{spec.cpu.count}<small>{topology(spec.cpu)} · {cpuNames[spec.cpu.model] || spec.cpu.model}</small></dd><dt>Memory</dt><dd>{spec.memory.size_mib} MiB<small>{spec.memory.mode === "dedicated" ? "Dedicated · the host locks this much RAM while the VM runs, and keeps the capacity committed to this VM while it is stopped" : "Maximum · a ceiling only; free pages return to the host when the guest reports them"}</small></dd><dt>Disks</dt><dd>{spec.disks?.length ? <ul className="plain">{spec.disks.map((d, i) => <li key={i}>{d.name} · {d.size_gib} GiB · {busNames[d.bus] || d.bus} · {d.thin ? "Thin" : "Thick"}{d.boot_order > 0 ? ` · boot ${d.boot_order}` : ""}<small>{storage.find(s => s.id === d.storage_id)?.name || d.storage_id}</small></li>)}</ul> : "None recorded"}</dd><dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => <li key={i}>{networks.find(x => x.id === n.network_id)?.name || n.network_id} · {adapterNames[n.model] || n.model}{n.mtu ? ` · MTU ${n.mtu}` : ""}<small className="mono">{n.mac || "MAC derived from the VM identity"}</small></li>)}</ul> : "None"}</dd><dt>Install ISO</dt><dd>{spec.media_id ? media.find(m => m.id === spec.media_id)?.name || spec.media_id : "None · CD drive empty"}{spec.boot.media_boot_order > 0 && <small>CD drive boot order {spec.boot.media_boot_order}</small>}</dd><dt>Driver disc</dt><dd>{spec.drivers_media_id ? media.find(m => m.id === spec.drivers_media_id)?.name || spec.drivers_media_id : "None · second CD drive empty"}</dd><dt>Firmware</dt><dd>{spec.boot.firmware?.toUpperCase()}<small>Machine type {spec.boot.machine || "q35"}</small></dd><dt>Secure Boot</dt><dd>{secureBootText(spec.boot)}{spec.boot.firmware === "uefi" && !spec.boot.secure_boot && <small>Not recorded in this definition: a UEFI VM defined before the choice existed boots with the enrolled-keys firmware. Edit and save the VM to record it.</small>}</dd><dt>TPM</dt><dd>{tpmText(spec.boot)}</dd><dt>Autostart</dt><dd>{spec.autostart ? "Starts when the host boots" : "Does not start when the host boots"}</dd></>}{vm.operation_id && <><dt>Creation task</dt><dd>{task(vm)}</dd></>}</dl>}
-    {!vm.protected && !editing && <p className="panel-note">To install a guest, open the Console tab and use Start VM on its toolbar so the console is attached in time for the boot prompt. Select Edit to change the VM; changes a running guest can take apply while it runs.</p>}
-  </section>
-  <GuestTools vm={vm} />
-  <VMUsagePanel vm={vm} />
-  </>;
+    <dl className="details">{drives.drives.map(d => <Fragment key={d.drive}>
+      <dt>{d.label}</dt>
+      <dd className="media-drive">
+        <select aria-label={`Insert an ISO in ${d.label}`} disabled={off || !drives.options.length} value="" onChange={e => { if (e.target.value) d.onInsert(e.target.value); }}>
+          <option value="">{d.currentName || "Empty"}</option>
+          {drives.options.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+        <button type="button" className="sm" aria-label={`Eject ${d.label}`} disabled={off || !d.currentID} onClick={d.onEject}>Eject</button>
+      </dd>
+    </Fragment>)}</dl>
+    {drives.note && <p className="help" role="status">{drives.note}</p>}
+  </section>;
 }
 
 const usageBytes = (value?: number | null) => typeof value === "number" && Number.isFinite(value)
   ? `${(value / GiB).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`
   : "Not reported";
-function VMUsagePanel({ vm }: { vm: VM }) {
+export function VMUsage({ vm }: { vm: VM }) {
   const usage = vm.usage;
-  return <section className="panel vm-usage" aria-label="VM usage">
-    <div className="section-heading"><h2>VM usage</h2><Badge value={vm.freshness} /></div>
-    {!usage ? <p className="empty">No usage sample reported. This is not zero usage: the VM may be stopped, the host may not support usage observation, or the host could not sample it without waiting for another operation.</p>
+  return <section className="tile vm-usage" aria-label="VM usage">
+    <h2>Current usage<Badge value={vm.freshness} /></h2>
+    {!usage ? <p className="help">No usage sample reported. This is not zero usage: the VM may be stopped, the host may not support usage observation, or the host could not sample it without waiting for another operation.</p>
       : <dl className="details">
         <dt>CPU</dt><dd>{usage.cpu_percent == null ? "Not reported" : `${usage.cpu_percent}% of allocated vCPUs`}{usage.cpu_percent != null && usage.sample_window_ms ? <small>Average over {(usage.sample_window_ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} seconds</small> : <small>A rate needs two host samples; it is not reported as zero before then.</small>}</dd>
         <dt>Memory allocation</dt><dd>{usageBytes(usage.memory_assigned_bytes)} assigned · {usageBytes(usage.memory_maximum_bytes)} maximum<small>Allocation, not memory used inside the guest.</small></dd>
@@ -607,7 +643,7 @@ function VMUsagePanel({ vm }: { vm: VM }) {
         <dt>Disk used</dt><dd>{usageBytes(usage.disk_used_bytes)}<small>Repository space occupied by this VM's disk images.</small></dd>
         <dt>Disk capacity</dt><dd>{usageBytes(usage.disk_capacity_bytes)}<small>Virtual disk size visible to the guest.</small></dd>
       </dl>}
-    <p className="panel-note">Usage is a host observation, not a guest-health check. A stale VM status means the host's current execution state is unknown; wait for a fresh report before acting on these numbers.</p>
+    <p className="note">Usage is a host observation, not a guest-health check. A stale VM status means the host's current execution state is unknown; wait for a fresh report before acting on these numbers.</p>
   </section>;
 }
 
@@ -620,7 +656,7 @@ const guestAgentText: Record<string, string> = {
   "no-channel": "Channel missing · this VM was created before guest tools support; recreate it to add the channel",
 };
 const guestClipboardText: Record<string, string> = {
-  ready: "Ready · copy and paste work both ways in the Console tab",
+  ready: "Ready · copy and paste work both ways in the console",
   waiting: "Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest · Type into VM still works",
   "no-channel": "Channel missing · this VM was created before console clipboard support; recreate it to add the channel",
 };
@@ -637,31 +673,51 @@ export function guestResizeText(g: Guest): string {
   if (g.clipboard === "no-channel") return "Not available · this VM was created before the console agent channel existed, so nothing in the guest can act on a resize. Recreate it, then install the guest tools.";
   return "Not available · the guest is not running both qemu-guest-agent and the vdagent that changes its resolution. Install the guest tools; Console clipboard reads Ready exactly when resize becomes available. A VM whose display is not VirtIO cannot resize even then.";
 }
+// guestCapabilities is the guest tools block's status grid: one row per console capability, a
+// word or two for the state and the full reason on demand. Anything not reported is Unknown.
+export function guestCapabilities(g?: Guest | null): { name: string; tone: string; status: string; why: string }[] {
+  const unknown = "Not observed yet. The host reports guest tools only for a running VM.";
+  const agent = !g ? ["unknown", "Unknown", unknown]
+    : g.agent === "connected" ? ["ok", "Ready"] : g.agent === "unresponsive" ? ["warn", "Not answering"] : g.agent === "disconnected" ? ["warn", "Not running"]
+    : g.agent === "no-channel" ? ["bad", "Not available"] : ["unknown", "Unknown"];
+  const clipboard = !g ? ["unknown", "Unknown", unknown]
+    : g.clipboard === "ready" ? ["ok", "Ready"] : g.clipboard === "waiting" ? ["warn", "Waiting"] : g.clipboard === "no-channel" ? ["bad", "Not available"] : ["unknown", "Unknown"];
+  const resize = !g ? ["unknown", "Unknown", unknown] : g.resize ? ["ok", "Ready"] : ["warn", "Not available"];
+  return [
+    { name: "Guest agent", tone: agent[0], status: agent[1], why: agent[2] || guestAgentText[g!.agent] || `Reported as ${g!.agent || "nothing"}.` },
+    { name: "Clipboard", tone: clipboard[0], status: clipboard[1], why: clipboard[2] || guestClipboardText[g!.clipboard] || `Reported as ${g!.clipboard || "nothing"}.` },
+    { name: "Display resize", tone: resize[0], status: resize[1], why: resize[2] || guestResizeText(g!) },
+  ];
+}
 export function GuestTools({ vm }: { vm: VM }) {
   const g = vm.guest;
   const running = vm.freshness === "fresh" && vm.state === "running";
-  return <section className="panel" aria-label="Guest tools">
-    <div className="section-heading"><h2>Guest tools</h2>{g ? <Badge value={g.agent || "unknown"} /> : <Badge value="unknown" />}</div>
-    {!g ? <p className="empty">{running ? "No guest observation yet. The host reports guest tools for running VMs on Nex Core builds with guest observation; wait for the next report or upgrade Nex Core." : "Guest tools are observed while the VM is running."}</p>
-      : <dl className="details">
-        <dt>Guest agent</dt><dd>{guestAgentText[g.agent] || g.agent}</dd>
-        {g.os && <><dt>Operating system</dt><dd>{g.os}</dd></>}
-        {g.hostname && <><dt>Guest hostname</dt><dd>{g.hostname}</dd></>}
-        <dt>IP addresses</dt><dd>{g.addresses?.length ? <ul className="plain">{g.addresses.map(a => <li key={a.interface + a.address} className="mono">{a.address} <small>{a.interface}</small></li>)}</ul> : g.agent === "connected" ? "None reported" : "Unknown until the guest agent answers"}</dd>
-        <dt>Console clipboard</dt><dd>{guestClipboardText[g.clipboard] || g.clipboard}</dd>
-        <dt>Display resize</dt><dd>{guestResizeText(g)}</dd>
-      </dl>}
-    {g && running && (g.agent === "disconnected" || g.agent === "unresponsive") && <GuestToolsAdvisory />}
-    {g && g.agent === "no-channel" && <p className="warning">This VM was created before guest tools support, so it has no guest agent channel. Recreate it to add the channel, then install the tools below. In the meantime the console's <strong>Type into VM</strong> still works.</p>}
-    <p className="panel-note">A connected agent reports facts and enables graceful operations; it is not proof that the guest's applications are healthy.</p>
+  return <section className="tile" aria-label="Guest tools">
+    <h2>Guest tools{g ? <Badge value={g.agent || "unknown"} /> : <Badge value="unknown" />}</h2>
+    {!g && <p className="help">{running ? "No guest observation yet. Wait for the next report, or upgrade Nex Core if it does not observe guests." : "Guest tools are observed while the VM is running."}</p>}
+    <ul className="guest-caps">{guestCapabilities(g).map(c => <li key={c.name}><details>
+      <summary title={c.why}><span>{c.name}</span><span className={`badge ${c.tone === "unknown" ? "neutral" : c.tone}`}>{c.status}</span><span className="link">{c.tone === "ok" ? "Details" : "Why?"}</span></summary>
+      <p className="help">{c.why}</p>
+    </details></li>)}</ul>
+    {g && <dl className="details">
+      {g.os && <><dt>Operating system</dt><dd>{g.os}</dd></>}
+      {g.hostname && <><dt>Guest hostname</dt><dd>{g.hostname}</dd></>}
+      <dt>IP addresses</dt><dd>{g.addresses?.length ? <ul className="plain">{g.addresses.map(a => <li key={a.interface + a.address} className="mono">{a.address} <small>{a.interface}</small></li>)}</ul> : g.agent === "connected" ? "None reported" : "Unknown until the guest agent answers"}</dd>
+    </dl>}
+    <About title="How to enable guest tools">
+      {g?.agent === "no-channel" ? <p>This VM was created before guest tools support, so it has no guest agent channel. Recreate it to add the channel, then install the tools below. In the meantime the console's <strong>Type into VM</strong> still works.</p>
+        : running && g && g.agent !== "connected" ? <p><strong>Guest tools are not responding.</strong> Install them inside the VM to see its OS, hostname and IP addresses here and to use the console clipboard.</p> : null}
+      <GuestToolsAdvisory />
+      <p>A connected agent reports facts and enables graceful operations; it is not proof that the guest's applications are healthy.</p>
+    </About>
   </section>;
 }
 
 // GuestToolsAdvisory tells an operator how to install the guest tools in a running VM whose
 // agent has not connected, for both Linux and Windows guests.
 export function GuestToolsAdvisory() {
-  return <div className="warning guest-advisory">
-    <p><strong>Guest tools are not responding.</strong> Install them inside the VM to see its OS, hostname and IP addresses here and to use the console clipboard. They are standard packages; use the <strong>Console</strong> tab to run these if the VM has no network yet.</p>
+  return <div className="guest-advisory">
+    <p>They are standard packages; open the <strong>Console</strong> to run these if the VM has no network yet.</p>
     <div className="guest-advisory-grid">
       <div>
         <h3>Linux</h3>
@@ -716,6 +772,11 @@ export const powerActions = [
 ] as const;
 
 // stateText names an observed libvirt state for operators; every other state is shown as reported.
+// A VM's state in one word for lists and maps; a VM whose state is not current is Unknown, never Stopped.
+export function vmStateLabel(vm: Pick<VM, "state" | "freshness">, known = vm.freshness === "fresh"): string {
+  if (!known) return "Unknown";
+  return vm.state === "running" ? "Running" : vm.state === "shut off" ? "Stopped" : vm.state === asleep ? "Asleep" : stateText(vm.state).replace(/^./, c => c.toUpperCase());
+}
 export function stateText(state?: string): string {
   return state === asleep ? "asleep (the guest suspended itself; Start wakes it)" : state || "unknown";
 }
@@ -739,19 +800,19 @@ export function powerConfirmText(item: typeof powerActions[number], vm: VM): str
     : `${item.confirm} This is the Controller appliance: central management stops until it runs again; recover it from the host-local page.`;
 }
 
-// VMPower is the toolbar's power group: Start, Shut down, Reboot, Force stop and Force reboot for
-// the selected VM, greyed out with a reason when nothing is selected or the host cannot take the request.
-// Requests are durable host tasks; the observed state, refreshed by host reports, tells what
-// actually happened. Confirmations use a native modal dialog so they work from the toolbar.
-export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, describedBy }: { vm?: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void; describedBy?: string }) {
+// VMPower is a VM panel's power actions: Start and Shut down as buttons, then `children`, then
+// Reboot, Force stop and Force reboot in a More menu, each greyed out with a reason when the host
+// cannot take the request. Requests are durable host tasks; the observed state, refreshed by host
+// reports, tells what actually happened.
+export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, children }: { vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void; children?: ReactNode }) {
   const [pending, setPending] = useState<typeof powerActions[number] | null>(null);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const request = useRef<Record<string, string>>({});
   const dialog = useRef<HTMLDialogElement>(null);
   // The opener is disabled while its request runs, so the dialog cannot restore focus by itself.
-  const opener = useRef<HTMLButtonElement | null>(null);
-  const blocker = vm ? powerBlocker(vm, host) : "Select a virtual machine in Resources.";
+  const opener = useRef<HTMLElement | null>(null);
+  const blocker = unavailable ? "Controller inventory could not be loaded, so the VM's current state is unknown. Retry loading it first." : powerBlocker(vm, host);
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
@@ -759,13 +820,12 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
     else if (!pending && element.open) element.close();
   }, [pending]);
   async function submit(item: typeof powerActions[number]) {
-    if (!vm) return;
     setWorking(true); setError("");
     request.current[item.action] ??= crypto.randomUUID();
     try {
       const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(vm.id)}/power`, "POST", { request_id: request.current[item.action], action: item.action });
       delete request.current[item.action];
-      onNotice(`${item.label} queued for ${vm.name}. Follow its progress in the Tasks strip.`, res?.operation?.id);
+      onNotice(`${item.label} queued for ${vm.name}. Follow its progress in Tasks.`, res?.operation?.id);
       await reload();
       // Close only once the button can take focus back, so the dialog returns focus to it.
       setPending(null);
@@ -777,10 +837,13 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
     }
     finally { setWorking(false); }
   }
-  return <div className="toolbar-group vm-power" role="group" aria-label="VM power">
-    {powerActions.map(item => <button key={item.action} type="button" className={`tool-${item.action}`} title={blocker || item.label} aria-describedby={describedBy}
-      disabled={busy || working || unavailable || !vm || Boolean(blocker) || !item.when(vm.state)}
-      onClick={e => { opener.current = e.currentTarget; setError(""); if (vm && powerConfirmText(item, vm)) setPending(item); else void submit(item); }}><Icon kind={item.icon} /><span className="toolbar-label">{item.label}</span></button>)}
+  const button = (item: typeof powerActions[number]) => <button key={item.action} type="button" className={`sm tool-${item.action}`} title={blocker || item.label}
+    disabled={busy || working || unavailable || Boolean(blocker) || !item.when(vm.state)}
+    onClick={e => { opener.current = e.currentTarget.closest("details")?.querySelector("summary") || e.currentTarget; setError(""); if (powerConfirmText(item, vm)) setPending(item); else void submit(item); }}><Icon kind={item.icon} />{item.label}</button>;
+  return <div className="vm-power" role="group" aria-label="VM power">
+    {powerActions.slice(0, 2).map(button)}
+    {children}
+    <Menu align="end" className="vm-more" label={<>More<Icon kind="chevron" size={14} /></>}>{powerActions.slice(2).map(button)}</Menu>
     <dialog ref={dialog} className="confirm-dialog" aria-labelledby="power-confirm-title" onCancel={e => { if (working) e.preventDefault(); }} onClose={() => { setPending(null); setError(""); opener.current?.focus(); }}>
       {pending && vm && <form aria-label={`Confirm ${pending.label.toLowerCase()}`} onSubmit={e => { e.preventDefault(); void submit(pending); }}>
         <h2 id="power-confirm-title">{pending.label} {vm.name}?</h2>
@@ -802,40 +865,23 @@ export function deleteBlocker(vm: VM, host?: Host): string {
 }
 
 // VMDelete confirms by typing the VM name and optionally wiping disk files on the host.
-// openSignal seeds open so a context-menu mount does not notify closed and unmount before the dialog shows.
-export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice, openSignal, onOpenChange, showButton = true }: {
-  vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean;
-  onNotice: (text: string) => void; openSignal?: number; onOpenChange?: (open: boolean) => void; showButton?: boolean;
+export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice }: {
+  vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void;
 }) {
-  const [open, setOpen] = useState(() => (openSignal ?? 0) > 0);
+  const [open, setOpen] = useState(false);
   const [wipe, setWipe] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const request = useRef<Record<string, string>>({});
   const dialog = useRef<HTMLDialogElement>(null);
-  const prevOpen = useRef<boolean | null>(null);
   const blocker = deleteBlocker(vm, host);
-  useEffect(() => {
-    if (openSignal && openSignal > 0) {
-      setError(""); setWipe(false); setName(""); setOpen(true);
-    }
-  }, [openSignal]);
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
     if (open && !element.open) element.showModal();
     else if (!open && element.open) element.close();
   }, [open]);
-  useEffect(() => {
-    if (prevOpen.current === null) {
-      prevOpen.current = open;
-      return;
-    }
-    if (prevOpen.current === open) return;
-    prevOpen.current = open;
-    onOpenChange?.(open);
-  }, [open, onOpenChange]);
   async function submit() {
     setWorking(true); setError("");
     // One identity per payload: a retry replays it, a changed wipe choice is a new request.
@@ -845,11 +891,11 @@ export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice, o
       request.current = {};
       setOpen(false);
       if (location.hash === `#/vms/${vm.id}` || location.hash.startsWith(`#/vms/${vm.id}/`) || location.hash.startsWith(`#/console/${vm.id}`)) {
-        location.hash = `#/hosts/${vm.host_id}`;
+        location.hash = "#/vms";
       }
       // Navigating clears page notices on hashchange; the awaited reload lets that run first.
       await reload();
-      onNotice(`Delete queued for ${vm.name}. Follow its progress in the Tasks strip.`);
+      onNotice(`Delete queued for ${vm.name}. Follow its progress in Tasks.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -857,8 +903,8 @@ export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice, o
     }
   }
   return <>
-    {showButton && <button type="button" className="danger" disabled={busy || working || unavailable || Boolean(blocker)} title={blocker || undefined}
-      onClick={() => { setError(""); setWipe(false); setName(""); setOpen(true); }}>Delete VM</button>}
+    <button type="button" className="sm danger" disabled={busy || working || unavailable || Boolean(blocker)} title={blocker || undefined}
+      onClick={() => { setError(""); setWipe(false); setName(""); setOpen(true); }}>Delete VM</button>
     <dialog ref={dialog} className="confirm-dialog" aria-labelledby="vm-delete-title" onCancel={e => { if (working) e.preventDefault(); }}
       onClose={() => { setOpen(false); setError(""); setWipe(false); setName(""); }}>
       {open && <form onSubmit={e => { e.preventDefault(); void submit(); }}>

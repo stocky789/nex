@@ -496,6 +496,7 @@ type poolMemberView struct {
 	Status     string                   `json:"status"`
 	Error      string                   `json:"error"`
 	PeerOrigin string                   `json:"peer_origin"`
+	JoinedAt   string                   `json:"joined_at"`
 	Connection string                   `json:"connection"`
 	Checks     []poolMemberCheck        `json:"checks"`
 	Access     poolMemberAccessCounts   `json:"access"`
@@ -705,10 +706,10 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 				view.Join = host.inventory.Managed.Join
 			}
 		}
-		// peer_origin is part of the master's durable membership record, not an observation
-		// of it: it is how this member is reached, and a quiet master does not make it
-		// untrue. Everything observational stays unknown.
-		view.PeerOrigin = member.PeerOrigin
+		// peer_origin and the join time are part of the master's durable membership record,
+		// not observations of it, and a quiet master does not make them untrue. Everything
+		// observational stays unknown.
+		view.PeerOrigin, view.JoinedAt = member.PeerOrigin, maintenanceSince(member.ObservedAt)
 		view.Guests = memberGuests(host)
 		if last, ok := maintenance[member.HostID]; ok {
 			found := last

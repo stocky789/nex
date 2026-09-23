@@ -1,0 +1,36 @@
+{
+  "summary": "Plan and design contract for the Controller console redesign: labelled icon rail, scope/search/activity top bar, filterable lists with slide-over panels, overview dashboard, stacked pool settings, phase-gated elements in an honest state, and VM tags stored on the pool master.",
+  "paths": [
+    "AGENTS.md",
+    "docs/design/controller-console/README.md",
+    "docs/design/controller-console/reference.html",
+    "docs/plans/2026-09-23-controller-console-redesign.md",
+    "docs/changes/2026-09-23-controller-console-redesign-plan.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Plan and design reference only; the guide pages change with the implementation slices and their own records.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Planning only. The plan records a future changed contract (optional VM tags on PUT /api/v1/vms/{id} and GET /api/v1/vms); docs/API.md changes with that implementation slice.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Supersedes the layout parts of the 2026-09-23 UI modernization and 2026-09-09 desktop layout plans without changing any phase or acceptance-gate status; phase-gated UI elements do not reorder Core phases.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Planning document. The planned VM tags live in the VM definition on the pool master; per-browser preferences are localStorage conveniences, not Controller state."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The reference page was reviewed in the browser by the project owner on 2026-09-23 as a published prototype with fictional data and RFC 5737 addresses.",
+    "evidence": [
+      "docs/design/controller-console/reference.html",
+      "docs/plans/2026-09-23-controller-console-redesign.md"
+    ]
+  }
+}

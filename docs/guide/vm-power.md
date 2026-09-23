@@ -12,6 +12,8 @@ hibernate, so a guest never offers them; a guest that slept anyway is shown as a
 media once a guest is installed, so later starts no longer boot the ISO first. Editing a VM is covered in
 [Edit a virtual machine](edit-virtual-machine.md); deletion is covered in
 [Delete a virtual machine](delete-virtual-machine.md).
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -23,11 +25,13 @@ media once a guest is installed, so later starts no longer boot the ISO first. E
 
 ## Steps
 
-1. Sign in, select the VM in **Resources**. The line under the VM's name shows the observed
-   state and its freshness, for example `Observed running · fresh`, followed by the reason
-   when power requests are unavailable. The toolbar's **Start**, **Shut down**, **Reboot**,
-   **Force reboot** and **Force stop** buttons act on this VM; only the ones that fit the
-   observed state are enabled, and hovering a greyed button shows the same reason.
+1. Sign in, choose the VM's pool (or its site's **all pools**) in the top-bar scope menu,
+   select **VMs** in the rail and select the VM's row. Its panel opens with the observed state
+   as a badge beside the name (**Unknown** while its host is not reporting). The panel's quick
+   actions hold **Start** and **Shut down**; **More** holds **Reboot**, **Force stop** and
+   **Force reboot**. Only the actions that fit the observed state are enabled, and hovering a
+   greyed action shows the reason, for example "Power controls need a freshly connected host."
+   **Migrate** beside them is not available yet (Phase 7).
 2. Select **Start** for a stopped VM, or for a VM observed `asleep (the guest suspended
    itself; Start wakes it)`: the same button wakes a sleeping guest instead of starting a
    second copy. The request is submitted immediately and the notice
@@ -39,22 +43,26 @@ media once a guest is installed, so later starts no longer boot the ISO first. E
    without any request. If the Controller rejects a request the dialog stays open (for Start,
    it opens) and shows the error; confirming again retries the same request. An already-pending
    task is queued behind automatically on an updated host, without opening a busy-error dialog.
-4. Follow the `vm-power` task in the **Tasks** strip at the bottom of the page (select it to
-   expand; it shows the last five tasks and a count of running and failed ones) or **Task
-   history**, then check the observed state under the VM's name after the next host report.
-5. After you install a guest from an ISO, open the VM's **General** tab. While the VM is
-   running with its install ISO still in the CD drive ahead of every bootable disk, the
-   page offers **Eject install media** above the details, with the reason: every start boots
+4. Follow the `vm-power` task on **Tasks** (the rail item, or the activity pill in the top
+   bar), then check the state badge beside the VM's name after the next host report.
+5. After you install a guest from an ISO, open the VM panel's **Overview** tab. While the VM
+   is running with its install ISO still in the CD drive ahead of every bootable disk, the
+   **Install media** card offers **Eject install media**, with the reason: every start boots
    the ISO first, so the installer starts again, or the VM waits at a boot prompt such as
    "Press any key to boot from CD or DVD" on BIOS VMs or Windows media. Select it once the
    guest is installed, and only then: ejecting while an
    installer is still running interrupts it. Nex never ejects by itself and never rewrites
    the VM's definition for you.
 6. The eject is the same durable `vm-media` task as the console's **Eject** control. Follow
-   it in the **Tasks** strip at the bottom of the page (select it to expand; it shows the
-   last five tasks and a count of running and failed ones); the offer disappears once the
-   host reports the empty drive.
-   The ISO stays in the pool's library and can be inserted again from the **Console** tab.
+   it on **Tasks**; the offer disappears once the host reports the empty drive.
+   The ISO stays in the pool's library and can be inserted again from the **Install media**
+   card or the console's CD/DVD control.
+7. To start or shut down several VMs at once, select their checkboxes in the **VMs** list and
+   choose **Start** or **Shut down** on the bar above the table. One confirmation dialog lists
+   every selected VM with *Will be requested* or the reason it is skipped (for example a VM
+   already in that state, a stale host, or the Controller appliance, which is left to its own
+   panel). Each VM gets its own request; confirming again after a failure retries only the
+   failed ones. **Snapshot** and **Migrate** on that bar are not available yet (Phases 5 and 7).
 
 ## Expected result
 
@@ -68,14 +76,13 @@ to finish. Check observed state before asking for the next state change. **Activ
 records `vm-power` with the administrator.
 
 After **Eject install media**, the `vm-media` task shows `succeeded` when the host issued the
-change, the **Install ISO** row becomes `None · CD drive empty`, and the offer disappears at
+change, the **Install ISO** row on the **Configuration** tab's **Definition** card becomes
+`None · CD drive empty`, and the offer disappears at
 the next host report. The boot order is deliberately unchanged: the empty CD drive keeps its
 place, so the firmware skips it and boots the disk, and inserting an ISO again needs no edit.
 
 ## Troubleshooting
 
-- **Power buttons are greyed with "Select a virtual machine in Resources.":** no VM is
-  selected; the toolbar is fixed and only acts on the selected VM.
 - **Buttons are disabled with "Power controls need a freshly connected host":** the host
   has not reported within the freshness window. Restore host connectivity; the VM's actual
   state is unchanged by the Controller connection.
@@ -83,9 +90,7 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   host to a build reporting `vm-power-v1`.
 - **"still pending; upgrade Nex Core to queue power requests":** this host runs an older
   Core. Upgrade Controller and Core together to queue power behind existing tasks.
-- **Task is waiting:** follow the earlier task in the **Tasks** strip at the bottom of the
-  page (select it to expand; it shows the last five tasks and a count of running and failed
-  ones). Once the host receives your request, it retains it across browser closure,
+- **Task is waiting:** follow the earlier task on **Tasks**. Once the host receives your request, it retains it across browser closure,
   Controller outage and agent restart.
   A replacement Controller recovers the host's queue. Acceptance before host delivery does
   not establish that the host has saved it.
@@ -95,7 +100,7 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   (Windows Sleep, for example) on a definition written before Nex disabled guest sleep. Select
   **Start** to wake it. **Shut down** and **Reboot** wake the guest first and then send the
   ACPI request; **Force stop** and **Force reboot** work as usual. Editing or deleting the VM
-  is refused until it is awake or stopped. Once the guest is up, **Edit** and save the VM so
+  is refused until it is awake or stopped. Once the guest is up, use **Edit hardware** and save the VM so
   its definition is rewritten without sleep support; the change applies at its next boot.
   Other VMs on the host are not affected by a sleeping guest.
 - **Task reports `failed`:** read its error. Common causes are a VM in a paused or
@@ -119,8 +124,8 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   management; recover it from the host-local page.
 - **No Eject install media offer, but the VM still boots from the ISO:** the offer appears
   only for a running VM with a fresh host report whose recorded install ISO is ahead of a
-  bootable disk, on a host reporting `vm-media-v1`. Use the console's **Eject** control, or
-  **Edit** to change the CD drive boot order, when the offer does not apply — for example
+  bootable disk, on a host reporting `vm-media-v1`. Use the **Install media** card's or the
+  console's **Eject** control, or **Edit hardware** to change the CD drive boot order, when the offer does not apply — for example
   while the VM is stopped, when no disk has a boot order yet, or when the guest already
   opened its own tray.
 - **The eject task reports `failed` or `needs_attention`:** the message is shown with the
@@ -130,20 +135,25 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
 
 ## Verification
 
-The [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) re-ran the toolbar power flow in the phase 1 browser lab with simulated Core responses at 1440 and 360 px. The icon-only power buttons between 901 and 1280 px were checked by separate browser measurements, which no committed test repeats.
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
+
+The [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) re-ran the power flow from the earlier layout's toolbar in the phase 1 browser lab with simulated Core responses at 1440 and 360 px. The icon-only power buttons between 901 and 1280 px were checked by separate browser measurements, which no committed test repeats.
 
 Guest sleep handling (2026-09-17) is covered by runnable checks only: the Core power engine
 test wakes a `pmsuspended` domain for Start, wakes then requests for Shut down and Reboot,
 and destroys or resets it directly; the pool admission test proves a sleeping shared VM no
 longer blocks inventory and is admitted as a wake without a start permit; the UI check proves
-the toolbar offers Start and the running-VM actions while asleep. The originating lab case (a
+the earlier layout's toolbar offered Start and the running-VM actions while asleep. The originating lab case (a
 Windows 11 guest asleep on SMB storage, every power request and console refused, the host's
 other VM unable to start) was diagnosed through the Controller and host-local APIs but the fix
 has not yet been run against that host; a browser walkthrough of the wake is outstanding.
 
 
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
-disposable nested-KVM lab, headless Chromium) walked steps 1–4 in the browser from the toolbar on
+disposable nested-KVM lab, headless Chromium) walked steps 1–4 in the browser from the earlier layout's toolbar on
 an installed Debian UEFI guest, through a replacement Controller: Escape on **Shut down** and on
 **Force stop** sent nothing, and Shut down (ACPI), Start, Force stop, Start, Reboot and Force reboot
 each sent one request, showed the queued notice and settled to the host's outcome, with the ACPI
