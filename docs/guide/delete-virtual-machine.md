@@ -28,8 +28,10 @@ Controller appliance cannot be deleted here.
    retained disk again.
 4. Select **Delete VM** (or **Delete VM and disks** when wiping). The request is queued as a
    durable task. If the VM's page or console was open, Controller returns to the VM's host
-   page. The page shows *Delete queued for <name>. Follow its progress in Recent tasks.*;
-   follow the task under **Recent tasks** / **Task history**. When the host reports success,
+   page. The page shows *Delete queued for <name>. Follow its progress in the Tasks strip.*;
+   follow the task in the **Tasks** strip at the bottom of the page (select it to expand; it
+   shows the last five tasks and a count of running and failed ones) or **Task history**. When
+   the host reports success,
    the VM disappears from **Resources**.
 
 ## Expected result

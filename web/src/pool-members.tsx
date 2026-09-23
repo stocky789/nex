@@ -7,6 +7,8 @@ import {
   promotionInProgress, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
+import { Badge } from "./ui";
+import { checkLabel } from "./labels";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Connection = "fresh" | "stale" | "unknown" | "revoked";
@@ -203,9 +205,6 @@ const prerequisiteNames: Record<string, string> = {
   bmc: "Fence devices",
   quorum: "Pool quorum",
 };
-// Text carries the state; the badge colour only repeats it.
-const prerequisiteBadges: Record<string, string> = { met: "ok", unmet: "warning", unknown: "unknown" };
-
 // Core ends its sentence before naming hosts and puts their IDs beside it, because only a
 // client knows their display names — and a host ID is an opaque durable identifier an
 // operator would have to look up while the rows above show the name.
@@ -261,12 +260,12 @@ export function HostFencingSetting({ report, onChange, busy }: {
     <p className="help">Turning this on does not arm anything by itself. Nex Core arms a host's watchdog only where every prerequisite below holds.</p>
     <p className="warning" role="note">Once watchdogs are armed, a host that loses this pool's quorum resets itself and its running virtual machines stop. A switch failure that splits a pool therefore reboots the minority side. This pool's cluster runs on the management network, so changing a host's management network, or any work that interrupts it, is refused while that host is armed — put the host in maintenance first. In a three-host pool a second failure while one host is already down reboots the remaining two, because two of three are a minority: for planned work on more than one host, put the first in maintenance mode, which disarms the whole pool.</p>
     {summary.cluster ? <p className={`help pool-host-fencing-cluster ${clusterBadges[summary.cluster.state] || "unknown"}`} role="status">
-      <span className={`badge ${clusterBadges[summary.cluster.state] || "unknown"}`}>{clusterStateNames[summary.cluster.state] || summary.cluster.state}</span>
+      <Badge value={clusterBadges[summary.cluster.state] || "unknown"} label={clusterStateNames[summary.cluster.state] || summary.cluster.state} />
       {clusterText(report, summary.cluster)}
     </p> : null}
     <ul className="pool-host-fencing-checklist">{(summary.prerequisites || []).map(prerequisite =>
       <li key={prerequisite.name}>
-        <span className={`badge ${prerequisiteBadges[prerequisite.state] || "unknown"}`}>{prerequisite.state}</span>
+        <Badge value={prerequisite.state} />
         <strong>{prerequisiteNames[prerequisite.name] || prerequisite.name}</strong>
         <small>{prerequisiteDetail(report, prerequisite)}</small>
       </li>)}
@@ -302,16 +301,16 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
           <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
           {member.peer_origin && <small className="mono">{member.peer_origin}</small>}
         </td>
-        <td><span className={`badge ${member.role}`}>{member.role === "master" ? "Pool master" : "Member"}</span></td>
-        <td><span className={`badge ${member.connection}`}>{member.connection}</span></td>
+        <td><Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} /></td>
+        <td><Badge value={member.connection} /></td>
         <td>
-          <span className={`badge ${authoritative ? member.status : "unknown"}`}>{authoritative ? member.status || "unknown" : "unknown"}</span>
+          <Badge value={authoritative ? member.status || "unknown" : "unknown"} />
           {authoritative && member.error && <small className="task-error">{member.error}</small>}
           {progress && <small>{progress}</small>}
           <RestrictedNote report={report} member={member} />
         </td>
         <td className="pool-maintenance-cell">
-          <span className={`badge ${drain.badge}`}>{drain.label}</span>
+          <Badge value={drain.badge} label={drain.label} />
           {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
           <small>{guestsText(member)}</small>
           {outcome && <small className={member.last_maintenance?.status === "failed" ? "task-error" : undefined} role={member.last_maintenance?.conflict ? "alert" : undefined}>{outcome}</small>}
@@ -319,7 +318,7 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
         </td>
         {replicas && <td className="pool-replica-cell">
           {member.role === "master" ? <small>Holds the pool records</small> : <>
-            <span className={`badge ${replicaText(member).badge}`}>{replicaText(member).label}</span>
+            <Badge value={replicaText(member).badge} label={replicaText(member).label} />
             {member.replica && <>
               {behindText(member, report) && <small>{behindText(member, report)}</small>}
               {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
@@ -333,7 +332,7 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
           {/* The checks are the host's own report and stay readable without a fresh master.
               pool-restricted is left out here: its reason is rendered in full on the
               Membership cell and repeating Core's sentence twice per row helps nobody. */}
-          {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || check.name}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
+          {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || checkLabel(check.name)}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
           {failures.map(failure => <small key={`${failure.kind}:${failure.id}`} className="task-error">{failure.kind} {failure.name || failure.id}: {failure.error}</small>)}
         </td>
         {/* How this host would be shut out if it were lost. Every word of it is the pool
@@ -402,7 +401,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
         <tbody>{(selected.rows || []).map((row, index) => <tr key={`${row.check}-${index}`}>
           <td>{row.check}</td>
           <td>{row.subject}{row.detail ? <small>{row.detail}</small> : null}</td>
-          <td><span className={`badge ${resultBadges[row.result]}`}>{resultNames[row.result]}</span></td>
+          <td><Badge value={resultBadges[row.result]} label={resultNames[row.result]} /></td>
         </tr>)}</tbody>
       </table></div>}
       {selected && (selected.rows || []).some(row => row.result === "will_not_converge") && <p className="warning">Some pool settings will not converge on this host. It can still join; the settings that cannot be applied are reported against it afterwards.</p>}

@@ -24,7 +24,7 @@ the Release workflow has published packages to the signed APT archive.
 
 ## Steps
 
-1. Open **Updates** (Controller: View menu or sidebar; host-local: aside **Updates**).
+1. Open **Updates** (Controller: sidebar; host-local: aside **Updates**).
 2. Select **Check**. The package index is refreshed at most once every five minutes,
    so a release published moments ago can take that long to appear.
 3. If an update is listed, select **Update**.

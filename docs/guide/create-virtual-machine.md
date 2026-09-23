@@ -108,8 +108,9 @@ Use an explicitly selected disposable lab host.
    (the host's own **Local storage** registration is fine), then choose **ISO source**:
    - **Upload from computer**: select or drop one **ISO file**, then select
      **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
-     appear under **Recent tasks**. You can close the form and keep working while the
-     upload runs, but keep the Controller browser tab open.
+     appear in the **Tasks** strip at the bottom of the page (select it to expand; it shows the
+     last five tasks and a count of running and failed ones). You can close the form and keep
+     working while the upload runs, but keep the Controller browser tab open.
    - **Download from public URL**: enter the direct **Public ISO URL**. **ISO name** is
      filled from the filename in that URL (edit it if you want; it must end in `.iso`),
      then select **Download ISO**. The selected host downloads and validates the image;

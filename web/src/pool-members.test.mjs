@@ -50,12 +50,13 @@ assert.match(rows, /https:\/\/192\.0\.2\.12:9444/);
 // Corrected in S6: each host's own report — its connection, its checks, its copy of the pool
 // records — is that host's, not the master's, and survives the master going quiet.
 const stale = table({ report: { ...report, master_connection: "stale", authoritative: false } });
-assert.equal((stale.match(/badge unknown">unknown/g) || []).length, 7, "membership, maintenance and fencing are unknown for both hosts, and the member's authority copy has none to report");
+assert.equal((stale.match(/badge neutral">Unknown/g) || []).length, 2, "the membership status badge is a raw enum, run through statusLabel");
+assert.equal((stale.match(/badge neutral">unknown/g) || []).length, 5, "maintenance, fencing and the member's authority copy carry their own already-written label");
 assert.match(stale, /Fence device: unknown — the pool master keeps this record and is not reporting\./, "fencing is the master's record too");
 assert.doesNotMatch(stale, /ready/, "the membership status is the master's record");
 assert.doesNotMatch(stale, /uplink lab0/, "the failures it recorded are its observations");
 assert.doesNotMatch(stale, /2 healthy, 1 failed/, "so is its view of each member's access");
-assert.match(stale, /badge fresh">fresh</, "but a host's own connection is its own report");
+assert.match(stale, /badge ok">Fresh</, "but a host's own connection is its own report");
 assert.match(stale, /Storage: failed · 1 repository is not reconciled/, "and so are its own health checks");
 assert.match(stale, /Access unknown/);
 assert.match(stale, /Pool master/, "role comes from the membership record, not from a derived observation");
@@ -148,7 +149,7 @@ const supported = { ...report, maintenance_supported: true, members: [{ ...maste
 
 // The flag, its timestamp and the guests still on the host are rendered from the master's report.
 const drainedRows = table({ report: supported, onMaintenance: () => {}, onMasterChange: () => {}, onEject: () => {} });
-assert.match(drainedRows, /badge warning">in maintenance/);
+assert.match(drainedRows, /badge warn">in maintenance/);
 assert.match(drainedRows, /badge ok">available/, "a member that is not drained reads as available, not blank");
 assert.match(drainedRows, /<small>Since 2026-09-19T10:00:00Z<\/small>/);
 assert.match(drainedRows, /2 guests · 1 running · build, db/);
@@ -245,7 +246,7 @@ assert.equal(replicaText(member).label, "unknown", "a member with no replica rep
 // state itself: current and behind compare against a number only the master reports, so they
 // never arrive without one, and the master's acknowledgement disappears with the master.
 const staleReplica = table({ report: { ...withReplica(replicaOf({ state: "unverified", verified: false })), master_connection: "stale", authoritative: false } });
-assert.match(staleReplica, /badge unverified">unverified</, "the member's own report of its copy is still shown");
+assert.match(staleReplica, /badge warn">unverified</, "the member's own report of its copy is still shown");
 assert.match(staleReplica, /Received 2026-09-19T10:04:11Z/, "and when it received it");
 assert.doesNotMatch(staleReplica, /Acknowledged/, "the acknowledgement is the master's observation");
 assert.doesNotMatch(staleReplica, /This host reports copy/, "and so is the number it is compared with");
@@ -267,12 +268,12 @@ assert.equal(replicaGenerations(replicaOf({})), "");
 assert.match(replicaGenerations(replicaOf({ generation: 6, state: "behind" })), /^This host reports copy 6; the pool master last saw it acknowledge 7\. This host has not caught up with what the pool master recorded\.$/);
 assert.match(replicaGenerations(replicaOf({ acknowledged_generation: 6, state: "behind" })), /^This host reports copy 7; the pool master last saw it acknowledge 6\. The master's record of this host is the older of the two\.$/);
 const behindRows = table({ report: withReplica(replicaOf({ generation: 6, state: "behind" })) });
-assert.match(behindRows, /badge warning">behind</);
+assert.match(behindRows, /badge warn">behind</);
 assert.match(behindRows, /This host reports copy 6; the pool master last saw it acknowledge 7\./);
 
 // A refusal shows Core's own text.
 const refusedRows = table({ report: withReplica(replicaOf({ state: "refused", verified: false, error: "replica signature does not verify against the pool CA" })) });
-assert.match(refusedRows, /badge failed">refused</);
+assert.match(refusedRows, /badge bad">refused</);
 assert.match(refusedRows, /task-error">replica signature does not verify against the pool CA/);
 
 // Awaiting the first copy: no numbers, no times, no alarm.
@@ -433,11 +434,11 @@ const recovery = {
   ],
 };
 const recoveryRows = table({ report: recovery, ...handlers, onPromote: () => {}, onFenceProfile: () => {} });
-assert.match(recoveryRows, /badge failed">Restricted<\/span>/);
+assert.match(recoveryRows, /badge bad">Restricted<\/span>/);
 assert.match(recoveryRows, /this host&#x27;s pool authority was superseded by another master/);
 assert.match(recoveryRows, /<small>Since 2026-09-19T10:11:00Z<\/small>/);
 assert.match(recoveryRows, /Virtual machines this host still defines that the pool records elsewhere: vm-7/);
-assert.match(recoveryRows, /<td class="pool-replica-cell"><span class="badge unknown">unknown<\/span><small>Received 2026-09-19T10:04:11Z<\/small><\/td>/, "the member's own copy is still reported, without a claim the master alone could support");
+assert.match(recoveryRows, /<td class="pool-replica-cell"><span class="badge neutral">unknown<\/span><small>Received 2026-09-19T10:04:11Z<\/small><\/td>/, "the member's own copy is still reported, without a claim the master alone could support");
 // A candidate that has not verified the copy it holds is not offered the action at all.
 assert.match(table({ report: { ...recovery, members: [recovery.members[0], { ...recovery.members[1], replica: replicaOf({ state: "unverified", verified: false }) }] }, ...handlers, onPromote: () => {} }),
   /disabled=""[^>]*>Promote to pool master…<\/button><small>This host does not report a copy of the pool records it has verified, so it cannot be promoted\.<\/small>/);

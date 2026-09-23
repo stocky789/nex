@@ -4,6 +4,7 @@
 // host reports. It never computes the outcome, and it never turns "not reporting" into a result.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { heldRequestID } from "./managed";
+import { Badge } from "./ui";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Connection = "fresh" | "stale" | "unknown" | "revoked";
@@ -330,7 +331,7 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
   return <section className="panel host-network-panel" aria-label="Management network">
     <div className="section-heading">
       <h2>Management network</h2>
-      <span><span className={`badge ${stage.badge}`}>{stage.label}</span>{view && <> <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span></>}</span>
+      <span><Badge value={stage.badge} label={stage.label} />{view && <> <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span></>}</span>
     </div>
     <div className="managed-actions actions fold-actions">
       <button type="button" disabled={loading || unavailable} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>

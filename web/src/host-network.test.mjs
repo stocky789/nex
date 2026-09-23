@@ -108,7 +108,7 @@ assert.doesNotMatch(unsupported, /Stage this configuration/);
 // no countdown, no confirm, no apply.
 const staleView = { ...view, connection: "stale", state: "unknown", management_network: { revision: 2, stage: "applied", operation_id: "op-1", spec, deadline: "2026-09-19T10:10:00Z", seconds_remaining: 412 } };
 const staleMarkup = panel({ view: staleView });
-assert.match(staleMarkup, /badge unknown">unknown/);
+assert.match(staleMarkup, /badge neutral">unknown/);
 assert.match(staleMarkup, /The host is stale, so its management network state is unknown/);
 assert.match(staleMarkup, /rollback deadline of 2026-09-19T10:10:00Z/);
 assert.match(staleMarkup, /revision unknown/, "the revision of a host that is not reporting is unknown too");

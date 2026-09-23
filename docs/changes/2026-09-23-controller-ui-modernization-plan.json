@@ -1,0 +1,32 @@
+{
+  "summary": "Plan for the Controller web UI modernization: token sheet, flat brand surfaces, header Actions menu replacing the menubar, collapsed task strip, off-canvas tree, operator labels, console focus mode and dark theme, with square status badges retained by owner decision.",
+  "paths": [
+    "docs/plans/2026-09-23-controller-ui-modernization.md",
+    "docs/changes/2026-09-23-controller-ui-modernization-plan.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Plan only; the guide pages it names change with the implementation tasks and their own record.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation-only plan; every task reuses the existing client-facing reads and writes unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Evolves the 2026-09-09 desktop layout plan without changing any phase or acceptance-gate status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Planning document; the plan itself commits to no Controller or Core state changes."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. The plan's token contrast values were computed from the listed hex pairs on 2026-09-23; its screen findings come from an inspected capture set of every Controller view against a working-tree build with a labeled simulated inventory (captures not committed).",
+    "evidence": [
+      "docs/plans/2026-09-23-controller-ui-modernization.md"
+    ]
+  }
+}

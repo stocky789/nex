@@ -290,7 +290,7 @@ assert.match(managedSource, /await reload\(\);\s*\n\s*onNotice\(`Delete queued f
 // so a fresh VM whose agent is disconnected must not read "stale".
 const guestBadge = renderToStaticMarkup(createElement(GuestTools, { vm: { id: "vm-g", name: "g", state: "running", freshness: "fresh", guest: { agent: "disconnected", clipboard: "waiting", resize: false } } }));
 assert.doesNotMatch(guestBadge, />stale</, "guest agent badge must not say stale");
-assert.match(guestBadge, /<span class="badge stale">disconnected<\/span>/);
+assert.match(guestBadge, /<span class="badge warn">Disconnected<\/span>/);
 
 // Gate3 2d: Start on a protected Controller appliance always confirms, warning about two Controllers;
 // Start on an ordinary VM is still sent straight away.
@@ -301,7 +301,7 @@ assert.match(powerConfirmText(powerActions.find(a => a.action === "force-stop"),
 assert.match(managedSource, /if \(vm && powerConfirmText\(item, vm\)\) setPending\(item\)/);
 
 // Gate3 2b (managed half): a power notice carries its task so the page can clear it when the task settles.
-assert.match(managedSource, /Follow its progress in Recent tasks\.`, res\?\.operation\?\.id\)/);
+assert.match(managedSource, /Follow its progress in the Tasks strip\.`, res\?\.operation\?\.id\)/);
 
 // Gate3 2f/2g: checkboxes are not stretched by the global input width, and a VM of a host that
 // is not fresh has a gray tree icon.

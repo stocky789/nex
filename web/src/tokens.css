@@ -1,0 +1,37 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Every colour, radius, shadow and font the Controller UI uses. style.css, stats.css and
+   console.css reference these and never a literal colour (tokens.test.mjs enforces it).
+   Values are the brand's primary palette (docs/brand/README.md) plus derived status pairs,
+   each checked at 4.5:1 or better. */
+:root {
+  color-scheme: light;
+  --canvas: #F6F7FC;
+  --panel: #FFFFFF;
+  --sunken: #E5E8F3;
+  --line: #C6CEE4;
+  --line-soft: #DDE2EE;
+  --text: #17233B;
+  --muted: #5B6478;
+  --accent: #2456D9;
+  --accent-hover: #3478FF;
+  --on-accent: #FFFFFF;
+  --select: #E4ECFF;
+  --topbar: #17233B;
+  --on-topbar: #E5E8F3;
+  --focus: #2456D9;
+  --danger: #B42318;
+  --on-danger: #FFFFFF;
+  --ok: #176B42; --ok-bg: #DDF5E6;
+  --warn: #8A4B00; --warn-bg: #FFF1D6;
+  --bad: #B42318; --bad-bg: #FDE2E1;
+  --info: #2456D9; --info-bg: #E4ECFF;
+  --neutral: #5B6478; --neutral-bg: #E5E8F3;
+  --console-bg: #000000;
+  --series-1: #2456D9; --series-2: #0E7490; --series-3: #7C3AED; --series-4: #0F8A5F;
+  --series-5: #9A6700; --series-6: #B42318; --series-7: #5B6478; --series-8: #3478FF;
+  --radius-control: 4px;
+  --radius-panel: 8px;
+  --shadow-pop: 0 8px 24px rgba(23, 35, 59, .16), 0 1px 2px rgba(23, 35, 59, .08);
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}

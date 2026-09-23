@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useRef, useState } from "react";
 import RFB from "@novnc/novnc";
+import { Badge } from "./ui";
 import "./console.css";
 
 // Console renders one VM's graphical console over a WebSocket bridge. Showing it is the
@@ -234,7 +235,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   }
   const live = phase === "connected";
   const view = effective(prefs);
-  const connectionBadge = <span className={`badge ${live ? "fresh" : phase === "connecting" ? "queued" : "stale"}`}>{live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"}</span>;
+  const connectionBadge = <Badge value={live ? "fresh" : phase === "connecting" ? "queued" : "stale"} label={live ? "connected" : phase === "connecting" ? "connecting" : phase === "closed" ? "disconnected" : "not connected"} />;
   const clipboardHint = !guest ? "Clipboard readiness is unknown for this VM; sending works when spice-vdagent runs in the guest."
     : guest.clipboard === "ready" ? "Guest clipboard is ready: text you send appears in the VM and VM copies appear here."
     : guest.clipboard === "waiting" ? "The VM has a clipboard channel but the guest is not running both qemu-guest-agent and spice-vdagent. Install the guest tools, or use Type into VM."

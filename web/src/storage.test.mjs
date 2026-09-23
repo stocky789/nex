@@ -11,7 +11,8 @@ const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
 const stubbed = code
   .replace('from "react"', 'from "data:text/javascript,export const Fragment=()=>null;export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"')
-  .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;export const ZFSReplaceDialog=()=>null;export const zfsFailedDevices=(pool)=>(pool?.devices||[]).filter(d=>d.state!==\'ONLINE\').map(d=>{const item={device:d.path||d.name,state:d.state};if(d.parent)item.parent=d.parent;return item;});export const zfsReplaceableDevices=(pool)=>zfsFailedDevices(pool).filter(d=>d.parent!==\'replacing\'&&d.parent!==\'spare\');"');
+  .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;export const ZFSReplaceDialog=()=>null;export const zfsFailedDevices=(pool)=>(pool?.devices||[]).filter(d=>d.state!==\'ONLINE\').map(d=>{const item={device:d.path||d.name,state:d.state};if(d.parent)item.parent=d.parent;return item;});export const zfsReplaceableDevices=(pool)=>zfsFailedDevices(pool).filter(d=>d.parent!==\'replacing\'&&d.parent!==\'spare\');"')
+  .replace('from "./ui"', 'from "data:text/javascript,export const Badge=()=>null;"');
 writeFileSync(file, stubbed);
 const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText } = await import(`file://${file}`);
 

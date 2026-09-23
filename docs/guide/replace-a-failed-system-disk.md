@@ -54,7 +54,9 @@ Known limits:
 
 ## Expected result
 
-The request is accepted and appears in **Recent tasks** on the host page. The host then, by itself:
+The request is accepted and appears in the **Tasks** strip at the bottom of the host page
+(select it to expand; it shows the last five tasks and a count of running and failed ones).
+The host then, by itself:
 erases the replacement, copies the partition layout from the surviving disk, adds the new partition
 to the mirror, and makes the new disk bootable — on a UEFI host by formatting its EFI system
 partition and copying the boot files onto it (from `/boot/efi` when that mount has them, or from

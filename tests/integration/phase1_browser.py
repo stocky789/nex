@@ -76,19 +76,11 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         session_idle(idle_deadline)
         assert page.request.get(lab.url + '/api/v1/session').status == 200
         assert session_idle() == idle_deadline, 'GET polling extended idle session'
-        for label, item in [('File', 'Create site'), ('View', 'Overview'), ('Host', 'Refresh inventory'), ('Help', 'API reference')]:
-            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
-            summary = menu.locator('summary')
-            summary.focus()
-            page.keyboard.press('Enter')
-            expect(menu.get_by_text(item, exact=True)).to_be_visible()
-            page.keyboard.press('Escape')
-            expect(menu.get_by_text(item, exact=True)).not_to_be_visible()
-            expect(summary).to_be_focused()
-        file_menu = page.locator('details.menu').filter(has=page.locator('summary', has_text='File'))
-        file_menu.locator('summary').click()
-        file_menu.get_by_role('button', name='Create site', exact=True).click()
-        expect(file_menu).not_to_have_attribute('open', '')
+        expect(page.locator('[aria-label="Application menus"]')).to_have_count(0)
+        status = page.locator('.statusbar')
+        expect(status.get_by_role('link', name='API reference')).to_be_visible()
+        expect(status.get_by_role('link', name='Nex source code')).to_be_visible()
+        page.get_by_role('button', name='Create site', exact=True).first.click()
         page.get_by_label('Site name').fill('Browser walkthrough')
         page.get_by_label('Site name').press('Enter')
         expect(page.get_by_role('heading', name='Browser walkthrough', exact=True)).to_be_visible()
@@ -98,9 +90,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
         expect(tree.get_by_text('No hosts in this site.', exact=True)).to_be_visible()
         expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
-        file_menu.locator('summary').click()
-        expect(file_menu.get_by_role('button', name='Add host', exact=True)).to_be_enabled()
-        page.keyboard.press('Escape')
+        expect(page.get_by_role('button', name='Add host', exact=True).first).to_be_enabled()
         capture('empty-site-desktop')
         page.get_by_role('button', name='Add host', exact=True).first.click()
         expect(page.get_by_role('heading', name='Add host to Browser walkthrough', exact=True)).to_be_visible()
@@ -171,8 +161,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
 
         refresh_route('hosts/missing-browser-resource')
         expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
-        expect(menu_item('Host', 'Refresh inventory')).to_be_disabled()
-        page.keyboard.press('Escape')
+        expect(page.locator('details.menu').filter(has=page.locator('summary', has_text='Actions'))).to_have_count(0)
         capture('invalid-object-desktop')
         page.get_by_role('link', name='Return to overview', exact=True).click()
         expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
@@ -264,16 +253,16 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.keyboard.press('Enter')
         expect(dock.get_by_role('heading', name='Recent tasks', exact=True)).to_be_visible()
         chrome = {name: page.locator(selector).bounding_box() for name, selector in {
-            'menus': '.menubar', 'toolbar': '.toolbar', 'tree': 'aside',
+            'topbar': '.topbar', 'toolbar': '.toolbar', 'tree': 'aside', 'header': '.page-heading',
             'main': '#main', 'tabs': '.detail-tabs', 'dock': '.activity-dock', 'status': '.statusbar',
         }.items()}
         assert all(chrome.values()), 'desktop shell elements must be visible'
-        assert chrome['menus']['y'] < chrome['toolbar']['y'] < chrome['tabs']['y'], 'menu/toolbar/tab order'
+        assert chrome['topbar']['y'] < chrome['toolbar']['y'] < chrome['header']['y'] < chrome['tabs']['y'], 'topbar/toolbar/header/tab order'
         assert chrome['tree']['x'] + chrome['tree']['width'] <= chrome['main']['x'] + 1, 'resource tree must sit left of detail pane'
         assert chrome['tabs']['y'] < chrome['dock']['y'] < chrome['status']['y'], 'tasks and status must sit below resource tabs'
         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'desktop page overflow'
         capture('desktop-shell')
-        lab.passed('browser keyboard File/View/Host/Help menus and Escape, menu creation, resource search with ancestors, collapsible tree and current selection, scoped General/Networking/Storage/Activity views, task dock and desktop shell')
+        lab.passed('browser resource search with ancestors, site picker Escape, collapsible tree keyboard toggle and current selection, scoped General/Networking/Storage/Activity views, task dock keyboard toggle and desktop chrome bands')
         # Fixed toolbar: VM power buttons stay in place, greyed with a reason, until a VM is selected.
         toolbar = page.locator('.toolbar')
         for name in ['Start', 'Shut down', 'Reboot', 'Force stop', 'Force reboot']:
@@ -545,7 +534,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.reload()
         expect(libvirt.locator('.badge.healthy')).to_be_visible()
         lab.passed('browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks')
-        menu_item('Host', 'Refresh inventory').click()
+        menu_item('Actions', 'Refresh inventory').click()
         expect(page.get_by_role('status')).to_contain_text('Inventory refresh')
         page.get_by_role('link', name='Task history', exact=True).click()
         expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
@@ -553,7 +542,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('tasks-desktop')
 
         refresh_route('hosts/' + host_id)
-        menu_item('Host', 'Revoke access').click()
+        menu_item('Actions', 'Revoke access').click()
         page.get_by_label('Type the hostname to confirm').fill('incorrect host')
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
         expect(page.get_by_label('Type the hostname to confirm')).to_be_visible()
@@ -562,14 +551,12 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
 
         page.set_viewport_size({'width': 360, 'height': 800})
         capture('host-360')
-        for label in ['File', 'View', 'Host', 'Help']:
-            menu = page.locator('details.menu').filter(has=page.locator('summary', has_text=label))
-            menu.locator('summary').click()
-            bounds = menu.locator('.menu-items').bounding_box()
-            assert bounds and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 360, f'{label} menu outside narrow viewport'
-            if label == 'Help':
-                capture('help-menu-360')
-            page.keyboard.press('Escape')
+        actions_menu = page.locator('details.menu').filter(has=page.locator('summary', has_text='Actions'))
+        actions_menu.locator('summary').click()
+        bounds = actions_menu.locator('.menu-items').bounding_box()
+        assert bounds and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 360, 'Actions menu outside narrow viewport'
+        capture('actions-menu-360')
+        page.keyboard.press('Escape')
         for tab_name, heading in [('Networking', 'Network interfaces'), ('Storage', 'Disks'), ('Activity', 'Activity and health history')]:
             tabs.get_by_role('button', name=tab_name, exact=True).click()
             expect(page.get_by_role('heading', name=heading, exact=True)).to_be_visible()
@@ -653,19 +640,19 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', hold_first)
         page.wait_for_timeout(10500)
         assert len(older) == 1
-        menu_item('Host', 'Revoke access').click()
+        menu_item('Actions', 'Revoke access').click()
         hostname = page.locator('h1').inner_text()
         page.get_by_label('Type the hostname to confirm').fill(hostname)
         page.get_by_role('button', name='Confirm revoke access', exact=True).click()
-        expect(menu_item('Host', 'Re-enroll host')).to_be_enabled()
+        expect(menu_item('Actions', 'Re-enroll host')).to_be_enabled()
         page.keyboard.press('Escape')
         older[0][0].fulfill(response=older[0][1])
         page.unroute('**/api/v1/hosts')
         page.wait_for_timeout(200)
-        expect(menu_item('Host', 'Re-enroll host')).to_be_enabled()
-        expect(menu_item('Host', 'Refresh inventory')).to_be_disabled()
+        expect(menu_item('Actions', 'Re-enroll host')).to_be_enabled()
+        expect(menu_item('Actions', 'Refresh inventory')).to_be_disabled()
         capture('revoked-host-360')
-        menu_item('Host', 'Re-enroll host').click()
+        menu_item('Actions', 'Re-enroll host').click()
         page.get_by_text('Manual enrollment', exact=True).click()
         expect(page.get_by_role('button', name='Generate enrollment token', exact=True)).to_be_visible()
         page.get_by_role('button', name='Close', exact=True).click()

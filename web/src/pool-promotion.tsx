@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { confirmMatches } from "./managed";
 import { hostName } from "./pool-authority";
+import { Badge } from "./ui";
 
 export type PromotionCheck = { name: string; status: "passed" | "blocked" | "unknown"; reason?: string; hosts?: string[]; vms?: string[] };
 export type PromotionHost = {
@@ -131,8 +132,6 @@ const checkTitles: Record<string, string> = {
   "accepted-ownership": "Every pool virtual machine's owner agrees with the copy",
   "old-master-exclusion": "The old pool master is shut out",
 };
-// Text carries the verdict; the badge colour only repeats it.
-const checkBadges: Record<string, string> = { passed: "ok", blocked: "failed", unknown: "unknown" };
 const vmStates: Record<string, string> = {
   confirmed: "confirmed by its owner",
   fenced: "its owner is fenced",
@@ -373,7 +372,7 @@ export function FencingCell({ member, authoritative }: { member: PromotionMember
   const fencing = fencingText(member, authoritative);
   const checks = fenceCheckLines(member, authoritative);
   return <>
-    <span className={`badge ${fencing.badge}`}>{fencing.label}</span>
+    <Badge value={fencing.badge} label={fencing.label} />
     {fencing.reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
     <small>{fenceText(member, authoritative)}</small>
     {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
@@ -415,7 +414,7 @@ export function RestrictedNote({ report, member }: { report: PromotionReport; me
   if (!restricted) return null;
   const conflicts = restricted.conflicts || [];
   return <div className="pool-restricted" role="status">
-    <span className="badge failed">Restricted</span>
+    <Badge value="failed" label="Restricted" />
     <small className="task-error">{restricted.reason}</small>
     {restricted.since && <small>Since {restricted.since}</small>}
     {conflicts.length > 0 && <small>Virtual machines this host still defines that the pool records elsewhere: {conflicts.join(", ")}</small>}
@@ -497,7 +496,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
   return <div className="pool-promotion-verdict">
     <p>Nex Core on {hostName(report, verdict.candidate_host_id)} checked this itself and reported the following at {verdict.observed_at || "an unreported time"}. It holds copy {verdict.authority_generation} of the pool records.</p>
     <ul className="pool-promotion-checks">{checks.map(check => <li key={check.name}>
-      <span className={`badge ${checkBadges[check.status] || "unknown"}`}>{check.status}</span> {checkTitle(check.name)}
+      <Badge value={check.status} /> {checkTitle(check.name)}
       {check.reason && <small className={check.status === "blocked" ? "task-error" : undefined}>{check.reason}</small>}
       {(check.hosts || []).length > 0 && <small>Hosts: {(check.hosts || []).map(id => hostName(report, id)).join(", ")}</small>}
       {(check.vms || []).length > 0 && <small>Virtual machines: {(check.vms || []).join(", ")}</small>}
@@ -514,7 +513,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
         <td>{host.reachable ? host.authority_generation || 0 : "unknown"}</td>
         <td>{host.reachable ? host.replica_generation || 0 : "unknown"}</td>
         <td>{host.reachable ? host.membership_generation || 0 : "unknown"}</td>
-        <td><span className={`badge ${host.blocks ? "failed" : "ok"}`}>{host.blocks ? "stops it" : "no"}</span></td>
+        <td><Badge value={host.blocks ? "failed" : "ok"} label={host.blocks ? "stops it" : "no"} /></td>
         <td className={host.blocks && !fenceHostIDs(verdict).includes(host.host_id) ? "task-error" : undefined}>
           {fenceCellText(verdict, host)}
           {/* Advisory: the candidate's own last non-destructive check of that device.
@@ -534,7 +533,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
         <tbody>{vms.map(vm => <tr key={vm.vm_id}>
           <td>{vm.vm_id}</td>
           <td>{hostName(report, vm.host_id)}</td>
-          <td><span className={`badge ${vm.state === "confirmed" ? "ok" : vm.state === "blocked" ? "failed" : "warning"}`}>{vmStates[vm.state] || vm.state}</span></td>
+          <td><Badge value={vm.state === "confirmed" ? "ok" : vm.state === "blocked" ? "failed" : "warning"} label={vmStates[vm.state] || vm.state} /></td>
           <td>{vm.reason ? <small className={vm.state === "blocked" ? "task-error" : undefined}>{vm.reason}</small> : null}</td>
         </tr>)}</tbody>
       </table></div>

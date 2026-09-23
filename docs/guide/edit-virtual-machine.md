@@ -91,8 +91,9 @@ disk to other storage and moving a VM to another host are not available in this 
 3. Select **Save changes**. Controller validates the request shape and queues a `vm-update`
    task. Core asks the pool master to approve the exact definition, then rechecks it before
    applying it. Select **Cancel** to discard the form.
-4. Follow the task under **Recent tasks** or **Task history**. The details update with the
-   host's next report once the task has succeeded.
+4. Follow the task in the **Tasks** strip at the bottom of the page (select it to expand; it
+   shows the last five tasks and a count of running and failed ones) or **Task history**. The
+   details update with the host's next report once the task has succeeded.
 
 ## Expected result
 

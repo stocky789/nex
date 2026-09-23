@@ -72,7 +72,9 @@ host-local console and full-screen or separate-window views.
    needs to be shut down once before the first insert so the host can add a CDROM tray.
    **Inserting the install media…** or **Ejecting the driver disc…** clears when the task
    succeeds or the host reports the requested tray contents. If the task fails or needs
-   attention, its reason remains visible; inspect it in Recent tasks.
+   attention, its reason remains visible; inspect it in the **Tasks** strip at the bottom of
+   the page (select it to expand; it shows the last five tasks and a count of running and
+   failed ones).
    This works the same for a VM whose disks are on pool-shared storage; Core records the
    change on its pool master, so the ISO is still attached after the VM is re-adopted. The
    selected host and pool master must be upgraded for master-owned placement; a queued media

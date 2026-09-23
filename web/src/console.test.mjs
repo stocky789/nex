@@ -23,9 +23,14 @@ const src = readFileSync(new URL("./console.tsx", import.meta.url), "utf8");
 const { code } = transformSync(src, { loader: "tsx", format: "esm", jsx: "automatic" });
 const stubbed = code
   .replace('from "@novnc/novnc"', 'from "data:text/javascript,export default class RFB {}"')
-  .replace('import "./console.css";', "");
+  .replace('import "./console.css";', "")
+  .replace('from "./ui"', 'from "./ui.mjs"');
 assert.doesNotMatch(stubbed, /@novnc|console\.css/, "module stubs did not apply");
 writeFileSync(outfile, stubbed);
+// Badge/statusLabel are transformed the same way, so console.tsx's badge renders through the
+// real Badge component rather than a second stub of its tone logic.
+writeFileSync(`${outdir}/labels.mjs`, transformSync(readFileSync(new URL("./labels.ts", import.meta.url), "utf8"), { loader: "ts", format: "esm" }).code);
+writeFileSync(`${outdir}/ui.mjs`, transformSync(readFileSync(new URL("./ui.tsx", import.meta.url), "utf8"), { loader: "tsx", format: "esm", jsx: "automatic" }).code.replace('from "./labels"', 'from "./labels.mjs"'));
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 const { typedKey, typedEvents, Console } = await import(`file://${outfile}`);
 

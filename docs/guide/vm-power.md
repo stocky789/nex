@@ -39,8 +39,9 @@ media once a guest is installed, so later starts no longer boot the ISO first. E
    without any request. If the Controller rejects a request the dialog stays open (for Start,
    it opens) and shows the error; confirming again retries the same request. An already-pending
    task is queued behind automatically on an updated host, without opening a busy-error dialog.
-4. Follow the `vm-power` task under **Recent tasks** or **Task history**, then check the
-   observed state under the VM's name after the next host report.
+4. Follow the `vm-power` task in the **Tasks** strip at the bottom of the page (select it to
+   expand; it shows the last five tasks and a count of running and failed ones) or **Task
+   history**, then check the observed state under the VM's name after the next host report.
 5. After you install a guest from an ISO, open the VM's **General** tab. While the VM is
    running with its install ISO still in the CD drive ahead of every bootable disk, the
    page offers **Eject install media** above the details, with the reason: every start boots
@@ -50,7 +51,9 @@ media once a guest is installed, so later starts no longer boot the ISO first. E
    installer is still running interrupts it. Nex never ejects by itself and never rewrites
    the VM's definition for you.
 6. The eject is the same durable `vm-media` task as the console's **Eject** control. Follow
-   it under **Recent tasks**; the offer disappears once the host reports the empty drive.
+   it in the **Tasks** strip at the bottom of the page (select it to expand; it shows the
+   last five tasks and a count of running and failed ones); the offer disappears once the
+   host reports the empty drive.
    The ISO stays in the pool's library and can be inserted again from the **Console** tab.
 
 ## Expected result
@@ -80,8 +83,10 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   host to a build reporting `vm-power-v1`.
 - **"still pending; upgrade Nex Core to queue power requests":** this host runs an older
   Core. Upgrade Controller and Core together to queue power behind existing tasks.
-- **Task is waiting:** follow the earlier task in Recent tasks. Once the host receives your
-  request, it retains it across browser closure, Controller outage and agent restart.
+- **Task is waiting:** follow the earlier task in the **Tasks** strip at the bottom of the
+  page (select it to expand; it shows the last five tasks and a count of running and failed
+  ones). Once the host receives your request, it retains it across browser closure,
+  Controller outage and agent restart.
   A replacement Controller recovers the host's queue. Acceptance before host delivery does
   not establish that the host has saved it.
 - **A prerequisite task failed or needs attention:** the queued power task fails without

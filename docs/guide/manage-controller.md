@@ -63,9 +63,10 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    certificate authority is separate from the HTTPS server CA; never copy its private key
    to an enrolling host.
 2. Open the Controller HTTPS address in a browser that trusts its server certificate.
-   Choose **Sign in** with the administrator account. The desktop layout has a menu row and
-   a fixed command toolbar across the top, a **Resources** pane on the left, and details for
-   the selected resource on the right. The toolbar always shows the same buttons, in groups:
+   Choose **Sign in** with the administrator account. The desktop layout has a top bar with
+   the Nex Controller link and the signed-in account, a fixed command toolbar below it, a
+   **Resources** pane on the left, and the selected resource's header and details on the
+   right. The toolbar always shows the same buttons, in groups:
    **Back** and **Forward** move through pages you visited; **Create site**, **Add host** and
    **New VM** create resources; **Start**, **Shut down**, **Reboot**, **Force reboot** and
    **Force stop** control the selected VM (see [Control VM power](vm-power.md)); **Refresh view** at the
@@ -86,14 +87,15 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    Clear a search to restore its choices; switching sites changes the tree's scope.
    In the site menu, use Up/Down and Enter to choose a result. Escape closes the
    menu and returns focus to the site control; Tab moves to the next control.
-   The **File** menu repeats the creation actions (**Create site**, **Add host**, **New VM**)
-   for the selected scope; **View** opens the overview or task history and refreshes the
-   displayed inventory; **Host** holds the actions for the selected host: **Refresh
-   inventory**, **Re-enroll host** and **Revoke access**. Menu items that do not apply to
-   the current selection are greyed out.
-   Use Tab to reach menus and controls, Enter to open a menu, and Escape to close it.
-   On narrow screens the resource pane is above the details area.
-3. With the site selected, choose **Add host** (toolbar, File menu or the empty-state button).
+   The selected resource's header shows a breadcrumb back to the workspace and its
+   ancestors, then its icon and name. For a host, the header also holds an **Actions**
+   menu: **Refresh inventory**, **Re-enroll host** and **Revoke access**; entries that do
+   not apply to the current host are greyed out. Below the header, underlined tabs switch
+   between the resource's views. The status bar at the bottom of the window links to the
+   **API reference** and the **Nex source code**.
+   Use Tab to reach controls including the Actions menu, Enter to open it, and Escape to
+   close it. On narrow screens the resource pane is above the details area.
+3. With the site selected, choose **Add host** (toolbar or the empty-state button).
    The form is titled **Add host to** followed by the site name; it explains that a new host
    becomes the master of a new pool in this site, and a host that already belongs to a pool
    keeps it. Enter:
@@ -159,10 +161,12 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    disks; these are read-only observations. **Activity** shows recorded changes for the
    selected resource. Selecting another resource returns to **General**.
    Connection warnings remain visible on the host's General, Networking and Storage views.
-   Open the **Host** menu, select **Refresh inventory** and follow its durable task in
-   **Task history** to its reported outcome. **Recent tasks** at the bottom also shows up to five tasks for the
-   selected scope; select its heading to collapse or expand it. **Refresh view** reloads
-   Controller's records; **Refresh inventory** sends the existing read-only request to
+   Open the **Actions** menu, select **Refresh inventory** and follow its durable task in
+   **Task history** to its reported outcome. The **Tasks** strip at the bottom of the page
+   (select it to expand; it shows the last five tasks and a count of running and failed ones)
+   also covers the selected scope, and remembers whether you left it open. A task that fails
+   between refreshes is also announced in the notice bar, naming the task. **Refresh view**
+   reloads Controller's records; **Refresh inventory** sends the existing read-only request to
    the selected host. Neither control changes VM power.
    A fresh heartbeat alone does not prove every capability is healthy. By default the agent
    reports every ten seconds, and Controller marks a connection stale after thirty seconds.
@@ -192,9 +196,9 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    revoke/re-enroll procedure below. Certificates last ninety
    days; rotation is manual, so use `status` to check expiry and rotate before that date.
 8. To revoke a host, select that exact host in Controller, choose **Revoke access** from the
-   **Host** menu, type its hostname, then select **Confirm revoke access**.
+   **Actions** menu, type its hostname, then select **Confirm revoke access**.
    Revocation withdraws its management credential; it does not stop its VMs or erase disks.
-   For deliberate re-enrollment, select **Re-enroll host** from the **Host** menu (it is
+   For deliberate re-enrollment, select **Re-enroll host** from the **Actions** menu (it is
    greyed out until the host is revoked): the same Add host panel opens,
    titled **Re-enroll** with the host's name. If the host is reachable, enter its address
    and root password and use **Connect** / **Confirm and add host** as in step 3 — the

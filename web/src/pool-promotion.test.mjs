@@ -185,10 +185,10 @@ const full = verdictOf([
 });
 const verdictMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report, verdict: full }));
 // Each check is a word, not a colour, with Core's reason verbatim and the hosts and VMs named.
-assert.match(verdictMarkup, /badge ok">passed<\/span> This host&#x27;s copy of the pool records is whole and signed/);
-assert.match(verdictMarkup, /badge failed">blocked<\/span> No reachable host holds a newer copy/);
-assert.match(verdictMarkup, /badge failed">blocked<\/span> Every pool virtual machine&#x27;s owner agrees with the copy/);
-assert.match(verdictMarkup, /badge unknown">unknown<\/span> The old pool master is shut out/);
+assert.match(verdictMarkup, /badge ok">Passed<\/span> This host&#x27;s copy of the pool records is whole and signed/);
+assert.match(verdictMarkup, /badge bad">Blocked<\/span> No reachable host holds a newer copy/);
+assert.match(verdictMarkup, /badge bad">Blocked<\/span> Every pool virtual machine&#x27;s owner agrees with the copy/);
+assert.match(verdictMarkup, /badge neutral">Unknown<\/span> The old pool master is shut out/);
 assert.match(verdictMarkup, /pool host host-c holds a newer pool authority than this host; promote it instead/);
 assert.match(verdictMarkup, /<small>Hosts: host-c<\/small>/);
 assert.match(verdictMarkup, /<small>Virtual machines: vm-7<\/small>/);
@@ -199,8 +199,8 @@ assert.match(verdictMarkup, /<td>core-b<\/td><td>answered<\/td><td>member<\/td><
 assert.match(verdictMarkup, /<td>unknown<\/td><td>unknown<\/td><td>unknown<\/td>/, "a host that did not answer reports no generations");
 // The per-VM ownership table: every state in words, and what a blocked VM means.
 assert.match(verdictMarkup, /badge ok">confirmed by its owner</);
-assert.match(verdictMarkup, /badge warning">its owner is fenced</);
-assert.match(verdictMarkup, /badge failed">blocked</);
+assert.match(verdictMarkup, /badge warn">its owner is fenced</);
+assert.match(verdictMarkup, /badge bad">blocked</);
 assert.match(verdictMarkup, /its owner reports definition revision 4, not 3/);
 assert.match(verdictMarkup, /stays defined and stays visible in the pool after a promotion\. It cannot be started until the disagreement about where it lives is resolved/);
 assert.match(verdictMarkup, /Being visible is not the same as its disks being available/);
@@ -356,7 +356,7 @@ assert.deepEqual(unfenceableBlockers(twoHosts), [], "a blocking host Core will f
 // The per-host table says, for every host, whether it stops the promotion and what happens to it.
 const twoMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report: threeReport, verdict: twoHosts }));
 assert.match(twoMarkup, /<th>Stops this promotion<\/th><th>Fence<\/th>/);
-assert.match(twoMarkup, /<td>core-c<\/td>.*?<span class="badge failed">stops it<\/span><\/td><td>powered off by this promotion<\/td>/);
+assert.match(twoMarkup, /<td>core-c<\/td>.*?<span class="badge bad">stops it<\/span><\/td><td>powered off by this promotion<\/td>/);
 assert.match(twoMarkup, /<td>core-a<\/td>.*?<span class="badge ok">no<\/span><\/td><td>powered off by this promotion<\/td>/);
 assert.match(twoMarkup, /<td>core-b<\/td>.*?<span class="badge ok">no<\/span><\/td><td>not powered off<\/td>/);
 assert.match(twoMarkup, /This promotion powers off core-a, core-c, and Nex Core verifies each one is off/);
@@ -484,12 +484,12 @@ assert.match(restrictedClearsText({ ...report, members: [{ ...master, restricted
 const kindless = { ...master, connection: "fresh", restricted: { reason: superseded.reason, since: "2026-09-19T10:11:00Z" } };
 assert.equal(restrictedClearsText({ ...report, members: [kindless, member] }, kindless), "");
 const kindlessMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: kindless }));
-assert.match(kindlessMarkup, /badge failed">Restricted<\/span>/);
+assert.match(kindlessMarkup, /badge bad">Restricted<\/span>/);
 assert.match(kindlessMarkup, /superseded by another master/);
 assert.doesNotMatch(kindlessMarkup, /It clears/);
 
 const supersededMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: { ...member, restricted: superseded } }));
-assert.match(supersededMarkup, /badge failed">Restricted<\/span>/);
+assert.match(supersededMarkup, /badge bad">Restricted<\/span>/);
 assert.match(supersededMarkup, /task-error">this host&#x27;s pool authority was superseded by another master; it starts no shared-storage guest and writes no pool authority until it has rejoined and reconciled \(VM ownership conflicts: vm-7\)/);
 assert.match(supersededMarkup, /<small>Since 2026-09-19T10:11:00Z<\/small>/);
 assert.match(supersededMarkup, /Virtual machines this host still defines that the pool records elsewhere: vm-7/);

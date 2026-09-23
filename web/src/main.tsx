@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
+import "./tokens.css";
 import "./style.css";
 import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, powerBlocker, powerConfirmText, deleteBlocker, sentence, stateText, type VM, type Storage, type Network, type Media } from "./managed";
 import { Console } from "./console";
@@ -16,6 +17,9 @@ import { PoolMembers } from "./pool-members";
 import { HostRestrictedBanner } from "./pool-promotion";
 import { HostNetwork } from "./host-network";
 import { followUpdate, versionLight, type UpdateStatus } from "./updates";
+import { Badge } from "./ui";
+import { operationLabel, auditLabel, checkLabel, statusLabel, relativeTime } from "./labels";
+import { taskCounts, newFailures, readPreference, writePreference } from "./dock";
 
 type Site = { id: string; name: string };
 type Pool = Site & { site_id: string; master_host_id: string };
@@ -138,6 +142,7 @@ export function taskTimestamp(operation: Pick<Operation, "id" | "host_id" | "req
   return {
     reobserved,
     value: date(operation.updated_at),
+    iso: operation.updated_at,
   };
 }
 const size = (value: number) =>
@@ -174,9 +179,6 @@ function rememberSignedIn(yes: boolean) {
 }
 function Brand() {
   return <span className="brand" role="img" aria-label="Nex Controller" />;
-}
-function Badge({ value }: { value: string }) {
-  return <span className={`badge ${value}`}>{value.replaceAll("-", " ")}</span>;
 }
 function HostHealthSummary({ host }: { host: Host }) {
   const summary = hostHealth(host);
@@ -233,9 +235,9 @@ function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void 
     </tr>
   );
 }
-function Menu({ label, children }: { label: string; children: ReactNode }) {
+function Menu({ label, align, children }: { label: string; align?: "start" | "end"; children: ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
-  return <details className="menu" ref={ref}
+  return <details className={`menu${align === "end" ? " menu-end" : ""}`} ref={ref}
     onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.open = false; }}
     onKeyDown={(e) => { if (e.key === "Escape") { e.currentTarget.open = false; e.currentTarget.querySelector("summary")?.focus(); } }}>
     <summary>{label}</summary>
@@ -310,6 +312,12 @@ function App() {
   const setNotice = (text: string, operationID = "") => { noticeRoute.current = text ? (location.hash.slice(1) || "/") : ""; setNoticeText(text); setNoticeOp(operationID); };
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [dockOpen, setDockOpen] = useState(() => readPreference("nex.dock", false));
+  // Off-canvas only below 900px; at or above it the tree is always inline, never a preference.
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 900px)").matches);
+  const [treeOpen, setTreeOpen] = useState(() => window.matchMedia("(max-width: 900px)").matches && readPreference("nex.tree", false));
+  const treeToggle = useRef<HTMLButtonElement>(null);
+  const resourceSearchInput = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [resourceSearch, setResourceSearch] = useState("");
   const [selectedSiteID, setSelectedSiteID] = useState("");
@@ -349,6 +357,9 @@ function App() {
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
+  // The previous poll's operations, so reload() can tell a status that just became failed
+  // (announce it) from one that was already failed on the last poll (stay quiet).
+  const previousOperations = useRef<Operation[]>([]);
   // The browser-to-Controller upload outlives the form that started it, so the App shell owns
   // the request and reports it in the activity dock until the operator navigates or reloads.
   const [upload, setUpload] = useState<Upload | null>(null);
@@ -562,7 +573,7 @@ function App() {
     try {
       const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: powerRequest.current[target.id], action: "start" });
       delete powerRequest.current[target.id];
-      setNotice(`Start queued for ${target.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
+      setNotice(`Start queued for ${target.name}. Follow its progress in the Tasks strip.`, res?.operation?.id);
       await reload();
     } catch (e) {
       setStartError((e as Error).message);
@@ -580,7 +591,7 @@ function App() {
     const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
     const what = driveLabels[mediaChange.drive].toLowerCase();
     if (task.status === "failed" || task.status === "needs_attention") {
-      return task.error || `The ${what} change did not complete. Check Recent tasks.`;
+      return task.error || `The ${what} change did not complete. Check the Tasks strip.`;
     }
     if (task.status !== "succeeded" && !vmMediaApplied(target, mediaChange.drive, mediaChange.mediaID)) {
       return mediaChange.action === "insert" ? `Inserting the ${what}…` : `Ejecting the ${what}…`;
@@ -635,6 +646,22 @@ function App() {
         api<VM[]>("vms"), api<Storage[]>("storage"), api<Network[]>("networks"), api<Media[]>("media"),
       ]);
       if (isCurrent()) {
+        // The notice bar only carries text, not a link (its operation id just tracks a queued
+        // task so the notice clears once that task resolves); a failed task is already resolved,
+        // so the id goes in the text itself instead of triggering that same clear-on-resolve effect.
+        // One call per poll: several failures in the same poll become one notice, not a series
+        // that only leaves the last one visible.
+        const failures = newFailures(previousOperations.current, operations || []);
+        const hostnameOf = (o: Operation) => hosts?.find((h) => h.id === o.host_id)?.hostname || o.host_id;
+        if (failures.length === 1) {
+          const o = failures[0];
+          const verb = o.status === "failed" ? "failed" : "needs attention";
+          setNotice(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
+        } else if (failures.length > 1) {
+          const items = failures.map((o) => `${operationLabel(o.kind)} on ${hostnameOf(o)} (${o.id})`).join(", ");
+          setNotice(`${failures.length} tasks failed: ${items}.`);
+        }
+        previousOperations.current = operations || [];
         setData({
           sites: sites || [],
           pools: pools || [],
@@ -722,6 +749,31 @@ function App() {
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, []);
+  // Track the 900px breakpoint on its own, independent of treeOpen, so the tree's inert state is
+  // correct even while it is closed (and so a resize past 900px can close an open tree).
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  // The off-canvas tree: track body.tree-open for its CSS, and close it on navigation, Escape or a
+  // resize past 900px. Focus is handled by the actions that cause these transitions, not here: a
+  // restored-open tree (treeOpen starting true from nex.tree) must not steal focus on mount, and by
+  // the time that first effect run happens the session-less screen may not even have an aside yet.
+  useEffect(() => {
+    document.body.classList.toggle("tree-open", treeOpen);
+    if (!treeOpen) return;
+    if (!narrow) { setTreeOpen(false); return; }
+    const closeAndRefocus = () => { setTreeOpen(false); treeToggle.current?.focus(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeAndRefocus(); };
+    window.addEventListener("hashchange", closeAndRefocus);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("hashchange", closeAndRefocus);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [treeOpen, narrow]);
   // New VM from the toolbar or File menu opens the pool's VM wizard; the pool view shows it.
   function newVM() {
     if (!pool) return;
@@ -775,7 +827,7 @@ function App() {
       await reload();
     });
   }
-  const powerStatus = vm && `Observed ${stateText(vm.state)} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
+  const powerStatus = vm && `Observed ${stateText(vm.state)} · ${statusLabel(vm.freshness).toLowerCase()}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name")).trim();
@@ -867,7 +919,7 @@ function App() {
           try {
             const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(menuPower.vm.id)}/power`, "POST", { request_id: powerRequest.current[key], action: menuPower.item.action });
             delete powerRequest.current[key];
-            setNotice(`${menuPower.item.label} queued for ${menuPower.vm.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
+            setNotice(`${menuPower.item.label} queued for ${menuPower.vm.name}. Follow its progress in the Tasks strip.`, res?.operation?.id);
             closeMenuPower();
             await reload();
           } catch (err) { setMenuPowerError((err as Error).message); }
@@ -950,41 +1002,35 @@ function App() {
           </button>
         </div>
       </header>
-      <div className="menubar" aria-label="Application menus">
-        <Menu label="File"><button disabled={busy} onClick={() => open("site")}>Create site</button><button disabled={busy || !site || Boolean(host)} onClick={() => open("enroll")}>Add host</button><button disabled={busy || !pool} onClick={newVM}>New VM</button></Menu>
-        <Menu label="View"><a href="#/">Overview</a><a href="#/tasks">Task history</a><a href="#/updates">Updates</a><button onClick={() => void reload()} disabled={busy}>Refresh view</button></Menu>
-        <Menu label="Host"><button disabled={busy || !host || host.revoked} onClick={refreshInventory}>Refresh inventory</button><button disabled={busy || !host?.revoked} onClick={() => open("enroll")}>Re-enroll host</button><button disabled={busy || !host || host.revoked} onClick={() => open("revoke")}>Revoke access</button></Menu>
-        <Menu label="Help"><a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a><a href="/source">Source code</a></Menu>
-      </div>
       {/* A fixed toolbar in the desktop-console style: every action stays in place and is greyed out,
           with its reason as a tooltip, when it does not apply to the selected resource. */}
       <div className="toolbar" aria-label="Controller actions">
         <div className="toolbar-group" role="group" aria-label="Navigation">
-          <button type="button" onClick={() => history.back()}><Icon kind="back" />Back</button>
-          <button type="button" onClick={() => history.forward()}><Icon kind="forward" />Forward</button>
+          <button type="button" onClick={() => history.back()}><Icon kind="back" /><span className="toolbar-label">Back</span></button>
+          <button type="button" onClick={() => history.forward()}><Icon kind="forward" /><span className="toolbar-label">Forward</span></button>
         </div>
         <div className="toolbar-group" role="group" aria-label="Create">
-          <button type="button" disabled={busy} onClick={() => open("site")}><Icon kind="site" />Create site</button>
-          <button type="button" disabled={busy || !site || Boolean(host)} title={!site ? "Select a site first." : host ? "Select the site or pool to add a host." : undefined} onClick={() => open("enroll")}><Icon kind="host" />Add host</button>
-          <button type="button" disabled={busy || !pool || Boolean(error)} title={pool ? undefined : "Select a pool, host or VM first."} onClick={newVM}><Icon kind="new-vm" />New VM</button>
+          <button type="button" disabled={busy} onClick={() => open("site")}><Icon kind="site" /><span className="toolbar-label">Create site</span></button>
+          <button type="button" disabled={busy || !site || Boolean(host)} title={!site ? "Select a site first." : host ? "Select the site or pool to add a host." : undefined} onClick={() => open("enroll")}><Icon kind="host" /><span className="toolbar-label">Add host</span></button>
+          <button type="button" disabled={busy || !pool || Boolean(error)} title={pool ? undefined : "Select a pool, host or VM first."} onClick={newVM}><Icon kind="new-vm" /><span className="toolbar-label">New VM</span></button>
         </div>
         <VMPower key={`power-${vm?.id || "none"}`} vm={vm} host={vm && data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} describedBy={vm ? "vm-power-status" : undefined} />
-        <button type="button" className="toolbar-end" disabled={busy} onClick={() => void reload()}><Icon kind="refresh" />Refresh view</button>
+        <button type="button" className="toolbar-end" disabled={busy} onClick={() => void reload()}><Icon kind="refresh" /><span className="toolbar-label">Refresh view</span></button>
       </div>
       <div className="shell">
-        <aside>
+        <aside id="resources" inert={narrow && !treeOpen}>
           <div className="nav-title">Resources</div>
           <div className="site-selector">
             <SitePicker sites={data.sites} selected={navigationSite} onSelect={id => { setSelectedSiteID(id); setResourceSearch(""); location.hash = `/sites/${id}`; }} />
             {navigationSite && <a href={`#/sites/${navigationSite.id}`}>Site overview</a>}
             {!loading && !data.sites.length && <><p className="help">{error ? "Sites could not be loaded. Refresh the view to retry." : "No sites yet. Create a site to get started."}</p><button disabled={busy} onClick={() => open("site")}>Create site</button></>}
           </div>
-          <label className="resource-search"><span className="sr-only">Search resources</span><input type="search" placeholder="Search resources…" value={resourceSearch} onChange={(e) => setResourceSearch(e.target.value)} /></label>
+          <label className="resource-search"><span className="sr-only">Search resources</span><input ref={resourceSearchInput} type="search" placeholder="Search resources…" value={resourceSearch} onChange={(e) => setResourceSearch(e.target.value)} /></label>
           <nav aria-label="Infrastructure">
             {navigationPools.map(p => <details key={`${p.id}/${resourceSearch}`} className="tree-branch" open>
               <summary aria-label={`Expand or collapse ${p.name}`}><a className={`tree-node ${kind === "pools" && id === p.id ? "selected" : ""}`} aria-current={kind === "pools" && id === p.id ? "page" : undefined} href={`#/pools/${p.id}`}><Icon kind="pool" />{p.name}</a></summary>
               <div className="tree">{data.hosts.filter(h => h.pool_id === p.id && (matchResource(p.name) || matchResource(h.hostname) || data.vms.some(v => v.host_id === h.id && v.pool_id === p.id && matchResource(v.name)))).map(h =>
-                <div key={h.id}><a className={`host-link ${host?.id === h.id ? "selected" : ""}`} aria-current={host?.id === h.id ? "page" : undefined} href={`#/hosts/${h.id}`}><Icon kind="host" />{h.hostname}{p.master_host_id === h.id && " · master"}<span className={`connection-dot ${h.connection}`} title={h.connection} aria-label={`Connection ${h.connection}`} /></a>
+                <div key={h.id}><a className={`host-link ${host?.id === h.id ? "selected" : ""}`} aria-current={host?.id === h.id ? "page" : undefined} aria-label={`${h.hostname}${p.master_host_id === h.id ? ", pool master" : ""}, connection ${statusLabel(h.connection)}`} href={`#/hosts/${h.id}`}><Icon kind="host" />{h.hostname}{p.master_host_id === h.id && " · master"}<span className={`connection-dot ${h.connection}`} aria-hidden="true" />{h.connection !== "fresh" && <Badge value={h.connection} />}</a>
                 <div className="tree">{data.vms.filter(v => v.pool_id === p.id && v.host_id === h.id && (matchResource(p.name) || matchResource(h.hostname) || matchResource(v.name))).map(v => <a className={`host-link ${vm?.id === v.id ? "selected" : ""} ${v.freshness !== "fresh" ? "vm-unknown" : v.state === "shut off" ? "vm-off" : ""}`} title={v.freshness !== "fresh" ? "State unknown: host not fresh" : undefined} key={v.id} aria-current={vm?.id === v.id ? "page" : undefined} href={`#/vms/${v.id}`}
                   onContextMenu={e => { e.preventDefault(); setVmMenu({ vm: v, x: e.clientX, y: e.clientY }); }}><Icon kind="vm" />{v.name}</a>)}</div></div>
               )}</div>
@@ -994,36 +1040,30 @@ function App() {
           <div className="sidebar-foot"><a href="#/"><Icon kind="home" /> Infrastructure</a><a className={kind === "tasks" ? "selected" : ""} href="#/tasks"><Icon kind="tasks" /> Task history</a><a className={kind === "updates" ? "selected" : ""} href="#/updates">Updates</a></div>
         </aside>
         <main id="main" tabIndex={-1}>
-          <div className="breadcrumbs">
-            <a href="#/">Workspace</a>
-            {site && (
-              <>
-                {" "}
-                / <a href={`#/sites/${site.id}`}>{site.name}</a>
-              </>
-            )}
-            {pool && (
-              <>
-                {" "}
-                / <a href={`#/pools/${pool.id}`}>{pool.name}</a>
-              </>
-            )}
-            {host && <> / {host.hostname}</>}{vm && <> / {vm.name}</>}
-          </div>
           <div className="page-heading">
             <div>
+              <button ref={treeToggle} type="button" className="tree-toggle" aria-expanded={treeOpen} aria-controls="resources" onClick={() => {
+                const next = !treeOpen;
+                writePreference("nex.tree", next);
+                setTreeOpen(next);
+                // Focus after this render commits: the search field is inert (unfocusable) until then.
+                if (next) requestAnimationFrame(() => resourceSearchInput.current?.focus());
+              }}>Resources</button>
               <p className="eyebrow">
-                {host
-                  ? "HOST"
-                  : pool
-                    ? "POOL"
-                    : site
-                      ? "SITE"
-                      : kind === "tasks"
-                        ? "OPERATIONS"
-                        : kind === "updates"
-                          ? "UPDATES"
-                          : "INFRASTRUCTURE"}
+                <a href="#/">Workspace</a>
+                {site && (
+                  <>
+                    {" "}
+                    / <a href={`#/sites/${site.id}`}>{site.name}</a>
+                  </>
+                )}
+                {pool && (
+                  <>
+                    {" "}
+                    / <a href={`#/pools/${pool.id}`}>{pool.name}</a>
+                  </>
+                )}
+                {host && <> / {host.hostname}</>}{vm && <> / {vm.name}</>}
               </p>
               <h1><Icon kind={vm ? "vm" : host ? "host" : pool ? "pool" : site ? "site" : kind === "tasks" ? "tasks" : "home"} />
                 {vm?.name || host?.hostname ||
@@ -1047,6 +1087,15 @@ function App() {
                           : "Sites, pools and connected hosts."}
               </p>
             </div>
+            {host && !vm && (
+              <div className="actions">
+                <Menu label="Actions" align="end">
+                  <button disabled={busy || host.revoked} onClick={refreshInventory}>Refresh inventory</button>
+                  <button disabled={busy || !host.revoked} onClick={() => open("enroll")}>Re-enroll host</button>
+                  <button className="danger" disabled={busy || host.revoked} onClick={() => open("revoke")}>Revoke access</button>
+                </Menu>
+              </div>
+            )}
           </div>
           {kind !== "tasks" && kind !== "updates" && !invalid && <nav className="detail-tabs" aria-label="Resource views">
             {(vm ? ["General", "Stats", "Console", "Activity"] : host ? ["General", "Stats", "Console", "Networking", "Storage", "Activity"] : pool ? ["General", "Hosts", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
@@ -1643,10 +1692,22 @@ function App() {
             </>
           )}
           </div>
-          {!loading && kind !== "tasks" && kind !== "updates" && <details className="activity-dock" open>
-            <summary>Recent tasks <span>{data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).length}</span></summary>
-            <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent upload={upload} onCancelUpload={cancelUpload} />
-          </details>}
+          {!loading && kind !== "tasks" && kind !== "updates" && (() => {
+            const scoped = data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id));
+            const counts = taskCounts(scoped);
+            return <details className="activity-dock" open={dockOpen} onToggle={(e) => { setDockOpen(e.currentTarget.open); writePreference("nex.dock", e.currentTarget.open); }}>
+              <summary>
+                <span>Tasks</span>
+                <span className="dock-counts">
+                  {counts.running ? <Badge value="pending" label={`${counts.running} running`} /> : null}
+                  {counts.failed ? <Badge value="failed" label={`${counts.failed} failed`} /> : null}
+                  {!counts.running && !counts.failed && <span className="muted">{scoped.length} recent</span>}
+                </span>
+                <a href="#/tasks" onClick={(e) => e.stopPropagation()}>Task history</a>
+              </summary>
+              <Tasks operations={scoped.slice(0, 5)} hosts={data.hosts} recent upload={upload} onCancelUpload={cancelUpload} />
+            </details>;
+          })()}
         </main>
       </div>
       {vmMenu && (() => {
@@ -1669,7 +1730,7 @@ function App() {
                 else void (async () => {
                   try {
                     const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: crypto.randomUUID(), action: item.action });
-                    setNotice(`${item.label} queued for ${target.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
+                    setNotice(`${item.label} queued for ${target.name}. Follow its progress in the Tasks strip.`, res?.operation?.id);
                     await reload();
                   } catch (e) { setNotice((e as Error).message); }
                 })();
@@ -1686,7 +1747,7 @@ function App() {
       {menuDeleteVM && <VMDelete vm={menuDeleteVM} host={data.hosts.find(h => h.id === menuDeleteVM.host_id)} api={api} reload={reload}
         busy={busy} unavailable={Boolean(error)} onNotice={setNotice} openSignal={menuDeleteSignal} showButton={false}
         onOpenChange={open => { if (!open) setMenuDeleteVM(null); }} />}
-      <footer className="statusbar"><span>{loading ? "Loading inventory…" : error ? "Controller request failed · inventory may be out of date" : "Observed state · refreshes every 10 seconds"}</span><span>{data.hosts.length} hosts · {data.hosts.filter((h) => h.connection === "fresh").length} fresh connections</span><a href="/source">Nex source code</a></footer>
+      <footer className="statusbar"><span>{loading ? "Loading inventory…" : error ? "Controller request failed · inventory may be out of date" : "Observed state · refreshes every 10 seconds"}</span><span>{data.hosts.length} hosts · {data.hosts.filter((h) => h.connection === "fresh").length} fresh connections</span><a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a><a href="/source">Nex source code</a></footer>
     </div>
   );
 }
@@ -1781,7 +1842,7 @@ function HostDetails({ host, master, tab, coreAvailable }: { host: Host; master:
       <section className="panel host-overview" hidden={tab === "Console"}>
         <div className="section-heading">
           <h2>Host overview</h2>
-          <span><span className="badge">{master ? "Pool master" : "Member"}</span> <Badge value={host.connection} /></span>
+          <span><Badge value={master ? "master" : "member"} label={master ? "Pool master" : "Member"} /> <Badge value={host.connection} /></span>
         </div>
         {host.connection !== "fresh" && (
           <p className="warning">
@@ -1830,7 +1891,8 @@ function HostDetails({ host, master, tab, coreAvailable }: { host: Host; master:
                 {inv.checks.map((c) => (
                   <div className="check" key={c.name}>
                     <div>
-                      <strong>{c.name}</strong>
+                      <strong>{checkLabel(c.name)}</strong>
+                      {checkLabel(c.name) !== c.name && <small className="mono">{c.name}</small>}
                       <p>{c.error || "No error reported"}</p>
                       <small>
                         Observed {date(c.observed_at)} · Last success{" "}
@@ -1917,16 +1979,19 @@ function Tasks({
 }: {
   operations: Operation[];
   hosts: Host[];
+  // The activity dock already has a "Tasks" summary and a "Task history" link outside this
+  // panel, so its embedded copy (the only caller passing this) skips both.
   recent?: boolean;
   upload?: Upload | null;
   onCancelUpload?: () => void;
 }) {
   return (
     <section className="panel">
-      <div className="section-heading">
-        <h2>{recent ? "Recent tasks" : "Tasks"}</h2>
-        {recent && <a href="#/tasks">View all tasks →</a>}
-      </div>
+      {!recent && (
+        <div className="section-heading">
+          <h2>Tasks</h2>
+        </div>
+      )}
       {operations.length || upload ? (
         <div className="table-scroll">
           <table>
@@ -1944,11 +2009,7 @@ function Tasks({
                 const timestamp = taskTimestamp(o);
                 return <tr key={o.id}>
                   <td>
-                    <strong>
-                      {o.kind === "refresh-inventory"
-                        ? "Refresh inventory"
-                        : o.kind}
-                    </strong>
+                    <strong>{operationLabel(o.kind)}</strong>
                     <small>
                       <a href={`#/hosts/${o.host_id}`}>
                         {hosts.find((h) => h.id === o.host_id)?.hostname ||
@@ -1965,7 +2026,7 @@ function Tasks({
                     )}
                   </td>
                   <td>{o.actor}</td>
-                  <td>{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : timestamp.value}</td>
+                  <td>{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : <time dateTime={timestamp.iso} title={timestamp.value}>{relativeTime(timestamp.iso)}</time>}</td>
                 </tr>
               })}
             </tbody>
@@ -2020,11 +2081,7 @@ function Activity({
                 return (
                   <tr key={entry.id}>
                     <td>
-                      <strong>
-                        {entry.action
-                          .replaceAll(".", " · ")
-                          .replaceAll("-", " ")}
-                      </strong>
+                      <strong>{auditLabel(entry.action)}</strong>
                       <small>
                         {target}
                         {check ? ` / ${check}` : ""}
@@ -2032,7 +2089,7 @@ function Activity({
                       {entry.detail && <p className="help">{entry.detail}</p>}
                     </td>
                     <td>{entry.actor}</td>
-                    <td>{date(entry.created_at)}</td>
+                    <td><time dateTime={entry.created_at} title={date(entry.created_at)}>{relativeTime(entry.created_at)}</time></td>
                   </tr>
                 );
               })}
