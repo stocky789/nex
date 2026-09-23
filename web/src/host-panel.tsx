@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { API, Data, Host } from "./main";
+import type { API, Data, Host } from "./types";
 import type { Storage } from "./managed";
 import { HostISOs, vmStateLabel } from "./managed";
 import { Console } from "./console";
-import { HardwareSections, Stats, formatValue, lastValue, mdArraysView, sectionNote, statsFailure, systemDiskReplaceSupported, HARDWARE_CAPABILITY, type HostHardware, type StatsFailure, type StatsHistory } from "./stats";
+import { HardwareSections, Stats, formatValue, lastValue, mdArraysView, statsFailure, systemDiskReplaceSupported, HARDWARE_CAPABILITY, type HostHardware, type StatsFailure, type StatsHistory } from "./stats";
 import { SystemDiskMirror, mdMemberFailed, type MDArray } from "./md";
 import { HostNetwork } from "./host-network";
 import { HostRestrictedBanner, fencingText } from "./pool-promotion";
 import { maintenanceText, type Report } from "./pool-members";
 import { versionLight } from "./updates";
 import { checkLabel, relativeTime } from "./labels";
-import { Activity, Badge, Meter, Panel, Sparkline, date } from "./ui";
+import { Activity, Badge, Banner, Meter, Panel, Sparkline, date } from "./ui";
 import { Icon } from "./icons";
 import "./hosts.css";
 
@@ -40,7 +40,8 @@ export function hostUsage(history?: StatsHistory | null) {
 
 // One line per resource for the Performance tab. Disk and network add up every device's bytes/s;
 // the sparkline is scaled to its own peak, so the current rate is always given as text beside it.
-export function sparkRows(history: StatsHistory) {
+// Distinct from stats.tsx sparkRows (VM series shape).
+export function hostSparkRows(history: StatsHistory) {
   const rate = (group: string) => {
     const series = history.series.filter(s => s.group === group && s.unit === "bytes_per_second");
     const length = Math.max(0, ...series.map(s => s.values.length));
@@ -55,12 +56,17 @@ export function sparkRows(history: StatsHistory) {
     { label: "Network", series: 4 as const, values: scaled(network), text: formatValue("bytes_per_second", lastValue(network)) },
   ];
 }
+/** @deprecated use hostSparkRows */
+export const sparkRows = hostSparkRows;
 
-// Uptime counts forward from when the host measured it; unknown on hosts that do not report it.
+// Uptime counts forward from when the host measured it; unknown when the observation time is missing.
 export function uptime(host: Host) {
   const inv = host.inventory;
   if (inv?.uptime_seconds == null) return null;
-  const seconds = inv.uptime_seconds + Math.max(0, (Date.now() - Date.parse(inv.observed_at)) / 1000);
+  const observed = inv.observed_at && !inv.observed_at.startsWith("0001-") ? Date.parse(inv.observed_at) : NaN;
+  if (!Number.isFinite(observed)) return null;
+  const seconds = inv.uptime_seconds + Math.max(0, (Date.now() - observed) / 1000);
+  if (!Number.isFinite(seconds)) return null;
   const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60);
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
@@ -111,12 +117,15 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
   const ip = addresses(host)[0];
   const hardwareSupported = !!host.capabilities?.includes(HARDWARE_CAPABILITY);
 
-  // The caller keys this panel by host, so each host starts from nothing.
+  // Membership refreshes while the panel is open; callers also key this panel by host.id.
   useEffect(() => {
     let stopped = false;
-    if (host.pool_id) api<Report>(`pools/${encodeURIComponent(host.pool_id)}/members`).then(r => { if (!stopped) setReport(r); }, () => {});
-    return () => { stopped = true; };
-  }, []);
+    if (!host.pool_id) { setReport(null); return; }
+    const load = () => api<Report>(`pools/${encodeURIComponent(host.pool_id)}/members`).then(r => { if (!stopped) setReport(r); }, () => {});
+    load();
+    const timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60_000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [host.pool_id]);
   useEffect(() => {
     if (!hardwareSupported) return;
     let stopped = false;
@@ -124,7 +133,7 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
     api<HostHardware>(`hosts/${encodeURIComponent(host.id)}/hardware`)
       .then(hw => { if (!stopped) { setHardware(hw); setHardwareFailure(null); } }, e => { if (!stopped) setHardwareFailure(statsFailure(e)); });
     return () => { stopped = true; };
-  }, [hardwareSupported, attempt]);
+  }, [host.id, hardwareSupported, attempt]);
 
   // Stable, so the system-disk panel's rebuild polling survives the list's usage refresh.
   const reread = useCallback(() => setAttempt(a => a + 1), []);
@@ -153,7 +162,7 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
     actions={<>
       <button type="button" className="sm primary" disabled={busy || host.revoked} onClick={onRefreshInventory}>Refresh inventory</button>
       <button type="button" className="sm" disabled={Boolean(consoleBlocker)} title={consoleBlocker || undefined} onClick={() => setTab("Console")}>Console</button>
-      <button type="button" className="sm" disabled={!host.pool_id} title="Maintenance is set in the pool's Members settings." onClick={() => { location.hash = `/pools/${host.pool_id}/members`; }}>Maintenance</button>
+      <button type="button" className="sm" disabled={!host.pool_id} title="Maintenance is set in the pool's Members settings." onClick={() => { location.hash = `/pools/${encodeURIComponent(host.pool_id)}/members`; }}>Maintenance</button>
       <button type="button" className="sm" disabled={busy || !host.revoked} title={host.revoked ? undefined : "Only a host whose access was revoked can be re-enrolled."} onClick={onReenroll}>Re-enroll</button>
       <button type="button" className="sm danger" disabled={busy || host.revoked} onClick={onRevoke}>Revoke access</button>
     </>}>
@@ -164,13 +173,13 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
       {tab === "Performance" && <>
         <section className="host-card">
           <h3>Last 10 minutes</h3>
-          {history ? sparkRows(history).map(row => <div className="host-spark" key={row.label}>
+          {history ? hostSparkRows(history).map(row => <div className="host-spark" key={row.label}>
             <span className="muted">{row.label}</span>
             <Sparkline values={row.values.filter((v): v is number => v != null)} series={row.series} width={200} height={30} />
             <span>{row.text}</span>
           </div>) : <p className="muted">{host.connection === "fresh" ? "Reading usage from the host…" : "No current usage: the host is not reporting."}</p>}
         </section>
-        <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} poolID={host.pool_id} hardwarePanel={false} />
+        <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} poolID={host.pool_id} hardwarePanel={false} initialHistory={history} hardware={hardware} skipHardwareFetch />
       </>}
       {tab === "Networking" && <><HostNetwork key={host.id} hostID={host.id} api={api} unavailable={unavailable} /><Interfaces host={host} /></>}
       {tab === "Storage" && <>
@@ -182,7 +191,7 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
         {mirror}
         <HostISOs host={host} media={data.media} storage={data.storage} unavailable={unavailable} />
       </>}
-      {tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={consoleBlocker} open={() => openHostConsole(host.id)} />}
+      {tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${encodeURIComponent(host.id)}`} disabled={consoleBlocker} open={() => openHostConsole(host.id)} />}
       {tab === "Activity" && <Activity entries={data.audit.filter(a => a.resource_id === host.id || a.resource_id.startsWith(host.id + "/"))} data={data} />}
     </div>
   </Panel>;
@@ -205,14 +214,14 @@ function Overview({ data, host, master, poolName, history, hardware, hardwareNot
   const model = [hardware?.system?.vendor, hardware?.system?.model].filter(Boolean).join(" ");
   const vms = data.vms.filter(v => v.host_id === host.id);
   return <>
-    {host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} />}
+    {host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} report={report as never} />}
     <section className="host-card host-model">
       <span className="host-glyph"><Icon kind="host" size={22} /></span>
       <div><b>{model || "Model not reported"}</b><span className="muted">{model ? `${master ? "Master" : "Member"} of ${poolName || "an unknown pool"}` : hardwareNote || "The host reported no system model."}</span></div>
     </section>
-    {host.connection !== "fresh" && <p className="warning" role="status">{host.revoked
+    {host.connection !== "fresh" && <Banner tone="warn" role="status">{host.revoked
       ? "Access revoked. Re-enroll this host to resume reporting."
-      : `${host.last_seen ? `Last report ${relativeTime(host.last_seen)}` : "No current report"}. VMs on this host are shown as Unknown, not stopped. Fence it or wait for it to reconnect before restarting them elsewhere. Values below are from its last report.`}</p>}
+      : `${host.last_seen ? `Last report ${relativeTime(host.last_seen)}` : "No current report"}. VMs on this host are shown as Unknown, not stopped. Fence it or wait for it to reconnect before restarting them elsewhere. Values below are from its last report.`}</Banner>}
     {!inv ? <p className="empty">Waiting for the first inventory report.</p> : <>
       <section className="host-card">
         <h3>Network interfaces</h3>
@@ -234,7 +243,7 @@ function Overview({ data, host, master, poolName, history, hardware, hardwareNot
         {vms.length ? <table className="host-vms"><tbody>{vms.map(v => {
           const known = v.freshness === "fresh";
           return <tr key={v.id}>
-            <td><span className={`dot ${!known ? "warn" : v.state === "running" ? "ok" : "off"}`} aria-hidden="true" /><a href={`#/vms/${v.id}`}>{v.name}</a></td>
+            <td><span className={`dot ${!known ? "warn" : v.state === "running" ? "ok" : "off"}`} aria-hidden="true" /><a href={`#/vms/${encodeURIComponent(v.id)}`}>{v.name}</a></td>
             <td className="muted">{vmStateLabel(v)}</td>
             <td>{v.spec?.cpu?.count ?? "—"} vCPU</td>
             <td>{v.spec?.memory?.size_mib ? formatValue("bytes", v.spec.memory.size_mib * 1024 ** 2) : "—"}</td>

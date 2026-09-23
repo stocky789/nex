@@ -118,7 +118,8 @@ export function timestamps(history: StatsHistory): number[] {
 // most telling series the host reports (guest used, then host resident); disk and network add
 // their byte rates. Only the shape matters beside the current value, so each line is scaled to
 // its busiest point in view, and a gap is left out rather than drawn as zero.
-export function sparkRows(history: StatsHistory) {
+// Distinct from host-panel hostSparkRows (host series keys and null gaps).
+export function vmSparkRows(history: StatsHistory) {
   const rows = [["CPU", "cpu", 1], ["Memory", "memory", 2], ["Disk", "disk", 3], ["Network", "network", 4]] as const;
   return rows.map(([label, group, series]) => {
     const all = history.series.filter(s => s.group === group && s.values.some(v => v != null));
@@ -132,6 +133,8 @@ export function sparkRows(history: StatsHistory) {
     return { label, series, detail: parts.map(s => s.label).join(" + "), values: known.map(v => (v / top) * 100), text: formatValue(unit, lastValue(values)) };
   });
 }
+/** @deprecated use vmSparkRows */
+export const sparkRows = vmSparkRows;
 
 // Realtime turns itself off after this long so a forgotten tab does not keep a host sampling every second.
 export const REALTIME_LIMIT_MS = 10 * 60 * 1000;
@@ -476,11 +479,15 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
 }
 
 // A host panel that shows the hardware report on a tab of its own passes hardwarePanel={false};
-// the report is still read, for the temperature gauges' thresholds.
-export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitMS = REALTIME_LIMIT_MS, hardwarePanel = true }: { kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; poolID?: string; realtimeLimitMS?: number; hardwarePanel?: boolean }) {
+// the report is still read, for the temperature gauges' thresholds, unless skipHardwareFetch and
+// a parent-supplied hardware report are passed. initialHistory seeds the 10m range from a list poll.
+export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitMS = REALTIME_LIMIT_MS, hardwarePanel = true, initialHistory, hardware: hardwareProp, skipHardwareFetch = false }: {
+  kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; poolID?: string; realtimeLimitMS?: number; hardwarePanel?: boolean;
+  initialHistory?: StatsHistory | null; hardware?: HostHardware | null; skipHardwareFetch?: boolean;
+}) {
   const [range, setRange] = useState("10m");
   const [stacked, setStacked] = useState(false);
-  const [history, setHistory] = useState<StatsHistory | null>(null);
+  const [history, setHistory] = useState<StatsHistory | null>(() => range === "10m" ? initialHistory ?? null : null);
   const [failure, setFailure] = useState<StatsFailure | null>(null);
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -490,7 +497,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
   // Hardware is static, so it is read once when the tab opens and on an explicit Retry. An older
   // Core that does not report the capability is not asked at all.
   const hardwareSupported = kind === "host" && !!capabilities?.includes(HARDWARE_CAPABILITY);
-  const [hardware, setHardware] = useState<HostHardware | null>(null);
+  const [hardware, setHardware] = useState<HostHardware | null>(hardwareProp ?? null);
   const [hardwareFailure, setHardwareFailure] = useState<StatsFailure | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareAttempt, setHardwareAttempt] = useState(0);
@@ -499,7 +506,11 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
   const rereadHardware = useCallback(() => setHardwareAttempt(a => a + 1), []);
 
   useEffect(() => {
-    if (!hardwareSupported) return;
+    if (hardwareProp) setHardware(hardwareProp);
+  }, [hardwareProp]);
+
+  useEffect(() => {
+    if (!hardwareSupported || skipHardwareFetch) return;
     let stopped = false;
     setHardwareLoading(true);
     api<HostHardware>(`hosts/${encodeURIComponent(id)}/hardware`)
@@ -508,14 +519,14 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
       .catch(e => { if (!stopped) setHardwareFailure(statsFailure(e)); })
       .finally(() => { if (!stopped) setHardwareLoading(false); });
     return () => { stopped = true; };
-  }, [id, hardwareSupported, hardwareAttempt]);
+  }, [id, hardwareSupported, hardwareAttempt, skipHardwareFetch]);
 
   useEffect(() => {
     let stopped = false, inFlight = false;
     // Refresh and Retry keep the charts and zoom; only a different object or range starts over.
     if (shown.current !== `${kind}|${id}|${range}`) {
       shown.current = `${kind}|${id}|${range}`;
-      setHistory(null);
+      setHistory(range === "10m" && initialHistory ? initialHistory : null);
       setFailure(null);
     }
     async function load() {
@@ -567,7 +578,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
     {failure?.kind === "error" && <div className="alert" role="alert">{history ? `Could not refresh; showing the last loaded history. ${failure.message}` : failure.message} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}
     {!history && !failure && <p className="empty" role="status">Connecting to host… the first load can take up to 30 seconds.</p>}
     {history && !hasData && <p className="empty">No history recorded yet. Usage is recorded while {kind === "vm" ? "the VM is running" : "the host agent runs"}.</p>}
-    {kind === "vm" && history && hasData && <div className="stats-sparks">{sparkRows(history).map(row => <div key={row.label} className="spark-row" title={row.detail}>
+    {kind === "vm" && history && hasData && <div className="stats-sparks">{vmSparkRows(history).map(row => <div key={row.label} className="spark-row" title={row.detail}>
       <span className="muted">{row.label}</span><Sparkline values={row.values} series={row.series} width={240} height={30} /><b>{row.text}</b>
     </div>)}</div>}
     {history && hasData && <div className="stats-grid">

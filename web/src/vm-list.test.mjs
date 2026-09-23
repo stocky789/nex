@@ -55,4 +55,11 @@ const failing = renderToStaticMarkup(createElement(VMList, { ...props, unavailab
 assert.equal((failing.match(/badge warn">Unknown</g) || []).length, 4, "three rows and the panel badge are Unknown");
 assert.match(failing, /class="sm primary" disabled="" title="Controller inventory could not be loaded/);
 assert.match(failing, /class="sm tool-start" title="Controller inventory could not be loaded/);
+
+// Above 40 rows the ungrouped table virtualizes: spacer pads and only a window of rows.
+const many = Array.from({ length: 50 }, (_, i) => vm(`vm-${i}`));
+const virt = renderToStaticMarkup(createElement(VMList, { ...props, vms: many, data: { ...data, vms: many, hosts: [host] } }));
+assert.match(virt, /class="virtual-pad"/, "large lists use virtual spacer rows");
+assert.ok((virt.match(/<tr>/g) || []).length < 60, "not every VM row is in the markup");
+
 console.log("vm-list ok");

@@ -1,0 +1,69 @@
+{
+  "summary": "Finish console redesign review remediation: route code-splitting, shared host stats cache, VM list virtualization, inventory poll transitions, and related module splits.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-console-review-fixes.json",
+    "web/build.mjs",
+    "web/src/gated.tsx",
+    "web/src/host-list.test.mjs",
+    "web/src/host-list.tsx",
+    "web/src/host-model.ts",
+    "web/src/host-panel.tsx",
+    "web/src/lazy-screens.tsx",
+    "web/src/main.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/managed.tsx",
+    "web/src/overview-model.ts",
+    "web/src/overview.tsx",
+    "web/src/pool-members.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-promotion.tsx",
+    "web/src/rail-screens.tsx",
+    "web/src/session.ts",
+    "web/src/settings.tsx",
+    "web/src/stats-cache.test.mjs",
+    "web/src/stats-cache.ts",
+    "web/src/stats.tsx",
+    "web/src/theme.ts",
+    "web/src/tokens.css",
+    "web/src/tokens.test.mjs",
+    "web/src/types.ts",
+    "web/src/ui.tsx",
+    "web/src/virtual-list.test.mjs",
+    "web/src/virtual-list.tsx",
+    "web/src/vm-edit.tsx",
+    "web/src/vm-list.test.mjs",
+    "web/src/vm-list.tsx",
+    "web/src/vm-panel.tsx"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator flows and labels are unchanged; loading chunks, virtualized rows and shared stats are presentation-only. Navigate guide already covers the screens.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI-only: same host stats and inventory endpoints, fewer duplicate client polls. No Controller/Core contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Review remediation on the existing console redesign; no phase or gate change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. Stats cache and virtualization window are in-browser only; inventory remains host-reported."
+  },
+  "verification": {
+    "method": "cd web && npm test && npx tsc --noEmit && node build.mjs; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "web/src/host-list.test.mjs",
+      "web/src/vm-list.test.mjs",
+      "web/src/stats-cache.test.mjs",
+      "web/src/virtual-list.test.mjs",
+      "web/src/tokens.test.mjs"
+    ]
+  }
+}

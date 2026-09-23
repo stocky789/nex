@@ -428,19 +428,23 @@ export function RestrictedNote({ report, member }: { report: PromotionReport; me
 // A host that is restricted is not doing what an operator expects, and its own page is where
 // that is looked for. The membership is pool-scoped, so this reads the one pool report the
 // host belongs to; it is the same projection the Hosts view renders and nothing is kept here.
-export function HostRestrictedBanner({ poolID, hostID, api }: {
+export function HostRestrictedBanner({ poolID, hostID, api, report: provided }: {
   poolID: string; hostID: string; api: <T>(path: string) => Promise<T>;
+  report?: PromotionReport | null;
 }) {
-  const [report, setReport] = useState<PromotionReport | null>(null);
+  const [fetched, setFetched] = useState<PromotionReport | null>(null);
   const load = useRef<() => void>(() => {});
   load.current = () => {
     api<PromotionReport>(`pools/${encodeURIComponent(poolID)}/members`)
-      .then(answer => setReport(answer), () => {});
+      .then(answer => setFetched(answer), () => {});
   };
+  // Parent host panel may already poll members; only fetch here when no report is supplied.
   useEffect(() => {
-    setReport(null);
+    if (provided !== undefined) return;
+    setFetched(null);
     load.current();
-  }, [poolID, hostID]);
+  }, [poolID, hostID, provided]);
+  const report = provided !== undefined ? provided : fetched;
   const member = (report?.members || []).find(entry => entry.host_id === hostID);
   const restricted = Boolean(member?.restricted);
   useEffect(() => {

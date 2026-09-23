@@ -19,10 +19,10 @@ for (const file of readdirSync(new URL(".", import.meta.url)).filter(f => f.ends
   assert.ok(!/border-radius:\s*([4-9]|\d{2,})px/.test(css), `${file}: corners are 2 or 3 px`);
 }
 
-const [light, media] = tokens.split("@media (prefers-color-scheme: dark)");
-const [dark, forced] = media.split(':root[data-theme="dark"]');
-const declarations = (block) => block.match(/--[\w-]+:[^;]+;/g).join("");
-assert.equal(declarations(forced), declarations(dark), "the system dark block and the forced dark block are the same values");
+const [light, dark] = tokens.split(':root[data-theme="dark"]');
+assert.ok(light && dark, "tokens.css defines light and dark theme blocks");
+const declarations = (block) => (block.match(/--[\w-]+:[^;]+;/g) || []).join("");
+assert.ok(declarations(dark).includes("--canvas:"), "dark theme defines colours");
 const hex = (block, name) => {
   const m = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
   assert.ok(m, `token --${name} is defined`);

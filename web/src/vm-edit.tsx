@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
 import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, recommendedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, mediaUsable, networkUsable, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
 import { Icon } from "./icons";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+export const tagsCapability = "vm-tags-v1";
+const tagPattern = /^[a-z0-9-]{1,32}$/;
 // The draft always carries an explicit Secure Boot and TPM choice, even for a definition
 // written before those fields existed: an unset secure_boot on a UEFI VM is the enrolled-keys
 // firmware libvirt already gave it, which is "on", and an unset tpm is no TPM device. Saving
@@ -118,7 +120,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (issue) { setError(issue); return; }
-    const payload = updateBody(vm, draft);
+    // An older Core drops tags; sending none lets hardware edits succeed when the capability is gone.
+    const payload = updateBody(vm, { ...draft, tags: host?.capabilities?.includes(tagsCapability) ? draft.tags : [] });
     const encoded = JSON.stringify(payload);
     ids.current[encoded] ??= crypto.randomUUID();
     setWorking(true); setError("");
@@ -258,18 +261,21 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   </form>;
 }
 
-export const tagsCapability = "vm-tags-v1";
-const tagPattern = /^[a-z0-9-]{1,32}$/;
+export function tagsSupported(host?: Host, master?: Host): boolean {
+  return Boolean(master?.capabilities?.includes(tagsCapability) && host?.capabilities?.includes(tagsCapability));
+}
 // Both the VM's host and its pool master must keep tags: an older Core would drop them.
-export function tagsBlocker(vm: VM, host?: Host, master?: Host): string {
-  if (!master?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on the pool master.";
-  if (!host?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on this VM's host.";
+// Clearing every tag is still allowed when the capability is gone, so other edits are not stuck.
+export function tagsBlocker(vm: VM, host?: Host, master?: Host, clearing = false): string {
+  if (!tagsSupported(host, master) && !(clearing && (vm.spec?.tags?.length ?? 0) > 0)) {
+    if (!master?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on the pool master.";
+    if (!host?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on this VM's host.";
+  }
   return editBlocker(vm, host);
 }
 
-// TagEditor changes only the tags, submitted as the complete current definition with the same
-// request identity rules as the editor. Callers key it by the saved tags so a new host report
-// replaces the draft.
+// Tag-only saves still use PUT of the full definition. The editor re-reads the VM first so a
+// stale list mirror cannot rewrite disks, NICs or firmware while changing labels.
 export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice }: { vm: VM; host?: Host; master?: Host; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void }) {
   const saved = vm.spec?.tags ?? [];
   const [tags, setTags] = useState(saved);
@@ -277,10 +283,22 @@ export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const ids = useRef<Record<string, string>>({});
-  const blocker = tagsBlocker(vm, host, master) || (unavailable ? "Controller inventory may be out of date. Refresh before changing tags." : "");
-  const off = Boolean(blocker) || working;
+  const savedRef = useRef(saved);
+  // Accept a new host report only while the draft still matches the previous report.
+  useEffect(() => {
+    const previous = savedRef.current;
+    savedRef.current = saved;
+    setTags(t => t.join() === previous.join() ? saved : t);
+  }, [saved.join()]);
+  const dirty = tags.join() !== saved.join();
+  const clearing = dirty && tags.length === 0;
+  const supported = tagsSupported(host, master);
+  const blocker = tagsBlocker(vm, host, master, clearing) || (unavailable ? "Controller inventory may be out of date. Refresh before changing tags." : "");
+  const addBlocked = Boolean(blocker) || working || (!supported && !(saved.length > 0 && tags.length < saved.length));
+  const saveBlocked = Boolean(blocker) || working || !dirty || (!supported && !clearing);
   function add(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!supported) { setError("Requires Nex Core 0.4.8 or later to add tags."); return; }
     const tag = text.trim().toLowerCase();
     if (!tagPattern.test(tag)) { setError("A tag is 1 to 32 lowercase letters, digits or hyphens."); return; }
     if (!tags.includes(tag)) {
@@ -290,33 +308,44 @@ export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice
     setText(""); setError("");
   }
   async function save() {
-    const payload = updateBody(vm, { ...draftOf(vm), tags });
-    const encoded = JSON.stringify(payload);
-    ids.current[encoded] ??= crypto.randomUUID();
     setWorking(true); setError("");
     try {
+      const fresh = await api<VM>(`vms/${encodeURIComponent(vm.id)}`);
+      if (!fresh.spec) throw new Error("This VM has no definition to update.");
+      const payload = updateBody(fresh, { ...draftOf(fresh), tags });
+      const encoded = JSON.stringify(payload);
+      ids.current[encoded] ??= crypto.randomUUID();
       await api(`vms/${encodeURIComponent(vm.id)}`, "PUT", { ...payload, request_id: ids.current[encoded] });
       delete ids.current[encoded];
       onNotice(`Tags for ${vm.name} requested. They show here once the pool master reports them.`);
       await reload();
     } catch (err) {
       const code = (err as Error & { status?: number }).status;
-      if ([400, 404].includes(code || 0)) delete ids.current[encoded];
+      if ([400, 404].includes(code || 0)) {
+        // Drop only the request_id for this payload when the server rejected it as bad input.
+        for (const key of Object.keys(ids.current)) {
+          try {
+            const body = JSON.parse(key);
+            if (body.tags?.join() === tags.join()) delete ids.current[key];
+          } catch { /* ignore */ }
+        }
+      }
       setError((err as Error).message);
     } finally { setWorking(false); }
   }
   return <div className="tag-editor">
     <ul className="tags" aria-label="Tags">
-      {tags.map(tag => <li key={tag} className="tag">{tag}<button type="button" className="icon-button" aria-label={`Remove tag ${tag}`} disabled={off} onClick={() => setTags(tags.filter(t => t !== tag))}><Icon kind="close" size={12} /></button></li>)}
+      {tags.map(tag => <li key={tag} className="tag">{tag}<button type="button" className="icon-button" aria-label={`Remove tag ${tag}`} disabled={working || Boolean(editBlocker(vm, host)) || unavailable} onClick={() => setTags(tags.filter(t => t !== tag))}><Icon kind="close" size={12} /></button></li>)}
       {!tags.length && <li className="muted">No tags</li>}
     </ul>
     <form onSubmit={add}>
       <label className="sr-only" htmlFor={`tag-${vm.id}`}>New tag</label>
-      <input id={`tag-${vm.id}`} placeholder="Add a tag, such as web" maxLength={32} value={text} disabled={off} onChange={e => setText(e.target.value)} />
-      <button disabled={off || !text.trim()}>Add</button>
-      <button type="button" className="primary" disabled={off || tags.join() === saved.join()} onClick={() => void save()}>{working ? "Saving…" : "Save tags"}</button>
+      <input id={`tag-${vm.id}`} placeholder="Add a tag, such as web" maxLength={32} value={text} disabled={addBlocked} onChange={e => setText(e.target.value)} />
+      <button disabled={addBlocked || !text.trim()}>Add</button>
+      <button type="button" className="primary" disabled={saveBlocked} onClick={() => void save()}>{working ? "Saving…" : "Save tags"}</button>
     </form>
     {error && <p className="task-error" role="alert">{error}</p>}
     {blocker && <p className="help">{blocker}</p>}
+    {!supported && saved.length > 0 && <p className="help">This host no longer supports tags. Clear them to save other changes.</p>}
   </div>;
 }

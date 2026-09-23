@@ -4,9 +4,8 @@
 // operator clicks Close. There is no test harness in web/ (no vitest/jest), so this bundles the
 // real module with the already-installed esbuild and renders it with react-dom/server;
 // run with: node src/managed.test.mjs
-import { transformSync } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
-import { bundleTestModule, testCacheDir } from "./test-helpers.mjs";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -61,15 +60,15 @@ assert.equal(isoNameFromURL(""), "");
 // Controller's updated_at is when that history was re-observed. Only the exact Core
 // adoption identity gets the recovered-history time treatment; ordinary request IDs do not.
 const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-const settingsSource = readFileSync(new URL("./settings.tsx", import.meta.url), "utf8");
+const railSource = readFileSync(new URL("./rail-screens.tsx", import.meta.url), "utf8");
 const { taskTimestamp } = await import(bundleTestModule(new URL("./settings.tsx", import.meta.url), "settings", true));
 const adopted = { id: "historic", host_id: "core-a", request_id: "adopt-outcome:core-a:historic", updated_at: "2026-09-01T00:00:00Z" };
 assert.equal(taskTimestamp(adopted).reobserved, true);
 assert.equal(taskTimestamp({ ...adopted, request_id: "operator-adopt-outcome:core-a:historic" }).reobserved, false);
 assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-b:historic" }).reobserved, false);
 assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-a:other-operation" }).reobserved, false);
-assert.match(settingsSource, /Reobserved from Core history/);
-assert.match(settingsSource, /Original outcome time was not reported\./);
+assert.match(railSource, /Reobserved from Core history/);
+assert.match(railSource, /Original outcome time was not reported\./);
 
 // BUG-0204: the ISO banner follows the host transfer record, not the status the submission
 // returned. "queued" must stop being shown once the same page lists the import as succeeded.
@@ -100,7 +99,7 @@ const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "u
 assert.match(managedSource, /request\.current\[String\(wipe\)\] \|\|= crypto\.randomUUID\(\)/);
 assert.match(managedSource, /request_id: request\.current\[String\(wipe\)\], delete_disks: wipe/);
 assert.match(managedSource, /confirm\(`Discard \$\{media\.name\}\?/);
-assert.match(managedSource, /await api\(`media\/\$\{media\.id\}`, "DELETE"\)/);
+assert.match(managedSource, /await api\(`media\/\$\{encodeURIComponent\(media\.id\)\}`, "DELETE"\)/);
 assert.match(managedSource, /current = await api<Media\[\]>\("media"\)/);
 assert.match(managedSource, /current\.some\(entry => entry\.id === media\.id\)/);
 assert.match(managedSource, /await reload\(\);\s*\n\s*setNotice\(`Discarded the failed import/);
@@ -226,19 +225,13 @@ assert.match(noTools, /<details class="about"><summary>.*How to enable guest too
 // load of the sign-in page logged a failed request in the browser console. The probe now runs
 // only where it can succeed. The marker is a hint about this browser, never an authorization:
 // the Controller still authenticates every request, and no session state is kept here.
-const sessionStart = mainSource.indexOf("const signedInKey");
-const sessionEnd = mainSource.indexOf("function Brand()", sessionStart);
-assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, "session probe helpers are present");
-const sessionFile = `${testCacheDir}/main-session-probe.test.mjs`;
-writeFileSync(sessionFile, transformSync(mainSource.slice(sessionStart, sessionEnd), { loader: "tsx", format: "esm" }).code
-  + "\nexport { signedInBefore, rememberSignedIn };\n");
+const { signedInBefore, rememberSignedIn } = await import(bundleTestModule(new URL("./session.ts", import.meta.url), "session"));
 const store = new Map();
 globalThis.localStorage = {
   getItem: key => store.has(key) ? store.get(key) : null,
   setItem: (key, value) => { store.set(key, String(value)); },
   removeItem: key => { store.delete(key); },
 };
-const { signedInBefore, rememberSignedIn } = await import(`file://${sessionFile}?${Date.now()}`);
 assert.equal(signedInBefore(), false, "a browser that never signed in must not probe the session");
 rememberSignedIn(true);
 assert.equal(signedInBefore(), true, "a signed-in browser probes so a reload keeps its session");
@@ -247,6 +240,7 @@ assert.equal(signedInBefore(), false, "signing out or a 401 stops the probe agai
 globalThis.localStorage = { getItem() { throw new Error("storage disabled"); }, setItem() {}, removeItem() {} };
 assert.equal(signedInBefore(), true, "without storage, keep the previous behaviour and probe");
 // The probe is skipped, not merely silenced, and a 401 anywhere clears the marker.
+assert.match(mainSource, /from "\.\/session"/);
 assert.match(mainSource, /if \(!signedInBefore\(\)\) \{\s*\n\s*setSession\(null\);/);
 assert.match(mainSource, /response\.status === 401 && requestGeneration === generation\.current\) \{\s*\n\s*generation\.current\+\+;\s*\n\s*rememberSignedIn\(false\);/);
 
@@ -534,6 +528,10 @@ console.log("managed.test.mjs: pool resource removal ok");
   assert.match(mainSource, /noticeRoute\.current = text \? \(location\.hash\.slice\(1\) \|\| "\/"\) : ""/);
   assert.match(mainSource, /if \(noticeRoute\.current !== nextRoute\) setNotice\(""\);/);
   assert.match(mainSource, /onCloseCreate=\{\(\) => setCreating\(false\)\} onNotice=\{setNotice\}/);
+  // Create-wizard side trips to Storage/Networks keep creating true so #/vms resumes the form.
+  assert.match(mainSource, /wizardRoutes = new Set\(\["vms", "storage", "networks"\]\)/);
+  assert.match(mainSource, /else if \(!wizardRoutes\.has\(nextKind\)\) \{\s*\n\s*setCreating\(false\);/);
+  assert.doesNotMatch(mainSource, /setCreating\(pendingCreate\.current\);/);
   assert.doesNotMatch(mainSource, /o\.warnings\?\.map/, "create-time warnings stay on the 202 response, not the operations list");
 
   // D4: a retryable 409 from add-host is a wait. The probe and password are kept (only a success

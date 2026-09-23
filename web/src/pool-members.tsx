@@ -9,7 +9,7 @@ import {
 } from "./pool-promotion";
 import { Badge, Section, badgeTone, date, type Tone } from "./ui";
 import { versionLight } from "./updates";
-import type { Host } from "./main";
+import type { Host } from "./types";
 import { capitalize, checkLabel, relativeTime, statusLabel } from "./labels";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;

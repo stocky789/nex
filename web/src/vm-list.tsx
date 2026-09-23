@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Fragment, useEffect, useRef, useState } from "react";
-import type { API, Data, Pool } from "./main";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { API, Data, Pool } from "./types";
 import { powerActions, powerBlocker, sentence, stateText, vmStateLabel, type VM } from "./managed";
 import type { ConsoleMedia } from "./console";
 import { guestNames } from "./vm-create";
@@ -9,9 +9,7 @@ import { readPreference, writePreference } from "./dock";
 import { Badge, MiniBar, MissingPanel, Panel } from "./ui";
 import { Icon } from "./icons";
 import { formatValue } from "./stats";
-
-export { consoleBlocker } from "./vm-panel";
-
+import { VirtualPad, useVirtualWindow } from "./virtual-list";
 const dotTone = (vm: VM) => vm.freshness !== "fresh" ? "warn" : vm.state === "running" ? "ok" : "off";
 const fresh = (vm: VM) => vm.freshness === "fresh";
 export function statusOf(vm: VM): string {
@@ -51,26 +49,44 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
 }) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState(false);
-  // Networks links its VM count here with that network already chosen in the Network facet.
-  const [filters, setFilters] = useState<Record<string, string[]>>(network ? { Network: [network] } : {});
+  // Networks links its VM count here with that network already chosen in the Network facet (by id).
+  const [filters, setFilters] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    if (network) setFilters(f => ({ ...f, Network: [network] }));
+  }, [network]);
   const [view, setView] = useState<string>("All");
   const [checked, setChecked] = useState<string[]>([]);
   const [hidden, setHidden] = useState(() => hiddenColumns(readPreference(columnsKey)));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [bulk, setBulk] = useState<Bulk | null>(null);
-  const hostName = (id: string) => data.hosts.find(h => h.id === id)?.hostname || id;
-  const poolName = (id: string) => data.pools.find(p => p.id === id)?.name || id;
-  const facets: [string, (vm: VM) => string[]][] = [
-    ["Status", vm => [statusOf(vm)]],
-    ["Pool", vm => [poolName(vm.pool_id)]],
-    ["Host", vm => [hostName(vm.host_id)]],
-    ["Guest OS", vm => [vm.spec ? guestNames[vm.spec.guest_os] || "Not recorded" : "Not recorded"]],
-    ["Network", vm => (vm.spec?.nics ?? []).map(n => data.networks.find(x => x.id === n.network_id)?.name || n.network_id)],
-    ["Tags", vm => vm.spec?.tags ?? []],
-  ];
+  const hostNames = useMemo(() => new Map(data.hosts.map(h => [h.id, h.hostname || h.id])), [data.hosts]);
+  const poolNames = useMemo(() => new Map(data.pools.map(p => [p.id, p.name || p.id])), [data.pools]);
+  const networkNames = useMemo(() => new Map(data.networks.map(n => [n.id, n.name || n.id])), [data.networks]);
+  const hostName = (id: string) => hostNames.get(id) || id;
+  const poolName = (id: string) => poolNames.get(id) || id;
+  const networkLabel = (id: string) => networkNames.get(id) || id;
+  const checkedSet = useMemo(() => new Set(checked), [checked]);
   const viewTest = views.find(([name]) => name === view)?.[1] ?? views[0][1];
-  const rows = vms.filter(vm => viewTest(vm) && matches(vm, query) && facets.every(([facet, values]) => !filters[facet]?.length || values(vm).some(v => filters[facet].includes(v))));
-  const targets = rows.filter(vm => checked.includes(vm.id));
+  const rows = useMemo(() => {
+    const facetFns: [string, (vm: VM) => string[]][] = [
+      ["Status", vm => [statusOf(vm)]],
+      ["Pool", vm => [vm.pool_id]],
+      ["Host", vm => [vm.host_id]],
+      ["Guest OS", vm => [vm.spec ? guestNames[vm.spec.guest_os] || "Not recorded" : "Not recorded"]],
+      ["Network", vm => (vm.spec?.nics ?? []).map(n => n.network_id)],
+      ["Tags", vm => vm.spec?.tags ?? []],
+    ];
+    return vms.filter(vm => viewTest(vm) && matches(vm, query) && facetFns.every(([facet, values]) => !filters[facet]?.length || values(vm).some(v => filters[facet].includes(v))));
+  }, [vms, view, query, filters, hostNames, poolNames, networkNames]);
+  const targets = rows.filter(vm => checkedSet.has(vm.id));
+  const facetDefs: [string, (vm: VM) => string[], (value: string) => string][] = [
+    ["Status", vm => [statusOf(vm)], v => v],
+    ["Pool", vm => [vm.pool_id], poolName],
+    ["Host", vm => [vm.host_id], hostName],
+    ["Guest OS", vm => [vm.spec ? guestNames[vm.spec.guest_os] || "Not recorded" : "Not recorded"], v => v],
+    ["Network", vm => (vm.spec?.nics ?? []).map(n => n.network_id), networkLabel],
+    ["Tags", vm => vm.spec?.tags ?? [], v => v],
+  ];
   const show = (column: Column) => !hidden.includes(column);
   const filtered = Boolean(query || Object.values(filters).some(v => v.length));
 
@@ -88,19 +104,21 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
     location.hash = "/vms";
     requestAnimationFrame(() => document.querySelector<HTMLElement>(`tr[data-vm="${CSS.escape(id || "")}"] a`)?.focus());
   };
-  const vm = data.vms.find(v => v.id === selectedID);
+  const scopedVM = vms.find(v => v.id === selectedID);
+  const vm = scopedVM || data.vms.find(v => v.id === selectedID);
+  const outOfScope = Boolean(selectedID && vm && !scopedVM);
   // A VM opened on its creation route shows that task, not "not found" or VM details with Edit
   // and Delete, until the create has succeeded.
   const createOperation = operationID && (!vm || (vm.status !== "succeeded" && vm.operation_id === operationID))
     ? data.operations.find(o => o.kind === "vm-create" && o.id === operationID)
     : undefined;
   const createBlocker = !pool ? "Choose a pool in the scope menu first." : unavailable ? "Controller inventory may be out of date. Use Retry above to reload it before creating a VM." : "";
-  const row = (v: VM) => <tr key={v.id} data-vm={v.id} className={v.id === selectedID ? "sel" : undefined} onClick={() => { location.hash = `/vms/${v.id}`; }}>
+  const row = (v: VM) => <tr key={v.id} data-vm={v.id} className={v.id === selectedID ? "sel" : undefined} onClick={() => { location.hash = `/vms/${encodeURIComponent(v.id)}`; }}>
     <td onClick={e => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${v.name}`} checked={checked.includes(v.id)} onChange={e => setChecked(e.target.checked ? [...checked, v.id] : checked.filter(id => id !== v.id))} /></td>
-    <td><span className={`dot ${unavailable ? "warn" : dotTone(v)}`} aria-hidden="true" /><a className="row-lead" href={`#/vms/${v.id}`}>{v.name}</a></td>
+    <td><span className={`dot ${unavailable ? "warn" : dotTone(v)}`} aria-hidden="true" /><a className="row-lead" href={`#/vms/${encodeURIComponent(v.id)}`}>{v.name}</a></td>
     {show("State") && <td>{fresh(v) && !unavailable ? statusOf(v) : stateBadge(v, unavailable)}</td>}
     {show("Pool") && <td>{poolName(v.pool_id)}</td>}
-    {show("Host") && <td><a href={`#/hosts/${v.host_id}`} onClick={e => e.stopPropagation()}>{hostName(v.host_id)}</a></td>}
+    {show("Host") && <td><a href={`#/hosts/${encodeURIComponent(v.host_id)}`} onClick={e => e.stopPropagation()}>{hostName(v.host_id)}</a></td>}
     {show("IP address") && <td className="mono">{v.guest?.addresses?.[0]?.address || "—"}</td>}
     {show("Guest OS") && <td>{v.guest?.os || (v.spec ? guestNames[v.spec.guest_os] || "Not recorded" : "—")}</td>}
     {show("vCPU") && <td>{v.spec?.cpu.count ?? "—"}</td>}
@@ -112,19 +130,32 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
   const groups = data.hosts.filter(h => rows.some(v => v.host_id === h.id));
   // A VM whose host is not in the inventory still gets a group, so grouping never hides it.
   const unplaced = rows.filter(v => !groups.some(h => h.id === v.host_id));
-
+  // Flat lists above this size only paint the visible rows; grouping keeps the full tree.
+  const virtualize = !group && rows.length > 40;
+  const virt = useVirtualWindow(virtualize ? rows.length : 0, 36);
+  const body = group ? groups.map(h => <Fragment key={h.id}>
+    <tr className="group"><td colSpan={span}>{poolName(h.pool_id)} › {h.hostname || h.id} {h.connection !== "fresh" && <Badge value="stale" />}</td></tr>
+    {rows.filter(v => v.host_id === h.id).map(row)}
+  </Fragment>).concat(unplaced.length ? [<Fragment key="unknown-host">
+    <tr className="group"><td colSpan={span}>Unknown host <Badge value="unknown" /></td></tr>
+    {unplaced.map(row)}
+  </Fragment>] : []) : virtualize ? <>
+    <VirtualPad height={virt.topPad} colSpan={span} />
+    {rows.slice(virt.start, virt.end).map(row)}
+    <VirtualPad height={virt.bottomPad} colSpan={span} />
+  </> : rows.map(row);
   return <div className="vms">
     <h1 className="sr-only">Virtual machines</h1>
     <aside className={`vm-filters${filtersOpen ? " open" : ""}`} aria-label="Filters">
       <label className="search"><Icon kind="search" /><input type="search" placeholder="Search name, IP, tag" aria-label="Search name, IP address or tag" value={query} onChange={e => setQuery(e.target.value)} /></label>
       <label className="toggle-row">Group by host<input type="checkbox" role="switch" className="switch" checked={group} onChange={e => setGroup(e.target.checked)} /></label>
-      {facets.map(([facet, values]) => {
+      {facetDefs.map(([facet, values, label]) => {
         const counts = new Map<string, number>();
         vms.forEach(v => values(v).forEach(value => counts.set(value, (counts.get(value) || 0) + 1)));
         return <details key={facet} className="facet" open>
           <summary>{facet}<Icon kind="chevron" size={14} /></summary>
-          {[...counts].sort(([a], [b]) => a.localeCompare(b)).map(([value, count]) => <label key={value}>
-            <input type="checkbox" checked={filters[facet]?.includes(value) || false} onChange={e => toggleFilter(facet, value, e.target.checked)} />{value} <span className="muted">({count})</span>
+          {[...counts].sort(([a], [b]) => label(a).localeCompare(label(b))).map(([value, count]) => <label key={value}>
+            <input type="checkbox" checked={filters[facet]?.includes(value) || false} onChange={e => toggleFilter(facet, value, e.target.checked)} />{label(value)} <span className="muted">({count})</span>
           </label>)}
           {!counts.size && <p className="help">None in this scope</p>}
         </details>;
@@ -152,21 +183,15 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
         <button type="button" className="sm" disabled title="Available with live migration (Phase 7)"><Icon kind="migrate" />Migrate</button>
         <button type="button" className="link" onClick={() => setChecked([])}>Clear</button>
       </div>}
-      {vms.length ? <div className="table-scroll"><table className="list">
+      {vms.length ? <div className="table-scroll" ref={el => { virt.scroller.current = el; }}><table className="list">
         <thead><tr>
           <th><input type="checkbox" aria-label="Select all shown" checked={rows.length > 0 && targets.length === rows.length} ref={el => { if (el) el.indeterminate = targets.length > 0 && targets.length < rows.length; }} onChange={e => setChecked(e.target.checked ? rows.map(v => v.id) : [])} /></th>
           <th>Name</th>{columns.filter(show).map(c => <th key={c}>{c}</th>)}
         </tr></thead>
-        <tbody>{group ? groups.map(h => <Fragment key={h.id}>
-          <tr className="group"><td colSpan={span}>{poolName(h.pool_id)} › {h.hostname || h.id} {h.connection !== "fresh" && <Badge value="stale" />}</td></tr>
-          {rows.filter(v => v.host_id === h.id).map(row)}
-        </Fragment>).concat(unplaced.length ? [<Fragment key="unknown-host">
-          <tr className="group"><td colSpan={span}>Unknown host <Badge value="unknown" /></td></tr>
-          {unplaced.map(row)}
-        </Fragment>] : []) : rows.map(row)}
+        <tbody>{body}
           {!rows.length && <tr className="group"><td colSpan={span}>No VMs match this view and these filters.</td></tr>}
         </tbody>
-      </table></div> : <p className="empty">{loading ? "Loading…" : "No virtual machines in this scope. Register storage and a network, upload an ISO, then create your first VM."}</p>}
+      </table></div> : <p className="empty">{loading ? "Loading…" : "No virtual machines in this scope."}</p>}
       <div className="pager">
         <span>{rows.length ? `1–${rows.length}` : "0"} of {rows.length} virtual machines{rows.length < vms.length ? ` (${vms.length} in scope)` : ""}</span>
         <button type="button" className="primary" disabled={busy || Boolean(createBlocker)} title={createBlocker || undefined} onClick={onCreateVM}><Icon kind="vm" />Create VM</button>
@@ -182,7 +207,9 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
         </p>
         <a href="#/tasks">Tasks</a>
       </section>
-    </Panel> : selectedID && (vm ? <VMPanel vm={vm} data={data} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} media={mediaControls(vm)} eject={installMedia(vm)} onClose={close} />
+    </Panel> : selectedID && (outOfScope ? <Panel icon="vm" title={vm!.name} onClose={close}>
+      <p className="empty">This VM is outside the current site or pool scope. Choose its site or pool in the scope menu to open it.</p>
+    </Panel> : scopedVM ? <VMPanel key={scopedVM.id} vm={scopedVM} data={data} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} media={mediaControls(scopedVM)} eject={installMedia(scopedVM)} onClose={close} />
       : <MissingPanel icon="vm" noun="VM" unavailable={unavailable} loading={loading} onClose={close} />)}
   </div>;
 }

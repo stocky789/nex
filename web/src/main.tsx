@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
   Fragment,
+  startTransition,
   useEffect,
   useRef,
   useState,
@@ -10,85 +11,26 @@ import {
 import { createRoot } from "react-dom/client";
 import "./tokens.css";
 import "./style.css";
-import { ManagedVMs, powerActions, powerConfirmText, sentence, type VM, type Storage, type Network, type Media } from "./managed";
-import { Console } from "./console";
-import { RealtimeStats } from "./stats";
+import { powerActions, powerConfirmText, sentence, type VM, type Storage, type Network, type Media } from "./managed";
 import { Icon, type IconKind } from "./icons";
 import { followUpdate, type UpdateStatus } from "./updates";
 import { LoadError, LoadErrorAlert, Menu, ScreenBoundary, badgeTone, date } from "./ui";
 import { operationLabel, statusLabel } from "./labels";
 import { taskCounts, newFailures, readPreference, writePreference } from "./dock";
-import { Overview, attentionItems, sampleCounts } from "./overview";
-import { VMList, consoleBlocker } from "./vm-list";
-import { HostList, hostConsoleBlocker } from "./host-list";
-import { Backups, Containers, Events, Settings, SettingsHead, SettingsNav, Tasks, movedSection, sections, type Upload } from "./settings";
+import { attentionItems, sampleCounts } from "./overview-model";
+import { consoleBlocker } from "./vm-panel";
+import { hostConsoleBlocker } from "./host-model";
+import { SettingsHead, SettingsNav, movedSection, sections, type Upload } from "./settings";
+import {
+  LazyBackups, LazyConsole, LazyContainers, LazyEvents, LazyHostList, LazyManagedVMs,
+  LazyOverview, LazyRealtimeStats, LazyScreen, LazySettings, LazyTasks, LazyVMList,
+} from "./lazy-screens";
+import { rememberSignedIn, signedInBefore } from "./session";
+import { applyTheme, themeKey, watchSystemTheme } from "./theme";
+import type { API, Audit, Data, Host, Operation, Pool, Session, Site } from "./types";
 
-export type Site = { id: string; name: string };
-export type Pool = Site & { site_id: string; master_host_id: string };
-export type Check = {
-  name: string;
-  status: string;
-  freshness: string;
-  observed_at: string;
-  last_success?: string;
-  error?: string;
-};
-type Inventory = {
-  observed_at: string;
-  hostname: string;
-  cpu_model: string;
-  cpu_count: number;
-  memory_bytes: number;
-  virtualization: string[];
-  os_version: string;
-  agent_version: string;
-  nics: { name: string; mac: string; kind?: string; master?: string; parent?: string; addresses: string[]; state: string; speed_mbps?: number }[];
-  uptime_seconds?: number;
-  disks: { name: string; size_bytes: number }[];
-  checks: Check[];
-};
-export type Host = {
-  id: string;
-  pool_id: string;
-  hostname: string;
-  revoked: boolean;
-  capabilities?: string[];
-  connection: string;
-  last_seen: string | null;
-  inventory: Inventory | null;
-};
-export type Operation = {
-  id: string;
-  host_id: string;
-  kind: string;
-  request_id: string;
-  status: string;
-  error?: string;
-  created_at: string;
-  updated_at: string;
-  actor: string;
-};
-export type Audit = {
-  id: number;
-  actor: string;
-  action: string;
-  resource_id: string;
-  created_at: string;
-  detail?: string;
-};
-export type Data = {
-  sites: Site[];
-  pools: Pool[];
-  hosts: Host[];
-  operations: Operation[];
-  audit: Audit[];
-  vms: VM[];
-  storage: Storage[];
-  networks: Network[];
-  media: Media[];
-};
-type Session = { username: string; csrf_token: string };
-export type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
+export type { API, Audit, Check, Data, Host, Operation, Pool, Site } from "./types";
+
 // The scope the top bar filters by: a site, and one of its pools or "" for all of them. It is a
 // per-browser convenience; the pools themselves come from the hosts on every load.
 type Scope = { site: string; pool: string };
@@ -122,24 +64,11 @@ const vmMediaApplied = (vm: VM | undefined, drive: Drive, mediaID: string) =>
 // shown straight away when it cannot. It is a hint about this browser and never an
 // authorization: the Controller authenticates every request, and a marker left behind by an
 // expired session only costs the one 401 that ends it.
-const signedInKey = "nex-signed-in";
-function signedInBefore() {
-  // Without storage, keep probing: that is the previous behaviour and it restores a session.
-  try { return localStorage.getItem(signedInKey) !== null; } catch { return true; }
-}
-function rememberSignedIn(yes: boolean) {
-  try { if (yes) localStorage.setItem(signedInKey, "1"); else localStorage.removeItem(signedInKey); } catch {}
-}
 function Brand() {
   return <span className="brand" role="img" aria-label="Nex Controller" />;
 }
-// The theme follows the system unless this browser chose light or dark in the top bar.
-const themeKey = "nex.theme";
-function applyTheme(theme: string) {
-  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
-  else delete document.documentElement.dataset.theme;
-}
 applyTheme(readPreference(themeKey));
+watchSystemTheme(() => applyTheme(""));
 function readScope(): Scope {
   try {
     const saved = JSON.parse(readPreference("nex.scope"));
@@ -169,11 +98,11 @@ function GlobalSearch({ data }: { data: Data }) {
   const results = !q ? [] : [
     ...data.vms.flatMap(v => {
       const ip = v.guest?.addresses?.find(a => a.address.includes(q))?.address;
-      return v.name.toLowerCase().includes(q) || ip ? [{ href: `/vms/${v.id}`, label: v.name, detail: ip ? `VM · ${ip}` : "VM" }] : [];
+      return v.name.toLowerCase().includes(q) || ip ? [{ href: `/vms/${encodeURIComponent(v.id)}`, label: v.name, detail: ip ? `VM · ${ip}` : "VM" }] : [];
     }),
     ...data.hosts.flatMap(h => {
       const ip = h.inventory?.nics?.flatMap(n => n.addresses || []).find(a => a.includes(q));
-      return h.hostname.toLowerCase().includes(q) || ip ? [{ href: `/hosts/${h.id}`, label: h.hostname, detail: ip ? `Host · ${ip}` : "Host" }] : [];
+      return h.hostname.toLowerCase().includes(q) || ip ? [{ href: `/hosts/${encodeURIComponent(h.id)}`, label: h.hostname, detail: ip ? `Host · ${ip}` : "Host" }] : [];
     }),
     ...[...rail, ...railEnd].filter(([, label]) => label.toLowerCase().includes(q)).map(([path, label]) => ({ href: `/${path}`, label, detail: "Page" })),
     ...sections.filter(s => s.label.toLowerCase().includes(q)).map(s => ({ href: `/settings/${s.key}`, label: s.label, detail: "Setting" })),
@@ -255,6 +184,9 @@ function App() {
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
+  // After the first inventory paint, later polls apply through a transition so rail and search
+  // stay responsive while lists update.
+  const inventoryPainted = useRef(false);
   // The previous poll's operations, so reload() can tell a status that just became failed
   // (announce it) from one that was already failed on the last poll (stay quiet).
   const previousOperations = useRef<Operation[]>([]);
@@ -329,6 +261,7 @@ function App() {
       generation.current++;
       rememberSignedIn(false);
       setSession(null);
+      inventoryPainted.current = false;
       setData(empty);
       setToken(null);
       setUpdate(null);
@@ -554,7 +487,12 @@ function App() {
           vms: vms || [], storage: storage || [], networks: networks || [], media: media || [],
         };
         sampleCounts(next);
-        setData(next);
+        if (!inventoryPainted.current) {
+          inventoryPainted.current = true;
+          setData(next);
+        } else {
+          startTransition(() => setData(next));
+        }
         setError("");
       }
     } catch (e) {
@@ -587,7 +525,7 @@ function App() {
     if (!session) return;
     setLoading(true);
     void reload();
-    const timer = setInterval(() => void reload(), 10000);
+    const timer = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 10000);
     return () => clearInterval(timer);
   }, [session]);
   // The update status feeds the Overview, Hosts, Members and Updates screens; it is read once per
@@ -613,12 +551,20 @@ function App() {
   useEffect(() => {
     if (kind === "events" && newestEvent > eventsSeen) { setEventsSeen(newestEvent); writePreference("nex.events-seen", newestEvent); }
   }, [kind, newestEvent]);
+  // Hash changes clear most transient chrome, but the create wizard stays open across its
+  // Storage / Networks / ISO side-trips so returning to #/vms resumes the form.
+  const wizardRoutes = new Set(["vms", "storage", "networks"]);
   useEffect(() => {
     const change = () => {
       const nextRoute = location.hash.slice(1) || "/";
+      const nextKind = nextRoute.split("/").filter(Boolean)[0] || "";
       setRoute(nextRoute);
-      setCreating(pendingCreate.current);
-      pendingCreate.current = false;
+      if (pendingCreate.current) {
+        setCreating(true);
+        pendingCreate.current = false;
+      } else if (!wizardRoutes.has(nextKind)) {
+        setCreating(false);
+      }
       setForm(null);
       setToken(null);
       if (noticeRoute.current !== nextRoute) setNotice("");
@@ -799,11 +745,11 @@ function App() {
       <div className="console-page"><ScreenBoundary>
         {kind === "host-console" ? <>
           <div className="console-page-bar"><a href={`#/hosts/${id}`}>Nex Controller</a><strong>{host ? (host.hostname || host.id) : "Host console"}</strong>{host && <span className="muted">{host.connection}</span>}</div>
-          {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />
+          {host ? <LazyScreen><LazyConsole key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} /></LazyScreen>
             : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Open it from the Hosts list."}</p>}
         </> : <>{powerConfirmDialog}
           <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}{startError && <span className="task-error" role="alert">{startError}</span>}{notice && <span role="status">{notice}</span>}</div>
-          {vm ? <div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id), Boolean(error))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div>
+          {vm ? <div className="vm-console-panel" key={vm.id}><LazyScreen><LazyConsole key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id), Boolean(error))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><LazyRealtimeStats kind="vm" id={vm.id} api={api} /></LazyScreen></div>
             : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Open it from the VM list."}</p>}
         </>}
       </ScreenBoundary></div>
@@ -826,6 +772,8 @@ function App() {
   // An open slide-over covers the page, so it carries the load error and Retry instead.
   const panelOpen = (kind === "vms" || kind === "hosts") && Boolean(id);
   const loadError = { error, busy, onRetry: () => void reload() };
+  // #/sites/… and #/pools/… redirect into scope; show loading rather than notFound while that runs.
+  const scopeRedirect = kind === "sites" || kind === "pools";
   const notFound = <section className="panel empty">
     <h2>{error ? "Inventory unavailable" : "Object not found"}</h2>
     <p>{error ? "Inventory could not be loaded. Use Retry above to load it again." : "This link does not match a site, pool, host or VM known to Nex Controller."}</p>
@@ -881,6 +829,7 @@ function App() {
                   generation.current++;
                   rememberSignedIn(false);
                   setSession(null);
+                  inventoryPainted.current = false;
                   setData(empty);
                   setToken(null);
                   setUpdate(null);
@@ -912,22 +861,26 @@ function App() {
               {notice}
             </div>
           )}
-          <ScreenBoundary key={kind}>{kind === "" ? <Overview data={data} site={site} pool={pool} hosts={scopedHosts} vms={scopedVMs} api={api} coreAvailable={update?.core_available_version} loading={loading} busy={busy} onCreateSite={() => open("site")} onAddHost={() => open("enroll")} />
-            : kind === "vms" ? !creating && <VMList data={data} vms={scopedVMs} pool={pool} network={new URLSearchParams(search).get("network") || undefined} selectedID={id} operationID={routeOperation} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} loading={loading} onNotice={setNotice}
+          <LazyScreen key={kind}>{kind === "" ? <LazyOverview data={data} site={site} pool={pool} hosts={scopedHosts} vms={scopedVMs} api={api} coreAvailable={update?.core_available_version} loading={loading} busy={busy} onCreateSite={() => open("site")} onAddHost={() => open("enroll")} />
+            : kind === "vms" ? !creating && <LazyVMList data={data} vms={scopedVMs} pool={pool} network={new URLSearchParams(search).get("network") || undefined} selectedID={id} operationID={routeOperation} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} loading={loading} onNotice={setNotice}
               onCreateVM={newVM} mediaControls={vmMediaControls}
               installMedia={target => ({ busy: mediaBusy, note: vmMediaNote(target), onEject: () => void changeVMMedia(target.id, "eject", "install") })} />
-            : kind === "hosts" ? <HostList data={data} hosts={scopedHosts} selectedID={id} api={api} busy={busy} unavailable={Boolean(error)} loading={loading} coreAvailable={update?.core_available_version}
+            : kind === "hosts" ? <LazyHostList data={data} hosts={scopedHosts} selectedID={id} api={api} busy={busy} unavailable={Boolean(error)} loading={loading} coreAvailable={update?.core_available_version}
               openHostConsole={openHostConsole} onRefreshInventory={refreshInventory} onReenroll={() => open("reenroll")} onRevoke={() => open("revoke")} />
             : kind === "storage" || kind === "networks" ? <><h1 className="sr-only">{kind === "storage" ? "Storage" : "Networks"}</h1>{!pool && <p className="empty">Choose a pool in the scope menu to see its {kind}.</p>}</>
             : section ? <SettingsHead section={section} pool={pool} master={masterHost} hostCount={scopedHosts.length} />
-            : kind === "backups" ? <Backups />
-            : kind === "containers" ? <Containers />
-            : kind === "tasks" ? <Tasks data={data} upload={upload} onCancelUpload={cancelUpload} />
-            : kind === "events" ? <Events entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />
-            : loading ? <p role="status">Loading…</p> : notFound}</ScreenBoundary>
-          {pool && <ScreenBoundary><ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></ScreenBoundary>}
+            : kind === "backups" ? <LazyBackups />
+            : kind === "containers" ? <LazyContainers />
+            : kind === "tasks" ? <LazyTasks data={data} upload={upload} onCancelUpload={cancelUpload} />
+            : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />
+            : scopeRedirect || loading ? <p role="status">Loading…</p> : notFound}</LazyScreen>
+          {/* ManagedVMs owns the create wizard and the Storage / Networks tables for the scoped
+              pool. List screens (VMList, HostList) own #/vms and #/hosts; when creating is true
+              VMList is hidden and the wizard is shown here. Storage and Networks routes only
+              render a heading above, and this mount supplies the real tables. */}
+          {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
           {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
-          {section && <ScreenBoundary key={section}><Settings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
+          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
               update,
               note: updateNote,
               phase: updatePhase,
@@ -969,7 +922,7 @@ function App() {
                     setBusy(false);
                   }
                 })(),
-            }} /></ScreenBoundary>}
+            }} /></LazyScreen>}
         </div>
       </main>
       {powerConfirmDialog}

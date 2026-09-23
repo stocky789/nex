@@ -43,6 +43,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Nex Controller before Nex Core: an older Controller cannot read a 0.4.8 host's reports and
   shows it as stale.
 
+### Bug Fixes
+
+- Create VM keeps the wizard open when you open Storage or Networks from a side link, so returning
+  to VMs resumes the form instead of showing the list.
+- Saving VM tags re-reads the VM first so a stale list cannot rewrite disks or networks; tag edits
+  no longer reset while you type; clearing tags still works if the host lost tag support.
+- Host and VM panels refuse deep links outside the current site or pool scope. Host stats refresh
+  in one batch, and the host Performance tab reuses the list's recent history.
+- Large VM lists scroll without drawing every row at once. Overview and Hosts share one host-stats
+  fetch, and console screens load in smaller pieces instead of one large download.
+
 ## [0.4.7] — 2026-09-23
 
 ### Bug Fixes

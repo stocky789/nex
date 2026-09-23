@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Component, createContext, useContext, useEffect, useId, useRef, type ReactNode } from "react";
 import { auditLabel, relativeTime, statusLabel } from "./labels";
-import type { Audit, Data } from "./main";
+import type { Audit, Data } from "./types";
 import { Icon, type IconKind } from "./icons";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "neutral";
@@ -187,6 +187,16 @@ export function Sparkline({ values, series = 1, width = 84, height = 28, title }
 
 // Activity is the audit history: recorded changes and debounced health transitions, for the
 // Events screen and each resource's Activity tab.
+export function auditTarget(entry: Audit, data: Data): { target: string; check?: string } {
+  const [hostID, check] = entry.resource_id.split("/");
+  const target =
+    data.hosts.find((h) => h.id === hostID)?.hostname ||
+    data.vms.find((v) => v.id === entry.resource_id)?.name ||
+    data.pools.find((p) => p.id === entry.resource_id)?.name ||
+    data.sites.find((s) => s.id === entry.resource_id)?.name ||
+    entry.resource_id;
+  return { target, check };
+}
 export function Activity({ entries, data }: { entries: Audit[]; data: Data }) {
   return (
     <section className="panel">
@@ -205,13 +215,7 @@ export function Activity({ entries, data }: { entries: Audit[]; data: Data }) {
             </thead>
             <tbody>
               {entries.map((entry) => {
-                const [hostID, check] = entry.resource_id.split("/");
-                const target =
-                  data.hosts.find((h) => h.id === hostID)?.hostname ||
-                  data.vms.find((v) => v.id === entry.resource_id)?.name ||
-                  data.pools.find((p) => p.id === entry.resource_id)?.name ||
-                  data.sites.find((s) => s.id === entry.resource_id)?.name ||
-                  entry.resource_id;
+                const { target, check } = auditTarget(entry, data);
                 return (
                   <tr key={entry.id}>
                     <td>
@@ -233,10 +237,6 @@ export function Activity({ entries, data }: { entries: Audit[]; data: Data }) {
       ) : (
         <p className="empty">No activity recorded in this scope.</p>
       )}
-      <p className="panel-note">
-        Recorded changes and debounced health transitions. Current check results
-        are shown on each host.
-      </p>
     </section>
   );
 }

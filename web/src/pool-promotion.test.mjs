@@ -593,7 +593,7 @@ assert.match(src, /if \(!restricted\) return;/);
 // The host panel renders it on its Overview tab only, keyed by host so a different host refetches.
 {
   const mainSrc = readFileSync(new URL("./host-panel.tsx", import.meta.url), "utf8");
-  assert.match(mainSrc, /<HostRestrictedBanner key=\{host\.id\} poolID=\{host\.pool_id\} hostID=\{host\.id\} api=\{api\} \/>/);
+  assert.match(mainSrc, /<HostRestrictedBanner key=\{host\.id\} poolID=\{host\.pool_id\} hostID=\{host\.id\} api=\{api\} report=\{report/);
   assert.equal((mainSrc.match(/HostRestrictedBanner/g) || []).length, 2, "one import and one use");
 }
 

@@ -22,7 +22,8 @@ await build({
     b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: "export default class RFB {}" }));
   } }],
 });
-const { HostList, hostStatus, coreVersion, hostUsage, sparkRows, ports, diskRoles } = await import(`file://${outfile}`);
+const { HostList, hostStatus, coreVersion, hostUsage, hostSparkRows, sparkRows, ports, diskRoles } = await import(`file://${outfile}`);
+assert.equal(hostSparkRows, sparkRows);
 
 const s = (key, group, unit, values) => ({ key, group, label: key, unit, values });
 const history = { object: "host", id: "h1", range: "10m", step_seconds: 5, start: "2026-09-23T00:00:00Z", series: [
@@ -35,7 +36,7 @@ const history = { object: "host", id: "h1", range: "10m", step_seconds: 5, start
 ] };
 assert.deepEqual(hostUsage(history), { cpu: 30, memory: 75, cpuValues: [10, 20, 30], memoryValues: [25, 50, 75] });
 assert.deepEqual(hostUsage(null), { cpu: null, memory: null, cpuValues: [], memoryValues: [] }, "no history is unknown, not zero");
-const [, , disk, network] = sparkRows(history);
+const [, , disk, network] = hostSparkRows(history);
 assert.deepEqual(disk.values, [50, null, 100], "rates add up per sample, keep gaps as gaps and leave IOPS out");
 assert.equal(disk.text, "300 B/s");
 assert.equal(network.text, "—", "a resource with no series reads as unknown");

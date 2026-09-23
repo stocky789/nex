@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
-import type { API, Data, Host } from "./main";
+import type { API, Data, Host } from "./types";
 import { GuestTools, InstallMedia, VMDetails, VMPower, VMUsage, staleNote, stateText, type VM } from "./managed";
 import type { ConsoleMedia } from "./console";
 import { Stats, formatValue } from "./stats";
@@ -28,19 +28,19 @@ export const stateBadge = (vm: VM, unavailable = false) => unavailable || vm.fre
 export const TagList = ({ tags }: { tags?: string[] | null }) => tags?.length ? <span className="tags">{tags.map(t => <span key={t} className="tag">{t}</span>)}</span> : <span className="muted">—</span>;
 
 const tabs = ["Overview", "Performance", "Snapshots", "Configuration", "Activity"] as const;
-const openConsole = (vm: VM) => { location.hash = `/console/${vm.id}`; };
+const openConsole = (vm: VM) => { location.hash = `/console/${encodeURIComponent(vm.id)}`; };
+
+type VMPanelProps = {
+  vm: VM; data: Data; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void;
+  media: ConsoleMedia; eject: { busy: boolean; note: string; onEject: () => void }; onClose: () => void;
+};
 
 // VMPanel is the selected VM's slide-over: power and console actions above, then its state,
 // usage, definition and history. Features whose Nex Core phase has not landed show their place
-// and say what is missing.
-export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, media, eject, onClose }: {
-  vm: VM; data: Data; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void;
-  media: ConsoleMedia; eject: { busy: boolean; note: string; onEject: () => void }; onClose: () => void;
-}) {
+// and say what is missing. Callers key this by vm.id so tab state resets per VM.
+export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, media, eject, onClose }: VMPanelProps) {
   const [tab, setTab] = useState<string>("Overview");
   const [editing, setEditing] = useState(false);
-  const [shown, setShown] = useState(vm.id);
-  if (shown !== vm.id) { setShown(vm.id); setTab("Overview"); setEditing(false); }
   const host = data.hosts.find(h => h.id === vm.host_id);
   const pool = data.pools.find(p => p.id === vm.pool_id);
   const master = data.hosts.find(h => h.id === pool?.master_host_id);
@@ -48,7 +48,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
   const blocker = consolePageBlocker(vm, host, unavailable);
   const addresses = vm.guest?.addresses || [];
   return <Panel icon="vm" title={vm.name} badge={stateBadge(vm, unavailable)} onClose={onClose} tabs={tabs} tab={tab} onTab={t => { setTab(t); setEditing(false); }} wide={tab === "Performance" || editing}
-    sub={<>on <a href={`#/hosts/${vm.host_id}`}>{host?.hostname || vm.host_id}</a> · <a href={`#/pools/${vm.pool_id}`}>{pool?.name || vm.pool_id}</a></>}
+    sub={<>on <a href={`#/hosts/${encodeURIComponent(vm.host_id)}`}>{host?.hostname || vm.host_id}</a> · <a href={`#/pools/${encodeURIComponent(vm.pool_id)}`}>{pool?.name || vm.pool_id}</a></>}
     actions={<>
       <button type="button" className="sm primary" disabled={Boolean(blocker)} title={blocker || "Open the console full screen"} onClick={() => openConsole(vm)}><Icon kind="console" />Console</button>
       <VMPower vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice}>
@@ -90,7 +90,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
       {!editing && <>
         <section className="tile" aria-label="Tags">
           <h2>Tags</h2>
-          <TagEditor key={(spec?.tags ?? []).join()} vm={vm} host={host} master={master} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} />
+          <TagEditor vm={vm} host={host} master={master} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} />
         </section>
         <section className="tile" aria-label="High availability">
           <h2>High availability</h2>

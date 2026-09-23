@@ -409,7 +409,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     if (!confirm(`Discard ${media.name}? This removes the failed import record and any Controller staging bytes. The task and audit history are kept.`)) return;
     void run("media-discard", async () => {
       try {
-        await api(`media/${media.id}`, "DELETE");
+        await api(`media/${encodeURIComponent(media.id)}`, "DELETE");
       } catch (error) {
         let current: Media[];
         try { current = await api<Media[]>("media"); } catch { throw error; }
@@ -507,7 +507,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       const scope = `network:${n.id || n.operation_id}`;
       const blocker = lifecycleState(masterHostID, n.id, n.status, scope);
       const users = vms.filter(v => v.spec?.nics?.some(i => i.network_id === n.id)).length;
-      return <tr key={n.id || `op:${n.operation_id}`}><td><strong>{n.name}</strong><small>{n.kind === "vlan" ? "Pool VLAN" : `Host network on ${hostName(n.host_id)}`}</small></td><td>{n.kind !== "vlan" ? "—" : n.vlan ? n.vlan : "Untagged"}</td><td>{n.uplink ? <span className="mono">{n.uplink}</span> : describeNetwork(n)}</td><td><AccessLights items={networkHostAccess(n, hosts)} /></td><td>{users ? <a href={`#/vms?network=${encodeURIComponent(n.name)}`} title={`Show the VMs attached to ${n.name}`}>{users}</a> : 0}</td><td>{task(n)}</td><td>{registrationDiscardable(n) ? <div className="actions row-actions">
+      return <tr key={n.id || `op:${n.operation_id}`}><td><strong>{n.name}</strong><small>{n.kind === "vlan" ? "Pool VLAN" : `Host network on ${hostName(n.host_id)}`}</small></td><td>{n.kind !== "vlan" ? "—" : n.vlan ? n.vlan : "Untagged"}</td><td>{n.uplink ? <span className="mono">{n.uplink}</span> : describeNetwork(n)}</td><td><AccessLights items={networkHostAccess(n, hosts)} /></td><td>{users ? <a href={`#/vms?network=${encodeURIComponent(n.id)}`} title={`Show the VMs attached to ${n.name}`}>{users}</a> : 0}</td><td>{task(n)}</td><td>{registrationDiscardable(n) ? <div className="actions row-actions">
         <button type="button" className="sm" title="Remove this Controller record of a registration the pool master refused." disabled={busy || unavailable} onClick={() => discardNetwork(n)}>Discard failed registration</button>
       </div> : networkRemovable(n) ? <div className="actions row-actions">
         <button type="button" className="sm" title={blocker || "Change this pool network's name on the pool master."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope: `${scope}:rename`, resource: "network", action: "rename", id: n.id, name: n.name, base: networkRemoveBody(n, poolID) })}>Rename</button>
