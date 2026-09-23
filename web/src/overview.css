@@ -51,6 +51,7 @@
 .ov-cross { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); pointer-events: none; }
 .ov-tip { position: absolute; top: 4px; z-index: 2; display: grid; gap: 3px; min-width: 150px; padding: 7px 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); box-shadow: var(--shadow-pop); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; transform: translateX(10px); }
 .ov-tip.flip { transform: translateX(calc(-100% - 10px)); }
+.ov-tip.pinned { transform: none; }
 .ov-tip span { display: flex; align-items: center; gap: 6px; }
 .ov-tip i { width: 8px; height: 8px; border-radius: var(--radius-control); }
 .ov-tip em { margin-left: auto; padding-left: 12px; font-style: normal; font-weight: 600; }

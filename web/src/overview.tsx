@@ -479,6 +479,8 @@ function UsageChart({ times, lines, range, loading, summary }: { times: number[]
     return short ? t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : t.toLocaleDateString([], { month: "short", day: "numeric" });
   };
   const i = at == null ? null : Math.min(at, n - 1);
+  // On a narrow chart the tooltip cannot sit beside the crosshair, so it pins to the far side.
+  const tipPinned = width > 0 && width < 480;
   const tip = i == null ? null : {
     when: buckets && buckets.counts[i] > 1 ? `${time(buckets.starts[i])} – ${time(shown[i])}` : time(shown[i]),
     average: buckets && buckets.counts[i] > 1 ? `Average of ${buckets.counts[i]} samples` : "",
@@ -506,7 +508,7 @@ function UsageChart({ times, lines, range, loading, summary }: { times: number[]
       {tip && <>
         <span className="ov-cross" style={{ left: `${x(i!)}%` }} aria-hidden="true" />
         {series.filter(l => l.values[i!] != null).map(l => <i key={l.label} className="ov-end" style={{ left: `${x(i!)}%`, top: `${y(l.values[i!]!)}%`, background: `var(--s${l.series})` }} />)}
-        <div className={`ov-tip${x(i!) > 55 ? " flip" : ""}`} style={{ left: `${x(i!)}%` }} aria-hidden="true">
+        <div className={`ov-tip${tipPinned ? " pinned" : x(i!) > 55 ? " flip" : ""}`} style={tipPinned ? (x(i!) > 50 ? { left: 4 } : { right: 4 }) : { left: `${x(i!)}%` }} aria-hidden="true">
           <b>{tip.when}</b>
           {tip.values.map(l => <span key={l.label}><i style={{ background: `var(--s${l.series})` }} />{l.label}<em>{l.text}</em></span>)}
           {tip.average && <small>{tip.average}</small>}

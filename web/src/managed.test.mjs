@@ -446,14 +446,14 @@ console.log("managed.test.mjs: ok");
   // reporting, is Unknown and never green.
   const member = { ...master, id: "host-2", hostname: "core-b" };
   const lights = (n, hosts) => networkHostAccess(n, hosts).map(a => [a.host.hostname, a.tone, a.label]);
-  assert.deepEqual(lights({ ...vlan, generation: 1 }, [master, member]), [["core-a", "ok", "Ready"], ["core-b", "unknown", "Unknown"]]);
+  assert.deepEqual(lights({ ...vlan, generation: 1 }, [master, member]), [["core-a", "ok", "Accessible"], ["core-b", "unknown", "Unknown"]]);
   // The master confirms a pool VLAN with its registration; members report their own apply.
-  assert.deepEqual(lights({ ...vlan, member_access: [] }, [master, member]), [["core-a", "ok", "Ready"], ["core-b", "unknown", "Unknown"]]);
+  assert.deepEqual(lights({ ...vlan, member_access: [] }, [master, member]), [["core-a", "ok", "Accessible"], ["core-b", "unknown", "Unknown"]]);
   assert.deepEqual(lights({ ...vlan, status: "queued", member_access: [] }, [master]), [["core-a", "unknown", "Unknown"]]);
   assert.deepEqual(lights({ ...vlan, generation: 1 }, [{ ...master, connection: "stale" }]), [["core-a", "unknown", "Unknown"]]);
   assert.deepEqual(lights({ ...vlan, generation: 1, member_access: [{ ...vlan.member_access[0], uplink_present: false }] }, [master]), [["core-a", "warn", "Uplink missing"]]);
   assert.deepEqual(lights({ ...vlan, member_access: [{ ...vlan.member_access[0], error: "bridge failed" }] }, [master]), [["core-a", "bad", "Error"]]);
-  assert.deepEqual(lights(hostNetwork, [master, { ...member, connection: "stale" }]), [["core-a", "ok", "Ready"], ["core-b", "neutral", "No access"]]);
+  assert.deepEqual(lights(hostNetwork, [master, { ...member, connection: "stale" }]), [["core-a", "ok", "Accessible"], ["core-b", "neutral", "No access"]]);
   const hostRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [hostNetwork] }));
   assert.doesNotMatch(hostRow, />Rename</);
   assert.doesNotMatch(hostRow, />Remove</);

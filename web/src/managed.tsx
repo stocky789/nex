@@ -171,10 +171,10 @@ export function networkHostAccess(n: Network, hosts: Host[]): HostAccess[] {
     if (n.kind !== "vlan" && host.id !== n.host_id) return light("neutral", "No access", `Host network on ${owner}; it exists only there.`);
     if (host.revoked || host.connection !== "fresh") return light("unknown", "Unknown", "The host is not reporting, so its network state is not current.");
     const a = n.kind === "vlan" ? n.member_access?.find(item => item.host_id === host.id) : undefined;
-    if (!a && host.id === n.host_id) return n.status === "succeeded" ? light("ok", "Ready", "Confirmed by this host when the network was registered.") : light("unknown", "Unknown", "The host has not confirmed this network yet.");
+    if (!a && host.id === n.host_id) return n.status === "succeeded" ? light("ok", "Accessible", "Confirmed by this host when the network was registered.") : light("unknown", "Unknown", "The host has not confirmed this network yet.");
     if (!a) return light("unknown", "Unknown", "The pool master has not reported this host's state for this network.");
     const state = networkMemberState(n, a);
-    return state === "ready" ? light("ok", "Ready", `Bridge ${a.bridge || "present"} on uplink ${n.uplink || "—"}.`)
+    return state === "ready" ? light("ok", "Accessible", `Bridge ${a.bridge || "present"} on uplink ${n.uplink || "—"}.`)
       : state === "converging" ? light("warn", "Converging", "This host has not applied the current settings yet.")
       : state === "pending" ? light("warn", "Uplink missing", `This host does not report the uplink NIC${n.uplink ? ` ${n.uplink}` : ""}.`)
       : light("bad", "Error", state);
@@ -671,7 +671,7 @@ export function guestResizeText(g: Guest): string {
   if (g.resize) return "Available · the console can resize the guest to the browser window";
   if (g.clipboard === "ready") return "Not available · the guest is running its tools, so this VM's display is not VirtIO. Only a VM recreated with a VirtIO display can be resized.";
   if (g.clipboard === "no-channel") return "Not available · this VM was created before the console agent channel existed, so nothing in the guest can act on a resize. Recreate it, then install the guest tools.";
-  return "Not available · the guest is not running both qemu-guest-agent and the vdagent that changes its resolution. Install the guest tools; Console clipboard reads Ready exactly when resize becomes available. A VM whose display is not VirtIO cannot resize even then.";
+  return "Not available · the guest is not running both qemu-guest-agent and the vdagent that changes its resolution. Install the guest tools; Clipboard reads Ready exactly when resize becomes available. A VM whose display is not VirtIO cannot resize even then.";
 }
 // guestCapabilities is the guest tools block's status grid: one row per console capability, a
 // word or two for the state and the full reason on demand. Anything not reported is Unknown.

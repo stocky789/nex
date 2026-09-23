@@ -194,3 +194,82 @@ the fullest, because a vertical grid line can land on the single middle column i
 - `joined_at` is covered by Go tests only; no browser walkthrough of the **Joined** column against
   a real pool has run.
 - Visual judgement is one agent's pass over a sample of the 391 captures, not every image.
+
+## Feedback round
+
+Owner feedback round, 2026-09-23 (see the plan's
+[Owner feedback round](../../plans/2026-09-23-controller-console-redesign.md#owner-feedback-round-2026-09-23)).
+Run by the docs/QA agent on the same machine; logs and captures under `.cache/feedback-round/`,
+not committed. Captures were inspected by the same agent, so this is not an independent review.
+
+**Environment.** Working tree after the round's UI changes, including the lead's follow-ups
+(14 px chart buckets, equal-width row actions, KPI tiles without trend lines). Review Controller
+built from the tree on loopback port 18650 with a private data directory and a self-signed
+certificate; every read simulated from `tests/integration/fixtures/ui-review.json` as before. The
+fixture now carries only values Core reports: storage `access.status` `healthy` (and `degraded`
+for the DEGRADED ZFS pool) instead of `ready`, guest `clipboard` `ready` / `waiting` /
+`no-channel` instead of `supported` / `unknown`, and no `guest` object on the shut-off VM, as
+checked against `internal/vmhost` and the Controller's report validation in
+`internal/controller/monitor.go`.
+
+| Command | Result |
+|---|---|
+| `ui_review_browser.py --url https://127.0.0.1:18650 …` (final build) | 77 views, 471 captures, no page errors; **exit 1 on one real defect**, F1 below, at 390 px in both themes. Every new expectation passed |
+| The eleven `.github/workflows/phase1.yml` browser checks, niced, one at a time: `iso_url`, `storage_repositories`, `zfs_provisioning`, `cluster_storage`, `website_controller_captures`, `console_controls`, `managed_vm --simulated`, `vm_edit`, `host_iso`, `site_selector`, `phase1.py --browser` | all exit 0 on the final run. The first run on the round's UI failed only `cluster_storage` (its stale-owner assertions read the removed member-access text and the removed **ISO library** settings link); the updated assertions pass |
+| `python3 scripts/check_docs.py --worktree` | passed |
+| `python3 -m unittest discover -s tests` | 399 tests, OK |
+
+The lead rebuilt `web/dist` for the 0.4.8 version-string bump while the final CI run was in
+progress, so some of those eleven checks ran against the rebuilt bundle. The version stamp was
+the only change reported for that rebuild; the checks were not rerun afterwards.
+
+**What the review harness now checks** (each is an assertion, not only a capture): rail order with
+**Containers** as the one sub-item; search offering the **Networks** page; three Overview tiles
+collapsed with summary lines and still collapsed after a reload; chart hover showing a reading;
+**1W** keyboard reading (Left shows *Average of N samples*, Escape hides it); the five Settings
+sections; `#/settings/storage`, `#/settings/iso` and `#/settings/networks` redirecting; Storage and
+Networks column headers; the stale host's hollow **Unknown** light on shared storage; the
+**Degraded** ZFS repository; **About storage**, **About changing networks**, **About removing
+ISOs**; the **VMs** count opening `#/vms?network=guest-vlan20` with the five VMs on it; the guest
+tools grid rows, **Not available** for a VM without the clipboard channel with *Channel missing*
+under **Why?**, **Ready, Ready, Ready** for a connected guest, and **How to enable guest tools**;
+Members status checks, **Details** opening the row, the pool strip's **About**, and the row
+**Actions** menu closing on Escape. `cluster_storage_browser.py` now asserts the stale owner's
+**Unknown** health and host lights instead of the removed text; `iso_url` and `managed_vm` open
+`#/storage` directly; `console_features_lab.py` (native lab, not run) reads the guest tools grid.
+
+**Captures inspected** (1440×900 unless noted): Overview with the new KPI tiles; Overview with
+three tiles collapsed; the chart on **1W** with the averaged reading; the chart hover at 390 px
+(F1); Storage (repository table, host lights, degraded ZFS, ISO library, equal-width row actions);
+Networks (dark); Members with a row's **Details** and the pool **About** open (light, and 390 px
+dark); the VM guest tools grid for a VM without channels. Rail, colours and badges follow the
+design guide; no side stripes or rounded pills were seen.
+
+**Guide walkthrough.** The changed guide steps (navigation, Storage, Networks, ISO removal,
+Members status checks and Details, maintenance, guest tools, the Overview chart) were checked
+against these captures and the source; they were not walked against a real host.
+
+### UI defects found
+
+- **F1 — chart reading runs off a phone screen.** At 390×844, pointing at the middle of the
+  Overview utilisation chart opens the reading to the right of the crosshair; it is cut off at
+  the screen edge (values hidden) and the page scrolls sideways by 24 px. It flips left only past
+  55 % of the width. Repro: `ui_review_browser.py --views overview-chart-hover`, capture
+  `05-overview-chart-hover-narrow-light.png`. Open; reported to the lead (web/src not edited here).
+- **F2 — stale label in a guest tools reason.** *Display resize* → **Why?** still says
+  "Console clipboard reads Ready"; the row is now **Clipboard**. Open.
+- **F3 — two words for the same light.** Network host lights count **ready** where storage
+  lights say **accessible** ("1 ready · 2 no access" vs "1 accessible · 2 no access"). Open,
+  cosmetic.
+
+### Limits
+
+- Simulated reads only; no Nex Core host. The fixture's provisioned ZFS repository has no
+  per-host ZFS access record, so its owner's light reads **Unknown** while **Health** reads
+  **Degraded**. That comes from the fixture, not the UI. The fixture's storage I/O series
+  swings faster than one averaging bucket, so the 1D line still looks spiky in captures; real
+  host history was not charted.
+- Host access lights for members come from the existing `member_access` reports; no real member
+  was used, so pending/failed member states were seen only through `cluster_storage_browser.py`
+  mocks.
+- Visual judgement is one agent's pass over a sample of the 471 captures.
