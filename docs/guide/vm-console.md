@@ -127,7 +127,10 @@ host-local console and full-screen or separate-window views.
 8. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
    stops keyboard and mouse input while you watch. **Reconnect** ends the current stream
    and attaches again with a new ticket. **Full screen** enlarges the panel with its
-   toolbar; press Escape or the button again to leave. **Open in new window** opens a
+   toolbar; press Escape or the button again to leave. **Focus mode** keeps the browser
+   window but hides the Controller around the console: the menus, toolbar, resource tree,
+   tabs and Tasks strip. Select **Leave focus mode**, or press Escape while the display does
+   not have the keyboard, to bring them back. **Open in new window** opens a
    console-only page (`#/console/<VM>`) in a separate tab or window.
 9. Leave the tab, select another resource, or close the page to end the console. The VM
    keeps running. If the link drops while the VM is still eligible, the console
@@ -255,6 +258,8 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   to its enrolled Controller. Revoking a host ends its ability to attach consoles.
 
 ## Verification
+
+**Focus mode** and the grouped console toolbar were checked in the [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) against a console with no VM attached; the connection itself was not exercised.
 
 See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
 unreleased admission change. Browser checks use simulated Core responses; native

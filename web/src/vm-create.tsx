@@ -329,6 +329,7 @@ export function VMWizard({ poolID, poolName, hosts, placement, storage, networks
 
   return <section className="panel form-panel vm-wizard" aria-label="Create VM">
     <div className="section-heading"><h2 ref={heading} tabIndex={-1}>Create VM · {step + 1} of 6: {steps[step]}</h2><button disabled={busy} onClick={onClose}>Close</button></div>
+    <ol className="steps">{steps.map((name, index) => <li key={name} aria-current={index === step ? "step" : undefined}>{name}</li>)}</ol>
     <form onSubmit={e => { e.preventDefault(); if (stepIssue || busy || unavailable || (step === 5 && blocked)) return; if (step < 5) go(step + 1); else void create({ ...draft, drivers_media_id: driversReady ? draft.drivers_media_id : "", boot, pool_id: poolID }); }}>
       {step === 0 && <>
         <label>VM name<input required maxLength={200} ref={el => { el?.setCustomValidity(vmNameIssue(draft.name)); }} value={draft.name} autoFocus onChange={e => renameVM(e.target.value)} /></label>

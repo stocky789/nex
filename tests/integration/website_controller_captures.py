@@ -218,7 +218,7 @@ def capture(lab, args):
             expect(page.get_by_role('heading', name=heading, exact=True)).to_be_visible()
             expect(page.get_by_role('heading', name=HOSTNAME, exact=True)).to_be_visible()
             if tab != 'Activity':
-                expect(page.locator('.badge.fresh').first).to_be_visible()
+                expect(page.locator('.badge', has_text='Fresh').first).to_be_visible()
             page.wait_for_load_state('networkidle')
             expect(page.locator('input[type="password"]')).to_have_count(0)
             expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)

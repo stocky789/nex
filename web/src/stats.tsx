@@ -635,7 +635,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
     shape.current = signature;
     const style = getComputedStyle(el);
     const color = (i: number) => style.getPropertyValue(`--series-${i % PALETTE_SIZE + 1}`).trim() || "#2456d9";
-    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: "#e3e6ea" }, values: (_u, ticks, _axis, _space, incr) => formatTicks(unit, ticks, incr), ...(unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
+    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: style.getPropertyValue("--line-soft").trim() }, values: (_u, ticks, _axis, _space, incr) => formatTicks(unit, ticks, incr), ...(unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
     const opts: uPlot.Options = {
       width: el.clientWidth || 400,
       height,
@@ -645,7 +645,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
       scales: Object.fromEntries(units.map(unit => [unit, { range: (_u: uPlot, min: number, max: number): uPlot.Range.MinMax =>
         chart.stacked && unit === "percent" ? [0, stackedPercentMax(raw.current, hidden)] : [unit === "percent" || chart.stacked ? 0 : Math.min(0, min), max > 0 ? max * 1.1 : 1] }])),
       // Compact realtime charts label seconds on one line; uPlot's default two-line date labels overlap at that width.
-      axes: [{ stroke: style.getPropertyValue("--muted").trim(), grid: { stroke: "#e3e6ea" }, ...(zoom ? {} : { space: 60, values: (_u: uPlot, ticks: number[]) => ticks.map(t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })) }) }, // Compact charts drop the right-hand axis: its width left no room for time labels. A second unit
+      axes: [{ stroke: style.getPropertyValue("--muted").trim(), grid: { stroke: style.getPropertyValue("--line-soft").trim() }, ...(zoom ? {} : { space: 60, values: (_u: uPlot, ticks: number[]) => ticks.map(t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })) }) }, // Compact charts drop the right-hand axis: its width left no room for time labels. A second unit
       // (IOPS beside bytes/s) keeps its own scale and is still read from the tooltip.
       ...units.slice(0, zoom ? 2 : 1).map((unit, i) => axis(unit, i ? 1 : 3))],
       series: [{}, ...chart.series.map((s, i): uPlot.Series => ({

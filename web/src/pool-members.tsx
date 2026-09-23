@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { heldRequestID } from "./managed";
 import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
 import {
@@ -7,8 +7,8 @@ import {
   promotionInProgress, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
-import { Badge } from "./ui";
-import { checkLabel } from "./labels";
+import { Badge, Banner } from "./ui";
+import { checkLabel, relativeTime } from "./labels";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Connection = "fresh" | "stale" | "unknown" | "revoked";
@@ -153,8 +153,10 @@ export function replicaGenerations(replica?: Replica | null) {
 // The acknowledgement is the master's observation, so it disappears with the master; what the
 // member says it received is its own report and stays.
 export function replicaTimes(replica?: Replica | null, authoritative = true) {
-  if (!replica) return "";
-  return [replica.received_at ? `Received ${replica.received_at}` : "", authoritative && replica.acknowledged_at ? `Acknowledged ${replica.acknowledged_at}` : ""].filter(Boolean).join(" · ");
+  if (!replica) return null;
+  const times = [["Received", replica.received_at], ["Acknowledged", authoritative ? replica.acknowledged_at : ""]].filter(([, at]) => at);
+  if (!times.length) return null;
+  return <small>{times.map(([label, at], index) => <Fragment key={label}>{index > 0 && " · "}{label} <time dateTime={at} title={at}>{relativeTime(at!)}</time></Fragment>)}</small>;
 }
 
 // When a host was last heard from, said both ways: an interval an operator reads at a glance,
@@ -287,8 +289,9 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
   const members = report.members || [];
   if (!members.length) return <p className="empty">The pool master reports no hosts yet. A host that has just enrolled appears here once its master reports the membership.</p>;
   const actions = Boolean(onMasterChange && onEject);
-  return <><div className="table-scroll"><table className="pool-members-table">
-    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th className="pool-convergence-cell">Convergence</th><th className="pool-fencing-cell">Fencing</th>{actions && <th><span className="sr-only">Actions</span></th>}</tr></thead>
+  return <><Banner tone="info" role="status">{fencingSummaryText(report)}</Banner>
+  <div className="table-scroll"><table className="pool-members-table">
+    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th className="pool-convergence-cell">Convergence</th><th className="pool-fencing-cell">Fencing</th>{actions && <th className="pool-actions-cell"><span className="sr-only">Actions</span></th>}</tr></thead>
     <tbody>{members.map(member => {
       // The join stage and the connection are this host's own report, so they survive a
       // master that is gone; the membership status and every observation of it do not.
@@ -323,7 +326,7 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
               {behindText(member, report) && <small>{behindText(member, report)}</small>}
               {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
               {member.replica.error && <small className="task-error">{member.replica.error}</small>}
-              {replicaTimes(member.replica, authoritative) && <small>{replicaTimes(member.replica, authoritative)}</small>}
+              {replicaTimes(member.replica, authoritative)}
             </>}
           </>}
         </td>}
@@ -350,7 +353,6 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
       </tr>;
     })}</tbody>
   </table></div>
-  <p className="help pool-fencing-summary" role="status">{fencingSummaryText(report)}</p>
   <HostFencingSetting report={report} onChange={onHostFencing} busy={hostFencingBusy} />
   {replicas
     ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>

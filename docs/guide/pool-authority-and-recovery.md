@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.4. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.5. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (pool detail → **Hosts** → the **Authority
 copy** column), how to **change which host is the pool master**, how to **eject a host from a
 pool**, how Nex Core **configures each host's own management controller** for fencing, how to record
@@ -326,8 +326,9 @@ host never checks itself — the question is whether *somebody else* could shut 
 | **not reported** | This pool master's Nex Core is too old to report fencing readiness. | Upgrade the pool master. Until then nothing here knows, so nothing here claims it. |
 | **unknown** | The pool master is not reporting. It keeps this record, so nothing else can answer for it. | See [when the pool master is gone](#promote-a-surviving-member). This does **not** mean the hosts cannot be shut out; it means nothing here knows. |
 
-**What each host found** under a row expands to one line per checking host, with what it saw and
-when that was last confirmed.
+**Why** under a row's badge expands to the reasons behind it, the recorded fence device, the
+host's watchdog and management-controller access, and one line per checking host with what it saw
+and when that was last confirmed.
 
 Above the table, **Fencing: ready for N of M hosts** is the pool's own line, and it names the hosts
 that are not. The pool master counts it, over the pool's hosts: a host you ejected is not one of

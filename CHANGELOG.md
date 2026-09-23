@@ -13,6 +13,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
 
+## [0.4.5] — 2026-09-23
+
+> **Development working-tree record, not a published release.** The web UI changes below were
+> checked with unit tests, the phase 1 browser lab and before/after captures against a labeled
+> simulated inventory ([QA checks](docs/qa/controller-ui-modernization/checks.md)). No real host,
+> hardware or console connection was exercised.
+
+### Minor Feature
+
+- Controller web UI modernization: one design-token sheet with a dark theme, flat surfaces on the
+  brand palette, a slimmer header with an **Actions** menu replacing the menubar, a collapsed
+  **Tasks** strip that announces failures, an off-canvas resource tree and icon toolbar on narrow
+  screens, operator labels instead of internal identifiers, relative times, a grouped console
+  toolbar with **Focus mode**, and a fuller Updates page. Status badges keep their square
+  dot-and-text form.
+
 ## [0.4.4] — 2026-09-22
 
 > **Development working-tree record, not a published release.** Mirrored system-disk install,

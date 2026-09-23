@@ -1,5 +1,11 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-.console-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.console-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+/* Keys, media and view: three groups split by a hairline. */
+.console-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.console-group + .console-group { padding-left: 16px; border-left: 1px solid var(--line-soft); }
+/* Focus mode: only the console is left on screen. */
+body.console-focus :is(.topbar, .toolbar, aside, .activity-dock, .statusbar, .detail-tabs, .page-heading) { display: none; }
+body.console-focus .shell { grid-template-columns: minmax(0, 1fr); }
 .console-toolbar .muted { font-size: 11px; }
 .console-status { margin: 0; padding: 6px 10px; font-size: 12px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--warn); }
 /* The screen takes the room the controls leave instead of pushing them out of the pane: its
@@ -31,7 +37,7 @@ section.console { padding: 0; overflow: auto; margin-bottom: 12px; display: flex
 .console-toolbar select, .console-toolbar input { font-size: 12px; }
 /* Toolbar controls take the width they need: the page-wide "select { width: 100% }" made the
    key-combination list claim a whole row, and rows here are display height (BUG-0207). */
-.console-toolbar > select { width: auto; max-width: 24ch; }
+.console-group > select { width: auto; max-width: 24ch; }
 .console-option { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .console-popout { flex-shrink: 0; font-size: 12px; margin-left: auto; white-space: nowrap; }
 .console-clipboard { flex: 0 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--sunken); display: grid; gap: 6px 14px; grid-template-columns: minmax(0, 1fr); align-content: start; }

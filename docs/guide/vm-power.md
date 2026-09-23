@@ -130,6 +130,8 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
 
 ## Verification
 
+The [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) re-ran the toolbar power flow in the phase 1 browser lab with simulated Core responses at 1440 and 360 px. The icon-only power buttons between 901 and 1280 px were checked by separate browser measurements, which no committed test repeats.
+
 Guest sleep handling (2026-09-17) is covered by runnable checks only: the Core power engine
 test wakes a `pmsuspended` domain for Start, wakes then requests for Shut down and Reboot,
 and destroys or resets it directly; the pool admission test proves a sleeping shared VM no

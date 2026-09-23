@@ -179,10 +179,10 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', stale_sample)
         refresh_route('hosts/' + host_id)
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
-        expect(page.locator('.badge.stale').first).to_be_visible()
+        expect(page.locator('.badge', has_text='Stale').first).to_be_visible()
         page.unroute('**/api/v1/hosts', stale_sample)
         # The default 5s assertion expires before the UI's 10s inventory poll.
-        expect(page.locator('.badge.fresh')).to_be_visible(timeout=15000)
+        expect(page.locator('.badge', has_text='Fresh')).to_be_visible(timeout=15000)
         lab.passed('browser injected stale connection recovers from live inventory on the next automatic poll')
         host = next(h for h in lab.api('/api/v1/hosts') if h['id'] == host_id)
         pool = next(p for p in lab.api('/api/v1/pools') if p['id'] == pool_id)
@@ -247,11 +247,13 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(page.get_by_role('heading', name='Health checks', exact=True)).to_be_visible()
         dock = page.locator('details.activity-dock')
         dock.locator('summary').focus()
+        # The Tasks strip starts collapsed; Enter on its summary opens and closes it.
+        expect(dock).not_to_have_attribute('open', '')
         page.keyboard.press('Enter')
-        expect(dock.get_by_role('heading', name='Recent tasks', exact=True)).not_to_be_visible()
+        expect(dock).to_have_attribute('open', '')
+        page.keyboard.press('Enter')
+        expect(dock).not_to_have_attribute('open', '')
         capture('tasks-collapsed-desktop')
-        page.keyboard.press('Enter')
-        expect(dock.get_by_role('heading', name='Recent tasks', exact=True)).to_be_visible()
         chrome = {name: page.locator(selector).bounding_box() for name, selector in {
             'topbar': '.topbar', 'toolbar': '.toolbar', 'tree': 'aside', 'header': '.page-heading',
             'main': '#main', 'tabs': '.detail-tabs', 'dock': '.activity-dock', 'status': '.statusbar',
@@ -272,7 +274,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_enabled()
         expect(toolbar.get_by_role('button', name='Add host', exact=True)).to_be_disabled()
         expect(page.locator('.toolbar dialog')).not_to_be_visible()
-        page.get_by_role('link', name='Task history', exact=True).click()
+        page.locator('aside').get_by_role('link', name='Task history', exact=True).click()
         expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
         expect(toolbar.get_by_role('button', name='New VM', exact=True)).to_be_disabled()
         toolbar.get_by_role('button', name='Back', exact=True).click()
@@ -425,7 +427,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                                'created_at': '2026-09-11T00:00:00Z', 'updated_at': '2026-09-11T00:00:00Z'}]
         page.route('**/api/v1/operations', lambda route: route.fulfill(json=pending_operations))
         toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text('dispatched')
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text(re.compile('dispatched', re.I))
 
         def queued_power(route):
             power_requests.append(route.request.post_data_json)
@@ -435,11 +437,11 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.unroute('**/api/v1/vms/fixture-vm/power')
         page.route('**/api/v1/vms/fixture-vm/power', queued_power)
         toolbar.get_by_role('button', name='Start', exact=True).click()
-        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in Recent tasks.')
+        expect(page.get_by_role('status')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in the Tasks strip.')
         expect(dialog).not_to_be_visible()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-queued-start')).to_contain_text('queued')
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-queued-start')).to_contain_text(re.compile('queued', re.I))
         toolbar.get_by_role('button', name='Refresh view', exact=True).click()
-        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text('dispatched')
+        expect(page.locator('.activity-dock tr').filter(has_text='fixture-edit')).to_contain_text(re.compile('dispatched', re.I))
         expect(dialog).not_to_be_visible()
         assert [r['action'] for r in power_requests] == ['start'], 'queued Start must submit only once'
         capture('power-start-queued')
@@ -467,7 +469,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/hosts', lambda route: route.fulfill(json=[summary_host]))
         refresh_route('pools/' + pool_id)
         pool_health = page.locator('.pool-health-summary')
-        expect(pool_health).to_contain_text('degraded')
+        expect(pool_health).to_contain_text(re.compile('degraded', re.I))
         expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt response exceeded its deadline')
         expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_attribute('href', '#/hosts/' + host_id)
         expect(pool_health).not_to_contain_text('internal-token')
@@ -476,7 +478,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
             {'name': 'storage', 'status': 'unknown', 'freshness': 'fresh', 'observed_at': '2026-09-12T00:00:00Z', 'error': 'Core sanitized: storage probe timed out'},
         ]
         refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text('failed')
+        expect(pool_health).to_contain_text(re.compile('failed', re.I))
         expect(pool_health).to_contain_text('2 checks need attention.')
         expect(pool_health).to_contain_text('libvirt: Core sanitized: libvirt is unavailable')
         expect(pool_health).to_contain_text('storage: Core sanitized: storage probe timed out')
@@ -485,18 +487,18 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                                                 'observed_at': '2026-09-12T00:00:00Z',
                                                 'error': 'Core sanitized: last libvirt result is stale'}]
         refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text('stale')
+        expect(pool_health).to_contain_text(re.compile('stale', re.I))
         expect(pool_health).to_contain_text('Core sanitized: last libvirt result is stale')
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'unknown', 'freshness': 'fresh',
                                                 'observed_at': '2026-09-12T00:00:00Z',
                                                 'error': 'Core sanitized: no current libvirt observation'}]
         refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text('unknown')
+        expect(pool_health).to_contain_text(re.compile('unknown', re.I))
         expect(pool_health).to_contain_text('Core sanitized: no current libvirt observation')
         summary_host['revoked'] = True
         summary_host['connection'] = 'revoked'
         refresh_route('pools/' + pool_id)
-        expect(pool_health).to_contain_text('revoked')
+        expect(pool_health).to_contain_text(re.compile('revoked', re.I))
         expect(pool_health).to_contain_text('Access revoked; this host is not reporting.')
         capture('health-summary-revoked')
         summary_host['revoked'] = False
@@ -504,7 +506,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'fresh',
                                                 'observed_at': '2026-09-12T00:00:00Z'}]
         refresh_route('pools/' + pool_id)
-        expect(pool_health.locator('.badge.healthy')).to_be_visible()
+        expect(pool_health.locator('.badge', has_text='Healthy')).to_be_visible()
         expect(pool_health.get_by_role('link', name='View host health', exact=True)).to_have_count(0)
         page.unroute('**/api/v1/hosts')
         refresh_route('pools/' + pool_id)
@@ -521,8 +523,8 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         wait_probe('failed')
         page.reload()
         libvirt = page.locator('.check').filter(has=page.get_by_text('libvirt', exact=True))
-        expect(libvirt.locator('.badge.failed')).to_be_visible()
-        expect(page.locator('.badge.fresh')).to_be_visible()
+        expect(libvirt.locator('.badge', has_text='Failed')).to_be_visible()
+        expect(page.locator('.badge', has_text='Fresh')).to_be_visible()
         capture('libvirt-failed-desktop')
         probe_mode('stalled')
         wait_probe('unknown')
@@ -532,11 +534,11 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         probe_mode('healthy')
         wait_probe('healthy')
         page.reload()
-        expect(libvirt.locator('.badge.healthy')).to_be_visible()
+        expect(libvirt.locator('.badge', has_text='Healthy')).to_be_visible()
         lab.passed('browser pool aggregate healthy enum, failed libvirt and timed-out probe distinct from fresh heartbeat; recovered checks')
         menu_item('Actions', 'Refresh inventory').click()
         expect(page.get_by_role('status')).to_contain_text('Inventory refresh')
-        page.get_by_role('link', name='Task history', exact=True).click()
+        page.locator('aside').get_by_role('link', name='Task history', exact=True).click()
         expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
         expect(page.locator('table').first).to_contain_text('root')
         capture('tasks-desktop')
@@ -626,7 +628,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         stop_agent()
         page.wait_for_timeout(2300)
         page.reload()
-        expect(page.locator('.badge.stale').first).to_be_visible()
+        expect(page.locator('.badge', has_text='Stale').first).to_be_visible()
         expect(page.get_by_text('workload execution is unknown.', exact=False)).to_be_visible()
         capture('stale-host-360')
         # Capture an older periodic read, revoke via a newer read, then release

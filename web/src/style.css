@@ -28,7 +28,7 @@ input, textarea {
   min-width: 0;
   width: 100%;
   min-height: 32px;
-  padding: 6px 8px;
+  padding: 5px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
   background: var(--panel);
@@ -37,10 +37,13 @@ input, textarea {
 input:where([type="checkbox"], [type="radio"]) { width: auto; }
 input::placeholder { color: var(--muted); }
 textarea, code, .mono { font-family: var(--font-mono); overflow-wrap: anywhere; }
-label { display: grid; gap: 5px; align-content: start; font-weight: 600; }
+label { display: grid; gap: 4px; align-content: start; font-size: 13px; font-weight: 600; }
+/* The label text is the heading; the value and its help inside the label are not. */
+label :is(input, select, textarea, small, .help) { font-weight: 400; }
+label :is(input, select, textarea) { font-size: 14px; }
 /* Grouped fields share one quiet border; a legend sits on it like a heading. */
-fieldset { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel); }
-legend { padding: 0 4px; font-weight: 600; }
+fieldset { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px 14px 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); }
+legend { padding: 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
 form .alert, form .notice, form .warning { margin: 0; }
 form { display: grid; gap: 12px; }
 form button { justify-self: start; }
@@ -113,8 +116,9 @@ small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; 
 .toolbar-group + .toolbar-group::before, .toolbar-group + .toolbar-end::before { content: ""; position: absolute; left: -6px; height: 26px; width: 1px; background: var(--line); }
 .toolbar .toolbar-end { margin-left: auto; }
 .toolbar .resource-icon { width: 20px; height: 20px; }
-.confirm-dialog { width: min(440px, calc(100vw - 32px)); padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-control); box-shadow: var(--shadow-pop); }
-.confirm-dialog::backdrop { background: rgba(0, 0, 0, .4); }
+.confirm-dialog { width: min(440px, calc(100vw - 32px)); padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); box-shadow: var(--shadow-pop); background: var(--panel); color: var(--text); }
+.confirm-dialog::backdrop { background: rgba(23, 35, 59, .45); }
+.confirm-dialog button.danger { background: var(--danger); color: var(--on-danger); border-color: var(--danger); }
 .confirm-dialog h2 { margin: 0 0 8px; font-size: 15px; }
 .confirm-dialog p { margin: 0 0 10px; }
 .confirm-dialog .actions { justify-content: flex-end; }
@@ -172,10 +176,10 @@ aside nav a.selected { background: var(--select); border-left-color: var(--accen
 .context-menu button.danger:hover:not(:disabled) { background: var(--bad-bg); }
 .context-menu hr { margin: 5px 4px; border: 0; border-top: 1px solid var(--line-soft); }
 label.disk-wipe, label.zfs-scope { display: flex; align-items: center; gap: 8px; font-weight: 400; }
-.steps { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: var(--sunken); list-style: none; color: var(--muted); font-size: 12px; counter-reset: step; }
+.steps { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); background: var(--sunken); list-style: none; color: var(--muted); font-size: 12px; counter-reset: step; }
 .steps li { counter-increment: step; }
 .steps li::before { content: counter(step) ". "; }
-.steps li[aria-current="step"] { color: var(--text); font-weight: 600; }
+.steps li[aria-current="step"] { color: var(--accent); font-weight: 600; }
 .sidebar-foot { margin-top: auto; padding: 12px 10px; border-top: 1px solid var(--line-soft); color: var(--muted); }
 .sidebar-foot p { margin: 5px 0 10px; font-size: 12px; }
 .sidebar-foot a { display: flex; align-items: center; gap: 6px; padding: 5px; font-size: 12px; margin-top: 2px; }
@@ -183,40 +187,41 @@ label.disk-wipe, label.zfs-scope { display: flex; align-items: center; gap: 8px;
 .tree-toggle { display: none; }
 .tiny-label { font-size: 11px; color: var(--muted); }
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--canvas); overflow: hidden; }
-.page-heading { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 8px 16px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
-.page-heading h1 { display: flex; align-items: center; gap: 8px; font-size: 20px; }
+.page-heading { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 6px 16px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+.page-heading h1 { display: flex; align-items: center; gap: 8px; font-size: 20px; line-height: 1.2; }
 .page-heading h1 .resource-icon { width: 24px; height: 24px; }
 .page-heading p:last-child { margin: 0; color: var(--muted); font-size: 12px; }
+/* When the heading wraps, the actions stay at the right edge so the end-aligned menu opens on screen. */
+.page-heading > .actions { margin-left: auto; }
 .eyebrow { display: none; }
 .page-heading .eyebrow { display: block; margin: 0 0 2px; font-size: 12px; color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 6px; }
 .detail-tabs { display: flex; flex-shrink: 0; gap: 20px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
-.detail-tabs button { position: relative; flex-shrink: 0; min-height: 36px; padding: 8px 2px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-weight: 500; }
+.detail-tabs button { position: relative; flex-shrink: 0; min-height: 36px; padding: 6px 2px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-weight: 500; }
 .detail-tabs button:hover { color: var(--text); }
 .detail-tabs button[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .workspace-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 12px; background: var(--panel); }
-.metrics { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-.metric { display: flex; align-items: baseline; gap: 9px; padding: 2px 20px; border-right: 1px solid var(--line); }
-.metric:first-child { padding-left: 3px; }
-.metric strong { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent); }
-.metric.context { margin-left: auto; border: 0; align-items: center; padding-right: 3px; }
+.metrics { display: flex; flex-wrap: wrap; align-items: stretch; gap: 24px; margin-bottom: 12px; padding: 10px 0 12px; border-bottom: 1px solid var(--line-soft); }
+.metric { display: flex; align-items: baseline; gap: 9px; }
+.metric strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric.context { margin-left: auto; align-items: center; }
 .metric.context p { margin: 0; font-size: 11px; color: var(--muted); }
 .metric.context .tiny-label { display: none; }
 /* overflow must stay visible: hidden clips native <select> menus in the desktop shell
    (flex + nested overflow) so they open and close on the same click (BUG-0050). */
-.panel { border: 1px solid var(--line); background: var(--panel); margin-bottom: 12px; }
-.section-heading { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--sunken); }
+.panel { border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); margin-bottom: 12px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; gap: 12px; border-bottom: 1px solid var(--line-soft); }
+.section-heading h2 { font-size: 15px; }
 .section-heading > a, .section-heading .muted { font-size: 11px; }
 .scope-list { display: flex; flex-wrap: wrap; gap: 0; padding: 4px 8px; }
 .scope-list a { display: flex; justify-content: space-between; min-width: 160px; padding: 6px 10px; gap: 20px; }
 .scope-list a:hover { background: var(--select); }
 .table-scroll { overflow: auto; }
-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
-th { background: var(--sunken); font-weight: 400; white-space: nowrap; border-right: 1px solid var(--line); }
-th, td { padding: 6px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; font-variant-numeric: tabular-nums; }
+th { background: var(--sunken); color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; border-bottom-color: var(--line); }
+th, td { padding: 8px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 td { line-height: 1.4; }
 td:first-child { min-width: 150px; }
-td:last-child { font-variant-numeric: tabular-nums; color: var(--muted); }
 tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--select); }
 .strong { font-weight: 600; }
@@ -240,9 +245,10 @@ tbody tr:hover { background: var(--select); }
 .empty p { max-width: 480px; margin: 0 auto 12px; }
 .search { width: 210px; }
 .search input { padding: 3px 7px; font-size: 12px; font-weight: 400; }
-.form-panel { padding: 0 14px 14px; border-color: var(--accent); background: var(--select); }
-.form-panel > .section-heading { margin: 0 -14px 12px; padding: 7px 14px; background: var(--select); }
-.form-panel form { max-width: 500px; }
+.form-panel { padding: 0 16px 16px; border-top: 3px solid var(--accent); }
+.form-panel > .section-heading { margin: 0 -16px 14px; padding: 8px 16px; background: var(--sunken); }
+.form-panel > .steps { margin: -14px -16px 14px; }
+.form-panel form { max-width: 560px; }
 .form-panel textarea { max-width: 660px; }
 .form-panel h3 { margin-top: 18px; }
 .manual-enrollment { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
@@ -290,8 +296,9 @@ ul.plain { margin: 0; padding: 0; list-style: none; }
 .statusbar > span { overflow-wrap: anywhere; }
 .statusbar a { white-space: nowrap; }
 .login { min-height: 100vh; max-width: 460px; margin: 0 auto; padding: 40px 24px; display: flex; flex-direction: column; justify-content: center; }
-.login > .brand { margin: 0 auto 25px; }
-.login-card { padding: 24px; border: 1px solid var(--line); background: var(--panel); box-shadow: 0 3px 12px rgba(0, 0, 0, .05); }
+/* The raster lockup carries its own porcelain ground, so it sits on that plate on any canvas. */
+.login > .brand { margin: 0 auto 25px; border-radius: 1px; box-shadow: 0 0 0 10px var(--brand-plate); }
+.login-card { padding: 24px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); }
 .login-card h1 { font-size: 21px; }
 .login-card > p { color: var(--muted); }
 .login-card form { margin: 20px 0; }
@@ -302,8 +309,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sunken);
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 .skip { position: fixed; top: -100px; left: 12px; z-index: 10; padding: 10px; background: var(--panel); }
 .skip:focus { top: 8px; }
+/* The full toolbar needs about 1250px: below that, navigation and VM power keep their icons and
+   name only; under 900px every group does. */
+@media (max-width: 1280px) {
+  .toolbar-group[aria-label="Navigation"] .toolbar-label, .vm-power .toolbar-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+}
 @media (max-width: 1050px) {
-  .shell { grid-template-columns: 230px minmax(0, 1fr); }
   .metric.context { display: none; }
   .page-heading { align-items: flex-start; flex-wrap: wrap; }
   .two-column { grid-template-columns: 1fr; gap: 0; }
@@ -346,7 +357,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sunken);
   .tree-toggle { display: inline-flex; margin-bottom: 6px; }
   aside { position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(320px, 85vw); transform: translateX(-100%); transition: transform .18s ease-out; box-shadow: var(--shadow-pop); }
   body.tree-open aside { transform: none; }
-  .sr-only, .toolbar-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  .toolbar-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
   .toolbar-group > button, .toolbar > button { padding: 4px 8px; }
 }
 @media (prefers-reduced-motion: reduce) { aside { transition: none; } }
@@ -358,7 +369,7 @@ select { font: inherit; min-width: 0; width: 100%; min-height: 32px; padding: 6p
    click, so the menu opens and closes at once (BUG-0064). Browsers without base-select keep
    their native picker. */
 select, ::picker(select) { appearance: base-select; }
-::picker(select) { border: 1px solid var(--line); border-radius: var(--radius-control); padding: 2px 0; background: var(--panel); color: var(--text); font-weight: 400; box-shadow: var(--shadow-pop); }
+::picker(select) { border: 1px solid var(--line); border-radius: var(--radius-panel); padding: 2px 0; background: var(--panel); color: var(--text); font-weight: 400; box-shadow: var(--shadow-pop); }
 select option { padding: 5px 8px; }
 select option:hover, select option:focus-visible { background: var(--select); }
 select option:checked { font-weight: 600; }
@@ -380,7 +391,7 @@ select option:checked { font-weight: 600; }
 .boot-order li::before { counter-increment: boot; content: counter(boot); display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 50%; background: var(--select); color: var(--accent); font-size: 11px; font-weight: 600; }
 .boot-order li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .boot-order button { min-height: 24px; padding: 2px 9px; font-size: 12px; }
-.iso-drop { border: 1px dashed var(--accent); background: var(--panel); padding: 14px; min-width: 0; }
+.iso-drop { border: 1px dashed var(--line); border-radius: var(--radius-panel); background: var(--canvas); padding: 14px; min-width: 0; }
 .iso-drop .help { margin-top: 10px; }
 .iso-filename { margin: 10px 0 0; overflow-wrap: anywhere; }
 progress { width: 100%; accent-color: var(--accent); }
@@ -406,7 +417,9 @@ progress { width: 100%; accent-color: var(--accent); }
 .vm-editor > fieldset { margin: 10px 0 0; }
 .vm-editor fieldset fieldset { margin: 0; }
 .vm-editor textarea { width: 100%; max-width: 660px; }
-.vm-editor > .actions { margin-top: 12px; }
+/* Save stays in reach while the long editor scrolls. */
+.vm-editor > .actions { position: sticky; bottom: 0; margin: 12px -10px -12px; padding: 10px; background: var(--panel); border-top: 1px solid var(--line-soft); }
+.actions > * + .danger { margin-left: 12px; }
 /* Storage tab: advanced panels fold away; the ZFS wizard is a two-screen dialog. */
 .fold > summary { cursor: pointer; }
 .fold:not([open]) > summary { border-bottom: 0; }
@@ -430,11 +443,8 @@ progress { width: 100%; accent-color: var(--accent); }
 .zfs-blocked > summary { cursor: pointer; }
 .zfs-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
 /* The disk lists are ordinary tables; only the tick column and the state colour differ from
-   the page tables, whose last column is muted and whose first column is wide. */
+   the page tables, whose first column is wide. */
 .zfs-disk-table th:first-child, .zfs-disk-table td:first-child { width: 1%; min-width: 0; text-align: center; }
-/* Spare / Fit last cells need body colour; keep .muted and .zfs-old on the state column. */
-.zfs-disk-table td:last-child:not(.muted):not(.zfs-old) { color: inherit; }
-.zfs-disk-table td.zfs-old { color: var(--warn); }
 .zfs-layouts { display: grid; gap: 2px; margin: 8px 0 0; padding: 6px 8px; border: 1px solid var(--line-soft); }
 .zfs-layouts > legend { padding: 0 4px; font-weight: 600; }
 .zfs-existing { margin-right: auto; }
@@ -463,21 +473,21 @@ progress { width: 100%; accent-color: var(--accent); }
 .pool-members-table th, .pool-members-table td { width: 1%; }
 .pool-members-table .pool-convergence-cell { width: auto; }
 .pool-members-table td > a { font-weight: 600; white-space: nowrap; }
-.pool-members-table td > small { min-width: 22ch; max-width: 44ch; }
+.pool-members-table td > small { min-width: 18ch; max-width: 44ch; }
 .pool-members-table td > .mono { min-width: 0; white-space: nowrap; }
-.pool-members-table .pool-actions-cell { color: inherit; text-align: right; }
+/* The actions stay on screen while the wide table scrolls under them. */
+tbody tr:hover .pool-actions-cell { background: var(--select); }
+.pool-members-table .pool-actions-cell { position: sticky; right: 0; text-align: right; background: var(--panel); box-shadow: -8px 0 8px -8px rgba(23, 35, 59, .2); }
 .pool-maintenance-cell { white-space: nowrap; }
-.pool-maintenance-cell small { white-space: normal; min-width: 28ch; }
-/* Fencing: how this host would be shut out, with Core's reasons under it and each other
-   host's last look at its fence device behind a disclosure. */
-.pool-members-table .pool-fencing-cell { width: 38ch; max-width: 38ch; }
+.pool-maintenance-cell small { white-space: normal; min-width: 18ch; }
+/* Fencing: how this host would be shut out; Core's reasons and each other host's last look at
+   its fence device sit behind the row's Why disclosure. */
 .pool-fencing-cell > .badge { white-space: normal; text-align: left; }
 /* A pinned certificate fingerprint is 64 unbroken characters and would otherwise run out
    of the column; it is one value, so it breaks anywhere rather than scrolling the row. */
 .pool-fencing-cell small { overflow-wrap: anywhere; }
-.pool-fence-checks > summary { cursor: pointer; font-size: 12px; }
-.pool-fence-checks ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
-.pool-fencing-summary { font-weight: 600; }
+.pool-fencing-cell .fold > summary { font-size: 12px; }
+.pool-fence-checks { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 /* The promotion verdict's advisory line sits inside a table cell, so it is emphasis on one
    line rather than the block callout .warning renders. */
 .pool-fence-advisory { color: var(--warn); }
@@ -491,10 +501,10 @@ progress { width: 100%; accent-color: var(--accent); }
 .pool-host-fencing-checklist > li > .badge { flex: 0 0 auto; min-width: 72px; text-align: center; }
 .pool-host-fencing-checklist small { color: var(--muted); }
 .pool-members > p.help { margin: 8px 10px; }
-.pool-row-actions > summary { display: inline-block; padding: 2px 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.pool-row-actions > summary { display: inline-block; padding: 2px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel); cursor: pointer; font-size: 12px; white-space: nowrap; }
 .pool-row-actions > summary::after { content: " ▾"; }
 .pool-row-actions[open] > summary { border-color: var(--accent); background: var(--select); }
-.pool-row-actions > div { display: grid; gap: 4px; justify-items: stretch; width: 30ch; margin-top: 6px; padding: 8px; text-align: left; background: var(--sunken); border: 1px solid var(--line); }
+.pool-row-actions > div { display: grid; gap: 4px; justify-items: stretch; width: 30ch; margin-top: 6px; padding: 8px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-panel); box-shadow: var(--shadow-pop); }
 .pool-row-actions > div > button { text-align: left; }
 .pool-row-actions > div > small { margin: -2px 0 4px; }
 .pool-transfer-strip { display: grid; gap: 8px; }

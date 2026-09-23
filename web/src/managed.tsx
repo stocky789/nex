@@ -413,11 +413,10 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       <button type="button" onClick={() => setTransfer(null)}>Dismiss</button>
     </p>}
     {unavailable && <p className="warning">Controller inventory may be out of date. Refresh the view before submitting changes.</p>}
-    <div className="managed-actions actions">
-      {vmTab && <button className="primary" disabled={busy || unavailable} onClick={() => open("vm")}>Create VM</button>}
+    {(tab === "Networking" || tab === "ISO library") && <div className="managed-actions actions">
       {tab === "Networking" && <button disabled={busy || unavailable} onClick={() => open("network")}>Register network</button>}
       {tab === "ISO library" && <button disabled={busy || unavailable} onClick={() => open("iso")}>Upload ISO</button>}
-    </div>
+    </div>}
     {form === "network" && <section className="panel form-panel" aria-label="Register network" hidden={!showForm}>
       <div className="section-heading"><h2>Register guest network</h2><button disabled={busy} onClick={() => setForm("")}>Close</button></div>
       <form onSubmit={e => register(e, "network")}>
@@ -486,7 +485,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       </form>
     </section>}
     {form === "vm" && <div hidden={!showForm}><VMWizard poolID={poolID} poolName={poolName} hosts={hosts} placement={placement} storage={storage} networks={networks} media={media} restored={() => restored("vm")} create={create} busy={busy} unavailable={unavailable} setTab={setTab} onClose={() => setForm("")} /></div>}
-    {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><span className="muted">{vms.length} in pool</span></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td><Badge value={v.state} label={stateText(v.state)} /></td><td><Badge value={v.freshness} /></td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
+    {vmTab && <section className="panel"><div className="section-heading"><h2>Virtual machines</h2><div className="actions"><span className="muted">{vms.length} in pool</span><button className="primary" disabled={busy || unavailable} onClick={() => open("vm")}>Create VM</button></div></div>{vms.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Assigned host</th><th>Observed state</th><th>Freshness</th><th>Creation task</th></tr></thead><tbody>{vms.map(v => <tr key={v.id}><td><a href={`#/vms/${v.id}`}>{v.name}</a>{v.protected && <small>Protected Controller appliance</small>}</td><td>{hostName(v.host_id)}</td><td><Badge value={v.state} label={stateText(v.state)} /></td><td><Badge value={v.freshness} /></td><td>{v.operation_id ? task(v) : "—"}</td></tr>)}</tbody></table></div> : <p className="empty">No virtual machines in this pool. Register storage and a network, upload an ISO, then create your first VM.</p>}<p className="panel-note">A stale or unreachable host does not mean its VMs have stopped. Creation results and current observations are separate.</p></section>}
     {tab === "Storage" && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
     {tab === "Networking" && <section className="panel"><div className="section-heading"><h2>Pool guest networks</h2></div>{networks.length ? <div className="table-scroll"><table><thead><tr><th>Name</th><th>Scope</th><th>Connection</th><th>VMs</th><th>Host check</th><th>Actions</th></tr></thead><tbody>{[...networks].sort((a, b) => (a.vlan || 0) - (b.vlan || 0) || a.name.localeCompare(b.name)).map(n => {
       const scope = `network:${n.id || n.operation_id}`;
@@ -779,7 +778,7 @@ export function VMPower({ vm, host, api, reload, busy, unavailable, onNotice, de
     finally { setWorking(false); }
   }
   return <div className="toolbar-group vm-power" role="group" aria-label="VM power">
-    {powerActions.map(item => <button key={item.action} type="button" className={`tool-${item.action}`} title={blocker || undefined} aria-describedby={describedBy}
+    {powerActions.map(item => <button key={item.action} type="button" className={`tool-${item.action}`} title={blocker || item.label} aria-describedby={describedBy}
       disabled={busy || working || unavailable || !vm || Boolean(blocker) || !item.when(vm.state)}
       onClick={e => { opener.current = e.currentTarget; setError(""); if (vm && powerConfirmText(item, vm)) setPending(item); else void submit(item); }}><Icon kind={item.icon} /><span className="toolbar-label">{item.label}</span></button>)}
     <dialog ref={dialog} className="confirm-dialog" aria-labelledby="power-confirm-title" onCancel={e => { if (working) e.preventDefault(); }} onClose={() => { setPending(null); setError(""); opener.current?.focus(); }}>

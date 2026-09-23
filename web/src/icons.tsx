@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { ReactNode } from "react";
 
-export type IconKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm" | "new-vm" | "back" | "forward" | "start" | "shutdown" | "reboot" | "stop" | "console" | "delete";
+export type IconKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm" | "new-vm" | "back" | "forward" | "start" | "shutdown" | "reboot" | "stop" | "console" | "delete" | "workspace" | "updates";
 const stroke = { strokeWidth: 1.25, strokeLinecap: "round", strokeLinejoin: "round" } as const;
 const vm = <><rect x="2" y="3" width="16" height="11" rx="1.5" fill="#93c5fd" stroke="#1d4ed8" /><path d="M7 17h6M10 14v3" stroke="#1d4ed8" /><path d="m8 6 5 3-5 3z" fill="#fff" /></>;
 export function Icon({ kind }: { kind: IconKind }) {
   const paths: Record<IconKind, ReactNode> = {
     vm,
     "new-vm": <>{vm}<circle cx="16" cy="4.5" r="3.4" fill="#facc15" stroke="#a16207" /><path d="M16 2.8v3.4M14.3 4.5h3.4" stroke="#713f12" strokeWidth="1.5" /></>,
+    workspace: <><rect x="2" y="3" width="16" height="14" rx="2" fill="#a8caff" stroke="#1d4ed8" /><path d="M2 8h16M8 8v9" stroke="#1d4ed8" /></>,
+    updates: <><circle cx="10" cy="10" r="8.5" fill="#dbeafe" stroke="#2563eb" /><path d="M10 14V6M6.5 9.5 10 6l3.5 3.5" stroke="#2563eb" strokeWidth="2" /></>,
     home: <><rect x="1.5" y="1.5" width="17" height="17" rx="4.5" fill="#3478ff" /><path d="M6.5 14.5V9.5a3.5 3.5 0 0 1 7 0v5" stroke="#fff" strokeWidth="2.4" /></>,
     site: <><path d="M3 18.5V4.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v14" fill="#4f8dff" stroke="#1d4ed8" /><path d="M12 8h4.5a1 1 0 0 1 1 1v9.5" fill="#a8caff" stroke="#1d4ed8" /><path d="M5 6h2M8 6h2M5 9.5h2M8 9.5h2M5 13h2M8 13h2M14 11h1.5M14 14h1.5" stroke="#fff" strokeWidth="1.5" /><path d="M1.5 18.5h17" stroke="#1d4ed8" /></>,
     pool: <><rect x="2" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><rect x="11" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><path d="M4 6h3M4 8.5h3M13 6h3M13 8.5h3" stroke="#fff" strokeWidth="1.3" /><circle cx="7.5" cy="11" r=".9" fill="#4c1d95" /><circle cx="16.5" cy="11" r=".9" fill="#4c1d95" /><path d="M5.5 13v3h9v-3M10 16v2" stroke="#6d28d9" /><circle cx="10" cy="18" r="1.4" fill="#7c3aed" /></>,

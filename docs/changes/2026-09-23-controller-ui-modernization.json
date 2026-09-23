@@ -1,0 +1,89 @@
+{
+  "summary": "Controller web UI modernization: token sheet with a dark theme, flat brand surfaces, header Actions menu replacing the menubar, collapsed Tasks strip with failure notices, off-canvas tree and icon toolbar on narrow screens, operator labels and relative times, grouped console toolbar with Focus mode, fuller Updates page Recorded under changelog version 0.4.5.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-controller-ui-modernization.json",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/manage-controller.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/vm-console.md",
+    "docs/guide/vm-power.md",
+    "docs/plans/2026-09-23-controller-ui-modernization-handover.md",
+    "docs/plans/2026-09-23-controller-ui-modernization.md",
+    "docs/qa/controller-ui-modernization/checks.md",
+    "docs/qa/controller-ui-modernization/results.json",
+    "tests/integration/fixtures/ui-review.json",
+    "tests/integration/managed_vm_browser.py",
+    "tests/integration/phase1_browser.py",
+    "tests/integration/ui_review_browser.py",
+    "tests/integration/website_controller_captures.py",
+    "web/src/console.css",
+    "web/src/console.test.mjs",
+    "web/src/console.tsx",
+    "web/src/dock.test.mjs",
+    "web/src/dock.ts",
+    "web/src/host-network.test.mjs",
+    "web/src/host-network.tsx",
+    "web/src/icons.tsx",
+    "web/src/labels.test.mjs",
+    "web/src/labels.ts",
+    "web/src/main.tsx",
+    "web/src/managed.test.mjs",
+    "web/src/managed.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-members.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/pool-promotion.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs",
+    "web/src/stats.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/storage.tsx",
+    "web/src/style.css",
+    "web/src/tokens.css",
+    "web/src/tokens.test.mjs",
+    "web/src/ui.test.mjs",
+    "web/src/ui.tsx",
+    "web/src/vm-create.tsx",
+    "web/src/zfs.test.mjs"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Navigation chrome, the Actions menu, the Tasks strip, Focus mode, the fencing Why disclosure and status labels changed what operators see and where; pages that described the removed menubar or the always-open task drawer were updated. Tasks 5\u20137 also updated create-, edit- and delete-virtual-machine.md, replace-a-failed-system-disk.md and software-updates.md in commit 0cc49ef; they are listed under paths.",
+    "pages": [
+      "docs/guide/manage-controller.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/vm-console.md",
+      "docs/guide/vm-power.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation only: the same client-facing reads and writes, identities, request IDs and results; no Core command or contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase or acceptance-gate status changes; the desktop layout plan is evolved by the linked plan.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Controller or Core record changes. The Tasks strip and tree open/closed preferences (nex.dock, nex.tree) live in the browser's localStorage as a per-browser convenience with a fixed default; losing them changes nothing an operator must re-enter."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck; npm --prefix web test (tokens, ui, labels, dock and existing suites); npm --prefix web run build; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/generate_api.py --check; tests/integration/phase1.py --browser with temporary state and simulated virsh (22 groups); tests/integration/ui_review_browser.py before/after captures at 1440x900, 1440x2000, 1024x768 and 390x844 with a labeled simulated inventory, inspected.",
+    "evidence": [
+      "docs/qa/controller-ui-modernization/checks.md",
+      "docs/qa/controller-ui-modernization/results.json",
+      "web/src/tokens.test.mjs",
+      "web/src/ui.test.mjs",
+      "web/src/labels.test.mjs",
+      "web/src/dock.test.mjs"
+    ]
+  }
+}

@@ -29,4 +29,9 @@ for (const [fg, bg] of pairs) {
   assert.ok(ratio(hex(light, fg), hex(light, bg)) >= 4.5, `light ${fg} on ${bg}`);
   if (dark) assert.ok(ratio(hex(dark, fg), hex(dark, bg)) >= 4.5, `dark ${fg} on ${bg}`);
 }
+// Chart lines are graphics, so they need 3:1 against the panel they are drawn on.
+for (let i = 1; i <= 8; i++) {
+  assert.ok(ratio(hex(light, `series-${i}`), hex(light, "panel")) >= 3, `light series-${i} on panel`);
+  if (dark) assert.ok(ratio(hex(dark, `series-${i}`), hex(dark, "panel")) >= 3, `dark series-${i} on panel`);
+}
 console.log("tokens ok");

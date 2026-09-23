@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Agents never commit: leave each task's changes unstaged for the project owner and report the suggested commit message.
 
 Date: 2026-09-23
-Status: in progress — Tasks 1–6 complete, Task 7 mid-fix; see the [handover](2026-09-23-controller-ui-modernization-handover.md). Owner: project owner.
+Status: implemented — Tasks 1–13 complete and reviewed, awaiting the project owner's commit; evidence in the [QA checks](../qa/controller-ui-modernization/checks.md), history in the [handover](2026-09-23-controller-ui-modernization-handover.md). Owner: project owner.
 
 **Goal:** Replace the Controller web UI's dated visual layer and vertical layout with a token-driven, flat, brand-correct design that keeps every workflow, the desktop-console navigation model and the honest state handling exactly as they are.
 

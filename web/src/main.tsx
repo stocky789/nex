@@ -231,7 +231,7 @@ function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void 
         </div>
       </td>
       <td>{upload.actor}</td>
-      <td>{date(upload.updated_at)}</td>
+      <td className="muted">{date(upload.updated_at)}</td>
     </tr>
   );
 }
@@ -765,7 +765,7 @@ function App() {
     document.body.classList.toggle("tree-open", treeOpen);
     if (!treeOpen) return;
     if (!narrow) { setTreeOpen(false); return; }
-    const closeAndRefocus = () => { setTreeOpen(false); treeToggle.current?.focus(); };
+    const closeAndRefocus = () => { writePreference("nex.tree", false); setTreeOpen(false); treeToggle.current?.focus(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeAndRefocus(); };
     window.addEventListener("hashchange", closeAndRefocus);
     document.addEventListener("keydown", onKey);
@@ -823,7 +823,7 @@ function App() {
       requestID.current ??= crypto.randomUUID();
       const op = await api<Operation>(`hosts/${host.id}/operations`, "POST", { kind: "refresh-inventory", request_id: requestID.current });
       requestID.current = null;
-      setNotice(`Inventory refresh ${op.status}. Follow its progress in Task history.`);
+      setNotice(`Inventory refresh ${statusLabel(op.status).toLowerCase()}. Follow its progress in Task history.`);
       await reload();
     });
   }
@@ -1006,8 +1006,8 @@ function App() {
           with its reason as a tooltip, when it does not apply to the selected resource. */}
       <div className="toolbar" aria-label="Controller actions">
         <div className="toolbar-group" role="group" aria-label="Navigation">
-          <button type="button" onClick={() => history.back()}><Icon kind="back" /><span className="toolbar-label">Back</span></button>
-          <button type="button" onClick={() => history.forward()}><Icon kind="forward" /><span className="toolbar-label">Forward</span></button>
+          <button type="button" title="Back" onClick={() => history.back()}><Icon kind="back" /><span className="toolbar-label">Back</span></button>
+          <button type="button" title="Forward" onClick={() => history.forward()}><Icon kind="forward" /><span className="toolbar-label">Forward</span></button>
         </div>
         <div className="toolbar-group" role="group" aria-label="Create">
           <button type="button" disabled={busy} onClick={() => open("site")}><Icon kind="site" /><span className="toolbar-label">Create site</span></button>
@@ -1037,7 +1037,7 @@ function App() {
             </details>)}
             {navigationSite && !navigationPools.length && <p className="empty">{resourceSearch ? "No matching resources in this site." : "No hosts in this site."}</p>}
           </nav>
-          <div className="sidebar-foot"><a href="#/"><Icon kind="home" /> Infrastructure</a><a className={kind === "tasks" ? "selected" : ""} href="#/tasks"><Icon kind="tasks" /> Task history</a><a className={kind === "updates" ? "selected" : ""} href="#/updates">Updates</a></div>
+          <div className="sidebar-foot"><a href="#/"><Icon kind="workspace" /> Infrastructure</a><a className={kind === "tasks" ? "selected" : ""} href="#/tasks"><Icon kind="tasks" /> Task history</a><a className={kind === "updates" ? "selected" : ""} href="#/updates"><Icon kind="updates" /> Updates</a></div>
         </aside>
         <main id="main" tabIndex={-1}>
           <div className="page-heading">
@@ -1065,7 +1065,7 @@ function App() {
                 )}
                 {host && <> / {host.hostname}</>}{vm && <> / {vm.name}</>}
               </p>
-              <h1><Icon kind={vm ? "vm" : host ? "host" : pool ? "pool" : site ? "site" : kind === "tasks" ? "tasks" : "home"} />
+              <h1><Icon kind={vm ? "vm" : host ? "host" : pool ? "pool" : site ? "site" : kind === "tasks" ? "tasks" : kind === "updates" ? "updates" : "workspace"} />
                 {vm?.name || host?.hostname ||
                   pool?.name ||
                   site?.name ||
@@ -1646,7 +1646,7 @@ function App() {
                                   ? `${h.inventory.cpu_count} CPUs / ${size(h.inventory.memory_bytes)}`
                                   : "Not observed"}
                               </td>
-                              <td>{date(h.last_seen)}</td>
+                              <td className="muted">{date(h.last_seen) === "Not observed" ? "Not observed" : <time dateTime={h.last_seen!} title={date(h.last_seen)}>{relativeTime(h.last_seen!)}</time>}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1779,17 +1779,27 @@ function UpdatesPanel({
             : update?.phase === "restarting" ? "Restarting…"
               : phase === "applying" ? "Updating…"
                 : note || "Done";
+  // Every status object is a fresh read from the Controller, so its arrival is the check time.
+  const [checkedAt, setCheckedAt] = useState("");
+  useEffect(() => { if (update && !update.error) setCheckedAt(new Date().toISOString()); }, [update]);
   return (
     <section className="panel">
+      <div className="section-heading">
+        <h2>Nex Controller</h2>
+        <div className="actions">
+          {update && !update.error && <Badge value={update.update_available ? "warning" : "ok"} label={update.update_available ? "Update available" : "Up to date"} />}
+          <button disabled={busy} onClick={onCheck}>Check</button>
+          <button className="primary" disabled={busy || !update?.update_available} onClick={onApply}>Update</button>
+        </div>
+      </div>
       <dl className="details">
-        <div>
-          <dt>Installed</dt>
-          <dd>{update?.installed_version || "—"}</dd>
-        </div>
-        <div>
-          <dt>Available</dt>
-          <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : update.error ? "—" : "Up to date"}</dd>
-        </div>
+        <dt>Installed</dt>
+        <dd>{update?.installed_version || "—"}</dd>
+        <dt>Available</dt>
+        <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : update.error ? "—" : "Up to date"}</dd>
+        {update?.repo_url && <><dt>Package archive</dt><dd className="mono">{update.repo_url}</dd></>}
+        <dt>Last checked</dt>
+        <dd>{checkedAt ? <time dateTime={checkedAt} title={date(checkedAt)}>{relativeTime(checkedAt)}</time> : "Not yet"}</dd>
       </dl>
       {(working || phase === "done") && <p className="small" role="status">{label}</p>}
       {working && (
@@ -1801,10 +1811,6 @@ function UpdatesPanel({
       )}
       {update?.error && <p className="warning" role="status">{update.error}</p>}
       {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
-      <div className="actions">
-        <button disabled={busy} onClick={onCheck}>Check</button>
-        <button className="primary" disabled={busy || !update?.update_available} onClick={onApply}>Update</button>
-      </div>
     </section>
   );
 }
@@ -2026,7 +2032,7 @@ function Tasks({
                     )}
                   </td>
                   <td>{o.actor}</td>
-                  <td>{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : <time dateTime={timestamp.iso} title={timestamp.value}>{relativeTime(timestamp.iso)}</time>}</td>
+                  <td className="muted">{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : <time dateTime={timestamp.iso} title={timestamp.value}>{relativeTime(timestamp.iso)}</time>}</td>
                 </tr>
               })}
             </tbody>
@@ -2089,7 +2095,7 @@ function Activity({
                       {entry.detail && <p className="help">{entry.detail}</p>}
                     </td>
                     <td>{entry.actor}</td>
-                    <td><time dateTime={entry.created_at} title={date(entry.created_at)}>{relativeTime(entry.created_at)}</time></td>
+                    <td className="muted"><time dateTime={entry.created_at} title={date(entry.created_at)}>{relativeTime(entry.created_at)}</time></td>
                   </tr>
                 );
               })}

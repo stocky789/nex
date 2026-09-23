@@ -695,7 +695,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'state': 'running', 'freshness': 'fresh', 'guest': guest} for v in vms]) if route.request.method == 'GET' else route.continue_())
         page.reload()
         guest_badge = page.get_by_role('region', name='Guest tools', exact=True).locator('.section-heading .badge')
-        expect(guest_badge).to_have_text('disconnected')
+        expect(guest_badge).to_have_text('Disconnected')
         guest_badge.scroll_into_view_if_needed()
         capture('guest-tools-disconnected')
         page.unroute('**/api/v1/vms')

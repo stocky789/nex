@@ -2,53 +2,22 @@
 
 Date: 2026-09-23
 Plan: [2026-09-23-controller-ui-modernization.md](2026-09-23-controller-ui-modernization.md)
-State: Tasks 1–6 are complete and reviewed. Task 7 is implemented, but its first fix round is half
-done. Tasks 8–13 have not started. Nothing is committed: every change is unstaged in the working tree
-for the project owner to commit.
+State: Tasks 1–13 are implemented and reviewed. Tasks 1–6 and part of Task 7 are in commit
+`0cc49ef`. The rest is unstaged in the working tree for the project owner to commit. Evidence is in
+[the QA checks](../qa/controller-ui-modernization/checks.md).
 
-## Where things stand
+## Gates
 
-| Task | State | Notes |
-|---|---|---|
-| 1 Capture harness | Complete, reviewed | `tests/integration/ui_review_browser.py`, `tests/integration/fixtures/ui-review.json` |
-| 2 Tokens, no gradients | Complete, reviewed | `web/src/tokens.css`, `tokens.test.mjs`; see ruling R1 |
-| 3 Badge and Banner | Complete, reviewed | `web/src/ui.tsx`, `ui.test.mjs`; every badge site routed through `Badge` |
-| 4 Labels, relative time | Complete, reviewed | `web/src/labels.ts`, `labels.test.mjs` |
-| 5 Menubar → Actions menu, underline tabs | Complete, one fix round | `phase1_browser.py` now matches the new chrome; login eyebrow stays hidden |
-| 6 Task strip, failure notices | Complete, one fix round | `web/src/dock.ts`, `dock.test.mjs`; one combined notice per poll; no duplicate heading in the strip |
-| 7 Tree, off-canvas, icon toolbar | **Fix round 1 interrupted** | See "Finish Task 7" below |
-| 8 Tables, panels, pool Hosts table | Not started | |
-| 9 Forms, dialogs, editor, sign-in | Not started | Adds `--brand-plate`; replaces the dialog backdrop (see R1) |
-| 10 Stats, console focus mode, Updates | Not started | Guide: `vm-console.md` Focus mode |
-| 11 Icons | Not started | |
-| 12 Dark theme | Not started | |
-| 13 Evidence, changelog, change record | Not started | `check_docs.py --worktree` fails until this task adds the change record (expected) |
+Last run on the final working tree:
 
-Last verified on the current working tree: `node web/src/tokens.test.mjs`, `npm --prefix web run
-typecheck`, `npm --prefix web test` (every `src/*.test.mjs`) and `npm --prefix web run build` all pass.
-`python3 scripts/check_docs.py --worktree` still fails because the change record is missing; Task 13
-adds it.
+- `npm --prefix web run typecheck`, `npm --prefix web test` and `npm --prefix web run build` pass.
+- `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` passes.
+- `python3 scripts/generate_api.py --check` passes.
+- `tests/integration/phase1.py --browser` passes all 22 groups.
+- `node web/src/tokens.test.mjs` passes. It now also checks chart series at 3:1 against the panel in both themes.
 
-## Finish Task 7 first
-
-The review of Task 7 raised four Important findings. Fix round 1 was stopped partway:
-
-1. **Done, not re-reviewed.** Focus on a restored-open tree: focus now moves only on user actions,
-   never from the `[treeOpen]` effect, so an off-canvas tree restored from `nex.tree` does not grab
-   focus. Still open: the toggle click must focus the resource search input on open. Check that
-   `onClick` for `.tree-toggle` in `main.tsx` does this; the stop came while this edit was in progress.
-2. **Done, not re-reviewed.** The tree row's `aria-label` now includes ", pool master".
-3. **Done, not re-reviewed.** The aside gets `inert` when it is off-canvas and closed (a new `narrow`
-   state follows the 900 px media query).
-4. **Not done.** Between 901 and 1050 px, a host name wraps onto three lines when a non-fresh badge
-   sits inline. Fix it with a small change to the `@media (max-width: 1050px)` block: widen the aside
-   column, or let the badge wrap under a name kept on one line.
-5. **Not done (minor).** The `.toolbar-label` visually-hidden rule duplicates `.sr-only`; combine
-   the selectors.
-
-Then re-run the checks above and a 390 px browser check: no horizontal page scroll; Tab from the top
-does not enter the closed tree; the toggle opens it with focus in search; Escape closes it and focus
-returns to the toggle. After that, run a scoped re-review of the fix.
+`python3 scripts/check_docs.py --worktree` passes. The change record's guide pages are the ones
+changed in the working tree. The pages changed in `0cc49ef` are listed under its paths.
 
 ## Rulings made during execution
 
@@ -65,39 +34,40 @@ returns to the toggle. After that, run a scoped re-review of the fix.
   `create-virtual-machine.md`, `replace-a-failed-system-disk.md`, `software-updates.md`) were updated
   because they described the removed menubar or the always-open "Recent tasks" drawer. Notice text
   now says "the Tasks strip".
+- **R5 (Task 8).** `.panel` keeps `overflow: visible` rather than the plan's `hidden` (BUG-0050), and
+  no table header is sticky: inside `.table-scroll` it could never stick. Tables get tabular
+  numerals globally instead of a `.num` class. The pool fencing summary is one info banner above
+  the Hosts table; each row keeps its badge, with the reasons behind a **Why** disclosure.
+- **R6 (Task 9).** The sign-in lockup's porcelain plate is a spread `box-shadow`, because the mark
+  is a positioned sprite and padding would expose the neighbouring artwork. The dialog padding
+  stayed at 14 px 16 px: eight dialogs pull their headings to the edge with matching margins.
+- **R7 (Task 10).** The Updates badge uses the reported `update_available` flag. The plan's
+  `versionLight` call only parses "Nex Core" version strings.
+- **R8 (Task 13).** The toolbar clipped between 901 and about 1250 px, so navigation and VM power
+  are icon-only with tooltips up to 1280 px. The heading and tab bar were tightened by 8 px so
+  1024×768 reaches the 520 px content target.
 
-## Deferred minor findings (for the final review to triage)
 
-- `ui_review_browser.py`: an unused `time` import, and query values that are not URL-decoded. Both
-  come verbatim from the plan's code.
-- `.topbar` border colour equals its background. Task 5 was meant to set `border-bottom: 0`; check it.
-- `storage.tsx` `ZFSPoolLines` keeps a raw `badge warn` span, which wraps, outside `Badge`.
-- Badge text is now title case everywhere ("Fresh", "Unknown"), as the plan intends.
-- Raw status still appears in two sentences: "Inventory refresh ${op.status}." and "Creation
-  ${status}" in `main.tsx`. `HostHealthSummary` still shows raw check names. The operation kinds
-  `pool-member-join` and `pool-storage-reconcile` use the fallback label.
-- `phase1_browser.py` lost its menu auto-close assertion when the File menu went. Add it back on the
-  Actions menu after "Revoke access" is clicked.
+## Open minor findings
+
+- `storage.tsx` `ZFSPoolLines` still renders a raw `badge warn` span outside `Badge`.
+- The "Creation ${status}" sentence in `main.tsx` and `HostHealthSummary` still show raw values.
+  The operation kinds `pool-member-join` and `pool-storage-reconcile` use the fallback label.
 - The multi-failure notice logic sits inline in `reload()` and has no unit test.
 - No test pins the delete-VM notice text that `docs/guide/delete-virtual-machine.md` quotes.
+- `ui_review_browser.py` does not URL-decode query values. This comes verbatim from the plan's code.
+- At 390 px the icon toolbar takes two rows, not one.
+- Console status text built from an API error can lack its full stop ("VM not found Retrying…").
 
-## How to resume
+## Local review setup
 
-- The ledger of task state, with briefs, reports and review diffs for each task, is local and
-  git-ignored under `.superpowers/sdd/2026-09-23-controller-ui-modernization/`. Each task was
-  implemented by one agent and reviewed by another; the reports there hold the command output.
-- Local review setup, also git-ignored, is under `.cache/ui-review/`:
-  - `start.sh` serves the working-tree UI on `https://127.0.0.1:18443`.
-  - `start.sh base` serves the pre-modernization UI on port 18444.
-  - `admin-password` holds the local administrator password for user `root`.
-  - `captures/ui-before/` holds the 40 baseline captures that Task 13 compares against.
-  - Browser checks run with `.cache/ui-qa-venv/bin/python`.
-  - Rebuild the UI with `npm --prefix web run build`; a page reload picks it up.
-- Continue with the plan's Task 8, then Tasks 9–13 in order; almost every task edits `main.tsx` and
-  `style.css`, so run them one at a time. Task 13 runs the after-captures and the phase 1 browser
-  lab, and writes `docs/qa/controller-ui-modernization/checks.md`, the changelog entry and
-  `docs/changes/2026-09-23-controller-ui-modernization.json`. That change record must also list the
-  extra guide pages from R4 and this handover file.
+This is git-ignored and local to the machine that ran it, under `.cache/ui-review/`:
+
+- `start.sh` serves the working-tree UI on `https://127.0.0.1:18443`.
+- `start.sh base` serves the pre-modernization UI (`3068134`) on port 18444.
+- `admin-password` holds the local administrator password for user `root`.
+- `captures/ui-before/` and `captures/ui-after/` hold the 40-view capture sets.
+- Browser checks need Python Playwright.
 
 API impact: none; presentation only. State owner: none; `nex.dock` and `nex.tree` are per-browser
 preferences.

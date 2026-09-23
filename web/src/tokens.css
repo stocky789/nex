@@ -27,6 +27,7 @@
   --info: #2456D9; --info-bg: #E4ECFF;
   --neutral: #5B6478; --neutral-bg: #E5E8F3;
   --console-bg: #000000;
+  --brand-plate: #F6F7FC;
   --series-1: #2456D9; --series-2: #0E7490; --series-3: #7C3AED; --series-4: #0F8A5F;
   --series-5: #9A6700; --series-6: #B42318; --series-7: #5B6478; --series-8: #3478FF;
   --radius-control: 4px;
@@ -34,4 +35,35 @@
   --shadow-pop: 0 8px 24px rgba(23, 35, 59, .16), 0 1px 2px rgba(23, 35, 59, .08);
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+/* The brand's supporting dark palette, applied only when the operator's system asks for it.
+   Delete this block to make the Controller light-only. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --canvas: #202B3B;
+    --panel: #26324A;
+    --sunken: #2A3649;
+    --line: #3A4860;
+    --line-soft: #2F3D55;
+    --text: #E5E8F3;
+    --muted: #AAB5C8;
+    --accent: #7BA7D9;
+    --accent-hover: #9CC0EA;
+    --on-accent: #17233B;
+    --select: #2C3F63;
+    --topbar: #17233B;
+    --on-topbar: #E5E8F3;
+    --focus: #9CC0EA;
+    --danger: #F1A8A2;
+    --on-danger: #17233B;
+    --ok: #7FD8A4; --ok-bg: #1E3A2C;
+    --warn: #F2C067; --warn-bg: #3D2F14;
+    --bad: #F1A8A2; --bad-bg: #452224;
+    --info: #9CC0EA; --info-bg: #23375A;
+    --neutral: #AAB5C8; --neutral-bg: #2A3649;
+    --series-1: #7BA7D9; --series-2: #5EC4D6; --series-3: #B79CF2; --series-4: #7FD8A4;
+    --series-5: #F2C067; --series-6: #F1A8A2; --series-7: #AAB5C8; --series-8: #9CC0EA;
+    --shadow-pop: 0 8px 24px rgba(0, 0, 0, .5);
+  }
 }

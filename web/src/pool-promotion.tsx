@@ -365,22 +365,24 @@ export function watchdogText(member: PromotionMember, authoritative: boolean) {
   return `Watchdog: ${method.reason || method.state}`;
 }
 
-// The Fencing cell: one badge whose text carries the state, the reasons under it, and what
-// every other host's last look at this host's fence device found. Nothing here is colour
+// The Fencing cell: one badge whose text carries the state, and behind **Why** the reasons,
+// the fence device and what every other host's last look at it found. Nothing here is colour
 // alone, and nothing is hidden behind a hover.
 export function FencingCell({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
   const fencing = fencingText(member, authoritative);
   const checks = fenceCheckLines(member, authoritative);
+  // "not reported" is the pool master's answer for every row; the notice above the table says it once.
+  const reasons = fencing.label === "not reported" ? [] : fencing.reasons;
   return <>
     <Badge value={fencing.badge} label={fencing.label} />
-    {fencing.reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
-    <small>{fenceText(member, authoritative)}</small>
-    {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
-    {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
-    {checks.length > 0 && <details className="pool-fence-checks">
-      <summary>What each host found</summary>
-      <ul>{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>
-    </details>}
+    <details className="fold">
+      <summary>Why<span className="sr-only"> for {member.name || member.host_id}</span></summary>
+      {reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
+      <small>{fenceText(member, authoritative)}</small>
+      {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
+      {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
+      {checks.length > 0 && <ul className="pool-fence-checks">{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>}
+    </details>
   </>;
 }
 

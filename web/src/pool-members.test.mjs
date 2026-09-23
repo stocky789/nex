@@ -36,6 +36,7 @@ assert.doesNotMatch(empty, /<table/);
 
 // Members render with their role badges, and a failing member shows the Core-reported message.
 const rows = table({ report });
+assert.match(rows, /^<p class="banner info" role="status">Fencing: not reported[^<]*<\/p><div class="table-scroll">/, "the pool's fencing line sits once above the table");
 assert.match(rows, /data-host-id="host-a"/);
 assert.match(rows, /data-host-id="host-b"/);
 assert.match(rows, /Pool master/);
@@ -247,7 +248,7 @@ assert.equal(replicaText(member).label, "unknown", "a member with no replica rep
 // never arrive without one, and the master's acknowledgement disappears with the master.
 const staleReplica = table({ report: { ...withReplica(replicaOf({ state: "unverified", verified: false })), master_connection: "stale", authoritative: false } });
 assert.match(staleReplica, /badge warn">unverified</, "the member's own report of its copy is still shown");
-assert.match(staleReplica, /Received 2026-09-19T10:04:11Z/, "and when it received it");
+assert.match(staleReplica, /Received <time dateTime="2026-09-19T10:04:11Z"/, "and when it received it");
 assert.doesNotMatch(staleReplica, /Acknowledged/, "the acknowledgement is the master's observation");
 assert.doesNotMatch(staleReplica, /This host reports copy/, "and so is the number it is compared with");
 assert.doesNotMatch(table({ report: { ...withReplica(replicaOf({})), master_connection: "stale", authoritative: false } }), /generations behind/, "nothing is called behind without the master's generation");
@@ -256,7 +257,7 @@ assert.doesNotMatch(table({ report: { ...withReplica(replicaOf({})), master_conn
 const currentRows = table({ report: withReplica(replicaOf({})) });
 assert.match(currentRows, /<th>Authority copy<\/th>/);
 assert.match(currentRows, /badge ok">current</);
-assert.match(currentRows, /Received 2026-09-19T10:04:11Z · Acknowledged 2026-09-19T10:04:11Z/);
+assert.match(currentRows, /Received <time dateTime="2026-09-19T10:04:11Z" title="2026-09-19T10:04:11Z">[^<]+<\/time> · Acknowledged <time dateTime="2026-09-19T10:04:11Z"/);
 assert.doesNotMatch(currentRows, /This host reports copy/, "agreeing reports need no explanation");
 
 // The master's own row holds the authority; it is not blank and it is not a state.
@@ -280,9 +281,9 @@ assert.match(refusedRows, /task-error">replica signature does not verify against
 const awaitingRows = table({ report: withReplica({ generation: 0, digest: "", verified: false, received_at: "", acknowledged_generation: 0, acknowledged_at: "", error: "", state: "awaiting" }) });
 assert.match(awaitingRows, /awaiting first copy/);
 assert.doesNotMatch(awaitingRows, /This host reports copy/);
-assert.equal(replicaTimes({ generation: 0, acknowledged_generation: 0 }), "");
-assert.equal(replicaTimes(null), "");
-assert.equal(replicaTimes(replicaOf({ acknowledged_at: "" })), "Received 2026-09-19T10:04:11Z");
+assert.equal(replicaTimes({ generation: 0, acknowledged_generation: 0 }), null);
+assert.equal(replicaTimes(null), null);
+assert.match(renderToStaticMarkup(replicaTimes(replicaOf({ acknowledged_at: "" }))), /^<small>Received <time dateTime="2026-09-19T10:04:11Z" title="2026-09-19T10:04:11Z">[^<]+<\/time><\/small>$/);
 
 // A member the master records as too old to hold a copy: the state and Core's reason.
 const upgradeRows = table({ report: withReplica(replicaOf({ generation: 0, acknowledged_generation: 0, verified: false, received_at: "", acknowledged_at: "", state: "unsupported", error: "host core-b does not advertise pool-authority-replica-v1; upgrade it" })) });
@@ -340,7 +341,7 @@ assert.match(withActions, /<details class="pool-row-actions"><summary>Actions<sp
 assert.match(withActions, />Make pool master</);
 assert.match(withActions, />Eject from pool</);
 assert.equal((withActions.match(/<th[ >]/g) || []).length, 9, "one actions column, after the Fencing one");
-assert.match(withActions, /<th><span class="sr-only">Actions<\/span><\/th>/);
+assert.match(withActions, /<th class="pool-actions-cell"><span class="sr-only">Actions<\/span><\/th>/);
 assert.equal((table({ report: transferReport }).match(/<th[ >]/g) || []).length, 8, "no actions column without handlers");
 // Without the handlers (an unavailable view) there are no row actions at all.
 assert.doesNotMatch(table({ report: transferReport }), /pool-row-actions/);
@@ -438,7 +439,7 @@ assert.match(recoveryRows, /badge bad">Restricted<\/span>/);
 assert.match(recoveryRows, /this host&#x27;s pool authority was superseded by another master/);
 assert.match(recoveryRows, /<small>Since 2026-09-19T10:11:00Z<\/small>/);
 assert.match(recoveryRows, /Virtual machines this host still defines that the pool records elsewhere: vm-7/);
-assert.match(recoveryRows, /<td class="pool-replica-cell"><span class="badge neutral">unknown<\/span><small>Received 2026-09-19T10:04:11Z<\/small><\/td>/, "the member's own copy is still reported, without a claim the master alone could support");
+assert.match(recoveryRows, /<td class="pool-replica-cell"><span class="badge neutral">unknown<\/span><small>Received <time dateTime="2026-09-19T10:04:11Z" title="2026-09-19T10:04:11Z">[^<]+<\/time><\/small><\/td>/, "the member's own copy is still reported, without a claim the master alone could support");
 // A candidate that has not verified the copy it holds is not offered the action at all.
 assert.match(table({ report: { ...recovery, members: [recovery.members[0], { ...recovery.members[1], replica: replicaOf({ state: "unverified", verified: false }) }] }, ...handlers, onPromote: () => {} }),
   /disabled=""[^>]*>Promote to pool master…<\/button><small>This host does not report a copy of the pool records it has verified, so it cannot be promoted\.<\/small>/);
@@ -446,7 +447,7 @@ assert.match(recoveryRows, /Fence device: unknown — the pool master keeps this
 assert.match(recoveryRows, /<button type="button" class="danger">Promote to pool master…<\/button>/);
 assert.match(recoveryRows, /<button type="button" disabled="">Set BMC access…<\/button>/);
 assert.equal((recoveryRows.match(/<th[ >]/g) || []).length, 9, "the recovery view adds no further column");
-assert.equal((recoveryRows.match(/<details/g) || []).length, 2, "one disclosure per row, not one per slice");
+assert.equal((recoveryRows.match(/<details class="pool-row-actions"/g) || []).length, 2, "one disclosure per row, not one per slice");
 // Core's own pool-restricted check is not repeated in the convergence cell beside the badge.
 const checkedRestricted = table({ report: { ...recovery, members: [recovery.members[0], { ...recovery.members[1], checks: [{ name: "pool-restricted", status: "failed", detail: restricted.reason }] }] }, ...handlers });
 assert.equal((checkedRestricted.match(/superseded by another master/g) || []).length, 1);

@@ -6,7 +6,7 @@ Reads are answered from tests/integration/fixtures/ui-review.json; the sign-in, 
 and every write go to the real Controller. Console tabs therefore report "not found": no host
 exists behind the fixture. Fictional names and RFC 5737 addresses only.
 """
-import argparse, json, math, re, time
+import argparse, json, math, re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright

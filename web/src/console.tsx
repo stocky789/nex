@@ -106,6 +106,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   const [fromVM, setFromVM] = useState("");
   const [clipNote, setClipNote] = useState("");
   const [typing, setTyping] = useState(0); // characters left to type; 0 when idle
+  const [focus, setFocus] = useState(false);
   const busy = useRef(false);
   const mounted = useRef(true);
   const retry = useRef<number | undefined>(undefined);
@@ -113,6 +114,15 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
   const wanted = useRef(false);
   const stop = () => { wanted.current = true; window.clearTimeout(retry.current); rfb.current?.disconnect(); rfb.current = null; };
   useEffect(() => () => { mounted.current = false; stop(); }, []);
+  // Focus mode hides the Controller chrome around the console. Escape leaves it, except while the
+  // guest display has the keyboard: there Escape belongs to the guest.
+  useEffect(() => {
+    document.body.classList.toggle("console-focus", focus);
+    if (!focus) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !screen.current?.contains(document.activeElement)) setFocus(false); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.classList.remove("console-focus"); document.removeEventListener("keydown", onKey); };
+  }, [focus]);
   // Resize is offered only where a guest has reported it can act on the request: a VirtIO
   // display and the running agent that applies the resolution. No report at all — a host
   // console, an older Core, the moment before a VM's first report — is not evidence of the
@@ -254,6 +264,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
         <button type="button" className="primary" disabled={power.busy} aria-describedby={startHintID} onClick={() => power.onStart()}>{power.busy ? "Starting…" : "Start VM"}</button>
         <span id={startHintID} className="console-hint">Starts the VM with this console open, so it attaches in time for any boot prompt, such as “Press any key to boot from CD or DVD”.</span>
       </>}
+      <span className="console-group">
       <button disabled={!live} onClick={() => rfb.current?.focus({ preventScroll: true })}>Focus console</button>
       <button disabled={!live || viewOnly} onClick={() => rfb.current?.sendCtrlAltDel()}>Send Ctrl+Alt+Del</button>
       <select aria-label="Send key combination" disabled={!live || viewOnly} value="" onChange={e => { const combo = keyCombos[Number(e.target.value)]; if (combo) sendCombo(combo.keys); }}>
@@ -261,7 +272,8 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
         {keyCombos.map((combo, i) => <option key={combo.label} value={i}>{combo.label}</option>)}
       </select>
       <button disabled={!live} aria-pressed={clipboardOpen} onClick={() => setClipboardOpen(v => !v)}>Clipboard</button>
-      {drives.map(drive => {
+      </span>
+      {drives.length > 0 && <span className="console-group">{drives.map(drive => {
         // With one drive there is nothing to tell apart, so it keeps the name the toolbar has
         // always used; the caller's label names a drive only when the operator has a choice.
         const label = oneDrive ? "CD/DVD" : drive.label || (drive.drive === "drivers" ? "Driver disc" : "Install media");
@@ -274,7 +286,8 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
           </label>
           <button type="button" aria-label={oneDrive ? undefined : `Eject ${label}`} disabled={mediaBusy || !drive.currentID} onClick={() => drive.onEject()}>Eject</button>
         </span>;
-      })}
+      })}</span>}
+      <span className="console-group">
       <label className="console-option">View
         <select aria-label="Display scaling" value={view} onChange={e => update({ view: e.target.value as View })}>
           <option value="fit">Fit to window</option>
@@ -288,6 +301,8 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
       <button disabled={!live} onClick={screenshot}>Screenshot</button>
       <button disabled={Boolean(disabled) || phase === "connecting"} onClick={() => { stop(); void connect(); }}>Reconnect</button>
       <button onClick={() => (document.fullscreenElement ? document.exitFullscreen() : section.current?.requestFullscreen?.())}>Full screen</button>
+      <button aria-pressed={focus} onClick={() => setFocus(v => !v)}>{focus ? "Leave focus mode" : "Focus mode"}</button>
+      </span>
       {popout && <a className="console-popout" href={popout} target="_blank" rel="noopener">Open in new window</a>}
     </div>
     {/* Two columns where there is room: the clipboard is a toolbar panel above the display,
@@ -309,9 +324,7 @@ export function Console({ name, open, disabled, guest, popout, media, power }: P
       {clipNote && <p className="help console-clip-wide" role="status">{clipNote}</p>}
     </div>}
     </div>
-    {media?.note && <p className="console-status" role="status">{media.note}</p>}
-    {disabled && <p className="warning">{disabled}</p>}
-    {detail && <p className="console-status" role="status">{detail}</p>}
+    {(media?.note || disabled || detail) && <p className="console-status" role="status">{[media?.note, disabled, detail].filter(Boolean).join(" ")}</p>}
     <div className="console-toolbar-edge">
       <button type="button" className="console-toolbar-toggle" aria-expanded={toolbarOpen} aria-controls={toolbarID} aria-label={toolbarOpen ? "Collapse console toolbar" : "Expand console toolbar"} title={toolbarOpen ? "Collapse console toolbar" : "Expand console toolbar"} onClick={() => setToolbarOpen(v => !v)}>
         <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16"><path d={toolbarOpen ? "M3 10l5-5 5 5" : "M3 6l5 5 5-5"} fill="none" stroke="currentColor" strokeWidth="2" /></svg>
