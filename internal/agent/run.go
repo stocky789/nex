@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,7 +144,7 @@ var ApplianceJournalDir = "/var/lib/nex/core-local/vmhost"
 // PoolPeerListen is the address this host's Core-to-Core peer listener is bound to, which
 // is also the origin the master hands a joining host. The commands set it from their
 // --pool-peer-listen flag before starting the agent.
-var PoolPeerListen = ":9444"
+var PoolPeerListen = ":" + strconv.Itoa(protocol.DefaultPoolPeerPort)
 
 func completeJournal(s *Store, inv *protocol.Inventory, timeout time.Duration) {
 	for id, e := range s.State.Journal {
@@ -277,6 +278,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// The staged join is Core's own durable record. Reporting it is how a replaced
 	// Controller adopts an interrupted join; the invitation is never part of it.
 	managed.Join = PoolJoinReport(s)
+	// This host's own peer address is an observation for the join dialog to offer; the
+	// join records it durably on the master. A host with no route reports none.
+	if origin, originErr := ownPeerOrigin(); originErr == nil {
+		managed.PeerOrigin = origin.String()
+	}
 	if storage != nil {
 		managed.Storage = storage.Overlay(managed.Storage)
 	}

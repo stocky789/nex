@@ -96,6 +96,9 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
    beside the ready link before accepting its trust warning. DHCP uses a hostname certificate
    while the link uses its discovered IP, so the browser may also report a name mismatch.
+   Hosts added later with **Add host** are told that hostname to verify by, so giving them
+   the appliance's IP as the Controller address works; see
+   [Set up Nex Controller and enroll a host](manage-controller.md).
    Check that the chosen Site, the automatically created pool showing this host as
    **Pool master**, and the enrolled host appear in Controller. The appliance
    remains visible in the host-local **Virtual machines** list and in Controller's

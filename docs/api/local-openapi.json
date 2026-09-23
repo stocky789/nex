@@ -1242,7 +1242,7 @@
    "post": {
     "operationId": "localEnroll",
     "summary": "Push an enrollment token to this host",
-    "description": "Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent's on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller's rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.",
+    "description": "Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. server_name, when set, is the DNS hostname the Controller certificate is verified by and is kept with the identity for every later report; it must be a DNS hostname, not an IP address. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent's on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller's rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.",
     "security": [
      {
       "LocalSession": []
@@ -2333,6 +2333,10 @@
      "replace_host": {
       "type": "string",
       "description": "Existing revoked host id being re-enrolled, at most 128 characters. Omit for a new host."
+     },
+     "server_name": {
+      "type": "string",
+      "description": "DNS hostname to verify the Controller certificate by when controller_url's host is not one of the certificate's names, for example the hostname of a Controller appliance deployed with DHCP. Must be a DNS hostname, never an IP address. Omit to verify by controller_url's host."
      }
     },
     "required": [

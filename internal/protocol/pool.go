@@ -134,6 +134,10 @@ type PoolMembership struct {
 // falling back to a partial exchange.
 const PoolJoinCapability = "pool-join-v1"
 
+// DefaultPoolPeerPort is the port a Core's pool-peer listener binds unless configured
+// otherwise; a Controller assumes it only for a host that does not report its peer origin.
+const DefaultPoolPeerPort = 9444
+
 // PoolMaintenanceCapability gates the drain flag: the maintenance command and the two
 // PoolMember fields above.  A Controller talking to a master without it offers no toggle,
 // because the refusal that makes the flag mean anything lives in the master.

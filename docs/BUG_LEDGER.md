@@ -7302,3 +7302,39 @@ Append resolved defects with their evidence and the approach to avoid.
 - Regression: `python3 tests/integration/installer-disk.py` (plus installer-qol/keyboard/hostname/link). Native 800×600/1024×768 wizard capture against a rebuilt ISO remains outstanding.
 - Avoid: packing an unconstrained tree view into a dual-axis scrolled viewport on the installer.
 
+
+## BUG-0529 — Installer Disk list columns could not be resized and sat at minimum widths
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found from operator screenshot.
+- Symptom: On the GUI Disk step the resize cursor appeared on every column divider but dragging changed nothing, and Device/Capacity/Type/Contents were squeezed to their minimum widths while Model and Serial took the rest.
+- Root cause: BUG-0528 gave Model and Serial GTK2 `expand`. An expand column's share of the slack is re-added on top of whatever width a drag sets, so it can never be dragged narrower, and the stale slack made widening any other column overflow instead of reflow; the remaining columns had only minimum widths.
+- Fix: No expand columns. The list's `size-allocate` handler shares the width by weight (Device 13 %, Capacity 12 %, Type 8 %, Model 25 %, Serial 22 %, Contents 20 % of the width after the 40 px Use column) as fixed widths, so GTK2's plain fixed-column drag applies and the last column absorbs slack.
+- Regression: `python3 tests/integration/installer-disk.py` now allocates the real disk list under Xvfb, asserts the default spread fills the list without sideways scroll, and drags Model, Serial and Device dividers with XTest, asserting each width changes. The installer workflows install `libgtk2.0-dev xvfb` for it. Native BMC-console capture against a rebuilt ISO remains outstanding.
+- Avoid: `gtk_tree_view_column_set_expand` on a GTK2 column the operator is meant to resize.
+
+## BUG-0530 — Installer disk serial blank for SATA, SAS, SCSI and virtio disks
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; reported by the project owner from the GUI Disk step.
+- Symptom: The Serial column, the text wizard's disk choices and erase review, and the recorded `disk_serial` were empty for every disk except NVMe, so the "Disk serial changed" guard compared blank with blank.
+- Root cause: All three readers only read `device/serial`, which exists for NVMe controllers alone. virtio-blk reports `serial` on the block device, and SCSI-class disks (SATA, SAS, USB) only expose the unit-serial VPD page `device/vpd_pg80`, a 4-byte binary header followed by the serial. Xen virtual disks report none.
+- Fix: One shared `nex_install_disk_serial` in the installer helper unit reads `device/serial`, then `serial`, then `device/vpd_pg80` past its header; the GTK wizard and nex-config call it and the text wizard's `disk_serial` mirrors the same order, so the recorded and re-read serials always agree.
+- Regression: `python3 tests/integration/installer-disk.py` runs the helper against NVMe, virtio, VPD-only, empty-page and Xen sysfs trees; `python3 tests/integration/installer-text-wizard.py` lists and records a VPD-only mirror partner and a virtio-style disk. Real SATA/SAS hardware readout remains outstanding.
+- Avoid: reading a single sysfs attribute for a fact that differs by bus; keep the readers on one shared helper.
+
+## BUG-0531 — Add host failed against a DHCP-deployed appliance: certificate has no IP SANs
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; reported by the project owner while adding a second host.
+- Symptom: **Add host** with the appliance's IP as the Controller address failed with `host could not enroll with the controller at https://<ip>:8443: ... x509: cannot validate certificate for <ip> because it doesn't contain any IP SANs`. The host that deployed the appliance had enrolled fine.
+- Root cause: A bundled Controller deployed with DHCP mints its certificate before it has an address, so it names only its hostname (`instanceTLS` in `internal/localcore/deploy.go`). The deploying host is told that name to verify by (`ControllerServerName`), but `addSiteHost` pushed only `controller_url`, `ca_pem`, `token` and `replace_host`, and the manual `nex-core-agent enroll` had no way to give the name either, so every host added by IP verified the certificate against the IP.
+- Fix: `POST /api/local/v1/enrollment` gains optional `server_name` and `nex-core-agent enroll` gains `--server-name`; `agent.Enroll` takes the name (the deployment handoff passes it instead of writing the store) and keeps it with the identity. `addSiteHost` parses its served certificate and sends its first DNS name only when the certificate does not name the Controller address, so older hosts still enroll whenever it does; a host-side 400 after sending it is answered with the certificate's name and the upgrade.
+- Regression: `TestAddSiteHostSendsCertificateServerName` (hostname-only certificate, Controller address by IP; failed with the exact error above before the fix), `TestAddSiteHostOlderHostRejectsServerName`, `TestAddSiteHostSuccess` (no name sent when the certificate names the address) in `internal/controller`; `TestEnrollmentRecordsServerName` in `internal/localcore`. Run by `go test ./...` in every phase1 workflow and the github.com job. Adding a real host to a DHCP-deployed appliance was not re-run after the fix.
+- Avoid: enrolling a host with fewer facts than the deploying host was given; the served certificate's names, not the address, decide what a host must verify by.
+
+## BUG-0532 — Add host to pool read as the place to add a new host by address
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; reported by the project owner while adding a second host.
+- Symptom: With one host enrolled, the operator opened the pool's **Add host to pool** to add a freshly installed host by IP. The dialog listed nothing, showed a **Peer address** field and a disabled confirm button, and the operator concluded the product was broken.
+- Root cause: The dialog assumed the operator knew that enrollment is the site's **Add host** and that every enrolled host is already the master of its own pool. Its empty state named the toolbar button in prose only, and the address field and confirm button rendered before any host was chosen, so an empty dialog looked like a form for a new host's address.
+- Fix: The dialog opens with one sentence stating the model; with nothing to list it shows **Enroll a new host…**, which closes the dialog and opens the site's Add host form; the peer address and confirm button render only after a host is selected; the enrollment success line says the join is done from the pool's Hosts tab. Label unchanged (decision: project owner, 2026-09-23).
+- Regression: `node web/src/pool-members.test.mjs` (model sentence; no address field or confirm button before a selection; Enroll button only when the page provides the form) and `tests/integration/site_selector_browser.py` (empty dialog → Enroll a new host → Add host form; selection reveals the address and confirm), step "Verify searchable site selection" in both `phase1` workflows. Captures inspected under `.cache/site-selector-browser/join-dialog-*.png`.
+- Avoid: rendering a dialog's inputs before the choice they depend on; an empty list needs an action, not a pointer to another button.

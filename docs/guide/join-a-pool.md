@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.4. Add an enrolled Nex Core host to another host's pool from Nex
+Development product 0.4.5. Add an enrolled Nex Core host to another host's pool from Nex
 Controller: pool detail → **Hosts** → **Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared
 repositories); the joining host performs the join itself and reports its own progress, and
@@ -50,11 +50,14 @@ Known limits in this release:
    [Put a pool host into maintenance](host-maintenance-mode.md); the authority copy each member
    holds is covered in [Pool authority and recovery](pool-authority-and-recovery.md). Both read
    *unknown* while the pool master is not fresh.
-2. Select **Add host to pool**. The dialog lists the other enrolled hosts at this site; each is
-   the master of its own single-host pool until it joins. A host that cannot join is shown as
-   **cannot join** and cannot be selected. A host that has not enrolled yet is not listed: the
-   dialog says *There is no other enrolled host at this site to add*. Enroll it first with
-   **Add host** in the toolbar, then return here once it reports.
+2. Select **Add host to pool**. The dialog opens by saying what it does: the pool grows by
+   joining a host already enrolled in this site, and every enrolled host starts as the master
+   of its own pool. It then lists the other enrolled hosts at this site. A host that cannot
+   join is shown as **cannot join** and cannot be selected. A host that has not enrolled yet
+   is not listed, and the dialog cannot take its address: it says *There is no other enrolled
+   host at this site yet* and offers **Enroll a new host…**, which opens the site's **Add
+   host** form (see [Set up Nex Controller and enroll a host](manage-controller.md)). Enroll
+   the host there, then return here once it reports.
 3. Select a host and read its compatibility preview. Each row is a check (connection, version,
    capability, membership, VMs, storage, uplink, CPU) with a result:
    - **compatible** — nothing to do.
@@ -64,8 +67,12 @@ Known limits in this release:
    - **refuses join** — the join is refused. Fix the cause first.
    The preview is composed from what the hosts themselves report. It is not a promise: Nex Core
    checks every refusal again when the request is submitted.
-4. Enter the **Peer address** of the joining host: the bare `https` address, with port and no
-   path, that the pool master will use to reach it — for example `https://192.0.2.12:9444`.
+4. Once a host is selected, the dialog shows its **Address** and the confirm button. The
+   address is the one the host reports for itself, so you normally change nothing. Change it
+   only if the pool master must reach this host by a different address, for example on
+   another network, and enter the address alone: no `https://`, no port. The port is the
+   host's own pool-peer listener and is never typed. A host running an older Nex Core does
+   not report its address; the field is then empty and asks for it.
 5. Select **Add host to pool** to confirm. Controller asks the master for a single-use invitation
    and hands it to the joining host as one durable command. You are not asked for the pool
    master's address: the master records its own peer address, taken from the address its pool-peer

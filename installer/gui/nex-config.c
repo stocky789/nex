@@ -58,7 +58,7 @@ static guint64 validate_disk(const char *disk, const char *size, const char *ser
     if (bytes < 16ULL*1024*1024*1024 || strcmp(expected_size,size)) fail("Disk capacity changed or is below 16 GiB; select the disk again.");
     g_free(actual);g_free(path);path=g_strdup_printf("%s/dev",base);actual=read_text(path);
     if (strcmp(actual,dev)) fail("Disk identity changed; select the disk again.");
-    g_free(actual);g_free(path);path=g_strdup_printf("%s/device/serial",base);actual=read_text(path);
+    g_free(actual);actual=nex_install_disk_serial(base);
     if (strcmp(actual,serial)) fail("Disk serial changed; select the disk again.");
     /* Never select the parent disk that supplies mounted installation media. */
     char *mounts=read_text("/proc/mounts");

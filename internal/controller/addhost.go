@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -246,6 +247,26 @@ func hostCall(ctx context.Context, client *http.Client, method, addr, path, csrf
 	return resp.StatusCode, out, nil
 }
 
+// certificateServerName returns the DNS name the host must verify the Controller's served
+// certificate by, or "" when the certificate already names the Controller address. The
+// appliance deployed with DHCP is minted before it has an address, so its certificate names
+// only its hostname while operators reach it, and tell hosts to reach it, by IP.
+func certificateServerName(certPEM, controllerURL string) string {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return ""
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	u, _ := url.Parse(controllerURL)
+	if leaf.VerifyHostname(u.Hostname()) == nil || len(leaf.DNSNames) == 0 {
+		return ""
+	}
+	return leaf.DNSNames[0]
+}
+
 func failWithHostID(w http.ResponseWriter, status int, msg, hostID string) {
 	write(w, status, map[string]string{"error": msg, "host_id": hostID})
 }
@@ -330,17 +351,28 @@ func (c *Controller) addSiteHost(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 
-	// (c) Push it to the host's local enrollment endpoint.
-	status, enrolled, err := hostCall(ctx, client, http.MethodPost, addr, "/api/local/v1/enrollment", login["csrf_token"], map[string]string{
+	// (c) Push it to the host's local enrollment endpoint. The certificate's name goes
+	// along only when the host needs it, so a host from before the field still enrolls
+	// whenever the certificate names the address.
+	push := map[string]string{
 		"controller_url": v.ControllerURL,
 		"ca_pem":         c.cfg.ServerCertPEM,
 		"token":          token,
 		"replace_host":   v.HostID,
-	})
+	}
+	serverName := certificateServerName(c.cfg.ServerCertPEM, v.ControllerURL)
+	if serverName != "" {
+		push["server_name"] = serverName
+	}
+	status, enrolled, err := hostCall(ctx, client, http.MethodPost, addr, "/api/local/v1/enrollment", login["csrf_token"], push)
 	if err != nil || status != 200 {
 		c.deleteToken(token)
 		if status == 409 {
 			failWithHostID(w, 409, cmp.Or(enrolled["error"], "already enrolled"), enrolled["host_id"])
+			return
+		}
+		if status == 400 && serverName != "" {
+			fail(w, 502, fmt.Sprintf("host could not enroll with the controller at %s: this host's Nex Core does not accept a certificate server name, and the controller certificate names %s, not this address; upgrade the host, or give a Controller address the certificate names", v.ControllerURL, serverName))
 			return
 		}
 		detail := enrolled["error"]

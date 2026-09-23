@@ -34,7 +34,7 @@ func run() error {
 	}
 	f := flag.NewFlagSet(mode, flag.ContinueOnError)
 	dir := f.String("state-dir", "/var/lib/nex-core-agent", "private local identity and journal directory")
-	var controller, caFile, tokenFile, replace *string
+	var controller, caFile, tokenFile, replace, serverName *string
 	var heartbeat, interval, timeout *time.Duration
 	switch mode {
 	case "enroll":
@@ -42,6 +42,7 @@ func run() error {
 		caFile = f.String("ca-file", "", "trusted controller CA PEM file")
 		tokenFile = f.String("token-file", "", "enrollment token file, or - for stdin")
 		replace = f.String("replace-host", "", "exact current host ID for revoked-host re-enrollment")
+		serverName = f.String("server-name", "", "DNS name to verify the controller certificate by when --controller is an address the certificate does not name")
 	case "run":
 		heartbeat = f.Duration("heartbeat", 10*time.Second, "report interval")
 		interval = f.Duration("probe-interval", 10*time.Second, "probe interval")
@@ -98,7 +99,7 @@ func run() error {
 		if len(token) > 4096 {
 			return fmt.Errorf("token exceeds 4096 bytes")
 		}
-		if err = agent.Enroll(ctx, s, strings.TrimRight(*controller, "/"), string(ca), string(token), *replace); err != nil {
+		if err = agent.Enroll(ctx, s, strings.TrimRight(*controller, "/"), string(ca), string(token), *replace, *serverName); err != nil {
 			return err
 		}
 		fmt.Println("Enrolled host", s.State.HostID)

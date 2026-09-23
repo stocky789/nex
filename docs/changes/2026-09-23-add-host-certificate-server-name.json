@@ -1,0 +1,58 @@
+{
+  "summary": "Add host tells the joining host which hostname to verify the Controller certificate by when the certificate does not name the Controller address, so enrolling against a DHCP-deployed appliance by IP works (BUG-0531).",
+  "paths": [
+    "internal/agent/client.go",
+    "internal/agent/client_test.go",
+    "internal/agent/queue_test.go",
+    "internal/localcore/enroll.go",
+    "internal/localcore/enroll_test.go",
+    "internal/localcore/handoff.go",
+    "internal/localcore/handoff_test.go",
+    "internal/controller/addhost.go",
+    "internal/controller/addhost_test.go",
+    "cmd/nex-core-agent/main.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/manage-controller.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-23-add-host-enrollment-and-join.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-add-host-certificate-server-name.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Controller address help explains that a hostname-only appliance certificate is handled by Add host and what an older host needs; the manual enrollment command documents --server-name; the appliance guide points to it.",
+    "pages": [
+      "docs/guide/manage-controller.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "POST /api/local/v1/enrollment gains optional server_name (validated as a DNS hostname, 400 otherwise); addSiteHost sends it only when its served certificate does not name the Controller address and maps an older host's 400 to a 502 naming the upgrade. Documented in docs/API.md and the host-local OpenAPI contract.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The server name is kept in the host's own agent state next to its Controller URL and trust, as the deployment handoff already did; the Controller stores nothing new and derives the name from its served certificate on every push.",
+    "record": "The host's own agent state file in its state directory (agent.State.ControllerServerName, next to Controller and TrustPEM), written by agent.Enroll with the identity and read by every later Controller connection. It is host-scoped identity, not pool state: nothing about it is on the pool master or in the Controller. A fresh Controller recovers nothing and needs nothing; the host keeps connecting to the Controller address and name it was enrolled with, and re-enrolling it with a new Controller supplies a new name the same way."
+  },
+  "verification": {
+    "method": "go test ./internal/controller/ ./internal/localcore/ ./internal/agent/ ./cmd/nex-core-agent/ -count=1 (TestAddSiteHostSendsCertificateServerName reproduced the exact 'doesn't contain any IP SANs' failure before the Controller change and passes after; TestAddSiteHostOlderHostRejectsServerName covers the older-host 400; TestEnrollmentRecordsServerName covers validation and persistence), plus the same packages under -race. Adding a real host to a DHCP-deployed appliance after the fix was not exercised.",
+    "evidence": [
+      "internal/controller/addhost_test.go",
+      "internal/localcore/enroll_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

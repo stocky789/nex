@@ -1184,7 +1184,7 @@ function App() {
                   {hostAdded ? (
                     <p role="status">
                       Host {hostAdded.host_id} enrolled in pool{" "}
-                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the tree after its first report.
+                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the tree after its first report. To make it a member of an existing pool, open that pool, then Hosts, then Add host to pool.
                     </p>
                   ) : hostProbe ? (
                     <>
@@ -1432,7 +1432,7 @@ function App() {
           ) : (
             <>
               {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} onNotice={setNotice} />}
-              {pool && !host && !vm && tab === "Hosts" && <PoolMembers key={pool.id} poolID={pool.id} api={api} unavailable={Boolean(error)} />}
+              {pool && !host && !vm && tab === "Hosts" && <PoolMembers key={pool.id} poolID={pool.id} api={api} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} />}
               {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
               {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div></>}
               {vm && tab === "Stats" && <Stats key={vm.id} kind="vm" id={vm.id} api={api} />}

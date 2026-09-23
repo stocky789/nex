@@ -96,7 +96,7 @@ func TestManagedQueueSurvivesControllerReplacement(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	second, secondTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	cmds := []protocol.Command{queuedPower("pending"), queuedPower("done"), {OperationID: "refresh", Kind: "refresh-inventory"}}
@@ -107,7 +107,7 @@ func TestManagedQueueSurvivesControllerReplacement(t *testing.T) {
 	e.Status = "succeeded"
 	s.State.Journal["done"] = e
 	before := s.State.Journal["pending"]
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err != nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.State.Journal) != 2 {

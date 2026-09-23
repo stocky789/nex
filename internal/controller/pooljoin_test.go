@@ -538,6 +538,16 @@ func TestPoolJoinCandidatesPreviewsUplinkAndRefusals(t *testing.T) {
 	if len(found) != 1 || found[0].HostID != l.member.id || !found[0].Eligible {
 		t.Fatalf("candidate preview: %+v", found)
 	}
+	// A host that reports no peer origin offers no address and Core's default port; a host
+	// that reports one offers that address and port, so the operator types nothing.
+	if found[0].PeerAddress != "" || found[0].PeerPort != protocol.DefaultPoolPeerPort {
+		t.Fatalf("peer address without a report: %+v", found[0])
+	}
+	l.member.inv.Managed.PeerOrigin = "https://192.0.2.12:9500/"
+	l.send(&l.member, nil)
+	if found = candidates(); found[0].PeerAddress != "192.0.2.12" || found[0].PeerPort != 9500 {
+		t.Fatalf("reported peer origin not offered: %+v", found[0])
+	}
 	rows := map[string]joinCandidateRow{}
 	for _, row := range found[0].Rows {
 		rows[row.Check] = row

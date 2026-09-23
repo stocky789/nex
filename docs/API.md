@@ -171,12 +171,21 @@ fingerprint against the confirmed one: a mismatch fails the handshake and return
 host's own login rate limit, 502 on any other transport failure), mints a token through
 the same `mintEnrollmentToken` helper `createEnrollmentToken` uses (same expiry, hash, and
 `enrollment-token.create` audit event), and pushes `{controller_url, ca_pem, token,
-replace_host}` to the host's `POST /api/local/v1/enrollment` with the login response's
-CSRF token. `ca_pem` is the Controller's own served HTTPS certificate (`-tls-cert`), which
-the host pins for its Controller connection; it is not the host-identity CA. A Controller
-without a configured served certificate returns 503 before contacting the host. A host-side 409 (already enrolled with this same Controller URL and trust) passes through with that host's
-`host_id`; any other host-side failure returns 502 naming `controller_url` so the operator
-knows which address the host tried to reach. Success returns `{host_id, pool_id}` (the
+replace_host, server_name}` to the host's `POST /api/local/v1/enrollment` with the login
+response's CSRF token. `ca_pem` is the Controller's own served HTTPS certificate
+(`-tls-cert`), which the host pins for its Controller connection; it is not the
+host-identity CA. `server_name` is sent only when that certificate does not name the host
+in `controller_url` and does carry a DNS name: it is the certificate's first DNS name, and
+the host verifies its Controller connection by it, exactly as the appliance deployment
+handoff already tells the deploying host to (the appliance deployed with DHCP is minted
+before it has an address, so its certificate names only its hostname while operators reach
+it by IP). Without it that host fails with `x509: cannot validate certificate for <ip>
+because it doesn't contain any IP SANs`. A Controller without a configured served
+certificate returns 503 before contacting the host. A host-side 409 (already enrolled with
+this same Controller URL and trust) passes through with that host's `host_id`; a host-side
+400 after `server_name` was sent is an older host that does not know the field and returns
+502 naming the certificate's name and the upgrade; any other host-side failure returns 502
+naming `controller_url` so the operator knows which address the host tried to reach. Success returns `{host_id, pool_id}` (the
 pool the host's enrollment created or kept, looked up from the `hosts` table) and audits
 `host.add` against the site. The root password is used once for that single login and is
 never stored, logged, or included in any error message. Any failure after a token is
@@ -187,7 +196,9 @@ without a second side effect.
 
 `localEnroll` is a host-local route (root session + CSRF, same as other mutations under
 `/api/local/v1`) that receives that pushed request and calls the same `agent.Enroll` the
-`nex-core-agent enroll` CLI uses. Attempts are serialized per host so a retried click
+`nex-core-agent enroll` CLI uses (`--server-name` is the CLI's form of `server_name`). An
+invalid `server_name` (not a DNS hostname, or an IP address) is a 400 before anything is
+stored; a valid one is persisted with the identity and used for every later report. Attempts are serialized per host so a retried click
 cannot race the embedded agent's on-disk state; the host-local handoff registry lock is
 held only to look up or start the agent, never across the network call to Controller.
 Already-enrolled-under-a-different-identity returns 409 `{error, host_id}`; a Controller
@@ -214,6 +225,10 @@ Version compatibility: this is new, additive surface. An older host without
 `nex-core-agent enroll` flow (unchanged) for such hosts. An older Controller without
 `probeHost`/`addSiteHost` simply lacks the "Add host" UI path; its manual token flow and
 `POST /api/v1/agent/enroll` are unaffected. Neither addition changes Core protocol version 1.
+`server_name` is additive and conditional: an older host still enrolls whenever the
+Controller's certificate names the address it is given, and when it does not, the operator
+is told to upgrade that host or use an address the certificate names. An older Controller
+never sends the field and an upgraded host does not require it.
 
 ## Controller appliance handoff
 
@@ -1087,6 +1102,14 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   baseline. Each row is `compatible`, `will_not_converge` or `refuses_join`; `eligible` is false
   if and only if some row is `refuses_join`, and `will_not_converge` rows do not block a join.
   It is presentation, not authorization: Core decides every refusal again at submission.
+  Each candidate also carries `peer_address` and `peer_port`: the host and port of the peer
+  origin the candidate reports for itself in `inventory.managed.peer_origin` (an observation
+  it works out from its configured peer listener at every report, the same way a master works
+  out its own origin; the Controller mirrors it for display and stores it nowhere else), or
+  `""` and Core's default port `9444` for a host that reports none. The dialog shows the
+  operator only the address, prefilled, and composes the `peer_origin` it submits from the
+  two; the POST contract above is unchanged. The join records the member's peer origin
+  durably on the master as before.
 
 **What is stored, and for how long.** The operation row, the managed-resource row (payload = the
 client request verbatim, with no invitation) and one audit row (`action = pool-join`, actor = the

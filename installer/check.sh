@@ -154,8 +154,14 @@ assert 'keeps running if one disk fails.' in graphical
 assert 'one disk can fail without stopping the host' in wizard
 assert 'compare_names' in graphical.split('/sys/class/block', 1)[1], 'both frontends list disks in one order'
 assert "within 10% of the smallest selected disk's capacity" in wizard
-assert 'device/serial' in wizard.split('step_disk()', 1)[1].split('step_erase()', 1)[0], \
+assert 'disk_serial "$name"' in wizard.split('step_disk()', 1)[1].split('step_erase()', 1)[0], \
     'the text Disk choices must name the serial like the graphical list'
+# nex-config re-reads the serial through nex_install_disk_serial, so the text wizard must
+# try the same sysfs attributes in the same order or a mirror would be refused as swapped.
+helper = Path('installer/gui/nex-network.c').read_text().split('nex_install_disk_serial(', 1)[1]
+shell = wizard.split('disk_serial() {', 1)[1].split('}', 1)[0]
+assert [a for a in ('device/serial', '"serial"', 'device/vpd_pg80') if a in helper] == ['device/serial', '"serial"', 'device/vpd_pg80']
+assert shell.index('device/serial') < shell.index('/serial"') < shell.index('device/vpd_pg80')
 assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an unconfigured adapter'
 assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
 assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in graphical, \

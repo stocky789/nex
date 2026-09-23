@@ -1,0 +1,46 @@
+{
+  "summary": "Installer Disk list shares its width across the columns by weight and dragging a column divider resizes the column (BUG-0529); both wizards and nex-config read SATA/SAS/SCSI and virtio disk serials, not only NVMe (BUG-0530).",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-network.c",
+    "installer/gui/nex-network.h",
+    "installer/gui/wizard-text.sh",
+    "installer/check.sh",
+    "tests/integration/installer-disk.py",
+    "tests/integration/installer-text-wizard.py",
+    ".github/workflows/installer.yml",
+    ".gitea/workflows/installer.yml",
+    "docs/guide/install-nex-core.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-installer-disk-columns.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "GUI Disk step notes the column spread, that a header divider can be dragged to resize a column, and which disks report a serial.",
+    "pages": ["docs/guide/install-nex-core.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local Debian installer GUI only; no Controller/Core API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installer presentation only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "python3 tests/integration/installer-disk.py (real disk list allocated under Xvfb at 1280x1024; default spread asserted; Model, Serial and Device dividers dragged with xdotool; serial helper run against NVMe, virtio, VPD-only, empty-page and Xen sysfs trees); python3 tests/integration/installer-text-wizard.py (VPD-only mirror partner and virtio-style disk listed and recorded); installer-shell/handoff/qol/keyboard/hostname/link harnesses; bash installer/check.sh. Native BMC-console capture and real SATA/SAS serial readout against a rebuilt ISO not run.",
+    "evidence": [
+      "tests/integration/installer-disk.py",
+      "tests/integration/installer-text-wizard.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

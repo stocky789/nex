@@ -6,12 +6,36 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.4` →
-> Debian `0.4.4`).
+> development software. Builds use the newest numbered changelog heading (`0.4.5` →
+> Debian `0.4.5`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.5] — 2026-09-23
+
+### Minor Feature
+
+- **Add host to pool** fills in the joining host's address by itself: each host reports the
+  address a pool master can reach it at, and the dialog shows only that address, prefilled.
+  The `https://` and the port are never typed; change the address only if the master must
+  reach the host another way.
+
+### Bug Fixes
+
+- The installer's disk list spreads its columns across the available width, and dragging a
+  column divider now actually resizes the column instead of doing nothing (BUG-0529).
+- Both installer wizards now show and record the serial of SATA, SAS, SCSI and virtio disks;
+  previously only NVMe disks had one, so the erase review and the last-moment "serial changed"
+  guard were blank for most hardware (BUG-0530).
+- **Add host** now works against a bundled Controller deployed with DHCP when the Controller
+  address is given by IP: the host is told the hostname the Controller's certificate carries,
+  instead of failing with "cannot validate certificate ... doesn't contain any IP SANs". The
+  manual `nex-core-agent enroll` gains `--server-name` for the same case (BUG-0531).
+- **Add host to pool** no longer looks like the place to add a brand-new host: it explains that
+  it joins a host already enrolled in the site, offers **Enroll a new host…** when there is none,
+  and asks for the peer address only after a host is chosen (BUG-0532).
 
 ## [0.4.4] — 2026-09-22
 

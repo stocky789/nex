@@ -73,7 +73,7 @@ func TestEnrollmentLostResponseAndIdentityPersistence(t *testing.T) {
 	defer srv.Close()
 	trust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, srv.URL, trust, "token", ""); err == nil {
+	if err := Enroll(context.Background(), s, srv.URL, trust, "token", "", ""); err == nil {
 		t.Fatal("lost response accepted")
 	}
 	if s.State.HostID != "" || s.State.PendingHostID != first.HostID || s.State.PoolID != first.PoolID || s.State.PoolName != first.PoolName {
@@ -88,13 +88,13 @@ func TestEnrollmentLostResponseAndIdentityPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err = Enroll(context.Background(), s, srv.URL, trust, "token", ""); err != nil {
+	if err = Enroll(context.Background(), s, srv.URL, trust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if s.State.KeyPEM != key || s.State.HostID != first.HostID || s.State.PendingHostID != "" || s.State.PoolID != first.PoolID {
 		t.Fatalf("identity changed: %+v", s.State)
 	}
-	if err = Enroll(context.Background(), s, srv.URL, trust, "token", ""); err == nil {
+	if err = Enroll(context.Background(), s, srv.URL, trust, "token", "", ""); err == nil {
 		t.Fatal("silent replacement accepted")
 	}
 	info, _ := os.Stat(filepath.Join(dir, "state.json"))
@@ -235,7 +235,7 @@ func TestEnrollWithReplacementController(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	second, secondTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	oldKey, host, pool, poolName := s.State.KeyPEM, s.State.HostID, s.State.PoolID, s.State.PoolName
@@ -246,16 +246,16 @@ func TestEnrollWithReplacementController(t *testing.T) {
 	s.State.Journal["op-old"] = JournalEntry{Status: "pending"}
 	s.State.StorageClusterProtocolReady = true
 	s.State.StorageClusterSessionMonitorProtocolReady = true
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", host); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", host, ""); err == nil {
 		t.Fatal("replace-host accepted against a different Controller")
 	}
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err != nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "", ""); err != nil {
 		t.Fatal("switching Controller refused:", err)
 	}
 	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 || s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
 		t.Fatalf("replacement did not keep identity with a fresh credential: %+v", s.State)
 	}
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", ""); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "", ""); err == nil {
 		t.Fatal("duplicate enrollment with the same Controller accepted")
 	}
 }
@@ -267,7 +267,7 @@ func TestEnrollWithReplacementController(t *testing.T) {
 func TestReplacementEnrollmentLostResponseKeepsActiveCredentialAndRetries(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	oldController, oldTrust := s.State.Controller, s.State.TrustPEM
@@ -322,7 +322,7 @@ func TestReplacementEnrollmentLostResponseKeepsActiveCredentialAndRetries(t *tes
 	defer second.Close()
 	secondTrust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate().Raw}))
 
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", "", ""); err == nil {
 		t.Fatal("lost replacement response accepted")
 	}
 	if s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.KeyPEM != oldKey || s.State.CSRPEM != oldCSR || s.State.CertificatePEM != oldCertificate || s.State.PendingKeyPEM == "" || s.State.PendingCSRPEM == "" {
@@ -340,7 +340,7 @@ func TestReplacementEnrollmentLostResponseKeepsActiveCredentialAndRetries(t *tes
 	if s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.KeyPEM != oldKey || s.State.CertificatePEM != oldCertificate || s.State.PendingKeyPEM == "" {
 		t.Fatal("replacement failure was not durable")
 	}
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err != nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", "", ""); err != nil {
 		t.Fatalf("replacement retry failed: %v", err)
 	}
 	if calls != 2 || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || s.State.PendingKeyPEM != "" || s.State.PendingCSRPEM != "" {
@@ -354,7 +354,7 @@ func TestReplacementEnrollmentLostResponseKeepsActiveCredentialAndRetries(t *tes
 func TestReplacementEnrollmentPrePublishFailureDoesNotLeakUnsavedPendingCSR(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	oldController, oldTrust := s.State.Controller, s.State.TrustPEM
@@ -376,7 +376,7 @@ func TestReplacementEnrollmentPrePublishFailureDoesNotLeakUnsavedPendingCSR(t *t
 	secondTrust := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate().Raw}))
 
 	s.beforePublish = func() error { return errors.New("injected pre-publication failure") }
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", "", ""); err == nil {
 		t.Fatal("pre-publication failure accepted")
 	}
 	if calls != 0 || s.State.Controller != oldController || s.State.TrustPEM != oldTrust || s.State.PendingKeyPEM != "" || s.State.PendingCSRPEM != "" {
@@ -384,7 +384,7 @@ func TestReplacementEnrollmentPrePublishFailureDoesNotLeakUnsavedPendingCSR(t *t
 	}
 
 	s.beforePublish = nil
-	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", ""); err == nil {
+	if err := Enroll(context.Background(), s, second.URL, secondTrust, "replacement-token", "", ""); err == nil {
 		t.Fatal("lost replacement response accepted")
 	}
 	if calls != 1 || request.CSRPEM == "" || request.CSRPEM != s.State.PendingCSRPEM || s.State.Controller != oldController || s.State.TrustPEM != oldTrust {
@@ -408,7 +408,7 @@ func TestReplacementEnrollmentPrePublishFailureDoesNotLeakUnsavedPendingCSR(t *t
 func TestReplacementAcceptPublishedSaveFailureKeepsPublishedStateForReconciliation(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	oldController, oldTrust, oldKey, oldCertificate := s.State.Controller, s.State.TrustPEM, s.State.KeyPEM, s.State.CertificatePEM
@@ -469,7 +469,7 @@ func TestReplacementAcceptPublishedSaveFailureKeepsPublishedStateForReconciliati
 func TestReplacementMalformedResponseDoesNotMutateJournalOrProtocolState(t *testing.T) {
 	first, firstTrust := issuingController(t, "")
 	s := testStore(t)
-	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", ""); err != nil {
+	if err := Enroll(context.Background(), s, first.URL, firstTrust, "first-token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	s.State.Journal["managed"] = JournalEntry{Command: &protocol.Command{Kind: "refresh-inventory"}, Status: "succeeded", Acknowledged: false}
@@ -498,7 +498,7 @@ func TestEnrollLegacyIdentityAdoptionAndChangedIdentityRefused(t *testing.T) {
 	s := testStore(t)
 	s.State.HostID = "legacy-host"
 	s.State.Controller, s.State.TrustPEM = "https://old.example", "old trust"
-	if err := Enroll(context.Background(), s, srv.URL, trust, "token", ""); err != nil {
+	if err := Enroll(context.Background(), s, srv.URL, trust, "token", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	hostname, _ := os.Hostname()
@@ -507,10 +507,10 @@ func TestEnrollLegacyIdentityAdoptionAndChangedIdentityRefused(t *testing.T) {
 	}
 	other, otherTrust := issuingController(t, "someone-else")
 	fresh := testStore(t)
-	if err := Enroll(context.Background(), fresh, other.URL, otherTrust, "token", ""); err == nil || fresh.State.HostID != "" || fresh.State.CertificatePEM != "" || fresh.State.PendingHostID == "" {
+	if err := Enroll(context.Background(), fresh, other.URL, otherTrust, "token", "", ""); err == nil || fresh.State.HostID != "" || fresh.State.CertificatePEM != "" || fresh.State.PendingHostID == "" {
 		t.Fatalf("Controller changing the host identity was accepted: %v %+v", err, fresh.State)
 	}
-	if err := Enroll(context.Background(), s, other.URL, otherTrust, "token", ""); err == nil || s.State.HostID != "legacy-host" || s.State.CertificatePEM == "" {
+	if err := Enroll(context.Background(), s, other.URL, otherTrust, "token", "", ""); err == nil || s.State.HostID != "legacy-host" || s.State.CertificatePEM == "" {
 		t.Fatalf("enrolled host accepted a changed identity: %v %+v", err, s.State)
 	}
 }

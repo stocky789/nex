@@ -13,6 +13,7 @@ type enrollmentRequest struct {
 	CAPEM         string `json:"ca_pem"`
 	Token         string `json:"token"`
 	ReplaceHost   string `json:"replace_host,omitempty"`
+	ServerName    string `json:"server_name,omitempty"`
 }
 
 // enrollmentState reports the local agent's current identity for GET /api/local/v1/host.
@@ -76,6 +77,10 @@ func (s *Service) enrollment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "replace_host must be at most 128 characters")
 		return
 	}
+	if v.ServerName != "" && !agent.ValidControllerServerName(v.ServerName) {
+		fail(w, 400, "server_name must be a DNS hostname")
+		return
+	}
 
 	// ponytail: one enrollment in flight per host; a genuinely concurrent retry queues
 	// behind this lock rather than racing the embedded agent's on-disk state.
@@ -110,7 +115,7 @@ func (s *Service) enrollment(w http.ResponseWriter, r *http.Request) {
 		<-done
 	}
 
-	if err := agent.Enroll(r.Context(), a.store, v.ControllerURL, v.CAPEM, v.Token, v.ReplaceHost); err != nil {
+	if err := agent.Enroll(r.Context(), a.store, v.ControllerURL, v.CAPEM, v.Token, v.ReplaceHost, v.ServerName); err != nil {
 		handoffAgents.Lock()
 		// Keep the registry's observable enrolled identity aligned with Store on
 		// every error. A pre-publication replacement failure leaves the old

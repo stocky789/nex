@@ -66,6 +66,11 @@ static gchar *property(const gchar *base, const gchar *name, const gchar *prop)
     gchar *path = g_build_filename(base, name, prop, NULL), *s = read_sys(path);
     g_free(path); return s;
 }
+static gchar *disk_serial(const gchar *name)
+{
+    gchar *block = g_build_filename("/sys/class/block", name, NULL), *serial = nex_install_disk_serial(block);
+    g_free(block); return serial;
+}
 static gchar *nic_group(gint index) { return g_strdup_printf("NIC:%s", (gchar *)g_ptr_array_index(nics, index)); }
 static void save_nic(void)
 {
@@ -330,7 +335,7 @@ static void disks_changed(void)
         if (bytes > largest) largest = bytes;
         g_ptr_array_add(names, g_strdup_printf("/dev/%s", name));
         g_ptr_array_add(sizes, g_strdup_printf("%" G_GUINT64_FORMAT, bytes));
-        s = property("/sys/class/block", name, "device/serial"); g_ptr_array_add(serials, s);
+        g_ptr_array_add(serials, disk_serial(name));
         s = property("/sys/class/block", name, "dev"); g_ptr_array_add(ids, s);
     }
     selected_disks = names->len;
@@ -374,7 +379,7 @@ static gboolean disk_key(GtkWidget *widget, GdkEventKey *event, gpointer unused)
 /* Wide Model/Serial columns must ellipsize; otherwise the Disk page forces a
  * horizontal scrollbar and clips the summary on BMC/IPMI consoles (800×600 /
  * 1024×768). */
-static void disk_text_column(GtkTreeView *view, const gchar *title, gint col, gboolean expand, gint min_width)
+static void disk_text_column(GtkTreeView *view, const gchar *title, gint col)
 {
     GtkCellRenderer *cell = gtk_cell_renderer_text_new();
     GtkTreeViewColumn *column;
@@ -382,9 +387,24 @@ static void disk_text_column(GtkTreeView *view, const gchar *title, gint col, gb
     column = gtk_tree_view_column_new_with_attributes(title, cell, "text", col, NULL);
     gtk_tree_view_column_set_resizable(column, TRUE);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
-    if (min_width > 0) gtk_tree_view_column_set_min_width(column, min_width);
-    gtk_tree_view_column_set_expand(column, expand);
     gtk_tree_view_append_column(view, column);
+}
+/* Share the list width by weight. GTK2 expand columns can never be dragged
+ * narrower (their slice of the slack is re-added on top of the dragged width),
+ * so the text columns get fixed widths instead; dragging a divider then works. */
+static void disk_list_allocate(GtkWidget *view, GtkAllocation *allocation, gpointer unused)
+{
+    static const gint percent[] = { 13, 12, 8, 25, 22, 20 }; /* Device, Capacity, Type, Model, Serial, Contents */
+    static gint width;
+    GList *columns, *l; gint text; guint i;
+    (void)unused;
+    if (allocation->width <= 1 || allocation->width == width) return;
+    width = allocation->width;
+    columns = gtk_tree_view_get_columns(GTK_TREE_VIEW(view));
+    text = width - gtk_tree_view_column_get_fixed_width(columns->data);
+    for (l = columns->next, i = 0; i < G_N_ELEMENTS(percent); l = l->next, i++)
+        gtk_tree_view_column_set_fixed_width(l->data, text * percent[i] / 100);
+    g_list_free(columns);
 }
 static GtkWidget *disk_list_widget(void)
 {
@@ -398,13 +418,14 @@ static GtkWidget *disk_list_widget(void)
     gtk_tree_view_column_set_sizing(use, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(use, 40);
     gtk_tree_view_append_column(GTK_TREE_VIEW(w), use);
-    disk_text_column(GTK_TREE_VIEW(w), "Device", DISK_NAME, FALSE, 72);
-    disk_text_column(GTK_TREE_VIEW(w), "Capacity", DISK_CAPACITY, FALSE, 72);
-    disk_text_column(GTK_TREE_VIEW(w), "Type", DISK_TYPE, FALSE, 48);
-    disk_text_column(GTK_TREE_VIEW(w), "Model", DISK_MODEL, TRUE, 64);
-    disk_text_column(GTK_TREE_VIEW(w), "Serial", DISK_SERIAL, TRUE, 64);
-    disk_text_column(GTK_TREE_VIEW(w), "Contents", DISK_CONTENTS, FALSE, 72);
+    disk_text_column(GTK_TREE_VIEW(w), "Device", DISK_NAME);
+    disk_text_column(GTK_TREE_VIEW(w), "Capacity", DISK_CAPACITY);
+    disk_text_column(GTK_TREE_VIEW(w), "Type", DISK_TYPE);
+    disk_text_column(GTK_TREE_VIEW(w), "Model", DISK_MODEL);
+    disk_text_column(GTK_TREE_VIEW(w), "Serial", DISK_SERIAL);
+    disk_text_column(GTK_TREE_VIEW(w), "Contents", DISK_CONTENTS);
     gtk_tree_view_set_headers_clickable(GTK_TREE_VIEW(w), FALSE);
+    g_signal_connect(w, "size-allocate", G_CALLBACK(disk_list_allocate), NULL);
     g_signal_connect(w, "key-press-event", G_CALLBACK(disk_key), NULL);
     g_object_unref(store); return w;
 }
@@ -479,7 +500,7 @@ static void discover(void)
         /* Same 16 GiB floor as the text frontend and nex-config: do not list undersized disks. */
         if (!bytes || bytes < 16ULL * 1024 * 1024 * 1024) continue;
         model = property("/sys/class/block", name, "device/model");
-        serial = property("/sys/class/block", name, "device/serial");
+        serial = disk_serial(name);
         capacity = g_strdup_printf("%.1f GiB", bytes / (1024.0 * 1024 * 1024));
         text = g_strdup_printf("/dev/%s", name);
         g_ptr_array_add(disks, g_strdup(name));

@@ -55,6 +55,7 @@ def acceptance(url, evidence):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
 
+        join_candidates = []
         def route_api(route):
             path = route.request.url.split('/api/v1/', 1)[1].split('?', 1)[0]
             if path == 'session':
@@ -73,6 +74,8 @@ def acceptance(url, evidence):
             elif path == 'updates/apply' and route.request.method == 'POST':
                 update_status.update(phase='failed', error='fixture apt failure')
                 route.fulfill(status=202, json={})
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/join-candidates'):
+                route.fulfill(json={'candidates': list(join_candidates)})
             elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/members'):
                 # Host pages load the pool membership report for the restricted-host banner.
                 pool_id = path.split('/', 2)[1]
@@ -213,6 +216,51 @@ def acceptance(url, evidence):
         selected(55)
         capture('deep-link')
         passed('Pool, host and VM deep links select their owning site on navigation/reload; in-page route change also updates the tree')
+        # Add host to pool only joins a host that has enrolled. Operators took it for the place
+        # to enter a fresh host's address, so an empty dialog must say what it is for, offer no
+        # address field, and lead to the site's Add host form.
+        page.goto(url + '/#/pools/pool-055')
+        page.get_by_role('navigation', name='Resource views', exact=True).get_by_role('button', name='Hosts', exact=True).click()
+        hosts_panel = page.get_by_role('region', name='Pool hosts', exact=True)
+        hosts_panel.get_by_role('button', name='Add host to pool', exact=True).first.click()
+        dialog = page.get_by_role('dialog', name='Add host to pool', exact=True)
+        enroll = dialog.get_by_role('button', name='Enroll a new host…', exact=True)
+        expect(enroll).to_be_visible()  # the candidates answer has arrived: this is the empty state, not loading
+        expect(dialog).to_contain_text('This pool grows by joining a host already enrolled in this site.')
+        expect(dialog).to_contain_text('There is no other enrolled host at this site yet.')
+        expect(dialog.get_by_label('Address', exact=True)).to_have_count(0)
+        expect(dialog.get_by_role('button', name='Add host to pool', exact=True)).to_have_count(0)
+        capture('join-dialog-no-candidates')
+        enroll.click()
+        expect(dialog).to_have_count(0)
+        add_host = page.get_by_role('region', name='Add host', exact=True)
+        expect(add_host.get_by_role('heading', name='Add host to Site 055', exact=True)).to_be_visible()
+        capture('join-dialog-to-add-host')
+        passed('An empty Add host to pool dialog states the model, shows no address field or confirm button, and Enroll a new host opens the site Add host form')
+        add_host.get_by_role('button', name='Close', exact=True).click()
+        join_candidates.append({'host_id': 'host-056', 'name': 'host-056', 'connection': 'fresh', 'eligible': True,
+                                'peer_address': '192.0.2.56', 'peer_port': 9444,
+                                'rows': [{'check': 'connection', 'subject': 'host-056', 'result': 'compatible', 'detail': 'reporting now'}]})
+        hosts_panel.get_by_role('button', name='Add host to pool', exact=True).first.click()
+        candidate = dialog.get_by_role('radio', name=re.compile('host-056'))
+        expect(candidate).to_be_visible()
+        expect(dialog.get_by_label('Address', exact=True)).to_have_count(0)
+        candidate.check()
+        # The host reports its own address, so the operator normally types nothing; the
+        # scheme and port are never shown, and a pasted origin is refused rather than guessed at.
+        address = dialog.get_by_label('Address', exact=True)
+        expect(address).to_have_value('192.0.2.56')
+        confirm = dialog.get_by_role('button', name='Add host to pool', exact=True)
+        expect(confirm).to_be_enabled()
+        capture('join-dialog-host-selected')
+        address.fill('https://192.0.2.56:9444')
+        confirm.click()
+        expect(dialog.get_by_role('alert')).to_contain_text('Enter the address only')
+        address.fill('')
+        expect(confirm).to_be_disabled()
+        dialog.get_by_role('button', name='Cancel', exact=True).click()
+        expect(dialog).to_have_count(0)
+        passed('Choosing a host prefills its reported address and enables the confirm button; a pasted origin is refused and an empty address disables it')
 
         page.set_viewport_size({'width': 360, 'height': 800})
         open_picker()

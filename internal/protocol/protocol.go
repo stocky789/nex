@@ -115,6 +115,10 @@ type ManagedState struct {
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
 	ZFSProvisions      []ZFSProvisionHostResult   `json:"zfs_provisions,omitempty"`
 	Membership         *PoolMembership            `json:"membership,omitempty"`
+	// PeerOrigin is this host's own pool-peer address as it works it out at report time: what
+	// a pool master would dial to reach it. It is an observation for the join dialog to
+	// prefill; the join itself records the member's peer origin durably on the master.
+	PeerOrigin string `json:"peer_origin,omitempty"`
 	// Join is this host's durable staged pool join, reported until it is ready so a
 	// replaced Controller adopts an interrupted join instead of losing it.
 	Join *PoolJoinStatus `json:"join,omitempty"`
