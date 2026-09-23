@@ -8,13 +8,16 @@ fails: the Linux kernel carries on with the surviving disk, the host stays conne
 virtual machines are not interrupted. This page covers replacing the failed disk from Nex
 Controller so the mirror is rebuilt and the host can boot from either disk again.
 
-The host page's **Stats** tab shows a **System disk** panel above the Hardware sections. It names
+The host panel's **Storage** tab shows a **System disk mirror** block below the host's disks. It names
 the array, its level and its state — **Healthy**, **Degraded** or **Rebuilding** with a progress
 bar and the kernel's copy rate — and one sentence saying what, if anything, to do about it. Below
 it, each disk the array still has is listed with its size and the kernel's own state for it, and a
 failed disk is marked **Failed**. **Replace disk…** appears on a degraded RAID1 array when no
 rebuild is running. A host whose system disk is not mirrored says so instead, and one whose Nex
 Core is too old to report its arrays says that.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 Known limits:
 
@@ -41,7 +44,8 @@ Known limits:
 
 ## Steps
 
-1. Open **Hosts**, select the host, and open its **Stats** tab.
+1. Select **Hosts** in the rail, select the host's row to open its panel, and select the
+   **Storage** tab.
 2. Read the **System disk mirror** table. A failed disk shows as **Degraded**, with fewer disks
    listed than the array has slots, or with a member whose state is `faulty`.
 3. Select **Replace disk…**. Nex Core is asked for the host's disks; this takes a moment.
@@ -55,7 +59,8 @@ Known limits:
 
 ## Expected result
 
-The request is accepted and appears in **Recent tasks** on the host page. The host then, by itself:
+The request is accepted and appears under **Tasks** in the rail (the top bar's activity pill
+counts it while it runs). The host then, by itself:
 erases the replacement, copies the partition layout from the surviving disk, adds the new partition
 to the mirror, and makes the new disk bootable — on a UEFI host by formatting its EFI system
 partition and copying the boot files onto it (from `/boot/efi` when that mount has them, or from
@@ -65,7 +70,7 @@ on a BIOS host by installing the bootloader to the disk, which is all a BIOS mir
 The panel follows it: it shows the task's outcome when the host reports it, and while a rebuild
 runs it rereads the mirror by itself every few seconds, showing **Rebuilding** with a progress bar,
 the percentage and the copy rate, then **Healthy** with both disks listed when the rebuild has
-finished. **Retry** on the Hardware panel rereads it immediately. A rebuild takes as long as it takes to copy the disk;
+finished. **Read again** on the host panel's **Hardware** tab rereads it immediately. A rebuild takes as long as it takes to copy the disk;
 the host and its virtual machines keep running throughout, and nothing depends on your browser, on
 this page staying open, or on Nex Controller staying reachable.
 
@@ -109,6 +114,12 @@ further action.
   but the one named in the request, and never the surviving system disk.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout, where the mirror was on the host's **Stats** tab, and still
+applies to the behaviour it describes.
 
 See the [system disk replacement QA record](../qa/2026-09-22-system-disk-replace.md) for the build,
 the environment and exactly which steps were exercised, including the refusals and the interrupted

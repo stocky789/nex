@@ -76,9 +76,9 @@ assert.equal(countdownText(9), "Rolls back in 0:09 unless you confirm it.");
 assert.match(countdownText(0), /deadline has passed/);
 assert.equal(countdownText(null), "", "no report, no countdown");
 
-assert.deepEqual(stageLabel("rolled-back"), { label: "rolled back automatically", badge: "failed" });
-assert.deepEqual(stageLabel("unknown"), { label: "unknown", badge: "unknown" });
-assert.deepEqual(stageLabel("none"), { label: "no change staged", badge: "" });
+assert.deepEqual(stageLabel("rolled-back"), { label: "Rolled back automatically", badge: "failed" });
+assert.deepEqual(stageLabel("unknown"), { label: "Unknown", badge: "unknown" });
+assert.deepEqual(stageLabel("none"), { label: "No change staged", badge: "" });
 
 // The form is built from the host's own NICs, and carries their reported MACs into the spec.
 const formRows = rowsFromHost(nics, spec);
@@ -108,7 +108,7 @@ assert.doesNotMatch(unsupported, /Stage this configuration/);
 // no countdown, no confirm, no apply.
 const staleView = { ...view, connection: "stale", state: "unknown", management_network: { revision: 2, stage: "applied", operation_id: "op-1", spec, deadline: "2026-09-19T10:10:00Z", seconds_remaining: 412 } };
 const staleMarkup = panel({ view: staleView });
-assert.match(staleMarkup, /badge unknown">unknown/);
+assert.match(staleMarkup, /badge neutral">Unknown/);
 assert.match(staleMarkup, /The host is stale, so its management network state is unknown/);
 assert.match(staleMarkup, /rollback deadline of 2026-09-19T10:10:00Z/);
 assert.match(staleMarkup, /revision unknown/, "the revision of a host that is not reporting is unknown too");
@@ -118,7 +118,7 @@ assert.doesNotMatch(staleMarkup, /Stage this configuration/);
 // A never-configured fresh host: the edit form, with reserved-example placeholders.
 const emptyView = { ...view, state: "none", management_network: null };
 const form = panel({ view: emptyView });
-assert.match(form, /no change staged/);
+assert.match(form, /No change staged/);
 assert.match(form, /placeholder="192\.0\.2\.10\/24"/);
 assert.match(form, /placeholder="192\.0\.2\.53 192\.0\.2\.54"/);
 assert.match(form, /<label for="host-network-window">Rollback window \(minutes\)<\/label>/);
@@ -155,7 +155,7 @@ const rolledBack = panel({ view: {
   management_network: { revision: 2, stage: "rolled-back", operation_id: "op-1", spec, last_error: "the new configuration would not come up" },
   check: { name: "management-network", status: "failed", detail: "the new configuration would not come up" },
 } });
-assert.match(rolledBack, /rolled back automatically/);
+assert.match(rolledBack, /Rolled back automatically/);
 assert.match(rolledBack, /restored its previous configuration by itself\. Nex Core(&#x27;|')s reason: the new configuration would not come up/);
 assert.match(rolledBack, /Host check management-network: failed/);
 assert.match(rolledBack, /Stage this configuration/, "a rolled-back host can be edited again");
@@ -165,7 +165,7 @@ const rolledBackByOperator = panel({ view: {
   ...view, state: "rolled-back",
   management_network: { revision: 2, stage: "rolled-back", operation_id: "op-1", spec, requested_rollback: true, last_error: "rolled back at the operator's request" },
 } });
-assert.deepEqual(stageLabel("rolled-back", true), { label: "rolled back at your request", badge: "" });
+assert.deepEqual(stageLabel("rolled-back", true), { label: "Rolled back at your request", badge: "" });
 assert.match(rolledBackByOperator, /restored its previous configuration because you asked it to/);
 assert.doesNotMatch(rolledBackByOperator, /restored its previous configuration by itself/);
 assert.doesNotMatch(rolledBackByOperator, /Host check management-network/, "no check is reported for a rollback nobody has to fix");

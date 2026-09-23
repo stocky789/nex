@@ -4,6 +4,7 @@
 // host reports. It never computes the outcome, and it never turns "not reporting" into a result.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { heldRequestID } from "./managed";
+import { Badge } from "./ui";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Connection = "fresh" | "stale" | "unknown" | "revoked";
@@ -24,13 +25,13 @@ export const MAX_WINDOW_MINUTES = 30;
 export const DEFAULT_WINDOW_MINUTES = 10;
 
 const stageText: Record<string, string> = {
-  none: "no change staged",
-  staged: "staged, not applied",
-  applied: "applied, waiting to be confirmed",
-  confirmed: "confirmed",
-  cancelled: "cancelled",
-  "rolled-back": "rolled back automatically",
-  unknown: "unknown",
+  none: "No change staged",
+  staged: "Staged, not applied",
+  applied: "Applied, waiting to be confirmed",
+  confirmed: "Confirmed",
+  cancelled: "Cancelled",
+  "rolled-back": "Rolled back automatically",
+  unknown: "Unknown",
 };
 // Text carries the state; the badge colour only repeats it.
 const stageBadges: Record<string, string> = { none: "", staged: "queued", applied: "warning", confirmed: "ok", cancelled: "", "rolled-back": "failed", unknown: "unknown" };
@@ -39,7 +40,7 @@ const stageBadges: Record<string, string> = { none: "", staged: "queued", applie
 // outcome they chose: the host reports which it was, and neither the wording nor the badge
 // calls a deliberate undo a failure.
 export function stageLabel(state: string, requested = false) {
-  if (state === "rolled-back" && requested) return { label: "rolled back at your request", badge: "" };
+  if (state === "rolled-back" && requested) return { label: "Rolled back at your request", badge: "" };
   return { label: stageText[state] || state, badge: stageBadges[state] ?? "" };
 }
 
@@ -330,7 +331,7 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
   return <section className="panel host-network-panel" aria-label="Management network">
     <div className="section-heading">
       <h2>Management network</h2>
-      <span><span className={`badge ${stage.badge}`}>{stage.label}</span>{view && <> <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span></>}</span>
+      <span><Badge value={stage.badge} label={stage.label} />{view && <> <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span></>}</span>
     </div>
     <div className="managed-actions actions fold-actions">
       <button type="button" disabled={loading || unavailable} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>

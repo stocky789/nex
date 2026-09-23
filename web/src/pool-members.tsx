@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { heldRequestID } from "./managed";
 import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
 import {
-  FenceProfileDialog, FencingCell, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
+  FenceProfileDialog, FencingDetail, fencingText, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
   promotionInProgress, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
+import { Badge, Section, badgeTone, date, type Tone } from "./ui";
+import { versionLight } from "./updates";
+import type { Host } from "./types";
+import { capitalize, checkLabel, relativeTime, statusLabel } from "./labels";
 
 type API = <T>(path: string, method?: string, body?: unknown, progress?: (loaded: number, total: number) => void, register?: (xhr: XMLHttpRequest) => void, signal?: AbortSignal) => Promise<T>;
 type Connection = "fresh" | "stale" | "unknown" | "revoked";
@@ -18,7 +22,7 @@ export type MemberOperation = { operation_id: string; action?: string; status: s
 export type Guests = { known: boolean; total: number; running: number; names?: string[] };
 export type ReplicaState = "current" | "behind" | "unverified" | "refused" | "awaiting" | "unsupported" | "unknown";
 export type Replica = { generation: number; digest?: string; verified: boolean; received_at?: string; acknowledged_generation: number; acknowledged_at?: string; error?: string; state: ReplicaState };
-export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null };
+export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null; joined_at?: string };
 export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; host_fencing_supported?: boolean; fence?: FenceSummary | null; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
 type CandidateRow = { check: string; subject: string; result: "compatible" | "will_not_converge" | "refuses_join"; detail?: string };
 export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[]; peer_address?: string; peer_port: number };
@@ -32,15 +36,16 @@ const checkNames: Record<string, string> = {
   "pool-restricted": "Restricted",
   "pool-authority-transfer": "Master change",
 };
-// Text carries the state; the badge colour only repeats it.
-const replicaStates: Record<ReplicaState, { label: string; badge: string }> = {
-  current: { label: "current", badge: "ok" },
-  behind: { label: "behind", badge: "warning" },
-  unverified: { label: "unverified", badge: "unverified" },
-  refused: { label: "refused", badge: "failed" },
-  awaiting: { label: "awaiting first copy", badge: "unknown" },
-  unsupported: { label: "not supported — upgrade", badge: "warning" },
-  unknown: { label: "unknown", badge: "unknown" },
+// The short result each state reads as on the row's status strip. Text carries the state; the
+// light only repeats it.
+const replicaStates: Record<ReplicaState, { result: string; tone: Tone }> = {
+  current: { result: "OK", tone: "ok" },
+  behind: { result: "Behind", tone: "warn" },
+  unverified: { result: "Unverified", tone: "warn" },
+  refused: { result: "Failed", tone: "bad" },
+  awaiting: { result: "Awaiting", tone: "neutral" },
+  unsupported: { result: "Not supported", tone: "warn" },
+  unknown: { result: "Unknown", tone: "neutral" },
 };
 // PoolJoinStatus.stage is the step still to perform, so it reads as what happens next.
 const stageNames: Record<string, string> = {
@@ -156,8 +161,10 @@ export function replicaGenerations(replica?: Replica | null) {
 // The acknowledgement is the master's observation, so it disappears with the master; what the
 // member says it received is its own report and stays.
 export function replicaTimes(replica?: Replica | null, authoritative = true) {
-  if (!replica) return "";
-  return [replica.received_at ? `Received ${replica.received_at}` : "", authoritative && replica.acknowledged_at ? `Acknowledged ${replica.acknowledged_at}` : ""].filter(Boolean).join(" · ");
+  if (!replica) return null;
+  const times = [["Received", replica.received_at], ["Acknowledged", authoritative ? replica.acknowledged_at : ""]].filter(([, at]) => at);
+  if (!times.length) return null;
+  return <small>{times.map(([label, at], index) => <Fragment key={label}>{index > 0 && " · "}{label} <time dateTime={at} title={at}>{relativeTime(at!)}</time></Fragment>)}</small>;
 }
 
 // When a host was last heard from, said both ways: an interval an operator reads at a glance,
@@ -186,7 +193,7 @@ export function recoveryText(report: Report, now = Date.now()) {
 }
 
 // The pool's own line about fencing. The count is the pool master's, reported with its
-// membership; this only puts words around it. The reasons are in the Fencing column of the
+// membership; this only puts words around it. The reasons are in the Fencing details of the
 // rows it counts.
 export function fencingSummaryText(report: Report) {
   if (!(report.members || []).length) return "";
@@ -197,7 +204,7 @@ export function fencingSummaryText(report: Report) {
   const unready = (summary.unready || []).map(id => hostName(report, id));
   const line = `Fencing: ready for ${summary.ready} of ${summary.total} hosts.`;
   if (!unready.length) return `${line} Every host in this pool can be shut out — by another host, or by its own watchdog — so a surviving member can be promoted if the pool master is lost.`;
-  return `${line} ${unready.join(", ")} cannot be shut out — the Fencing column on ${unready.length === 1 ? "that row" : "those rows"} says why.`;
+  return `${line} ${unready.join(", ")} cannot be shut out — the Fencing details on ${unready.length === 1 ? "that row" : "those rows"} say why.`;
 }
 
 // The names of Core's prerequisite lines. The sentence beside each one is Core's own and is
@@ -208,9 +215,6 @@ const prerequisiteNames: Record<string, string> = {
   bmc: "Fence devices",
   quorum: "Pool quorum",
 };
-// Text carries the state; the badge colour only repeats it.
-const prerequisiteBadges: Record<string, string> = { met: "ok", unmet: "warning", unknown: "unknown" };
-
 // Core ends its sentence before naming hosts and puts their IDs beside it, because only a
 // client knows their display names — and a host ID is an opaque durable identifier an
 // operator would have to look up while the rows above show the name.
@@ -266,12 +270,12 @@ export function HostFencingSetting({ report, onChange, busy }: {
     <p className="help">Turning this on does not arm anything by itself. Nex Core arms a host's watchdog only where every prerequisite below holds.</p>
     <p className="warning" role="note">Once watchdogs are armed, a host that loses this pool's quorum resets itself and its running virtual machines stop. A switch failure that splits a pool therefore reboots the minority side. This pool's cluster runs on the management network, so changing a host's management network, or any work that interrupts it, is refused while that host is armed — put the host in maintenance first. In a three-host pool a second failure while one host is already down reboots the remaining two, because two of three are a minority: for planned work on more than one host, put the first in maintenance mode, which disarms the whole pool.</p>
     {summary.cluster ? <p className={`help pool-host-fencing-cluster ${clusterBadges[summary.cluster.state] || "unknown"}`} role="status">
-      <span className={`badge ${clusterBadges[summary.cluster.state] || "unknown"}`}>{clusterStateNames[summary.cluster.state] || summary.cluster.state}</span>
+      <Badge value={clusterBadges[summary.cluster.state] || "unknown"} label={clusterStateNames[summary.cluster.state] || summary.cluster.state} />
       {clusterText(report, summary.cluster)}
     </p> : null}
     <ul className="pool-host-fencing-checklist">{(summary.prerequisites || []).map(prerequisite =>
       <li key={prerequisite.name}>
-        <span className={`badge ${prerequisiteBadges[prerequisite.state] || "unknown"}`}>{prerequisite.state}</span>
+        <Badge value={prerequisite.state} />
         <strong>{prerequisiteNames[prerequisite.name] || prerequisite.name}</strong>
         <small>{prerequisiteDetail(report, prerequisite)}</small>
       </li>)}
@@ -279,8 +283,86 @@ export function HostFencingSetting({ report, onChange, busy }: {
   </section>;
 }
 
-export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy, blockedReason, onHostFencing, hostFencingBusy }: {
-  report: Report; onMaintenance?: (member: Member) => void; busyHost?: string;
+// One line of the status strip: a light, a short label and a one-word result. The light only
+// repeats the words; the full sentence is the item's tooltip and sits in the row's details.
+export type StatusCheck = { label: string; result: string; tone: Tone; detail?: string };
+function StatusItem({ check }: { check: StatusCheck }) {
+  return <span className="pool-check" title={check.detail}><span className={`dot ${check.tone}`} />{check.label} <strong className={check.tone}>{check.result}</strong></span>;
+}
+
+// Each member's status strip. Connection, convergence and the copy it holds are the host's own
+// report, so a host that is not fresh cannot vouch for them: they read Unknown, never OK.
+// Membership, maintenance and fencing are the pool master's records, and read Unknown whenever
+// the master is not reporting.
+export function memberChecks(member: Member, report: Report): StatusCheck[] {
+  const authoritative = report.authoritative;
+  const own = (check: StatusCheck): StatusCheck => member.connection !== "fresh" && check.tone === "ok" ? { ...check, result: "Unknown", tone: "neutral" } : check;
+  const connection: StatusCheck = member.connection === "fresh" ? { label: "Connection", result: "OK", tone: "ok" }
+    : member.connection === "stale" ? { label: "Connection", result: "Stale", tone: "warn" }
+      : member.connection === "revoked" ? { label: "Connection", result: "Revoked", tone: "bad" }
+        : { label: "Connection", result: "Unknown", tone: "neutral" };
+  const drain = maintenanceText(member, authoritative);
+  const checks = [connection, membershipCheck(member, authoritative),
+    { label: "Maintenance", result: capitalize(drain.label), tone: badgeTone(drain.badge), detail: guestsText(member) }];
+  if (report.replica_supported !== false && member.role !== "master") {
+    const replica = replicaText(member);
+    checks.push(own({ label: "Authority copy", ...replica, detail: behindText(member, report) || member.replica?.error || undefined }));
+  }
+  checks.push(own(convergenceCheck(member, authoritative)));
+  const fencing = fencingText(member, authoritative);
+  const fenceResult = !authoritative ? "Unknown" : fencing.label === "not reported" ? "Not reported"
+    : fencing.badge === "ok" ? "OK" : fencing.badge === "failed" ? "Failed" : fencing.badge === "warning" ? "Stale" : "Unknown";
+  checks.push({ label: "Fencing", result: fenceResult, tone: badgeTone(fencing.badge), detail: capitalize(fencing.label) });
+  return checks;
+}
+
+function membershipCheck(member: Member, authoritative: boolean): StatusCheck {
+  const label = "Membership";
+  const detail = [authoritative ? member.error : "", joinProgressText(member.join)].filter(Boolean).join(" ") || undefined;
+  // A restriction and a join in progress are the host's own reports, so they outlive the master.
+  if (member.restricted) return { label, result: "Restricted", tone: "bad", detail: member.restricted.reason };
+  if (member.join?.status === "pending") return { label, result: "Joining", tone: "info", detail };
+  if (member.join?.status === "failed") return { label, result: "Failed", tone: "bad", detail };
+  if (member.join?.status === "needs_attention") return { label, result: "Needs attention", tone: "warn", detail };
+  if (!authoritative) return { label, result: "Unknown", tone: "neutral", detail: "The pool master keeps this record and is not reporting." };
+  const tone = badgeTone(member.status || "unknown");
+  return { label, result: tone === "ok" ? "OK" : tone === "bad" ? "Failed" : statusLabel(member.status || "unknown"), tone, detail };
+}
+
+function convergenceCheck(member: Member, authoritative: boolean): StatusCheck {
+  const label = "Convergence";
+  const detail = convergenceSummary(member, authoritative);
+  // pool-restricted is Membership's; the access figures are the master's observation.
+  const checks = (member.checks || []).filter(check => check.name !== "pool-restricted");
+  const access = authoritative ? member.access : undefined;
+  if (checks.some(check => check.status === "failed") || (authoritative && (member.failures || []).length) || access?.failed) return { label, result: "Failed", tone: "bad", detail };
+  if (!checks.length) return { label, result: "Not reported", tone: "neutral", detail };
+  if (!access || access.stale || checks.some(check => check.status !== "healthy")) return { label, result: "Unknown", tone: "neutral", detail };
+  if (access.pending) return { label, result: "Pending", tone: "warn", detail };
+  return { label, result: "OK", tone: "ok", detail };
+}
+
+// The pool's own facts on one strip: every value is the pool master's report, and unknown while
+// it is not reporting.
+export function poolChecks(report: Report): StatusCheck[] {
+  const authoritative = report.authoritative;
+  const summary = report.fence || null;
+  const checks: StatusCheck[] = [report.replica_supported === false
+    ? { label: "Authority copies", result: "Not supported", tone: "warn" }
+    : { label: "Authority generation", result: authoritative && report.authority ? String(report.authority.generation) : "Unknown", tone: "neutral" }];
+  if (!(report.members || []).length) return checks;
+  if (!authoritative) return [...checks, { label: "Fencing", result: "Unknown", tone: "neutral" }, { label: "Host fencing", result: "Unknown", tone: "neutral" }];
+  if (!summary) checks.push({ label: "Fencing", result: "Not reported (upgrade pool master)", tone: "neutral" });
+  else if (summary.total <= 1) checks.push({ label: "Fencing", result: "Not needed (one host)", tone: "neutral" });
+  else checks.push({ label: "Fencing", result: `${summary.ready === summary.total ? "OK" : "Not ready"} (${summary.ready} of ${summary.total})`, tone: summary.ready === summary.total ? "ok" : "warn" });
+  checks.push(report.host_fencing_supported === false || !summary ? { label: "Host fencing", result: "Not reported", tone: "neutral" }
+    : { label: "Host fencing", result: summary.host_fencing ? "On" : "Off", tone: "neutral" });
+  if (summary?.cluster) checks.push({ label: "Watchdog cluster", result: capitalize(clusterStateNames[summary.cluster.state] || summary.cluster.state), tone: badgeTone(clusterBadges[summary.cluster.state] || "unknown"), detail: clusterText(report, summary.cluster) });
+  return checks;
+}
+
+export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance, busyHost, onMasterChange, onEject, onPromote, onFenceProfile, onBMCProvisioning, bmcBusy, blockedReason, onHostFencing, hostFencingBusy }: {
+  report: Report; hosts?: Host[]; coreAvailable?: string; onMaintenance?: (member: Member) => void; busyHost?: string;
   onMasterChange?: (member: Member) => void; onEject?: (member: Member) => void;
   onPromote?: (member: Member) => void; onFenceProfile?: (member: Member) => void;
   onBMCProvisioning?: (member: Member) => void; bmcBusy?: string; blockedReason?: string;
@@ -288,79 +370,90 @@ export function MembersTable({ report, onMaintenance, busyHost, onMasterChange, 
 }) {
   const authoritative = report.authoritative;
   const supported = Boolean(report.maintenance_supported);
-  // An explicit false means no member can hold a copy at all: drop the column and say it once.
+  // An explicit false means no member can hold a copy at all: drop the check and say it once.
   const replicas = report.replica_supported !== false;
   const members = report.members || [];
   if (!members.length) return <p className="empty">The pool master reports no hosts yet. A host that has just enrolled appears here once its master reports the membership.</p>;
   const actions = Boolean(onMasterChange && onEject);
-  return <><div className="table-scroll"><table className="pool-members-table">
-    <thead><tr><th>Host</th><th>Role</th><th>Connection</th><th>Membership</th><th>Maintenance</th>{replicas && <th>Authority copy</th>}<th className="pool-convergence-cell">Convergence</th><th className="pool-fencing-cell">Fencing</th>{actions && <th><span className="sr-only">Actions</span></th>}</tr></thead>
-    <tbody>{members.map(member => {
+  return <>
+    {/* The pool's facts on one line; the explanations and the Host fencing switch open under it. */}
+    <details className="pool-status">
+      <summary>{poolChecks(report).map(check => <StatusItem key={check.label} check={check} />)}<span className="pool-more">About</span></summary>
+      <div className="pool-status-detail">
+        <p className="help">{fencingSummaryText(report)}</p>
+        {replicas
+          ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
+          : <p className="help">The pool master does not support authority copies, so no member holds one. Upgrade the pool master to give the pool a copy of its records that survives losing the master.</p>}
+        <HostFencingSetting report={report} onChange={onHostFencing} busy={hostFencingBusy} />
+      </div>
+    </details>
+    <ul className="pool-members">{members.map(member => {
       // The join stage and the connection are this host's own report, so they survive a
       // master that is gone; the membership status and every observation of it do not.
       const progress = joinProgressText(member.join);
       const failures = authoritative ? member.failures || [] : [];
-      const drain = maintenanceText(member, authoritative);
       const outcome = authoritative ? maintenanceResultText(member.last_maintenance) : "";
-      return <tr key={member.host_id} data-host-id={member.host_id}>
-        <td>
-          <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
-          {member.peer_origin && <small className="mono">{member.peer_origin}</small>}
-        </td>
-        <td><span className={`badge ${member.role}`}>{member.role === "master" ? "Pool master" : "Member"}</span></td>
-        <td><span className={`badge ${member.connection}`}>{member.connection}</span></td>
-        <td>
-          <span className={`badge ${authoritative ? member.status : "unknown"}`}>{authoritative ? member.status || "unknown" : "unknown"}</span>
-          {authoritative && member.error && <small className="task-error">{member.error}</small>}
-          {progress && <small>{progress}</small>}
-          <RestrictedNote report={report} member={member} />
-        </td>
-        <td className="pool-maintenance-cell">
-          <span className={`badge ${drain.badge}`}>{drain.label}</span>
-          {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
-          <small>{guestsText(member)}</small>
-          {outcome && <small className={member.last_maintenance?.status === "failed" ? "task-error" : undefined} role={member.last_maintenance?.conflict ? "alert" : undefined}>{outcome}</small>}
-          {onMaintenance && !supported && <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>}
-        </td>
-        {replicas && <td className="pool-replica-cell">
-          {member.role === "master" ? <small>Holds the pool records</small> : <>
-            <span className={`badge ${replicaText(member).badge}`}>{replicaText(member).label}</span>
-            {member.replica && <>
-              {behindText(member, report) && <small>{behindText(member, report)}</small>}
-              {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
-              {member.replica.error && <small className="task-error">{member.replica.error}</small>}
-              {replicaTimes(member.replica, authoritative) && <small>{replicaTimes(member.replica, authoritative)}</small>}
-            </>}
-          </>}
-        </td>}
-        <td className="pool-convergence-cell">
-          <small>{convergenceSummary(member, authoritative)}</small>
-          {/* The checks are the host's own report and stay readable without a fresh master.
-              pool-restricted is left out here: its reason is rendered in full on the
-              Membership cell and repeating Core's sentence twice per row helps nobody. */}
-          {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || check.name}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
-          {failures.map(failure => <small key={`${failure.kind}:${failure.id}`} className="task-error">{failure.kind} {failure.name || failure.id}: {failure.error}</small>)}
-        </td>
-        {/* How this host would be shut out if it were lost. Every word of it is the pool
-            master's own answer; the checks behind it never power anything off. */}
-        <td className="pool-fencing-cell"><FencingCell member={member} authoritative={authoritative} /></td>
-        {actions && <td className="pool-actions-cell">
-          <MemberActions report={report} member={member} onMasterChange={() => onMasterChange!(member)} onEject={() => onEject!(member)} blockedReason={blockedReason}
+      // The Core version is the host's own inventory report, as on the Hosts list.
+      const version = hosts.find(h => h.id === member.host_id)?.inventory?.os_version;
+      const light = version ? versionLight(version, coreAvailable) : undefined;
+      return <li key={member.host_id} className="pool-member" data-host-id={member.host_id}>
+        <div className="pool-member-head">
+          <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a> <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
+          <small className="pool-version">Nex Core {version?.replace(/^Nex Core /, "") || "not reported"}{light && light.level !== "current" && <> <Badge value="warning" label="Update" /></>}</small>
+          {/* When the host joined, as the pool master records it. */}
+          <small className="muted">Joined {member.joined_at ? <time dateTime={member.joined_at} title={date(member.joined_at)}>{relativeTime(member.joined_at)}</time> : "—"}</small>
+          {actions && <MemberActions report={report} member={member} onMasterChange={() => onMasterChange!(member)} onEject={() => onEject!(member)} blockedReason={blockedReason}
             extra={<>
               {onMaintenance && supported && <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={!authoritative || Boolean(blockedReason) || busyHost === member.host_id || maintenanceInFlight(member.last_maintenance)} onClick={() => onMaintenance(member)}>{member.maintenance ? "Exit maintenance" : "Enter maintenance"}</button>}
               <PromotionActions report={report} member={member} authoritative={authoritative}
                 onPromote={onPromote && (() => onPromote(member))} onFenceProfile={onFenceProfile && (() => onFenceProfile(member))}
                 onBMCProvisioning={onBMCProvisioning && (() => onBMCProvisioning(member))} bmcBusy={bmcBusy === member.host_id} />
-            </>} />
-        </td>}
-      </tr>;
-    })}</tbody>
-  </table></div>
-  <p className="help pool-fencing-summary" role="status">{fencingSummaryText(report)}</p>
-  <HostFencingSetting report={report} onChange={onHostFencing} busy={hostFencingBusy} />
-  {replicas
-    ? <p className="help">{authorityText(report)} Each member keeps a signed, read-only copy of the pool's records so the pool can be recovered if its master is lost; it is never used while the master is healthy.</p>
-    : <p className="help">The pool master does not support authority copies, so no member holds one. Upgrade the pool master to give the pool a copy of its records that survives losing the master.</p>}
+            </>} />}
+        </div>
+        {/* A restriction stops the host acting, so its explanation starts open. */}
+        <details className="pool-member-more" open={Boolean(member.restricted)}>
+          <summary>{memberChecks(member, report).map(check => <StatusItem key={check.label} check={check} />)}<span className="pool-more">Details<span className="sr-only"> for {member.name || member.host_id}</span></span></summary>
+          <dl className="pool-member-detail">
+            {member.peer_origin && <><dt>Peer address</dt><dd className="mono">{member.peer_origin}</dd></>}
+            <dt>Membership</dt>
+            <dd>
+              <small>{authoritative ? statusLabel(member.status || "unknown") : "Unknown: the pool master keeps this record and is not reporting."}</small>
+              {authoritative && member.error && <small className="task-error">{member.error}</small>}
+              {progress && <small>{progress}</small>}
+              <RestrictedNote report={report} member={member} />
+            </dd>
+            <dt>Maintenance</dt>
+            <dd>
+              {authoritative && member.maintenance && member.maintenance_since && <small>Since {member.maintenance_since}</small>}
+              <small>{guestsText(member)}</small>
+              {onMaintenance && !supported && <small>Maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master.</small>}
+            </dd>
+            {replicas && <><dt>Authority copy</dt>
+              <dd className="pool-replica-cell">
+                {member.role === "master" ? <small>Holds the pool records</small> : !member.replica ? <small>Not reported</small> : <>
+                  {behindText(member, report) && <small>{behindText(member, report)}</small>}
+                  {authoritative && replicaGenerations(member.replica) && <small>{replicaGenerations(member.replica)}</small>}
+                  {member.replica.error && <small className="task-error">{member.replica.error}</small>}
+                  {replicaTimes(member.replica, authoritative)}
+                </>}
+              </dd></>}
+            <dt>Convergence</dt>
+            <dd>
+              <small>{convergenceSummary(member, authoritative)}</small>
+              {/* The checks are the host's own report and stay readable without a fresh master.
+                  pool-restricted is left out: its reason is under Membership already. */}
+              {(member.checks || []).filter(check => check.status !== "healthy" && check.name !== "pool-restricted").map(check => <small key={check.name} className={check.status === "failed" ? "task-error" : undefined}>{checkNames[check.name] || checkLabel(check.name)}: {check.status}{check.detail ? ` · ${check.detail}` : ""}</small>)}
+              {failures.map(failure => <small key={`${failure.kind}:${failure.id}`} className="task-error">{failure.kind} {failure.name || failure.id}: {failure.error}</small>)}
+            </dd>
+            {/* How this host would be shut out if it were lost. Every word of it is the pool
+                master's own answer; the checks behind it never power anything off. */}
+            <dt>Fencing</dt>
+            <dd className="pool-fencing-cell"><FencingDetail member={member} authoritative={authoritative} /></dd>
+          </dl>
+        </details>
+        {outcome && <small className={member.last_maintenance?.status === "failed" ? "task-error" : undefined} role={member.last_maintenance?.conflict ? "alert" : undefined}>{outcome}</small>}
+      </li>;
+    })}</ul>
   </>;
 }
 
@@ -413,7 +506,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
         <tbody>{(selected.rows || []).map((row, index) => <tr key={`${row.check}-${index}`}>
           <td>{row.check}</td>
           <td>{row.subject}{row.detail ? <small>{row.detail}</small> : null}</td>
-          <td><span className={`badge ${resultBadges[row.result]}`}>{resultNames[row.result]}</span></td>
+          <td><Badge value={resultBadges[row.result]} label={resultNames[row.result]} /></td>
         </tr>)}</tbody>
       </table></div>}
       {selected && (selected.rows || []).some(row => row.result === "will_not_converge") && <p className="warning">Some pool settings will not converge on this host. It can still join; the settings that cannot be applied are reported against it afterwards.</p>}
@@ -464,7 +557,7 @@ export function MaintenanceDialog({ member, busy, submitError, submitReady, onCo
   </dialog>;
 }
 
-export function PoolMembers({ poolID, api, unavailable, onEnrollHost }: { poolID: string; api: API; unavailable: boolean; onEnrollHost?: () => void }) {
+export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, onEnrollHost }: { poolID: string; api: API; unavailable: boolean; hosts?: Host[]; coreAvailable?: string; onEnrollHost?: () => void }) {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -690,12 +783,11 @@ export function PoolMembers({ poolID, api, unavailable, onEnrollHost }: { poolID
     } finally { setBMCBusy(""); }
   }
   const authoritative = Boolean(report?.authoritative);
-  return <section className="panel pool-members" aria-label="Pool hosts">
-    <div className="section-heading"><h2>Hosts</h2><span className="muted">{report ? `${(report.members || []).length} reported${authoritative ? "" : " · not current"}` : loading ? "Loading…" : "Unavailable"}</span></div>
-    <div className="managed-actions actions fold-actions">
-      <button type="button" disabled={loading || unavailable} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</button>
-      <button type="button" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={unavailable || !report || Boolean(blockedReason)} onClick={() => { setSubmitError(""); setNotice(""); setOpen(true); void loadCandidates(); }}>Add host to pool</button>
-    </div>
+  return <Section icon="host" title="Members" count={report?.members?.length} actions={<>
+    {report ? !authoritative && <Badge value="stale" label="Not current" /> : <span className="muted">{loading ? "Loading…" : "Unavailable"}</span>}
+    <button type="button" className="sm primary" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={unavailable || !report || Boolean(blockedReason)} onClick={() => { setSubmitError(""); setNotice(""); setOpen(true); void loadCandidates(); }}>Add host to pool</button>
+    <button type="button" className="sm" disabled={loading || unavailable} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</button>
+  </>}>
     {blockedReason && <p className="warning" id="pool-actions-blocked" role="status">{blockedReason}</p>}
     {notice && <p className="notice" role="status">{notice}</p>}
     {/* A row or panel action has no dialog to show its refusal in, so Core's sentence lands here. */}
@@ -710,7 +802,7 @@ export function PoolMembers({ poolID, api, unavailable, onEnrollHost }: { poolID
     {report && <TransferStrip report={report} onCancel={() => void cancelTransfer()} cancelBusy={cancelBusy} cancelError={cancelError}
       onResume={unavailable ? undefined : () => { setCancelError(""); setNotice(""); setResumeOpen(true); }} />}
     {report && <PromotionStrip report={report} />}
-    {report ? <MembersTable report={report} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
+    {report ? <MembersTable report={report} hosts={hosts} coreAvailable={coreAvailable} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
       onMaintenance={unavailable ? undefined : member => { setDrainError(""); setNotice(""); setDrainTarget(member); }}
       onMasterChange={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
       onEject={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}
@@ -731,5 +823,5 @@ export function PoolMembers({ poolID, api, unavailable, onEnrollHost }: { poolID
       onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }} />}
     {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()}
       onEnrollHost={onEnrollHost && (() => { setOpen(false); onEnrollHost(); })} />}
-  </section>;
+  </Section>;
 }

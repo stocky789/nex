@@ -1,25 +1,43 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Host, Media, Network, Storage, VM, VMSpec } from "./managed";
 import { adapterNames, adapterNotes, applyTopology, autoDiskName, busNames, cpuName, availableBaseline, baselineSupported, baselineUnavailable, fixedCPU, recommendedCPU, selectCPU, cpuSelectionIssue, cpuMigrationHelp, describeNetwork, driversDriveReady, effectiveBoot, mediaUsable, networkUsable, readyHost, topologyIssue, vmNameIssue, type DiskRow, type NICRow } from "./vm-create";
 import { storageUsable } from "./storage";
+import { Icon } from "./icons";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+export const tagsCapability = "vm-tags-v1";
+const tagPattern = /^[a-z0-9-]{1,32}$/;
 // The draft always carries an explicit Secure Boot and TPM choice, even for a definition
 // written before those fields existed: an unset secure_boot on a UEFI VM is the enrolled-keys
 // firmware libvirt already gave it, which is "on", and an unset tpm is no TPM device. Saving
 // records that choice without changing what the VM boots with, so no stop is demanded for it.
-type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"] & { secure_boot: string; tpm: string }; media_id: string; drivers_media_id: string; autostart: boolean };
+// PUT replaces the whole definition, so the draft carries the tags too: an edit without them
+// would clear every tag the VM has.
+type Draft = { name: string; description: string; guest_os: string; cpu: VMSpec["cpu"]; memory: VMSpec["memory"]; disks: DiskRow[]; nics: NICRow[]; boot: VMSpec["boot"] & { secure_boot: string; tpm: string }; media_id: string; drivers_media_id: string; autostart: boolean; tags: string[] };
 type Props = { vm: VM; host?: Host; poolName: string; storage: Storage[]; networks: Network[]; media: Media[]; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void; onClose: () => void };
 
 const macPattern = "[0-9a-f][02468ace](:[0-9a-f]{2}){5}";
 const stopFirst = "Stop the VM to change this.";
 const num = (v: number) => Number.isNaN(v) ? "" : v;
 
+// draftOf is a VM's current definition as the complete update the editors submit.
+export function draftOf(vm: VM): Draft {
+  const spec = vm.spec!;
+  return {
+    name: vm.name, description: spec.description, guest_os: spec.guest_os || "other",
+    cpu: { ...spec.cpu }, memory: { ...spec.memory },
+    disks: (spec.disks || []).map(d => ({ ...d })), nics: (spec.nics || []).map(n => ({ ...n, mtu: n.mtu || 0 })),
+    boot: { ...spec.boot, secure_boot: spec.boot.secure_boot || (spec.boot.firmware === "uefi" ? "on" : ""), tpm: spec.boot.tpm || "none" },
+    media_id: spec.media_id, drivers_media_id: spec.drivers_media_id || "", autostart: spec.autostart, tags: spec.tags ?? [],
+  };
+}
+export const updateBody = (vm: VM, draft: Draft) => ({ pool_id: vm.pool_id, host_id: vm.host_id, ...draft, boot: effectiveBoot(draft.boot), start_after_create: false });
+
 // editBlocker explains why a VM cannot be edited now; empty means the Edit button is live.
 export function editBlocker(vm: VM, host?: Host): string {
   return vm.protected ? "The Controller appliance is managed from its host's local page."
-    : vm.status === "failed" || vm.status === "needs_attention" ? "The creation task did not succeed; check it in Task history."
+    : vm.status === "failed" || vm.status === "needs_attention" ? "The creation task did not succeed; check it in Tasks."
     : vm.status && vm.status !== "succeeded" ? "Wait for the creation task to finish."
     : !vm.spec ? "This VM has no definition to edit."
     : !host || !readyHost(host) ? "Editing needs a freshly connected host with managed-VM support."
@@ -50,13 +68,7 @@ function bootIssue(d: Draft): string {
 export function VMEditor({ vm, host, poolName, storage, networks, media, api, reload, unavailable, onNotice, onClose }: Props) {
   const spec = vm.spec!;
   const running = vm.state === "running";
-  const [draft, setDraft] = useState<Draft>(() => ({
-    name: vm.name, description: spec.description, guest_os: spec.guest_os || "other",
-    cpu: { ...spec.cpu }, memory: { ...spec.memory },
-    disks: (spec.disks || []).map(d => ({ ...d })), nics: (spec.nics || []).map(n => ({ ...n, mtu: n.mtu || 0 })),
-    boot: { ...spec.boot, secure_boot: spec.boot.secure_boot || (spec.boot.firmware === "uefi" ? "on" : ""), tpm: spec.boot.tpm || "none" },
-    media_id: spec.media_id, drivers_media_id: spec.drivers_media_id || "", autostart: spec.autostart,
-  }));
+  const [draft, setDraft] = useState<Draft>(() => draftOf(vm));
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [nvramAck, setNVRAMAck] = useState(false);
@@ -108,7 +120,8 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (issue) { setError(issue); return; }
-    const payload = { pool_id: vm.pool_id, host_id: vm.host_id, ...draft, boot: effectiveBoot(draft.boot), start_after_create: false };
+    // An older Core drops tags; sending none lets hardware edits succeed when the capability is gone.
+    const payload = updateBody(vm, { ...draft, tags: host?.capabilities?.includes(tagsCapability) ? draft.tags : [] });
     const encoded = JSON.stringify(payload);
     ids.current[encoded] ??= crypto.randomUUID();
     setWorking(true); setError("");
@@ -246,4 +259,93 @@ export function VMEditor({ vm, host, poolName, storage, networks, media, api, re
     {error && <p className="task-error" role="alert">{error}</p>}
     <div className="actions"><button type="button" disabled={working} onClick={onClose}>Cancel</button><button className="primary" disabled={working || unavailable || Boolean(issue)}>{working ? "Submitting…" : "Save changes"}</button></div>
   </form>;
+}
+
+export function tagsSupported(host?: Host, master?: Host): boolean {
+  return Boolean(master?.capabilities?.includes(tagsCapability) && host?.capabilities?.includes(tagsCapability));
+}
+// Both the VM's host and its pool master must keep tags: an older Core would drop them.
+// Clearing every tag is still allowed when the capability is gone, so other edits are not stuck.
+export function tagsBlocker(vm: VM, host?: Host, master?: Host, clearing = false): string {
+  if (!tagsSupported(host, master) && !(clearing && (vm.spec?.tags?.length ?? 0) > 0)) {
+    if (!master?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on the pool master.";
+    if (!host?.capabilities?.includes(tagsCapability)) return "Requires Nex Core 0.4.8 or later on this VM's host.";
+  }
+  return editBlocker(vm, host);
+}
+
+// Tag-only saves still use PUT of the full definition. The editor re-reads the VM first so a
+// stale list mirror cannot rewrite disks, NICs or firmware while changing labels.
+export function TagEditor({ vm, host, master, api, reload, unavailable, onNotice }: { vm: VM; host?: Host; master?: Host; api: API; reload: () => Promise<void>; unavailable: boolean; onNotice: (text: string) => void }) {
+  const saved = vm.spec?.tags ?? [];
+  const [tags, setTags] = useState(saved);
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+  const ids = useRef<Record<string, string>>({});
+  const savedRef = useRef(saved);
+  // Accept a new host report only while the draft still matches the previous report.
+  useEffect(() => {
+    const previous = savedRef.current;
+    savedRef.current = saved;
+    setTags(t => t.join() === previous.join() ? saved : t);
+  }, [saved.join()]);
+  const dirty = tags.join() !== saved.join();
+  const clearing = dirty && tags.length === 0;
+  const supported = tagsSupported(host, master);
+  const blocker = tagsBlocker(vm, host, master, clearing) || (unavailable ? "Controller inventory may be out of date. Refresh before changing tags." : "");
+  const addBlocked = Boolean(blocker) || working || (!supported && !(saved.length > 0 && tags.length < saved.length));
+  const saveBlocked = Boolean(blocker) || working || !dirty || (!supported && !clearing);
+  function add(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!supported) { setError("Requires Nex Core 0.4.8 or later to add tags."); return; }
+    const tag = text.trim().toLowerCase();
+    if (!tagPattern.test(tag)) { setError("A tag is 1 to 32 lowercase letters, digits or hyphens."); return; }
+    if (!tags.includes(tag)) {
+      if (tags.length >= 16) { setError("A VM allows at most 16 tags."); return; }
+      setTags([...tags, tag].sort());
+    }
+    setText(""); setError("");
+  }
+  async function save() {
+    setWorking(true); setError("");
+    try {
+      const fresh = await api<VM>(`vms/${encodeURIComponent(vm.id)}`);
+      if (!fresh.spec) throw new Error("This VM has no definition to update.");
+      const payload = updateBody(fresh, { ...draftOf(fresh), tags });
+      const encoded = JSON.stringify(payload);
+      ids.current[encoded] ??= crypto.randomUUID();
+      await api(`vms/${encodeURIComponent(vm.id)}`, "PUT", { ...payload, request_id: ids.current[encoded] });
+      delete ids.current[encoded];
+      onNotice(`Tags for ${vm.name} requested. They show here once the pool master reports them.`);
+      await reload();
+    } catch (err) {
+      const code = (err as Error & { status?: number }).status;
+      if ([400, 404].includes(code || 0)) {
+        // Drop only the request_id for this payload when the server rejected it as bad input.
+        for (const key of Object.keys(ids.current)) {
+          try {
+            const body = JSON.parse(key);
+            if (body.tags?.join() === tags.join()) delete ids.current[key];
+          } catch { /* ignore */ }
+        }
+      }
+      setError((err as Error).message);
+    } finally { setWorking(false); }
+  }
+  return <div className="tag-editor">
+    <ul className="tags" aria-label="Tags">
+      {tags.map(tag => <li key={tag} className="tag">{tag}<button type="button" className="icon-button" aria-label={`Remove tag ${tag}`} disabled={working || Boolean(editBlocker(vm, host)) || unavailable} onClick={() => setTags(tags.filter(t => t !== tag))}><Icon kind="close" size={12} /></button></li>)}
+      {!tags.length && <li className="muted">No tags</li>}
+    </ul>
+    <form onSubmit={add}>
+      <label className="sr-only" htmlFor={`tag-${vm.id}`}>New tag</label>
+      <input id={`tag-${vm.id}`} placeholder="Add a tag, such as web" maxLength={32} value={text} disabled={addBlocked} onChange={e => setText(e.target.value)} />
+      <button disabled={addBlocked || !text.trim()}>Add</button>
+      <button type="button" className="primary" disabled={saveBlocked} onClick={() => void save()}>{working ? "Saving…" : "Save tags"}</button>
+    </form>
+    {error && <p className="task-error" role="alert">{error}</p>}
+    {blocker && <p className="help">{blocker}</p>}
+    {!supported && saved.length > 0 && <p className="help">This host no longer supports tags. Clear them to save other changes.</p>}
+  </div>;
 }

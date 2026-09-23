@@ -5,8 +5,9 @@
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
 key and configure the signed APT source, so an available package is signature-verified.
-The working `0.4.7` version is not evidence of a published candidate. Updates appear once
-the Release workflow has published packages to the signed APT archive.
+The working `0.4.8` version is not evidence of a published candidate. Updates appear once
+the Release workflow has published packages to the signed APT archive. Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -24,7 +25,8 @@ the Release workflow has published packages to the signed APT archive.
 
 ## Steps
 
-1. Open **Updates** (Controller: View menu or sidebar; host-local: aside **Updates**).
+1. Open **Updates** (Controller: **Settings** → **Updates**, `#/settings/updates`; the old
+   `#/updates` link redirects there. Host-local: aside **Updates**).
 2. Select **Check**. The package index is refreshed at most once every five minutes,
    so a release published moments ago can take that long to appear.
 3. If an update is listed, select **Update**.
@@ -37,7 +39,7 @@ the Release workflow has published packages to the signed APT archive.
 Installed and available versions are shown. Apply schedules a package install and
 service restart; the page reports that the service is restarting. After a Core update the
 host identifies as `Nex Core <new version>` in `/etc/os-release`, the console banner and the
-Controller host page **Version** field; that package version is the only Nex Core version.
+**Nex Core** field on the host's **Overview** tab in Controller; that package version is the only Nex Core version.
 
 ## Troubleshooting
 
@@ -113,6 +115,11 @@ Controller host page **Version** field; that package version is the only Nex Cor
   storage state exists.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 Automated API tests cover check/apply and apt failures; package identity was checked in a
 labeled simulation. The binary-only appliance helper regression is covered in a simulated helper

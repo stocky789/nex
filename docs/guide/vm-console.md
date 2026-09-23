@@ -9,12 +9,15 @@ shows what a monitor attached to the VM would show, so it works before any guest
 operating system or agent is installed. With the [guest tools](guest-tools.md) installed,
 the console also exchanges clipboard text with the guest and can resize its display.
 
-A VM created through Controller starts stopped. Open the **Console** tab first and use
-**Start VM** on the console toolbar: the tab is already open, so it attaches as the VM boots,
+A VM created through Controller starts stopped. Open its console page first (step 1) and use
+**Start VM** on the console toolbar: the console is already open, so it attaches as the VM boots,
 in time to answer *Press any key to boot from CD or DVD*, which waits about five seconds. The
-[Power controls](vm-power.md) in the page toolbar start the VM too, but a console opened after
-that start usually attaches too late for the prompt. The host-local page offers local power
-only for the Controller appliance it deployed.
+[Power controls](vm-power.md) in the VM panel's quick actions start the VM too, but a console
+opened after that start usually attaches too late for the prompt. The host-local page offers
+local power only for the Controller appliance it deployed.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -26,19 +29,19 @@ only for the Controller appliance it deployed.
 - **Host-local console:** the host's root password and the local page described in
   [Deploy the Controller appliance](deploy-controller-appliance.md); the VM must be running
   on that host with the local VNC display Nex defines for every VM it creates.
-- A browser with WebSocket support (all current browsers). Keep the same browser tab
+- A browser with WebSocket support (all current browsers). Keep the same browser page
   open; a console ticket expires after 60 seconds if the stream is not opened.
 
 ## Steps
 
 ### From Nex Controller
 
-To watch usage while operating the VM, expand **Realtime** beneath the display and tick
-**Show realtime stats (1-second samples)**. The display stays above the charts; a longer
-chart panel scrolls independently. This also works in the separate VM console window.
-Closing the drawer or leaving the console stops requests. Sampling pauses in a hidden
-browser page and turns off after ten minutes. Historical charts remain in **Stats**;
-host consoles and the host-local console are unchanged. See [usage history](usage-history.md).
+To watch usage while operating the VM, expand **Realtime** beneath the display on the
+full-screen console page and tick **Show realtime stats (1-second samples)**. The display
+stays above the charts; a longer chart panel scrolls independently. Closing the drawer or
+leaving the console stops requests. Sampling pauses in a hidden browser page and turns off
+after ten minutes. Historical charts remain on the VM panel's **Performance** tab; host
+consoles and the host-local console have no Realtime drawer. See [usage history](usage-history.md).
 
 Use the small arrow at the top-left edge of the console screen to **Collapse console
 toolbar** and give the display more room. Select **Expand console toolbar** to restore
@@ -47,14 +50,18 @@ visible; collapsing does not disconnect or change **View only**. The toolbar sta
 expanded whenever you reopen the console. This also works in host consoles, the
 host-local console and full-screen or separate-window views.
 
-1. Sign in, select the VM in **Resources**, and open its **Console** tab. Opening the tab
-   connects: Controller checks the host connection, the host's console support and the
+1. Sign in, select **VMs** in the rail, select the VM's row to open its panel, and select
+   the **Console** quick action (or **Open console** on the panel's **Overview** tab). The
+   console opens full screen at `#/console/<VM>`; the **Nex Controller** link at its top left
+   returns to the VM panel. Opening the console connects: Controller checks the host connection, the host's console support and the
    VM's observed state, then waits up to 20 seconds for the host to attach the display.
    The status badge changes to **connected** and the screen shows the VM display scaled
-   to fit the panel. If the VM is not running, the tab explains why and connects on its
-   own once a fresh report shows it running.
+   to fit the page. For a stopped VM, **Console** still opens the console page while the VM's
+   host is freshly reporting; the page explains why it cannot connect yet and offers **Start
+   VM** (step 2). It connects on its own once a fresh report shows the VM running. While the
+   host is stale, **Console** is unavailable, with the reason as its tooltip.
 2. If the VM is not running, select **Start VM** on the console toolbar and keep watching the
-   screen. The tab connects as soon as the host reports the VM running, which is early enough
+   screen. The console connects as soon as the host reports the VM running, which is early enough
    to answer *Press any key to boot from CD or DVD* or to work a firmware menu; hold the key
    down if you want to be certain. The button is shown only while the VM is not running and is
    unavailable while a start is in progress; it disappears once the VM is running. Starting the
@@ -72,7 +79,8 @@ host-local console and full-screen or separate-window views.
    needs to be shut down once before the first insert so the host can add a CDROM tray.
    **Inserting the install media…** or **Ejecting the driver disc…** clears when the task
    succeeds or the host reports the requested tray contents. If the task fails or needs
-   attention, its reason remains visible; inspect it in Recent tasks.
+   attention, its reason remains visible; inspect it under **Tasks** in the rail (or the
+   activity pill in the top bar).
    This works the same for a VM whose disks are on pool-shared storage; Core records the
    change on its pool master, so the ISO is still attached after the VM is re-adopted. The
    selected host and pool master must be upgraded for master-owned placement; a queued media
@@ -125,21 +133,27 @@ host-local console and full-screen or separate-window views.
 8. **Screenshot** downloads a PNG of the current display named after the VM. **View only**
    stops keyboard and mouse input while you watch. **Reconnect** ends the current stream
    and attaches again with a new ticket. **Full screen** enlarges the panel with its
-   toolbar; press Escape or the button again to leave. **Open in new window** opens a
-   console-only page (`#/console/<VM>`) in a separate tab or window.
-9. Leave the tab, select another resource, or close the page to end the console. The VM
+   toolbar; press Escape or the button again to leave. **Focus mode** keeps the browser
+   window but hides the Controller around the console: the logo, top bar, rail, settings
+   navigation and the slide-over panel's header and tabs. Select **Leave focus mode**, or
+   press Escape while the display does not have the keyboard, to bring them back. The VM
+   console is already a page of its own (`#/console/<VM>`); open that address in another
+   browser tab or window to keep the console beside the VM list.
+9. Select **Nex Controller** at the top of the console page, go to another screen, or close
+   the page to end the console. The VM
    keeps running. If the link drops while the VM is still eligible, the console
    reconnects by itself every few seconds with a new ticket.
 
 ### From a host in Nex Controller
 
-1. Select the host in **Resources** and open its **Console** tab. The same console client
+1. Select **Hosts** in the rail, select the host's row, and select the **Console** quick
+   action (or the panel's **Console** tab). The same console client
    connects to the host itself (a root shell on Nex Core through the same display path as a
    VM console). The host must be freshly connected and report `host-console-v1`.
 2. Type as on a local terminal. **Open in new window** uses `#/host-console/<host-id>`.
    A host console has no guest report, so it offers no CD/DVD drives, no **Start VM** and no
    **Resize guest to window**; the other controls behave as above.
-3. Leave the tab when finished; the host keeps running.
+3. Leave the **Console** tab or close the panel when finished; the host keeps running.
 
 ### From the host-local page
 
@@ -152,25 +166,25 @@ host-local console and full-screen or separate-window views.
 ## Expected result
 
 The console shows the VM's current display, for example a firmware boot menu, an
-installer, or a login prompt, and reacts to keyboard input within a moment. Controller's
-**Activity** view records `console.open` with the VM identity and administrator.
+installer, or a login prompt, and reacts to keyboard input within a moment. The VM panel's
+**Activity** tab and **Events** in the rail record `console.open` with the VM identity and administrator.
 Leaving the console leaves the VM running. While a reconnect is pending the badge shows
 **disconnected** and the status line says it is reconnecting.
 
 ## Troubleshooting
 
 - **"The VM is observed shut off"** or **Console: start the VM first:** the VM is not running.
-  Use **Start VM** on the console toolbar, **Start** in the page toolbar, or start it on its
-  host; the Console tab connects on its own once a fresh report shows the VM running.
+  Use **Start VM** on the console toolbar, **Start** in the VM panel's quick actions, or start
+  it on its host; an open console connects on its own once a fresh report shows the VM running.
   Controller never starts a VM as a side effect of opening its console.
 - **The VM is observed asleep and the console shows nothing or refuses to open:** the guest
   put itself to sleep (for example Windows Sleep) on a definition written before Nex disabled
-  guest sleep. Select **Start** in the toolbar to wake it, wait for the next host report, then
+  guest sleep. Select **Start** in the VM panel's quick actions to wake it, wait for the next host report, then
   connect; see [Control VM power](vm-power.md#troubleshooting).
 - **The boot prompt is gone, or the guest stops at "No bootable option or device was found":**
   the *Press any key to boot from CD or DVD* prompt waits about five seconds, which a console
   opened after the start usually misses; the same happens when Setup reboots by itself. Shut
-  the VM down, open the **Console** tab, and use **Start VM** on the console toolbar with a
+  the VM down, open its console, and use **Start VM** on the console toolbar with a
   hand on a key. From the firmware front page you can also choose the DVD entry in the
   firmware's own boot menu.
 - **"The VM's host is not freshly connected":** the host has not reported within the
@@ -182,16 +196,16 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 - **"The host did not connect the console in time":** the host received the request but
   could not attach the display within 20 seconds, usually because the VM stopped, has no
   local VNC socket, or the host lost its Controller connection. Check the host's agent
-  log for `console for VM …` and confirm the VM is running; the tab retries every few
+  log for `console for VM …` and confirm the VM is running; the console retries every few
   seconds, and each attempt uses a new ticket.
 - **"Console connection ended unexpectedly. Reconnecting…":** the WebSocket closed
   without a normal close, for example because the VM was stopped, the host tunnel
-  dropped, or Controller restarted. The tab reconnects automatically while the VM stays
-  eligible; if the VM stopped or the host went stale, the tab shows that instead. An
+  dropped, or Controller restarted. The console reconnects automatically while the VM stays
+  eligible; if the VM stopped or the host went stale, the console shows that instead. An
   in-memory console session does not survive a Controller restart.
 - **Keyboard input does not reach the VM:** click inside the screen first, and make sure
   **View only** is off. Browser shortcuts such as Ctrl+W are still handled by the
-  browser; use the toolbar for Ctrl+Alt+Del and **Send key…** for other combinations.
+  browser; use the console toolbar for Ctrl+Alt+Del and **Send key…** for other combinations.
 - **The guest asks you to reinsert the installation disc:** the guest ejected it itself.
   **CD/DVD** shows the recorded ISO as **(ejected in the VM)**; select the same ISO to put it
   back, then continue in the guest. **Eject** is still available and makes Nex's record match
@@ -211,9 +225,9 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   the drive to boot first.
 - **Paste into VM does nothing in the guest:** the guest is not running both spice-vdagent
   and qemu-guest-agent (**Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the
-  guest**), or
-  the VM was created before clipboard support (**Channel missing** in its Guest tools
-  panel). Install the [guest tools](guest-tools.md) or use **Type into VM**.
+  guest**), or the VM was created before clipboard support (**Clipboard: Not available** in the
+  **Guest tools** block of its panel, with *Channel missing* under **Why?**). Install the
+  [guest tools](guest-tools.md) or use **Type into VM**.
 - **Resize guest to window cannot be chosen:** the guest has not reported that it can act on
   a resize request — an installer before drivers load, or a guest without the
   [guest tools](guest-tools.md), whose agent is what applies the new resolution. The option
@@ -243,7 +257,7 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
   you want it.
 - **"the driver disc ISO is not registered and verified on the VM's host and pool"** (or "the
   install ISO …"): the ISO is still importing, failed, or lives on another host. Wait for its
-  import to finish in the ISO library, or import it to this VM's host.
+  import to finish in the **ISO library** on **Storage**, or import it to this VM's host.
 - **Reading your clipboard is refused:** the browser denied clipboard access or the page is
   not on HTTPS. Paste into the text box manually.
 - **The display is not visible after a hardware passthrough change:** the browser console
@@ -254,13 +268,20 @@ Leaving the console leaves the VM running. While a reconnect is pending the badg
 
 ## Verification
 
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
+
+**Focus mode** and the grouped console toolbar were checked in the [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) against a console with no VM attached; the connection itself was not exercised.
+
 See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
 unreleased admission change. Browser checks use simulated Core responses; native
 multi-host outage and recovery acceptance remains open.
 
 Realtime placement and polling controls have [separate simulated-browser evidence](../changes/2026-09-17-console-realtime-stats.json); this does not establish native guest sampling.
 
-VM, host-local and toolbar console flows were walked through against a Debian 13 guest in a
+VM, host-local and console-toolbar flows (earlier layout) were walked through against a Debian 13 guest in a
 disposable nested-KVM lab; Windows guests, physical hardware, concurrent viewers and long
 sessions were not. See the [console QA report](../qa/console/checks.md),
 [console features](../qa/console-features/checks.md),
@@ -276,7 +297,7 @@ guest reads back unchanged, **Start VM** appeared only while the VM was not runn
 and two-drive toolbars behaved as described above, and the toolbar, an open clipboard and the
 display stayed visible together. The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab, headless Chromium) re-ran the Linux side on a host in the browser:
-**Start VM** from the Console toolbar attached in time for the Debian 13.6 UEFI installer menu, a
+**Start VM** from the console toolbar (earlier layout) attached in time for the Debian 13.6 UEFI installer menu, a
 full install was driven with canvas keys and **Clipboard** > **Type into VM**, the guest's own
 eject showed "(ejected in the VM)", and step 4 (**Eject** on **Install media** before rebooting)
 booted straight into the installed system. Step 2 did not fully match: the console connected

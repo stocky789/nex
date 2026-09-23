@@ -1,0 +1,42 @@
+{
+  "summary": "Report per-NIC link speed and host uptime in host inventory: the agent reads /sys/class/net/<name>/speed and /proc/uptime on each inventory probe and reports optional nics[].speed_mbps and uptime_seconds, which the Controller passes through unchanged on GET /api/v1/hosts.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/controller/controller_test.go",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/changes/2026-09-23-host-nic-speed-uptime.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No operator workflow changes here: the console redesign UI slice consumes the fields and updates the guide with the screens that show them.",
+    "pages": []
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Additive: Inventory gains optional uptime_seconds and NIC gains optional speed_mbps on POST /api/v1/agent/report and GET /api/v1/hosts; both are omitted when unknown and by older agents. Report JSON is decoded strictly, so the shared Controller-before-Core upgrade rule applies.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Supports the console redesign already planned in docs/plans/2026-09-23-controller-console-redesign.md; no phase or gate changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Observed state read fresh on every inventory probe; nothing is persisted on the host, and the Controller keeps only its existing copy of the last report."
+  },
+  "verification": {
+    "method": "go test ./internal/agent -run TestNICSpeedAndUptimeParsing (1000, -1, missing speed file; 12345.67 54321.00 and missing uptime; snapshot carries both); go test ./internal/controller -run TestHostsReportNICSpeedAndUptime (fields reach GET /api/v1/hosts, unknown speed omitted); python3 -m unittest tests.test_api_contract; python3 scripts/generate_api.py --check.",
+    "evidence": [
+      "internal/agent/probes_test.go",
+      "internal/controller/controller_test.go"
+    ]
+  }
+}

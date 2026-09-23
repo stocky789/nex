@@ -436,6 +436,13 @@ func hostSupportsCapability(tx *sql.Tx, host, capability string) bool {
 	return tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &caps) == nil && slices.Contains(caps, capability)
 }
 
+// vmTagsSupported reports whether both the VM's host and its pool master journal tags; an
+// older Core would drop them silently.
+func vmTagsSupported(tx *sql.Tx, pool, host string) bool {
+	master, _, err := poolMasterOf(tx, pool)
+	return err == nil && hostSupportsCapability(tx, host, protocol.VMTagsCapability) && hostSupportsCapability(tx, master, protocol.VMTagsCapability)
+}
+
 type resourceLifecycleAPIRequest struct {
 	RequestID          string `json:"request_id"`
 	PoolID             string `json:"pool_id"`
@@ -1326,6 +1333,8 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 400, "valid name and stable request_id required; the Controller assigns the VM identity")
 		return
 	}
+	slices.Sort(v.Tags)
+	v.Tags = slices.Compact(v.Tags)
 	if err := protocol.ValidateVMSpec(v.VMCreateSpec); err != nil {
 		fail(w, 400, err.Error())
 		return
@@ -1349,6 +1358,10 @@ func (c *Controller) createVM(w http.ResponseWriter, r *http.Request, user, csrf
 	}
 	if err := cpuFeaturesSupported(tx, v.VMCreateSpec); err != nil {
 		fail(w, 409, err.Error())
+		return
+	}
+	if len(v.Tags) > 0 && !vmTagsSupported(tx, v.PoolID, v.HostID) {
+		fail(w, 409, "the selected host or its pool master does not support VM tags; upgrade Nex Core")
 		return
 	}
 	if v.DriversMediaID != "" {
@@ -1456,6 +1469,8 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 		fail(w, 400, "start_after_create applies to creation only; use the power controls")
 		return
 	}
+	slices.Sort(v.Tags)
+	v.Tags = slices.Compact(v.Tags)
 	if err := protocol.ValidateVMSpec(v.VMCreateSpec); err != nil {
 		fail(w, 400, err.Error())
 		return
@@ -1598,6 +1613,10 @@ func (c *Controller) updateVM(w http.ResponseWriter, r *http.Request, user, csrf
 	}
 	if spec.DriversMediaID != "" && !slices.Contains(caps, protocol.DriversDriveCapability) {
 		fail(w, 409, "the VM's host agent does not support a driver disc drive; upgrade Nex Core")
+		return
+	}
+	if len(spec.Tags) > 0 && !vmTagsSupported(tx, cur.PoolID, cur.HostID) {
+		fail(w, 409, "the VM's host or its pool master does not support VM tags; upgrade Nex Core")
 		return
 	}
 	cmd := protocol.Command{OperationID: random(), Kind: "vm-update", VM: &spec}

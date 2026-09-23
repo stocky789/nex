@@ -18,7 +18,7 @@ const {
   fenceHostIDs, unfenceableBlockers, fenceBlockerReason, fenceCellText,
   restrictedUnconfirmed, HostRestrictedBanner,
   bmcText, manualBMCOffered, bmcReenableOffered,
-  FencingCell, fencingText, fenceCheckLines, watchdogText, fenceMethodName,
+  FencingDetail, fencingText, fenceCheckLines, watchdogText, fenceMethodName,
 } = await import(moduleURL);
 
 const master = { host_id: "host-a", name: "core-a", role: "master", connection: "stale" };
@@ -130,10 +130,10 @@ assert.equal(bmcReenableOffered(noInBand, true), false);
   assert.doesNotMatch(row, /Set BMC access/, "a host Nex Core configured is not asked for a controller address");
   assert.match(row, /Clear fence device…/, "and its device is cleared from the same one entry point");
   assert.doesNotMatch(row, /Remove Nex fence account/, "there is no second destructive action");
-  // What the device is and what Core found on the controller is in the Fencing column now,
+  // What the device is and what Core found on the controller is in the row's Fencing details now,
   // not repeated beside the buttons.
   assert.doesNotMatch(row, /configured by Nex Core at 192\.0\.2\.15/);
-  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: provisioned, authoritative: true })),
+  assert.match(renderToStaticMarkup(createElement(FencingDetail, { member: provisioned, authoritative: true })),
     /configured by Nex Core at 192\.0\.2\.15/);
 }
 {
@@ -163,7 +163,7 @@ assert.match(membersSrc, /\{actionError && <p className="alert" role="alert">\{a
 const actions = renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false, onPromote: () => {}, onFenceProfile: () => {} }));
 assert.match(actions, /<button type="button" class="danger">Promote to pool master…<\/button>/);
 assert.match(actions, /<button type="button" disabled="">Set BMC access…<\/button>/);
-assert.match(renderToStaticMarkup(createElement(FencingCell, { member, authoritative: false })), /Fence device: unknown/);
+assert.match(renderToStaticMarkup(createElement(FencingDetail, { member, authoritative: false })), /Fence device: unknown/);
 // Without the handlers (an unavailable view) neither button is offered at all.
 assert.doesNotMatch(renderToStaticMarkup(createElement(PromotionActions, { report, member, authoritative: false })), /<button/);
 
@@ -185,10 +185,10 @@ const full = verdictOf([
 });
 const verdictMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report, verdict: full }));
 // Each check is a word, not a colour, with Core's reason verbatim and the hosts and VMs named.
-assert.match(verdictMarkup, /badge ok">passed<\/span> This host&#x27;s copy of the pool records is whole and signed/);
-assert.match(verdictMarkup, /badge failed">blocked<\/span> No reachable host holds a newer copy/);
-assert.match(verdictMarkup, /badge failed">blocked<\/span> Every pool virtual machine&#x27;s owner agrees with the copy/);
-assert.match(verdictMarkup, /badge unknown">unknown<\/span> The old pool master is shut out/);
+assert.match(verdictMarkup, /badge ok">Passed<\/span> This host&#x27;s copy of the pool records is whole and signed/);
+assert.match(verdictMarkup, /badge bad">Blocked<\/span> No reachable host holds a newer copy/);
+assert.match(verdictMarkup, /badge bad">Blocked<\/span> Every pool virtual machine&#x27;s owner agrees with the copy/);
+assert.match(verdictMarkup, /badge neutral">Unknown<\/span> The old pool master is shut out/);
 assert.match(verdictMarkup, /pool host host-c holds a newer pool authority than this host; promote it instead/);
 assert.match(verdictMarkup, /<small>Hosts: host-c<\/small>/);
 assert.match(verdictMarkup, /<small>Virtual machines: vm-7<\/small>/);
@@ -199,8 +199,8 @@ assert.match(verdictMarkup, /<td>core-b<\/td><td>answered<\/td><td>member<\/td><
 assert.match(verdictMarkup, /<td>unknown<\/td><td>unknown<\/td><td>unknown<\/td>/, "a host that did not answer reports no generations");
 // The per-VM ownership table: every state in words, and what a blocked VM means.
 assert.match(verdictMarkup, /badge ok">confirmed by its owner</);
-assert.match(verdictMarkup, /badge warning">its owner is fenced</);
-assert.match(verdictMarkup, /badge failed">blocked</);
+assert.match(verdictMarkup, /badge warn">its owner is fenced</);
+assert.match(verdictMarkup, /badge bad">blocked</);
 assert.match(verdictMarkup, /its owner reports definition revision 4, not 3/);
 assert.match(verdictMarkup, /stays defined and stays visible in the pool after a promotion\. It cannot be started until the disagreement about where it lives is resolved/);
 assert.match(verdictMarkup, /Being visible is not the same as its disks being available/);
@@ -356,7 +356,7 @@ assert.deepEqual(unfenceableBlockers(twoHosts), [], "a blocking host Core will f
 // The per-host table says, for every host, whether it stops the promotion and what happens to it.
 const twoMarkup = renderToStaticMarkup(createElement(PromotionVerdictView, { report: threeReport, verdict: twoHosts }));
 assert.match(twoMarkup, /<th>Stops this promotion<\/th><th>Fence<\/th>/);
-assert.match(twoMarkup, /<td>core-c<\/td>.*?<span class="badge failed">stops it<\/span><\/td><td>powered off by this promotion<\/td>/);
+assert.match(twoMarkup, /<td>core-c<\/td>.*?<span class="badge bad">stops it<\/span><\/td><td>powered off by this promotion<\/td>/);
 assert.match(twoMarkup, /<td>core-a<\/td>.*?<span class="badge ok">no<\/span><\/td><td>powered off by this promotion<\/td>/);
 assert.match(twoMarkup, /<td>core-b<\/td>.*?<span class="badge ok">no<\/span><\/td><td>not powered off<\/td>/);
 assert.match(twoMarkup, /This promotion powers off core-a, core-c, and Nex Core verifies each one is off/);
@@ -484,12 +484,12 @@ assert.match(restrictedClearsText({ ...report, members: [{ ...master, restricted
 const kindless = { ...master, connection: "fresh", restricted: { reason: superseded.reason, since: "2026-09-19T10:11:00Z" } };
 assert.equal(restrictedClearsText({ ...report, members: [kindless, member] }, kindless), "");
 const kindlessMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: kindless }));
-assert.match(kindlessMarkup, /badge failed">Restricted<\/span>/);
+assert.match(kindlessMarkup, /badge bad">Restricted<\/span>/);
 assert.match(kindlessMarkup, /superseded by another master/);
 assert.doesNotMatch(kindlessMarkup, /It clears/);
 
 const supersededMarkup = renderToStaticMarkup(createElement(RestrictedNote, { report, member: { ...member, restricted: superseded } }));
-assert.match(supersededMarkup, /badge failed">Restricted<\/span>/);
+assert.match(supersededMarkup, /badge bad">Restricted<\/span>/);
 assert.match(supersededMarkup, /task-error">this host&#x27;s pool authority was superseded by another master; it starts no shared-storage guest and writes no pool authority until it has rejoined and reconciled \(VM ownership conflicts: vm-7\)/);
 assert.match(supersededMarkup, /<small>Since 2026-09-19T10:11:00Z<\/small>/);
 assert.match(supersededMarkup, /Virtual machines this host still defines that the pool records elsewhere: vm-7/);
@@ -590,10 +590,10 @@ assert.match(src, /if \(!report \|\| !member\?\.restricted\) return null;/);
 assert.match(src, /window\.addEventListener\("focus", onFocus\)/);
 assert.match(src, /window\.setInterval\(\(\) => load\.current\(\), 10_000\)/);
 assert.match(src, /if \(!restricted\) return;/);
-// main.tsx renders it on the host page only, keyed by host so a different host refetches.
+// The host panel renders it on its Overview tab only, keyed by host so a different host refetches.
 {
-  const mainSrc = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-  assert.match(mainSrc, /<HostRestrictedBanner key=\{host\.id\} poolID=\{host\.pool_id\} hostID=\{host\.id\} api=\{api\} \/>/);
+  const mainSrc = readFileSync(new URL("./host-panel.tsx", import.meta.url), "utf8");
+  assert.match(mainSrc, /<HostRestrictedBanner key=\{host\.id\} poolID=\{host\.pool_id\} hostID=\{host\.id\} api=\{api\} report=\{report/);
   assert.equal((mainSrc.match(/HostRestrictedBanner/g) || []).length, 2, "one import and one use");
 }
 
@@ -612,7 +612,7 @@ assert.doesNotMatch(src, /\.(reason|error|detail|stage)[^\n]*\.(includes|startsW
 
 console.log("pool-promotion.test.mjs: ok");
 
-// ------------------------------------------------- the Fencing column and the pool summary
+// ------------------------------------------------- the Fencing details and the pool summary
 
 // Every word of the column is the pool master's own answer; this only chooses the wording,
 // and never turns an unknown or a stale check into a protected host.
@@ -631,7 +631,7 @@ console.log("pool-promotion.test.mjs: ok");
   const stale = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "not_ready", reason: "the last check from host-a is stale", checks: [ok("host-a", { result: "ok", stale: true })] }] });
   assert.equal(fencingText(stale, true).label, "BMC · stale");
   assert.notEqual(fencingText(stale, true).badge, "ok");
-  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: stale, authoritative: true })), /stale/);
+  assert.match(renderToStaticMarkup(createElement(FencingDetail, { member: stale, authoritative: true })), /stale/);
 
   // A failing check names the host that found it, on the row.
   const broken = withReadiness({ ready: false, methods: [{ kind: "ipmilan", state: "not_ready",
@@ -670,7 +670,7 @@ console.log("pool-promotion.test.mjs: ok");
   const unarmed = watchdog({ kind: "watchdog", state: "not_ready", reason: "this host's hardware watchdog is not armed: Nex Core arms watchdogs once this pool has quorum" });
   assert.match(fencingText(unarmed, true).label, /^Not protected — no other host/, "the watchdog must not change the badge");
   assert.match(watchdogText(unarmed, true), /^Watchdog: this host's hardware watchdog is not armed/);
-  assert.match(renderToStaticMarkup(createElement(FencingCell, { member: unarmed, authoritative: true })), /hardware watchdog is not armed/);
+  assert.match(renderToStaticMarkup(createElement(FencingDetail, { member: unarmed, authoritative: true })), /hardware watchdog is not armed/);
   const software = watchdog({ kind: "watchdog", state: "not_ready", reason: "this host has only the kernel's software watchdog, which a hung kernel cannot run, so it does not count" });
   assert.match(watchdogText(software, true), /does not count/);
   const twoHosts = watchdog({ kind: "watchdog", state: "not_applicable", reason: "a watchdog needs three or more hosts to have a majority side; this pool is fenced through its management controllers" });

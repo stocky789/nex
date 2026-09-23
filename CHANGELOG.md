@@ -6,12 +6,53 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.7` →
-> Debian `0.4.7`).
+> development software. Builds use the newest numbered changelog heading (`0.4.8` →
+> Debian `0.4.8`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.8] — 2026-09-23
+
+> **Development working-tree record, not a published release.** The console redesign below was
+> checked with unit and Go tests, the phase 1 browser lab, the CI browser checks and captures
+> against a labelled simulated inventory ([QA checks](docs/qa/controller-console-redesign/checks.md)).
+> No real host was exercised, and the tags Controller-replacement lab check has not run.
+
+### Minor Feature
+
+- Controller web UI design tokens: one token sheet with a dark theme that follows the system
+  setting (with a toggle), flat surfaces on the brand palette, operator labels instead of internal
+  identifiers, relative times, and a grouped console toolbar with **Focus mode**. Status badges
+  keep their square dot-and-text form.
+- Controller console redesign: a labelled icon rail (Overview, VMs with Containers under it,
+  Hosts, Storage, Networks, Backups, Tasks, Events, Settings), a top bar with the site and pool
+  scope menu, global search and a running-tasks indicator, a pool overview with usage, placement
+  and a **Needs attention** list, filterable VM and host lists whose details open in a side panel,
+  bulk VM start and shut down, and pool settings. **Storage** and **Networks** show each
+  repository's and network's health with a light per host, and the VM list can be filtered by
+  network. Overview sections can be collapsed, and the usage chart can be read point by point
+  (longer ranges show averages). Pool members show short status checks with details on request,
+  VM guest tools show a compact status grid, and long explanations sit behind **About** links.
+  VMs can carry tags, kept on the pool master (needs Nex Core 0.4.8 or later there). Hosts
+  show uptime and network link speed where Nex Core reports them, and the pool members report says when each host joined. Backups,
+  containers, snapshots, migration and high availability appear in their place but stay
+  unavailable until their phase lands. The toolbar, resource tree and **Tasks** strip are gone;
+  see [Navigate the Controller console](docs/guide/navigate-the-controller-console.md). Upgrade
+  Nex Controller before Nex Core: an older Controller cannot read a 0.4.8 host's reports and
+  shows it as stale.
+
+### Bug Fixes
+
+- Create VM keeps the wizard open when you open Storage or Networks from a side link, so returning
+  to VMs resumes the form instead of showing the list.
+- Saving VM tags re-reads the VM first so a stale list cannot rewrite disks or networks; tag edits
+  no longer reset while you type; clearing tags still works if the host lost tag support.
+- Host and VM panels refuse deep links outside the current site or pool scope. Host stats refresh
+  in one batch, and the host Performance tab reuses the list's recent history.
+- Large VM lists scroll without drawing every row at once. Overview and Hosts share one host-stats
+  fetch, and console screens load in smaller pieces instead of one large download.
 
 ## [0.4.7] — 2026-09-23
 

@@ -2,10 +2,11 @@
 
 ## Status
 
-Development product 0.4.7. Maintenance mode is a drain flag the **pool master** records for one
+Development product 0.4.8. Maintenance mode is a drain flag the **pool master** records for one
 host in the pool: while it is set, the master places no new virtual machine on that host and
-refuses starting one there. Set it from Nex Controller: pool detail → **Hosts** → the host's
-**Actions** menu → **Enter maintenance**.
+refuses starting one there. Set it from Nex Controller: **Settings** → **Members** (with the
+pool chosen in the top-bar scope menu) → **Actions** on the host's row → **Enter maintenance**.
+The **Maintenance** quick action in a host's panel opens the same section.
 
 What it does not do, in this release and by design:
 
@@ -28,11 +29,16 @@ The flag is durable state of the **pool master**, not of Controller: it survives
 restart, a Controller rebuild and the drained host being unreachable, and a replacement Controller
 reads it back from the master with nothing to re-enter.
 
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
+
 ## Prerequisites
 
-- An administrator session in Nex Controller, and the pool open at its **Hosts** tab.
+- An administrator session in Nex Controller, and the pool's **Settings** → **Members** section
+  open.
 - The pool master **connected and fresh**, and advertising the `pool-maintenance-v1` capability.
-  If it does not, the column shows *Maintenance mode needs pool-maintenance-v1 on the pool master;
+  If it does not, the row's **Details** → **Maintenance** entry shows *Maintenance mode needs
+  pool-maintenance-v1 on the pool master;
   upgrade the pool master* and no control is offered — the refusal that makes the flag mean
   anything lives in the master, so Controller will not pretend to set it.
 - The host must be a member of that pool as the master reports it, and not ejected.
@@ -46,19 +52,24 @@ record then refuses placements and starts on itself.
 
 ## Steps
 
-1. Open the pool and select the **Hosts** tab.
-2. Find the host's row and read the **Maintenance** column. It shows **available**, **in
-   maintenance**, or **unknown**. *unknown* means the pool master is not fresh, so nothing can be
-   said about the flag; it never means *available*.
-3. Open **Actions** at the end of the host's row and select **Enter maintenance**. A dialog opens with the host's name, what maintenance does and
-   does not do, and the guests still on the host — for example *2 guests · 1 running · build, db*.
+1. Choose the pool in the top-bar scope menu, then select **Settings** in the rail and
+   **Members** in the settings navigation (`#/settings/members`). From a host's panel
+   (**Hosts** in the rail → the host's row), the **Maintenance** quick action opens the
+   **Members** section of that host's pool directly.
+2. Find the host's row and read its **Maintenance** check in the status strip under the host
+   name. It shows **Available**, **In maintenance**, or **Unknown**. *Unknown* means the pool
+   master is not fresh, so nothing can be said about the flag; it never means *Available*. Select
+   **Details** on the row for the guests still on the host and, while in maintenance, since when.
+3. Open **Actions** on the host's row and select **Enter maintenance**. A dialog opens with the
+   host's name, what maintenance does and does not do, and the guests still on the host — for example *2 guests · 1 running · build, db*.
    If the host is not reporting, the dialog says *Guests unknown: this host is not reporting.*
    Treat that as unknown, not as an empty host.
 4. Move or stop any guest you do not want running during the work. Do that before confirming;
    maintenance will not do it for you.
 5. Select **Enter maintenance** in the dialog to confirm. There is no typed confirmation: nothing
    is stopped or destroyed by this change, so there is nothing to confirm against.
-6. To release the host later, select **Exit maintenance** on the same row and confirm.
+6. To release the host later, open **Actions** on the same row, select **Exit maintenance** and
+   confirm.
 
 ## Expected result
 
@@ -107,22 +118,23 @@ as old as the last successful push while it is not.
 
 ## Troubleshooting
 
-- **The column shows *unknown* and the button is disabled.** The pool master is not fresh.
+- **The Maintenance check shows *Unknown* and the menu item is disabled.** The pool master is not fresh.
   Reconnect the master; nothing about the flag can be read or changed while it is quiet.
-- **No button, with an upgrade message.** The pool master does not advertise
+- **No menu item, with an upgrade message under Details.** The pool master does not advertise
   `pool-maintenance-v1`. Upgrade the master.
 - **"The pool master reports membership generation *n*; reload the pool and retry."** The
-  membership changed after the page was loaded. Reload the **Hosts** tab and try again.
+  membership changed after the page was loaded. Select **Refresh** in the **Members** section and
+  try again.
 - **"This host is not a member of the selected pool."** The master's reported membership does not
   contain the host, or reports it as ejected.
 - **A red message on the row after submitting, ending in "The pool changed since you loaded it —
   reload."** The pool master refused the change because its membership moved while the request was
   in flight, or because its membership was unavailable. This is a conflict, not a failure of the
-  host: reload the tab and decide again. It arrives on the row rather than as an error from the
+  host: select **Refresh** in the **Members** section and decide again. It arrives on the row rather than as an error from the
   button, because the command is durable and the master answers it later.
 - **"Needs attention: maintenance mode could not be recorded durably."** The master could not
   write the flag to its own state, and it may or may not have landed. Read the **Maintenance**
-  column after the master's next report — that is the truth — and submit the same change again if
+  check after the master's next report — that is the truth — and submit the same change again if
   needed; repeating it is safe.
 - **The change seems to do nothing.** Maintenance never affects a running guest. Confirm what you
   expected against the table above: it blocks new placements, definitions, starts and resumes, and
@@ -140,6 +152,11 @@ as old as the last successful push while it is not.
   local HTTPS service and read `GET /api/local/v1/pool` to see its membership record.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 - **G2 browser walkthrough.** On a disposable host, the rendered UI entered maintenance while a
   fresh VM on that same host remained running. After UI stop, UI Start reached Core's terminal

@@ -1563,3 +1563,25 @@ func TestDefineWithoutCreateOnlyChecksTheOwnerRecord(t *testing.T) {
 		t.Fatalf("a drained host refused an owner check: %v", err)
 	}
 }
+
+// Tags ride in the definition the master commits, so a replacement Controller re-adopts them.
+func TestPoolVMUpdateCommitKeepsTagsInMasterRecord(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	const vm = "11111111-1111-4111-8111-111111111112"
+	previous := poolVMTestSpec(vm, "host-a")
+	if err := poolVMLocal(s, vm, "define", nil, true, previous, nil); err != nil {
+		t.Fatal(err)
+	}
+	next := *previous
+	next.Revision, next.Tags = 1, []string{"prod", "web"}
+	if err := poolVMLocalUpdate(s, vm, "update-reserve", "update-tags", previous, &next, nil); err != nil {
+		t.Fatal(err)
+	}
+	evidence := vmhost.VMUpdateEvidence{OperationID: "update-tags", Status: "succeeded", Previous: *previous, Current: next}
+	if err := poolVMLocalUpdate(s, vm, "update-commit", "update-tags", nil, nil, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadPoolVMs(t, s).VMs[vm].Spec.Tags; !slices.Equal(got, next.Tags) {
+		t.Fatalf("master record tags = %v", got)
+	}
+}

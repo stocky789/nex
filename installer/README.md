@@ -64,7 +64,7 @@ against current `trixie` repositories and build timestamps change. Retain the ou
 manifest and cache for each tested build. A dated repository snapshot/package lock
 and complete source bundle are required before external release.
 
-The current working version is `0.4.7`; it is not a release merely because the build
+The current working version is `0.4.8`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).

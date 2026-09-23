@@ -316,12 +316,13 @@ def main():
             page.wait_for_load_state('networkidle')
             page.goto(lab.url + '/#/vms/' + vm_id)
             tools = page.get_by_label('Guest tools')
-            expect(tools.get_by_text('Connected · guest agent answering')).to_be_visible(timeout=30000)
+            # The status grid: one word per capability, the full reason behind Details / Why?.
+            expect(tools.locator('.guest-caps li', has_text='Guest agent').locator('.badge')).to_have_text('Ready', timeout=30000)
             expect(tools.get_by_text('Debian GNU/Linux 13')).to_be_visible()
             expect(tools.get_by_text('guest-tools-qa', exact=True)).to_be_visible()
             expect(tools.get_by_text('192.168.122.')).to_be_visible()
-            expect(tools.get_by_text('Ready · copy and paste work both ways')).to_be_visible()
-            expect(tools.get_by_text('Available · VirtIO display')).to_be_visible()
+            expect(tools.locator('.guest-caps li', has_text='Clipboard').locator('.badge')).to_have_text('Ready')
+            expect(tools.locator('.guest-caps li', has_text='Display resize').locator('.badge')).to_have_text('Ready')
             capture(page, 'guest-tools-connected')
             lab.passed('Guest tools panel shows the agent, OS, hostname, addresses, clipboard readiness and display resize')
 

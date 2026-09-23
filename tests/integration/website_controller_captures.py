@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Capture the real Controller with disposable, explicitly simulated public-demo data.
 
-Captures the four host views against a clean fixture, then registers demo storage, a
-guest network and an ISO, creates VMs through the real API and captures the pool VM
-list, VM details and the completed Create VM review.
+Captures four host panel tabs against a clean fixture, then registers demo storage, a
+guest network and an ISO, creates VMs through the real API and captures the VM list,
+a VM panel and the completed Create VM review.
 
 Requires built web/dist, Go, openssl and Python Playwright/Chromium as in phase1 CI.
 Default output is disposable CI evidence. To replace website images, pass
@@ -33,7 +33,7 @@ import urllib.request
 from phase1 import Lab, ROOT, eventually, run
 
 HOSTNAME = 'nex-core-01'
-VIEWS = [('General', 'Health checks', 'desktop-shell.png'),
+VIEWS = [('Overview', 'Health checks', 'desktop-shell.png'),  # host panel tabs
          ('Networking', 'Network interfaces', 'networking-desktop.png'),
          ('Storage', 'Disks', 'storage-desktop.png'),
          ('Activity', 'Activity and health history', 'activity-desktop.png')]
@@ -211,14 +211,13 @@ def capture(lab, args):
         page.get_by_label('Username').fill('root')
         page.get_by_label('Password', exact=True).fill(password.read_text())
         page.get_by_role('button', name='Sign in', exact=True).click()
-        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
+        expect(page.locator('summary[aria-label^="Scope: Community demo, ' + HOSTNAME + '."]')).to_be_visible()
         page.goto(lab.url + '/#/hosts/' + identity['host_id'])
+        host_panel = page.get_by_role('region', name=HOSTNAME, exact=True)
         for tab, heading, filename in VIEWS:
-            page.get_by_role('navigation', name='Resource views', exact=True).get_by_role('button', name=tab, exact=True).click()
-            expect(page.get_by_role('heading', name=heading, exact=True)).to_be_visible()
-            expect(page.get_by_role('heading', name=HOSTNAME, exact=True)).to_be_visible()
-            if tab != 'Activity':
-                expect(page.locator('.badge.fresh').first).to_be_visible()
+            host_panel.get_by_role('tab', name=tab, exact=True).click()
+            expect(host_panel.get_by_role('heading', name=heading, exact=True)).to_be_visible()
+            expect(host_panel.locator('header .badge', has_text='Online')).to_be_visible()
             page.wait_for_load_state('networkidle')
             expect(page.locator('input[type="password"]')).to_have_count(0)
             expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
@@ -226,12 +225,11 @@ def capture(lab, args):
             assert_public_text(body)
             # One Nex Core version: the package version, shown once; no separate agent row.
             assert 'Agent version' not in body, body
-            if tab == 'General':
-                assert 'Version\nNex Core 0.1.4' in body, body
+            if tab == 'Overview':
+                assert re.search(r'Nex Core\n0\.1\.4\b', body), body
             assert password.read_text() not in page.content() and token not in page.content()
-            assert all(label in body for label in ['Community demo', HOSTNAME, HOSTNAME + ' · master'])
-            if tab == 'General':
-                assert 'Pool master' in body
+            # The scope names the site; the panel says the host is its pool's master.
+            assert all(label in body for label in ['Community demo', HOSTNAME, 'Master of ' + HOSTNAME]), body
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             path = args.output / filename
             page.screenshot(path=str(path))
@@ -245,12 +243,10 @@ def capture(lab, args):
             page.screenshot(path=str(path))
             hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
 
-        def view(tab):
-            # A hash change alone leaves the loaded client state in place; reload so the
-            # view renders resources registered after sign-in.
-            page.goto(lab.url + '/#/pools/' + pools[0]['id'])
+        def vms():
+            # Reload so the list renders resources registered after sign-in.
+            page.goto(lab.url + '/#/vms')
             page.reload()
-            page.get_by_role('navigation', name='Resource views', exact=True).get_by_role('button', name=tab, exact=True).click()
 
         def option(field, prefix):
             texts = field.locator('option').all_text_contents()
@@ -310,19 +306,18 @@ def capture(lab, args):
         assert_public_text(json.dumps(lab.api('/api/v1/vms')))
         lab.passed('three demo VMs created through the real API on registered storage, network and uploaded media; the simulated host confirmed every operation and reports them running')
 
-        view('Virtual machines')
-        # The resource tree links each VM too, so scope the list assertions to the panel table.
-        table = page.locator('section.panel').filter(
-            has=page.get_by_role('heading', name='Virtual machines', exact=True)).locator('table')
+        vms()
+        table = page.locator('table.list')
         for name, *_ in DEMO_VMS:
             expect(table.get_by_role('link', name=name, exact=True)).to_be_visible()
         shot('vms-desktop.png')
         table.get_by_role('link', name=DEMO_VMS[0][0], exact=True).click()
-        expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
-        expect(page.locator('.details')).to_contain_text('running')
+        vm_panel = page.get_by_role('region', name=DEMO_VMS[0][0], exact=True)
+        expect(vm_panel.get_by_role('tab', name='Overview', exact=True)).to_have_attribute('aria-selected', 'true')
+        expect(vm_panel.locator('header .badge')).to_have_text(re.compile('running', re.I))
         shot('vm-general-desktop.png')
 
-        view('Virtual machines')
+        vms()
         page.get_by_role('button', name='Create VM', exact=True).click()
         page.get_by_label('VM name', exact=True).fill('build-01')
         page.get_by_label('Description').fill('Continuous integration builder')
@@ -347,20 +342,17 @@ def capture(lab, args):
         page.get_by_label('Install ISO').select_option(label=ISO_NAME)
         page.get_by_role('button', name='Next', exact=True).click()
         expect(page.get_by_role('heading', name='Create VM · 6 of 6:', exact=False)).to_be_visible()
-        # Collapse the task dock so the whole review, including Lifecycle, fits the viewport.
-        page.locator('details.activity-dock > summary').click()
-        expect(page.locator('details.activity-dock')).not_to_have_attribute('open', '')
         shot('create-vm-desktop.png')
-        lab.passed('pool VM list, VM details and the completed six-step Create VM review captured from the real browser UI')
+        lab.passed('VM list, VM panel and the completed six-step Create VM review captured from the real browser UI')
         stopped.set()
         assert not failures, failures
         # Exercise the original identity leak through real API/rendering after all safe captures.
         # This disposable negative fixture is never written to a screenshot.
         lab.api('/api/v1/sites', {'name': 'local-workstation'}, expected=201)
         page.reload()
-        # Sites are listed by the site picker rather than as tree links.
-        page.get_by_role('button', name=re.compile(r'^Site: ')).click()
-        expect(page.get_by_role('option', name='local-workstation', exact=True)).to_be_visible()
+        # Sites are listed by the scope menu.
+        page.locator('summary[aria-label^="Scope: "]').click()
+        expect(page.locator('details.scope').get_by_role('button', name='local-workstation · all pools', exact=True)).to_be_visible()
         try:
             assert_public_text(page.locator('body').inner_text())
         except AssertionError:
@@ -370,7 +362,7 @@ def capture(lab, args):
         assert not errors, errors
         version = browser.version
         browser.close()
-    lab.passed('four real browser resource views, neutral rendered identity, no credential fields or browser errors')
+    lab.passed('four real browser host panel tabs, neutral rendered identity, no credential fields or browser errors')
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps({
         'date_utc': datetime.now(timezone.utc).isoformat(), 'results': lab.results,

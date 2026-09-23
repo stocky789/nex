@@ -6,8 +6,10 @@ await cp("public", "dist", { recursive: true });
 const options = {
   entryPoints: { app: "src/main.tsx", local: "src/local.tsx" },
   bundle: true,
+  splitting: true,
   minify: true,
   outdir: "dist",
+  chunkNames: "chunks/[name]-[hash]",
   entryNames: "[name]",
   target: "es2022",
   format: "esm",

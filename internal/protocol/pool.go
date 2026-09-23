@@ -14,6 +14,8 @@ import (
 
 // PoolMember is a Core-master-owned membership record.  The Controller mirrors it from
 // inventory; it must not infer membership from which hosts happen to be connected.
+// ObservedAt is when the master admitted the member, or created the pool for its founding
+// host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
 	HostID            string    `json:"host_id"`
 	CertificateSHA256 string    `json:"certificate_sha256"`

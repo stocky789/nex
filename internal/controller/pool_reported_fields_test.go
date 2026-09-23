@@ -293,3 +293,24 @@ func TestMasterClaimantsFollowsTheAdoptionRule(t *testing.T) {
 		t.Fatalf("master_conflict without a mirrored membership = %v", got)
 	}
 }
+
+// TestPoolMembersReportsWhenEachMemberJoined: joined_at is the master's durable admission
+// time for the member, copied as reported. Like peer_origin it is a record, not an
+// observation, so a quiet master still reports it; a record without one reports "".
+func TestPoolMembersReportsWhenEachMemberJoined(t *testing.T) {
+	l := newTransferLab(t)
+	joined := time.Date(2026, 9, 1, 10, 30, 0, 0, time.UTC)
+	l.master.inv.Managed.Membership.Members[1].ObservedAt = joined
+	l.master.inv.Managed.Membership.Members[0].ObservedAt = time.Time{}
+	l.send(&l.master, nil)
+	if got := rawMember(t, l.rawMembers(t), l.member.id)["joined_at"]; got != "2026-09-01T10:30:00Z" {
+		t.Fatalf("joined_at = %v", got)
+	}
+	if got := rawMember(t, l.rawMembers(t), l.master.id)["joined_at"]; got != "" {
+		t.Fatalf("a member record without an admission time reported joined_at %v", got)
+	}
+	l.forget(&l.master)
+	if got := rawMember(t, l.rawMembers(t), l.member.id)["joined_at"]; got != "2026-09-01T10:30:00Z" {
+		t.Fatalf("a quiet master lost the join time: %v", got)
+	}
+}

@@ -174,24 +174,45 @@ assert.equal(statsFailure(failure("the host agent does not report hardware; upgr
   assert.doesNotMatch(statsSrc, /onRetry=\{\(\) => setHardwareAttempt/);
 }
 // WCAG 1.4.11: a plotted line is non-text content, so every series colour needs 3:1 against the
-// white card it is drawn on.
+// panel it is drawn on. Series and status colours now live in tokens.css (Task 2); stats.css
+// references them and carries no literal colour of its own (tokens.test.mjs enforces that).
 {
   const css = readFileSync(new URL("./stats.css", import.meta.url), "utf8");
+  const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
+  const token = name => tokens.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))[1];
   const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
   const luminance = hex => rgb(hex).map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
   const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  const panel = token("panel");
   for (let i = 1; i <= 8; i++) {
-    const colour = css.match(new RegExp(`--series-${i}: (#[0-9a-f]{6});`))[1];
-    assert.ok(contrast(colour, "#ffffff") >= 3, `--series-${i} ${colour} is ${contrast(colour, "#ffffff").toFixed(2)}:1 on white, below 3:1`);
+    const colour = token(`series-${i}`);
+    assert.ok(contrast(colour, panel) >= 3, `--series-${i} ${colour} is ${contrast(colour, panel).toFixed(2)}:1 on the panel, below 3:1`);
   }
   // SR-088: only the last body row drops its rule, so thead keeps its underline.
   assert.match(css, /\.stats-hw-table tbody tr:last-child > \* \{ border-bottom: 0; \}/);
   assert.doesNotMatch(css, /\.stats-hw-table tr:last-child > \*/);
-  // SR-089 / SR-090: system-disk block is a card; Healthy text meets 4.5:1 on the panel canvas.
-  assert.match(css, /\.md-arrays \{[^}]*background: #fff/);
-  const healthy = css.match(/\.md-healthy \{ color: (#[0-9a-f]{6});/)[1];
-  assert.ok(contrast(healthy, "#f7f8fa") >= 4.5, `.md-healthy ${healthy} is ${contrast(healthy, "#f7f8fa").toFixed(2)}:1 on #f7f8fa, below 4.5:1`);
+  // SR-089 / SR-090: system-disk block is a card; Healthy text meets 4.5:1 on the stats panel canvas.
+  assert.match(css, /\.md-arrays \{[^}]*background: var\(--panel\)/);
+  const healthy = token("ok");
+  const sunken = token("sunken");
+  assert.ok(contrast(healthy, sunken) >= 4.5, `.md-healthy ${healthy} is ${contrast(healthy, sunken).toFixed(2)}:1 on the stats panel canvas, below 4.5:1`);
 }
 
 console.log("stats helpers ok");
+
+// The VM panel's spark rows: one series per resource, byte rates summed, IOPS never added to bytes.
+{
+  const { sparkRows } = await import(moduleURL);
+  const rows = sparkRows({ object: "vm", id: "vm-1", range: "10m", step_seconds: 5, start: "2026-09-16T00:00:00Z", series: [
+    s("cpu.total", "cpu", "percent", [10, null, 30]), s("cpu.vcpu.0", "cpu", "percent", [4, null, 10]),
+    s("memory.assigned", "memory", "bytes", [8, 8, 8]), s("memory.host", "memory", "bytes", [2, 4, 4]),
+    s("disk.vda.read_bytes", "disk", "bytes_per_second", [1024, 0, 1024]), s("disk.vda.write_bytes", "disk", "bytes_per_second", [1024, 0, 1024]),
+    s("disk.vda.read_iops", "disk", "iops", [500, 500, 500]),
+  ] });
+  assert.deepEqual(rows.map(r => r.text), ["30%", "4 B", "2.0 KiB/s", "—"]);
+  assert.deepEqual(rows[0].values, [10, 30], "a gap is left out, not drawn as zero");
+  assert.equal(rows[1].detail, "memory.host", "host resident, not assigned plus host");
+  assert.deepEqual(rows[2].values, [100, 0, 100]);
+  console.log("stats spark rows ok");
+}

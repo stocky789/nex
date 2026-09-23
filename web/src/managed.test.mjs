@@ -4,9 +4,8 @@
 // operator clicks Close. There is no test harness in web/ (no vitest/jest), so this bundles the
 // real module with the already-installed esbuild and renders it with react-dom/server;
 // run with: node src/managed.test.mjs
-import { transformSync } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
-import { bundleTestModule, testCacheDir } from "./test-helpers.mjs";
+import { readFileSync } from "node:fs";
+import { bundleTestModule } from "./test-helpers.mjs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -17,25 +16,34 @@ const moduleURL = bundleTestModule(new URL("./managed.tsx", import.meta.url), "m
 // reload path that first showed the stale panel.
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
-const { ManagedVMs, VMDetails, VMDelete, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(moduleURL);
+const { ManagedVMs, VMDetails, VMDelete, InstallMedia, VMUsage, staleNote, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, guestCapabilities, networkHostAccess, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(moduleURL);
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
   media: [], vms: [], api: async () => ({}), reload: async () => {}, setTab: () => {},
-  unavailable: false, uploading: false, startIsoUpload: async () => ({}), createVM: false,
-  onCreateVMShown: () => {},
+  unavailable: false, uploading: false, startIsoUpload: async () => ({}), creating: false,
+  onCloseCreate: () => {},
 };
-const tabs = ["General", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"];
+const tabs = ["", "Virtual machines", "Storage", "Networking"];
+// A form shows only on its own screen; the ISO library, and so the ISO upload, is on Storage.
+const showsForm = (form, ownTab, tab) => tab === ownTab;
 
-for (const [form, ownTab, heading] of [["network", "Networking", "Register guest network"], ["iso", "ISO library", "Upload guest ISO"], ["vm", "Virtual machines", "Create VM · 1 of 6"]]) {
+for (const [form, ownTab, heading] of [["network", "Networking", "Register guest network"], ["iso", "Storage", "Upload guest ISO"], ["vm", "Virtual machines", "Create VM · 1 of 6"]]) {
   pending = { [form]: { payload: "{}", id: "request-1" } };
   for (const tab of tabs) {
     const html = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab }));
     // Still mounted everywhere: entries and wizard progress must survive a trip to another tab.
     assert.ok(html.includes(heading), `${form} form on ${tab}: expected ${heading} to stay mounted`);
-    assert.equal(/ hidden=""/.test(html), tab !== ownTab, `${form} form on ${tab}: wrong visibility`);
+    assert.equal(/ hidden=""/.test(html), !showsForm(form, ownTab, tab), `${form} form on ${tab}: wrong visibility`);
   }
 }
+
+// The VMs screen's own list replaced the pool view's VM table: the create wizard stands alone.
+pending = { vm: { payload: "{}", id: "request-1" } };
+const wizardOnly = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Virtual machines", vms: [{ id: "vm-x", pool_id: "pool-1", host_id: "h", name: "listed-vm", state: "running", freshness: "fresh" }] }));
+assert.match(wizardOnly, /Create VM · 1 of 6/);
+assert.doesNotMatch(wizardOnly, /listed-vm|<table/, "no VM table under the wizard");
+pending = {};
 
 assert.equal(formTab(""), "", "no open form matches no tab");
 assert.equal(formTab("storage"), "", "storage registration lives in its own tab-scoped view");
@@ -52,20 +60,15 @@ assert.equal(isoNameFromURL(""), "");
 // Controller's updated_at is when that history was re-observed. Only the exact Core
 // adoption identity gets the recovered-history time treatment; ordinary request IDs do not.
 const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-const timingStart = mainSource.indexOf("const date =");
-const timingEnd = mainSource.indexOf("const size =", timingStart);
-assert.ok(timingStart >= 0 && timingEnd > timingStart, "task timestamp helper is present");
-const timingCode = transformSync(mainSource.slice(timingStart, timingEnd), { loader: "tsx", format: "esm" }).code;
-const timingFile = `${testCacheDir}/main-task-timestamp.test.mjs`;
-writeFileSync(timingFile, timingCode);
-const { taskTimestamp } = await import(`file://${timingFile}?${Date.now()}`);
+const railSource = readFileSync(new URL("./rail-screens.tsx", import.meta.url), "utf8");
+const { taskTimestamp } = await import(bundleTestModule(new URL("./settings.tsx", import.meta.url), "settings", true));
 const adopted = { id: "historic", host_id: "core-a", request_id: "adopt-outcome:core-a:historic", updated_at: "2026-09-01T00:00:00Z" };
 assert.equal(taskTimestamp(adopted).reobserved, true);
 assert.equal(taskTimestamp({ ...adopted, request_id: "operator-adopt-outcome:core-a:historic" }).reobserved, false);
 assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-b:historic" }).reobserved, false);
 assert.equal(taskTimestamp({ ...adopted, request_id: "adopt-outcome:core-a:other-operation" }).reobserved, false);
-assert.match(mainSource, /Reobserved from Core history/);
-assert.match(mainSource, /Original outcome time was not reported\./);
+assert.match(railSource, /Reobserved from Core history/);
+assert.match(railSource, /Original outcome time was not reported\./);
 
 // BUG-0204: the ISO banner follows the host transfer record, not the status the submission
 // returned. "queued" must stop being shown once the same page lists the import as succeeded.
@@ -85,9 +88,9 @@ assert.match(isoTransferNotice("virtio-win.iso", "succeeded", "download"), /^vir
 assert.equal(mediaDiscardable({ id: "failed", status: "failed" }), true);
 assert.equal(mediaDiscardable({ id: "uncertain", status: "needs_attention" }), true);
 for (const status of ["queued", "dispatched", "succeeded"]) assert.equal(mediaDiscardable({ id: status, status }), false);
-const failedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "ISO library", media: [{ id: "failed", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "failed.iso", operation_id: "op-1", status: "failed", size_bytes: 0, sha256: "" }] }));
+const failedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Storage", media: [{ id: "failed", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "failed.iso", operation_id: "op-1", status: "failed", size_bytes: 0, sha256: "" }] }));
 assert.match(failedLibrary, /Discard failed import/);
-const storedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "ISO library", media: [{ id: "stored", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "stored.iso", operation_id: "op-2", status: "succeeded", size_bytes: 40000, sha256: "a" }] }));
+const storedLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Storage", media: [{ id: "stored", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "stored.iso", operation_id: "op-2", status: "succeeded", size_bytes: 40000, sha256: "a" }] }));
 assert.doesNotMatch(storedLibrary, /Discard failed import/);
 const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
 // DEL-5: the delete request identity belongs to its payload. Retrying after an uncertain
@@ -96,7 +99,7 @@ const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "u
 assert.match(managedSource, /request\.current\[String\(wipe\)\] \|\|= crypto\.randomUUID\(\)/);
 assert.match(managedSource, /request_id: request\.current\[String\(wipe\)\], delete_disks: wipe/);
 assert.match(managedSource, /confirm\(`Discard \$\{media\.name\}\?/);
-assert.match(managedSource, /await api\(`media\/\$\{media\.id\}`, "DELETE"\)/);
+assert.match(managedSource, /await api\(`media\/\$\{encodeURIComponent\(media\.id\)\}`, "DELETE"\)/);
 assert.match(managedSource, /current = await api<Media\[\]>\("media"\)/);
 assert.match(managedSource, /current\.some\(entry => entry\.id === media\.id\)/);
 assert.match(managedSource, /await reload\(\);\s*\n\s*setNotice\(`Discarded the failed import/);
@@ -131,17 +134,17 @@ assert.equal(ejectInstallOffer({ ...installed, guest: null }, mediaHost), true);
 
 const detailProps = {
   vm: installed, hosts: [mediaHost], storage: [], networks: [], media: [{ id: "iso-1", name: "windows.iso" }],
-  api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {},
-  installMedia: { busy: false, note: "", onEject: () => {} },
+  api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {}, editing: false, onEditing: () => {},
 };
 const details = renderToStaticMarkup(createElement(VMDetails, detailProps));
-assert.match(details, /Eject install media/);
-assert.match(details, /Press any key to boot from CD or DVD/);
-assert.doesNotMatch(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, state: "shut off" } })), /Eject install media/);
-// Without the wiring there is no action to offer, so the panel must not advertise one.
-assert.doesNotMatch(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, installMedia: undefined })), /Eject install media/);
+const mediaProps = { vm: installed, host: mediaHost, drives: { drives: [], options: [] }, eject: { busy: false, note: "", onEject: () => {} }, busy: false, unavailable: false };
+const offer = renderToStaticMarkup(createElement(InstallMedia, mediaProps));
+assert.match(offer, /Eject install media/);
+assert.match(offer, /Press any key to boot from CD or DVD/);
+assert.doesNotMatch(renderToStaticMarkup(createElement(InstallMedia, { ...mediaProps, vm: { ...installed, state: "shut off" } })), /Eject install media/);
+assert.doesNotMatch(details, /Eject install media/, "the offer lives with the drives, not the definition");
 // A running request and a task that did not complete are both shown with the offer.
-const working = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, installMedia: { busy: true, note: "Ejecting the install media…", onEject: () => {} } }));
+const working = renderToStaticMarkup(createElement(InstallMedia, { ...mediaProps, eject: { busy: true, note: "Ejecting the install media…", onEject: () => {} } }));
 assert.match(working, /Ejecting…/);
 assert.match(working, /Ejecting the install media…/);
 assert.match(working, /<button type="button" disabled=""/);
@@ -172,14 +175,14 @@ assert.doesNotMatch(details, /upgrade Core, stop/);
 
 // Roadmap item 8: Core reports nullable observations. The UI must distinguish an unavailable
 // metric from zero and state CPU's vCPU-relative meaning without a sample-age row.
-const usageDetails = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: { observed_at: new Date(Date.now() - 65_000).toISOString(), sample_window_ms: 30_000, cpu_percent: 125, memory_assigned_bytes: 4 * 1024 ** 3, memory_maximum_bytes: 8 * 1024 ** 3, memory_host_bytes: null, disk_used_bytes: 3 * 1024 ** 3, disk_capacity_bytes: null } } }));
+const usageDetails = renderToStaticMarkup(createElement(VMUsage, { vm: { ...installed, usage: { observed_at: new Date(Date.now() - 65_000).toISOString(), sample_window_ms: 30_000, cpu_percent: 125, memory_assigned_bytes: 4 * 1024 ** 3, memory_maximum_bytes: 8 * 1024 ** 3, memory_host_bytes: null, disk_used_bytes: 3 * 1024 ** 3, disk_capacity_bytes: null } } }));
 assert.match(usageDetails, /VM usage/);
 assert.match(usageDetails, /125% of allocated vCPUs/);
 assert.match(usageDetails, /Allocation, not memory used inside the guest/);
 assert.match(usageDetails, /Host memory cost<\/dt><dd>Not reported/);
 assert.match(usageDetails, /Disk capacity<\/dt><dd>Not reported/);
 assert.doesNotMatch(usageDetails, /Sample age|Sampled /);
-assert.match(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, usage: null } })), /This is not zero usage/);
+assert.match(renderToStaticMarkup(createElement(VMUsage, { vm: { ...installed, usage: null } })), /This is not zero usage/);
 assert.doesNotMatch(details, /Existing VMs/);
 
 // BUG-0201 (UI half): resize is now reported from what the guest can do, not from the device
@@ -198,30 +201,37 @@ for (const clipboard of ["waiting", "disconnected", ""]) {
 }
 assert.match(guestResizeText({ ...resizing, clipboard: "no-channel", resize: false }), /created before the console agent channel existed/);
 // The panel renders that reason rather than the old device-model claim.
-const noTools = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, vm: { ...installed, guest: { ...installed.guest, clipboard: "waiting", resize: false } } }));
+const noTools = renderToStaticMarkup(createElement(GuestTools, { vm: { ...installed, guest: { ...installed.guest, clipboard: "waiting", resize: false } } }));
 assert.match(noTools, /not running both qemu-guest-agent and the vdagent that changes its resolution/);
 // BUG-0243: Core reports "waiting" until qemu-guest-agent's channel is also open, so the waiting
 // label must name both agents, not send the operator to fix a spice-vdagent that already runs.
 assert.match(noTools, /Waiting for guest tools \(qemu-guest-agent and spice-vdagent\) in the guest/);
 assert.doesNotMatch(noTools, /no VirtIO display in this VM's definition/);
 
+// The guest tools grid: a word or two per capability, the full reason on demand, and nothing
+// that was not reported ever reads Ready.
+const caps = g => Object.fromEntries(guestCapabilities(g).map(c => [c.name, [c.tone, c.status]]));
+assert.deepEqual(caps(null), { "Guest agent": ["unknown", "Unknown"], Clipboard: ["unknown", "Unknown"], "Display resize": ["unknown", "Unknown"] });
+assert.deepEqual(caps(resizing), { "Guest agent": ["ok", "Ready"], Clipboard: ["ok", "Ready"], "Display resize": ["ok", "Ready"] });
+assert.deepEqual(caps({ agent: "disconnected", clipboard: "waiting", resize: false }), { "Guest agent": ["warn", "Not running"], Clipboard: ["warn", "Waiting"], "Display resize": ["warn", "Not available"] });
+assert.deepEqual(caps({ agent: "no-channel", clipboard: "no-channel", resize: false }), { "Guest agent": ["bad", "Not available"], Clipboard: ["bad", "Not available"], "Display resize": ["warn", "Not available"] });
+assert.deepEqual(caps({ agent: "something-new", clipboard: "", resize: false })["Guest agent"], ["unknown", "Unknown"]);
+assert.match(guestCapabilities({ ...resizing, resize: false }).find(c => c.name === "Display resize").why, /this VM's display is not VirtIO/);
+// The explanations are folded away but still in the page, and the install steps sit behind one disclosure.
+assert.match(noTools, /<details><summary title="[^"]*">.*Display resize.*Not available.*Why\?/);
+assert.match(noTools, /<details class="about"><summary>.*How to enable guest tools<\/summary>[\s\S]*sudo apt install qemu-guest-agent spice-vdagent/);
+
 // BUG-0208: the login page probed GET /api/v1/session before any session could exist, so every
 // load of the sign-in page logged a failed request in the browser console. The probe now runs
 // only where it can succeed. The marker is a hint about this browser, never an authorization:
 // the Controller still authenticates every request, and no session state is kept here.
-const sessionStart = mainSource.indexOf("const signedInKey");
-const sessionEnd = mainSource.indexOf("function Brand()", sessionStart);
-assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, "session probe helpers are present");
-const sessionFile = `${testCacheDir}/main-session-probe.test.mjs`;
-writeFileSync(sessionFile, transformSync(mainSource.slice(sessionStart, sessionEnd), { loader: "tsx", format: "esm" }).code
-  + "\nexport { signedInBefore, rememberSignedIn };\n");
+const { signedInBefore, rememberSignedIn } = await import(bundleTestModule(new URL("./session.ts", import.meta.url), "session"));
 const store = new Map();
 globalThis.localStorage = {
   getItem: key => store.has(key) ? store.get(key) : null,
   setItem: (key, value) => { store.set(key, String(value)); },
   removeItem: key => { store.delete(key); },
 };
-const { signedInBefore, rememberSignedIn } = await import(`file://${sessionFile}?${Date.now()}`);
 assert.equal(signedInBefore(), false, "a browser that never signed in must not probe the session");
 rememberSignedIn(true);
 assert.equal(signedInBefore(), true, "a signed-in browser probes so a reload keeps its session");
@@ -230,45 +240,34 @@ assert.equal(signedInBefore(), false, "signing out or a 401 stops the probe agai
 globalThis.localStorage = { getItem() { throw new Error("storage disabled"); }, setItem() {}, removeItem() {} };
 assert.equal(signedInBefore(), true, "without storage, keep the previous behaviour and probe");
 // The probe is skipped, not merely silenced, and a 401 anywhere clears the marker.
+assert.match(mainSource, /from "\.\/session"/);
 assert.match(mainSource, /if \(!signedInBefore\(\)\) \{\s*\n\s*setSession\(null\);/);
 assert.match(mainSource, /response\.status === 401 && requestGeneration === generation\.current\) \{\s*\n\s*generation\.current\+\+;\s*\n\s*rememberSignedIn\(false\);/);
 
-// BUG-0218: right-click Delete mounted VMDelete closed, so onOpenChange(false) cleared the host
-// and the confirm dialog never appeared. Seed open from openSignal and only notify after the
-// first open/close transition.
+// VMDelete keeps its typed-name confirmation; the dialog opens only from its own button.
 const deleteHost = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["vm-delete-v1"], inventory: null };
 const deleteVM = { id: "vm-del", pool_id: "pool-1", host_id: "host-1", name: "guest", state: "shut off", freshness: "fresh", protected: false, role: "guest", status: "succeeded", operation_id: "op-del" };
 assert.equal(deleteBlocker(deleteVM, deleteHost), "");
 assert.equal(deleteBlocker({ ...deleteVM, state: "running" }, deleteHost), "Stop the VM before deleting it.");
-const deleteProps = {
-  vm: deleteVM, host: deleteHost, api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {}, showButton: false,
-};
-const menuDelete = renderToStaticMarkup(createElement(VMDelete, { ...deleteProps, openSignal: 1 }));
-assert.match(menuDelete, /Delete guest\?/, "context-menu openSignal must seed the confirm dialog open");
-assert.match(menuDelete, /Permanently delete disks from storage/);
-assert.doesNotMatch(renderToStaticMarkup(createElement(VMDelete, deleteProps)), /Delete guest\?/, "without openSignal the dialog stays closed");
-assert.match(managedSource, /useState\(\(\) => \(openSignal \?\? 0\) > 0\)/);
-assert.match(managedSource, /prevOpen\.current === null/);
-assert.doesNotMatch(managedSource, /else if \(!open && element\.open\) element\.close\(\);\s*\n\s*onOpenChange\?\.\(open\);/);
-assert.match(mainSource, /Icon kind="delete"/);
-assert.match(mainSource, /Icon kind="console"/);
+const deleteHTML = renderToStaticMarkup(createElement(VMDelete, { vm: deleteVM, host: deleteHost, api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, onNotice: () => {} }));
+assert.match(deleteHTML, />Delete VM</);
+assert.doesNotMatch(deleteHTML, /Delete guest\?/, "the dialog stays closed until Delete VM is selected");
 
 // Gate round 2, UI-6: the VM listing reports "unknown" for a VM on a stale host, so the stale
 // warning must read the last state from the host's stored inventory instead of the listing.
 const staleHost = { ...mediaHost, connection: "stale", inventory: { cpu_count: 2, memory_bytes: 1, observed_at: "2026-09-16T10:00:00Z", vms: [{ id: "vm-1", name: "win11", state: "running" }] } };
-const staleDetails = renderToStaticMarkup(createElement(VMDetails, { ...detailProps, hosts: [staleHost], vm: { ...installed, state: "unknown", freshness: "stale" } }));
-assert.match(staleDetails, /Last reported state: running/);
-assert.match(staleDetails, /An unreachable host does not prove that this VM stopped/);
-assert.match(renderToStaticMarkup(createElement(VMDetails, { ...detailProps, hosts: [{ ...staleHost, inventory: null }], vm: { ...installed, state: "unknown", freshness: "stale" } })), /Last reported state: unknown/);
+const staleVM = { ...installed, state: "unknown", freshness: "stale" };
+assert.match(staleNote(staleVM, staleHost), /Last reported state: running/);
+assert.match(staleNote(staleVM, staleHost), /An unreachable host does not prove that this VM stopped/);
+assert.match(staleNote(staleVM, { ...staleHost, inventory: null }), /Last reported state: unknown/);
 
 // UI-8/GM-05: creation can start the VM, so the General tab must not claim it is always stopped;
 // installing a guest starts from the Console tab so the boot prompt is not missed.
 assert.doesNotMatch(details, /Creation provisions a stopped VM/);
-assert.match(details, /open the Console tab and use Start VM on its toolbar/);
-assert.match(details, /Select Edit to change the VM/);
+assert.match(details, /open the console and use Start VM on its toolbar/);
 
 // UI-9: the install-media banner describes every guest, not only a Windows BIOS prompt.
-assert.match(details, /Every start boots the ISO first/);
+assert.match(offer, /Every start boots the ISO first/);
 
 // UI-10: an error message without a full stop still reads as a sentence before the retry advice.
 assert.match(`${sentence("name is required")} Your entries are retained`, /required\. Your entries are retained/);
@@ -290,7 +289,7 @@ assert.match(managedSource, /await reload\(\);\s*\n\s*onNotice\(`Delete queued f
 // so a fresh VM whose agent is disconnected must not read "stale".
 const guestBadge = renderToStaticMarkup(createElement(GuestTools, { vm: { id: "vm-g", name: "g", state: "running", freshness: "fresh", guest: { agent: "disconnected", clipboard: "waiting", resize: false } } }));
 assert.doesNotMatch(guestBadge, />stale</, "guest agent badge must not say stale");
-assert.match(guestBadge, /<span class="badge stale">disconnected<\/span>/);
+assert.match(guestBadge, /<span class="badge warn">Disconnected<\/span>/);
 
 // Gate3 2d: Start on a protected Controller appliance always confirms, warning about two Controllers;
 // Start on an ordinary VM is still sent straight away.
@@ -298,18 +297,17 @@ const startItem = powerActions.find(a => a.action === "start");
 assert.match(powerConfirmText(startItem, { protected: true }), /two Controllers/);
 assert.equal(powerConfirmText(startItem, { protected: false }), "");
 assert.match(powerConfirmText(powerActions.find(a => a.action === "force-stop"), { protected: true }), /Cuts power.*Controller appliance/);
-assert.match(managedSource, /if \(vm && powerConfirmText\(item, vm\)\) setPending\(item\)/);
+assert.match(managedSource, /if \(powerConfirmText\(item, vm\)\) setPending\(item\)/);
 
 // Gate3 2b (managed half): a power notice carries its task so the page can clear it when the task settles.
-assert.match(managedSource, /Follow its progress in Recent tasks\.`, res\?\.operation\?\.id\)/);
+assert.match(managedSource, /Follow its progress in Tasks\.`, res\?\.operation\?\.id\)/);
+assert.doesNotMatch(managedSource, /Tasks strip/, "the task strip is gone; notices name Tasks");
 
-// Gate3 2f/2g: checkboxes are not stretched by the global input width, and a VM of a host that
-// is not fresh has a gray tree icon.
+// Gate3 2f: checkboxes are not stretched by the global input width.
 const styleSource = readFileSync(new URL("./style.css", import.meta.url), "utf8");
 const inputRule = styleSource.indexOf("\ninput, textarea {");
-const checkboxRule = styleSource.indexOf('input:where([type="checkbox"], [type="radio"]) { width: auto; }');
+const checkboxRule = styleSource.indexOf('input:where([type="checkbox"], [type="radio"]) { width: auto;');
 assert.ok(inputRule >= 0 && checkboxRule > inputRule, "checkbox width rule must follow the input width rule");
-assert.match(styleSource, /\.tree \.host-link\.vm-unknown \.resource-icon \{ filter: grayscale\(1\)/);
 
 console.log("managed.test.mjs: ok");
 
@@ -437,20 +435,33 @@ console.log("managed.test.mjs: ok");
   assert.match(vlanRow, />Remove</);
   assert.doesNotMatch(vlanRow, /<button type="button" title="[^"]*" disabled=""[^>]*>Rename</, "a confirmed network on a fresh capable master is actionable");
   // The member line still renders, and says converging while the member is behind the rename.
-  assert.match(vlanRow, /core-a: converging/);
+  assert.match(vlanRow, /core-a: Converging/);
+  // One light per pool host: a member the master has not reported, or a host that is not
+  // reporting, is Unknown and never green.
+  const member = { ...master, id: "host-2", hostname: "core-b" };
+  const lights = (n, hosts) => networkHostAccess(n, hosts).map(a => [a.host.hostname, a.tone, a.label]);
+  assert.deepEqual(lights({ ...vlan, generation: 1 }, [master, member]), [["core-a", "ok", "Accessible"], ["core-b", "unknown", "Unknown"]]);
+  // The master confirms a pool VLAN with its registration; members report their own apply.
+  assert.deepEqual(lights({ ...vlan, member_access: [] }, [master, member]), [["core-a", "ok", "Accessible"], ["core-b", "unknown", "Unknown"]]);
+  assert.deepEqual(lights({ ...vlan, status: "queued", member_access: [] }, [master]), [["core-a", "unknown", "Unknown"]]);
+  assert.deepEqual(lights({ ...vlan, generation: 1 }, [{ ...master, connection: "stale" }]), [["core-a", "unknown", "Unknown"]]);
+  assert.deepEqual(lights({ ...vlan, generation: 1, member_access: [{ ...vlan.member_access[0], uplink_present: false }] }, [master]), [["core-a", "warn", "Uplink missing"]]);
+  assert.deepEqual(lights({ ...vlan, member_access: [{ ...vlan.member_access[0], error: "bridge failed" }] }, [master]), [["core-a", "bad", "Error"]]);
+  assert.deepEqual(lights(hostNetwork, [master, { ...member, connection: "stale" }]), [["core-a", "ok", "Accessible"], ["core-b", "neutral", "No access"]]);
   const hostRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [hostNetwork] }));
   assert.doesNotMatch(hostRow, />Rename</);
   assert.doesNotMatch(hostRow, />Remove</);
-  assert.match(hostRow, /Host network · created and managed on core-a/);
+  assert.match(hostRow, /Host network on core-a/);
+  assert.match(hostRow, /Managed on core-a/);
   const staleRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], unavailable: true }));
-  assert.match(staleRow, /Controller inventory may be out of date\. Refresh the view before changing this pool resource\.[^>]*disabled=""/);
+  assert.match(staleRow, /Controller inventory may be out of date\. Use Retry above to reload it before changing this pool resource\.[^>]*disabled=""/);
   const oldCore = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], hosts: [{ ...master, capabilities: ["managed-vm-v1"] }] }));
   assert.match(oldCore, /cannot remove pool networks or ISOs yet; upgrade Nex Core\.[^>]*disabled=""/);
   const queued = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [{ ...vlan, id: "", status: "queued" }] }));
   assert.match(queued, /Wait for Nex Core to confirm this resource[^>]*disabled=""/);
 
   // The ISO library offers Remove ISO only for a stored import, and keeps Discard for a failed one.
-  const isoProps = { ...props, tab: "ISO library", masterHostID: "host-1", hosts: [master] };
+  const isoProps = { ...props, tab: "Storage", masterHostID: "host-1", hosts: [master] };
   const stored = { id: "iso-1", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "debian.iso", operation_id: "op-i1", status: "succeeded", size_bytes: 40000, sha256: "a" };
   const storedRow = renderToStaticMarkup(createElement(ManagedVMs, { ...isoProps, media: [stored] }));
   assert.match(storedRow, />Remove ISO</);
@@ -516,7 +527,11 @@ console.log("managed.test.mjs: pool resource removal ok");
   assert.match(mainSource, /const noticeRoute = useRef\(""\);/);
   assert.match(mainSource, /noticeRoute\.current = text \? \(location\.hash\.slice\(1\) \|\| "\/"\) : ""/);
   assert.match(mainSource, /if \(noticeRoute\.current !== nextRoute\) setNotice\(""\);/);
-  assert.match(mainSource, /onCreateVMShown=\{\(\) => setCreateVM\(false\)\} onNotice=\{setNotice\}/);
+  assert.match(mainSource, /onCloseCreate=\{\(\) => setCreating\(false\)\} onNotice=\{setNotice\}/);
+  // Create-wizard side trips to Storage/Networks keep creating true so #/vms resumes the form.
+  assert.match(mainSource, /wizardRoutes = new Set\(\["vms", "storage", "networks"\]\)/);
+  assert.match(mainSource, /else if \(!wizardRoutes\.has\(nextKind\)\) \{\s*\n\s*setCreating\(false\);/);
+  assert.doesNotMatch(mainSource, /setCreating\(pendingCreate\.current\);/);
   assert.doesNotMatch(mainSource, /o\.warnings\?\.map/, "create-time warnings stay on the 202 response, not the operations list");
 
   // D4: a retryable 409 from add-host is a wait. The probe and password are kept (only a success

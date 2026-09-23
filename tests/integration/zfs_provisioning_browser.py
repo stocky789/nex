@@ -6,6 +6,7 @@ This checks browser request construction and safety controls only. It never touc
 """
 import argparse
 import json
+import re
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,8 +27,8 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(args.dist)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     hosts = [
-        {"id": "core-a", "pool_id": "pool-qa", "hostname": "core-a", "connection": "fresh", "revoked": False, "capabilities": ["managed-vm-v1", "storage-zfs-provision-v1", "storage-discovery-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}},
-        {"id": "core-b", "pool_id": "pool-qa", "hostname": "core-b", "connection": "fresh", "revoked": False, "capabilities": ["managed-vm-v1", "storage-zfs-provision-v1", "storage-discovery-v1"], "inventory": {"cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}},
+        {"id": "core-a", "pool_id": "pool-qa", "hostname": "core-a", "connection": "fresh", "revoked": False, "capabilities": ["managed-vm-v1", "storage-zfs-provision-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}},
+        {"id": "core-b", "pool_id": "pool-qa", "hostname": "core-b", "connection": "fresh", "revoked": False, "capabilities": ["managed-vm-v1", "storage-zfs-provision-v1", "storage-discovery-v1"], "inventory": {"os_version": "Nex Core 0.4.8", "cpu_count": 4, "memory_bytes": 8 * 1024 ** 3}},
     ]
     hosts[0]["inventory"]["managed"] = {"zfs_provisions": [{"repository_id": "repo-existing", "pool_id": "pool-qa", "name": "Existing ZFS", "scope": "pool", "host_id": "core-a", "layout": "mirror", "status": "succeeded"}, {"repository_id": "repo-host", "pool_id": "pool-qa", "name": "Host ZFS", "scope": "host", "host_id": "core-a", "layout": "single", "status": "succeeded"}]}
     data = {"session": {"username": "operator", "csrf_token": "fixture-csrf"}, "sites": [{"id": "site-qa", "name": "QA site"}], "pools": [{"id": "pool-qa", "site_id": "site-qa", "name": "QA pool", "master_host_id": "core-a"}], "hosts": hosts, "storage": [], "vms": [], "networks": [], "media": [], "operations": [], "audit": []}
@@ -38,7 +39,8 @@ def main():
         request = route.request
         path = request.url.split("/api/v1/", 1)[1].split("?", 1)[0]
         if request.method == "GET":
-            route.fulfill(json=data["session"] if path == "session" else data.get(path, []))
+            # Reads this fixture does not simulate (usage history, pool members) are unavailable.
+            route.fulfill(json=data[path]) if path in data else route.fulfill(status=404, json={"error": "not simulated"})
             return
         body = request.post_data_json
         submissions.append((path, body))
@@ -76,8 +78,8 @@ def main():
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/api/v1/**", api)
             page.goto(f"http://127.0.0.1:{server.server_port}/#/pools/pool-qa", wait_until="commit")
-            page.get_by_role("navigation", name="Resource views").get_by_role("button", name="Storage", exact=True).click()
-            outcomes = page.get_by_role("region", name="ZFS storage by host", exact=True)
+            page.get_by_role("navigation", name="Sections", exact=True).get_by_role("link", name="Storage", exact=True).click()
+            outcomes = page.locator("section", has=page.get_by_role("heading", name="ZFS storage by host", exact=True))
             expect(outcomes.get_by_text("Existing ZFS", exact=True)).to_be_visible()
             host_scope = outcomes.get_by_role("heading", name="Host ZFS", exact=True).locator("..")
             expect(host_scope.get_by_text("core-a", exact=True)).to_be_visible()
@@ -111,7 +113,7 @@ def main():
             expect(wizard.get_by_text("system disk", exact=False).first).to_be_visible()
             wizard.get_by_label("Use /dev/disk/by-id/core-a-old", exact=True).check()
             wizard.get_by_label("Use /dev/disk/by-id/core-b-blank", exact=True).check()
-            expect(wizard.get_by_text("Single disk", exact=True)).to_have_count(2)
+            expect(wizard.get_by_text(re.compile(r"^1 data disk → Single disk,"))).to_have_count(2)
             wizard.get_by_label("Storage name", exact=True).fill("Fixture ZFS")
             page.screenshot(path=str(args.evidence / "disk-selection.png"))
             wizard.get_by_role("button", name="Review and erase →", exact=True).click()
@@ -196,7 +198,7 @@ def main():
             page.evaluate("sessionStorage.clear()")
             discovery_mode["value"] = "empty"
             page.get_by_role("button", name="Add ZFS storage", exact=True).click()
-            expect(wizard.get_by_text("No spare disks on this host.", exact=True)).to_have_count(2)
+            expect(wizard.get_by_text("No disk on this host can be used for new storage.", exact=False)).to_have_count(2)
             wizard.get_by_role("button", name="Close", exact=True).click()
             page.evaluate("sessionStorage.clear()")
             # One host that cannot report devices leaves the other host selectable.

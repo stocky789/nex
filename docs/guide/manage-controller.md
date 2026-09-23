@@ -18,7 +18,9 @@ Use one Controller process with its SQLite database on local disk. It is authori
 sites, administrator accounts, audit history, enrollment tokens, the Controller CA and backup
 jobs; pools, hosts and VMs are re-adopted from the hosts (see **Replace a failed Controller**
 under [Troubleshooting](#troubleshooting)). Use a private management network or VPN and read
-[web-access security behavior](secure-web-access.md).
+[web-access security behavior](secure-web-access.md). Navigation on this page follows the
+development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -63,37 +65,18 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    certificate authority is separate from the HTTPS server CA; never copy its private key
    to an enrolling host.
 2. Open the Controller HTTPS address in a browser that trusts its server certificate.
-   Choose **Sign in** with the administrator account. The desktop layout has a menu row and
-   a fixed command toolbar across the top, a **Resources** pane on the left, and details for
-   the selected resource on the right. The toolbar always shows the same buttons, in groups:
-   **Back** and **Forward** move through pages you visited; **Create site**, **Add host** and
-   **New VM** create resources; **Start**, **Shut down**, **Reboot**, **Force reboot** and
-   **Force stop** control the selected VM (see [Control VM power](vm-power.md)); **Refresh view** at the
-   right end reloads Controller's records. A button that does not apply to the selected
-   resource is greyed out, and hovering it shows why, for example
-   `Select a virtual machine in Resources.` Select **Create site** and enter its name. Do not
-   look for a pool-creation action: pools are created automatically when a host enrolls.
-   Open the site dropdown directly below **Resources**. Its **Search sites** field
-   narrows the choices inside the menu; choose a result to switch sites. The closed
-   control shows only the selected site. The resource tree starts with that site's pools,
-   and **Site overview** opens the selected site. A site without hosts shows
-   **Add your first host** with an **Add host** button.
-   Pools contain hosts and VMs; the pool master host is suffixed **· master** in the tree.
-   Stopped VMs appear muted in the tree. Right-click a VM for power actions, **Open console**
-   and **Delete…**. Expand or collapse pools using their arrows;
-   select a resource name to open it. **Search resources** filters within the selected
-   site. Opening a direct pool, host or VM link selects its owning site automatically.
-   Clear a search to restore its choices; switching sites changes the tree's scope.
-   In the site menu, use Up/Down and Enter to choose a result. Escape closes the
-   menu and returns focus to the site control; Tab moves to the next control.
-   The **File** menu repeats the creation actions (**Create site**, **Add host**, **New VM**)
-   for the selected scope; **View** opens the overview or task history and refreshes the
-   displayed inventory; **Host** holds the actions for the selected host: **Refresh
-   inventory**, **Re-enroll host** and **Revoke access**. Menu items that do not apply to
-   the current selection are greyed out.
-   Use Tab to reach menus and controls, Enter to open a menu, and Escape to close it.
-   On narrow screens the resource pane is above the details area.
-3. With the site selected, choose **Add host** (toolbar, File menu or the empty-state button).
+   Choose **Sign in** with the administrator account. The console opens on **Overview**; the
+   labelled rail on the left, the top bar's scope menu, search, activity pill, theme button and
+   account menu are described in [Navigate the Controller console](navigate-the-controller-console.md).
+   With no site yet, **Overview** shows **Start with a site** with a **Create site** button;
+   **Create site** is also in the top bar's scope menu. Enter the site name and select
+   **Create site**. Do not look for a pool-creation action: pools are created automatically when
+   a host enrolls. A site without hosts shows **Add your first host** with an **Add host** button.
+   Open the scope menu (the site name and pool name at the left of the top bar) to switch
+   between sites and pools: each site is listed as `<site> · all pools`, followed by its pools.
+   Opening a direct pool, host or VM link selects its owning site automatically.
+3. With the site chosen in the scope menu, choose **Add host** (scope menu or the empty-state
+   button).
    The form is titled **Add host to** followed by the site name; it explains that a new host
    becomes the master of a new pool in this site, and a host that already belongs to a pool
    keeps it. Enter:
@@ -119,8 +102,8 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    output before continuing — this confirmation is the only trust check before the root
    password is used, so do not skip it. Select **Confirm and add host** to proceed, or
    **Cancel** to change the address. On success the panel shows
-   `Host <id> enrolled in pool <pool>; it appears in the tree after its first report.`, tells
-   you that making it a member of an existing pool is done from that pool's **Hosts** tab
+   `Host <id> enrolled in pool <pool>; it appears in the host list after its first report.`, tells
+   you that making it a member of an existing pool is done from **Settings** → **Members**
    with **Add host to pool** (see [Join a host to a pool](join-a-pool.md)), and clears the
    password field. `<pool>` is the pool the host reports: a new pool for a new host, or the
    host's existing pool when it already belonged to one.
@@ -155,36 +138,40 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    certificate carries; the agent keeps it for every later connection.
    Keep `agent-state` across restarts. Remove the secret token file after successful
    enrollment. The agent connects outbound; it does not require an inbound management API.
-5. After enrollment the site contains a new pool named after the host. Select that pool:
-   its **General** panel shows **Pool master** with the hostname. Select the enrolled
-   hostname; its header shows the **Pool master** role badge (the **Member** badge is
-   reserved for hosts joined in a later phase). **General** shows **Host overview**
-   and health checks: identity, last contact and observation times, CPU/RAM and OS/agent
-   version. A light beside **Version** compares the host with the newest Nex Core in the
-   update archive: pulsing green is up to date, orange means a newer release exists, and red
-   means a newer major release exists (for example the host runs 1.x and 2.0 is available).
-   Hover over the light for the versions behind it. No light appears when the archive could
-   not be read, the account is not an administrator, or the host's version string is not a
-   Nex Core release. Select **Networking** for observed interfaces or **Storage** for observed
-   disks; these are read-only observations. **Activity** shows recorded changes for the
-   selected resource. Selecting another resource returns to **General**.
-   Connection warnings remain visible on the host's General, Networking and Storage views.
-   Open the **Host** menu, select **Refresh inventory** and follow its durable task in
-   **Task history** to its reported outcome. **Recent tasks** at the bottom also shows up to five tasks for the
-   selected scope; select its heading to collapse or expand it. **Refresh view** reloads
-   Controller's records; **Refresh inventory** sends the existing read-only request to
-   the selected host. Neither control changes VM power.
+5. After enrollment the site contains a new pool named after the host. Choose that pool in the
+   scope menu; **Settings** → **Overview** (`#/settings/overview`) shows **Pool** with the pool
+   name and **Master** with the hostname, and the settings footer reads
+   `<pool> · master <host>`. Select **Hosts** in the rail: the host's row shows the **Master**
+   role badge (the **Member** badge is for hosts joined to an existing pool), its status, IP
+   address, CPU and memory bars, VM count, **Nex Core** version and **Uptime**. Select the row to
+   open the host panel. Its **Overview** tab shows the hardware model, network ports, disks,
+   memory, the VMs on the host, the properties (IP address, CPU, **Nex Core**, **Uptime**,
+   **Fencing**, **Maintenance**, host identity, last connection and inventory observation times)
+   and **Health checks** with each check's last observed result. A light beside the **Nex Core**
+   version compares the host with the newest Nex Core in the update archive: pulsing green is up
+   to date, orange means a newer release exists, and red means a newer major release exists (for
+   example the host runs 1.x and 2.0 is available); the host list shows an **Update** badge for
+   the last two. Hover over the light for the versions behind it. No light appears when the
+   archive could not be read, the account is not an administrator, or the host's version string
+   is not a Nex Core release. The **Networking** tab shows observed interfaces and the **Storage**
+   tab observed disks; these are read-only observations. The **Activity** tab shows recorded
+   changes for the host. Press Escape or select the close button to return to the list.
+   A stale host's **Overview** tab keeps a warning above the last reported values.
+   Select **Refresh inventory** in the panel's quick actions and follow its durable task in
+   **Tasks** (rail, or the activity pill in the top bar) to its reported outcome. A task that
+   fails between refreshes is also announced in the notice bar, naming the task. The console
+   reloads Controller's records every ten seconds; **Refresh inventory** sends the existing
+   read-only request to the selected host. Neither changes VM power.
    A fresh heartbeat alone does not prove every capability is healthy. By default the agent
    reports every ten seconds, and Controller marks a connection stale after thirty seconds.
-   Read **Last observed health** together with the connection and observation timestamps.
-   Host summaries and **Pool health** show the affected checks and Core's public reasons
-   below an unhealthy status. Multiple affected checks show their count and each reason;
-   select **View host health** for the detailed host view. Healthy summaries stay compact.
+   Read **Health checks** together with the connection and observation timestamps.
+   **Overview** → **Needs attention** lists each unhealthy or stale host with Core's public
+   reasons and links to its panel; it reads
+   `Every host in scope is reporting and healthy.` when nothing needs attention.
    Stale data and revoked management access cannot establish whether workloads are running.
-   Open **Task history** for **Activity and health history**, which records observed health
-   changes and administrative actions separately from asynchronous tasks. This development
-   view shows the newest 1,000 task and activity records without pagination; older records
-   remain stored.
+   Open **Events** in the rail for recorded health changes and administrative actions, kept
+   separately from asynchronous tasks. This development view shows the newest 1,000 task and
+   event records without pagination; older records remain stored.
 6. To restart either application, stop it normally and start it with the same configuration
    and persistent state. Let observations refresh after reconnect. An interrupted or unknown
    task outcome needs reconciliation; do not treat a connection timeout as proof of failure.
@@ -201,11 +188,11 @@ under [Troubleshooting](#troubleshooting)). Use a private management network or 
    do not remove the pending identity state. After that overlap expires, use the deliberate
    revoke/re-enroll procedure below. Certificates last ninety
    days; rotation is manual, so use `status` to check expiry and rotate before that date.
-8. To revoke a host, select that exact host in Controller, choose **Revoke access** from the
-   **Host** menu, type its hostname, then select **Confirm revoke access**.
+8. To revoke a host, open that exact host's panel from **Hosts**, select **Revoke access** in
+   its quick actions, type its hostname, then select **Confirm revoke access**.
    Revocation withdraws its management credential; it does not stop its VMs or erase disks.
-   For deliberate re-enrollment, select **Re-enroll host** from the **Host** menu (it is
-   greyed out until the host is revoked): the same Add host panel opens,
+   For deliberate re-enrollment, select **Re-enroll** in the same host's quick actions (it is
+   greyed out until the host is revoked): the same Add host dialog opens,
    titled **Re-enroll** with the host's name. If the host is reachable, enter its address
    and root password and use **Connect** / **Confirm and add host** as in step 3 — the
    revoked host keeps its existing pool, and Controller includes the host's ID automatically
@@ -289,8 +276,8 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   to, and that no firewall blocks it; then use **Connect** again. No token is left behind
   after this failure.
 - **Add host: "already enrolled":** the host is already enrolled with *this* Controller under
-  another host record. To replace that identity deliberately, use **Re-enroll host** on the
-  exact existing host record instead of **Add host**. A host enrolled with a *different*
+  another host record. To replace that identity deliberately, use **Re-enroll** in the quick
+  actions of the exact existing host's panel instead of **Add host**. A host enrolled with a *different*
   Controller (for example one you are replacing) is accepted by **Add host**: it takes a new
   identity here, keeps its local state, and its pool settings are adopted.
 - **Add host: re-enrollment rejected (409):** re-enrollment by address only succeeds against
@@ -303,7 +290,7 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
 - **Host is stale or disconnected:** check Controller reachability and both process logs from
   local access. A missed heartbeat means uncertain connectivity, not a stopped host or guest.
   Restore connectivity and wait for fresh observations; monitoring never authorizes VM restart.
-- **Task history says “Reobserved from Core history”:** this row is a historical Core outcome
+- **Tasks says “Reobserved from Core history”:** this row is a historical Core outcome
   adopted after reporting or reconnection. Its displayed time is when Controller re-observed it;
   the original outcome time was not reported. It is not a new request and does not authorize a
   retry by itself.
@@ -315,16 +302,16 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   interval. Controller uses `-alert-debounce 5s` to require a health change to persist
   five seconds before recording its alert.
   Changing a timeout does not repair the underlying failed capability.
-- **Pool master unknown:** the pool's **General** panel shows **Unknown** when the master
-  host record is missing or revoked. The pool and its resources remain; re-enroll the same
-  host with **Re-enroll host** to restore it. For an intentional authority change, use the
+- **Pool master unknown:** **Settings** → **Overview** shows **Master** as **Unknown** when the
+  master host record is missing or revoked. The pool and its resources remain; re-enroll the
+  same host with **Re-enroll** in its panel's quick actions to restore it. For an intentional authority change, use the
   documented [planned master change or fence-verified promotion](pool-authority-and-recovery.md),
   never Controller replacement or host re-enrollment. Those development workflows remain subject
   to their stated acceptance limits.
 - **Confirm and add host reports "Already enrolled":** the message continues
   `Host <id> still trusts a Controller at this address. Use Re-enroll host on that host, or check the Controller address.`
   The host is already enrolled with a Controller at the same address and with the same
-  certificate authority, so nothing changed. Use **Re-enroll host** on that host, or, when
+  certificate authority, so nothing changed. Use **Re-enroll** in that host's panel, or, when
   connecting a replacement Controller, check that **Controller address** names the replacement.
 - **Credential revoked or expired:** use the deliberate revoke/re-enroll procedure for the
   same host. Do not create a second active identity as an automatic recovery shortcut.
@@ -344,7 +331,7 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   it `shut off`; an unreachable Controller is not proof that it stopped. Keep its disk. The new
   Controller later lists the old appliance as the protected **Controller** VM with **Start**
   available: **do not start it**. Starting it runs two Controllers for the same hosts. Selecting
-  **Start** on that VM opens a confirmation that reads "This is a Controller appliance. If another
+  **Start** in that VM's panel opens a confirmation that reads "This is a Controller appliance. If another
   Controller now manages this host, starting it runs two Controllers; never do that. Recover it
   from the host-local page instead." Select **Cancel**. Then sign
   in to the new Controller, create a site, and connect
@@ -362,13 +349,13 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   as `needs_attention` with *interrupted before completion; retry from a new request*: the
   host will not resume it. A VM creation or edit interrupted after its definition was written
   is checked by the host on its next reports and closes on its own once the definition
-  matches. Otherwise check the resource it addressed in **Storage**, **Networking**,
-  **ISO library** or **Virtual machines**, and submit it again as a new request if it is
+  matches. Otherwise check the resource it addressed under **Storage** (with its **ISO library**),
+  **Networks** or **VMs**, and submit it again as a new request if it is
   missing. A VM whose automatic start failed shows a separate failed
   *VM created but not started* task; the VM itself is adopted and starts from its
-  [Power controls](vm-power.md). Verify each
-  pool's **Storage**, **Networking**, **ISO library** and **Virtual machines** tabs and the
-  host's checks: **managed-journal** and **managed-vms** must be healthy. Nothing is skipped
+  [Power controls](vm-power.md). With each pool chosen in the scope menu, verify **Storage**,
+  (with its **ISO library**), **Networks** and **VMs**, and the host panel's
+  **Health checks**: **managed-journal** and **managed-vms** must be healthy. Nothing is skipped
   silently: an entry the new Controller cannot take over shows as a `needs_attention` task
   whose error starts with `not adopted from host report:` and names the reason (an invalid or
   conflicting entry, a reference the host has not adopted, or a VM whose definition is
@@ -381,9 +368,16 @@ capability passed or a VM was started. Revoked hosts cannot continue authenticat
   Controller-driven [join workflow](join-a-pool.md), which asks Core to perform and retain the
   host-side membership operation. Never run the old and new Controller at the same time. If you re-enroll a
   host with the *same* Controller under a new host record instead, its old records stay with
-  the revoked host and are not moved; use **Re-enroll host**, which keeps the identity.
+  the revoked host and are not moved; use **Re-enroll**, which keeps the identity.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
+
+The [Controller UI modernization checks](../qa/controller-ui-modernization/checks.md) (2026-09-23) walked the earlier chrome (header menu, task strip, off-canvas tree and narrow toolbar) in headless Chromium against simulated inventory and the phase 1 browser lab; no real host was involved.
 
 The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) checked
 the exact Controller package in a disposable Debian VM: authenticated HTTPS,
@@ -405,8 +399,8 @@ Recorded checks and their limits:
   Sign-in, **Create site** and browser **Add host** (step 3) re-adopted the same host, pool,
   storage, network, ISOs, VM identities, specifications and revisions with nothing re-entered;
   failed registrations returned only as failed tasks. A repeated **Add host** showed "Already
-  enrolled" and kept it on screen. **Start** on the old appliance from the toolbar, the Console
-  tab and the tree menu each asked for confirmation (and again after a host reboot), and edits and
+  enrolled" and kept it on screen. **Start** on the old appliance from the earlier layout's toolbar,
+  Console tab and tree menu each asked for confirmation (and again after a host reboot), and edits and
   creates succeeded afterwards. The repository Controller replacement contract script also
   passed. Step 1 was not walked exactly as written: the binary came from the package rather than
   `make build` and listened on a loopback lab port. The host was added through a lab port forward,

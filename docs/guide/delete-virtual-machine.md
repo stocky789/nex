@@ -5,6 +5,8 @@
 This development workflow removes a stopped guest VM from Nex Controller and its assigned
 host. You choose whether disk files stay on storage or are permanently deleted. The
 Controller appliance cannot be deleted here.
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -17,9 +19,10 @@ Controller appliance cannot be deleted here.
 
 ## Steps
 
-1. Sign in and select the VM in **Resources**. Open **General**, or right-click the VM in the
-   tree and choose **Delete…**.
-2. On **General**, select **Delete VM**. Type the exact VM name to confirm.
+1. Sign in, choose the VM's pool (or its site's **all pools**) in the top-bar scope menu, select
+   **VMs** in the rail and select the VM's row. Its panel opens (`#/vms/<VM>`).
+2. Open the panel's **Configuration** tab and, on the **Definition** card, select **Delete VM**.
+   Type the exact VM name to confirm.
 3. Leave **Permanently delete disks from storage** unchecked to keep the disk files on the
    host after the VM is removed. Check it only when you intend to erase those files.
    Keeping disks keeps only the disk files. The VM's UEFI variable store (boot entries and
@@ -27,10 +30,10 @@ Controller appliance cannot be deleted here.
    that seals secrets to the TPM, such as BitLocker, needs its recovery key before it can use a
    retained disk again.
 4. Select **Delete VM** (or **Delete VM and disks** when wiping). The request is queued as a
-   durable task. If the VM's page or console was open, Controller returns to the VM's host
-   page. The page shows *Delete queued for <name>. Follow its progress in Recent tasks.*;
-   follow the task under **Recent tasks** / **Task history**. When the host reports success,
-   the VM disappears from **Resources**.
+   durable task. If the VM's panel or console was open, Controller returns to the **VMs** list,
+   which shows *Delete queued for <name>. Follow its progress in Tasks.* Follow the task on
+   **Tasks** (the rail item, or the activity pill in the top bar). When the host reports success,
+   the VM disappears from the **VMs** list.
 
 ## Expected result
 
@@ -67,12 +70,17 @@ HTTP acceptance is not proof of completion — wait for the task and an updated 
   VM on its host. Nex never wipes disks that a later request asked to keep, and it does not offer a
   way to keep the disks of an interrupted wiping delete.
 - **Retrying after an uncertain response:** submitting again with the same disk choice is safe and
-  repeats the same request. Changing the disk choice submits a separate request; check **Recent
-  tasks** for a delete that is already queued.
+  repeats the same request. Changing the disk choice submits a separate request; check **Tasks** for
+  a delete that is already queued.
 - **Storage refuses to detach:** a VM deleted with its disks wiped no longer holds its storage
   repository; a VM deleted with its disks kept still does, because its files remain.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 Unit and contract coverage for `DELETE /api/v1/vms/{id}`, Core retain/wipe paths, and UI
 typecheck. The refusal when disk choices differ and the storage detach change are covered only
@@ -80,11 +88,11 @@ by Go unit tests against a simulated `virsh`.
 
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab, headless Chromium) walked steps 1–4 in the browser on a real installed
-host with libvirt, as did the earlier gate4 run: **Delete VM** and **Delete…** were disabled with a
+host with libvirt on the earlier layout, as did the earlier gate4 run: **Delete VM** and **Delete…** were disabled with a
 reason (and the API refused with 409) for a running VM and for the Controller appliance;
 typed-name confirmation refused empty, wrong and wrong-case names; the disk checkbox was unchecked
-by default and sat next to its label; a delete with disks retained, from the tree menu, kept the
-qcow2; two deletes with disks, from **General**, removed the disk directories and the NVRAM and
+by default and sat next to its label; a delete with disks retained, from the earlier tree menu, kept the
+qcow2; two deletes with disks, from the earlier **General** tab, removed the disk directories and the NVRAM and
 TPM state; the page returned to the host with the **Delete queued** notice; and an unrelated
 running VM was untouched. The running VM was stopped through the API before its delete.
 **Interrupted delete:** killing Nex Core while a wipe delete (submitted through the API to control

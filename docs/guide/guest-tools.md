@@ -5,12 +5,12 @@
 Development feature of matching Nex Controller and Nex Core builds. Every VM created
 through Controller carries the host-local channels that the guest tools use: the QEMU
 guest agent channel and a clipboard channel for the console. Once the tools run inside
-the VM, its page in Controller shows the operating system, hostname and IP addresses the
+the VM, its panel in Controller shows the operating system, hostname and IP addresses the
 guest reports, and the [console](vm-console.md) clipboard works in both directions.
 
 The guest tools are standard packages, not Nex-specific software. VMs created before this
-feature keep their original definitions: their page shows **Channel missing** for the
-clipboard and no display resize until they are recreated.
+feature keep their original definitions: their panel shows **Clipboard: Not available**
+(*Channel missing*) and no display resize until they are recreated.
 
 Display resize is one of the things the tools enable, not something the VM has on its own.
 Until the tools run, **Display resize** reads **Not available** and the console does not
@@ -21,6 +21,9 @@ On Windows the same virtio-win package carries the memory balloon driver, so a V
 with the **Maximum** [memory mode](create-virtual-machine.md#memory-modes) returns no freed
 memory to the host until that package is installed; Linux has the driver in its kernel. See
 [Memory reclaim](#memory-reclaim) below.
+
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -39,34 +42,39 @@ memory to the host until that package is installed; Linux has the driver in its 
      packages and enable the `qemu-guest-agent` and `spice-vdagentd` services.
    - **Windows:** run the virtio-win guest tools installer, which includes the QEMU guest
      agent and the SPICE vdagent (both start as services).
-2. In Nex Controller, select the VM and read the **Guest tools** panel on its **General**
-   tab. While a running VM has no responding agent, the panel shows an advisory with these
-   install commands for both Linux and Windows, so you do not need to leave the page to find
-   them. Within about ten seconds of the agent starting, the advisory disappears and the panel
-   shows **Connected · guest agent answering** with the operating system, guest hostname and
+2. In Nex Controller, select **VMs** in the rail, select the VM's row, and read the
+   **Guest tools** block on its panel's **Overview** tab. It is a status grid with one row each
+   for **Guest agent**, **Clipboard** and **Display resize**, each with one word: **Ready**,
+   **Not answering**, **Not running**, **Waiting**, **Not available** or **Unknown**. Select a
+   row (**Why?**, or **Details** when it reads **Ready**) for the full reason. **How to enable
+   guest tools** below the grid opens the install commands for Linux and Windows, so you do not
+   need to leave the page to find them. Within about ten seconds of the agent starting,
+   **Guest agent** reads **Ready** and the block lists the operating system, guest hostname and
    IP addresses.
-3. Open the **Console** tab. **Console clipboard** in the panel shows **Ready** once a
-   graphical session with spice-vdagent is running and qemu-guest-agent is running; the console then exchanges clipboard
-   text with the guest as described in [Open a VM console](vm-console.md#steps).
+3. Select **Console** in the VM panel's quick actions to open the full-screen console.
+   **Clipboard** in the **Guest tools** block reads **Ready** once a graphical session with
+   spice-vdagent is running and qemu-guest-agent is running; the console then exchanges
+   clipboard text with the guest as described in [Open a VM console](vm-console.md#steps).
 
 ## Expected result
 
-The **Guest tools** panel shows:
+The **Guest tools** block shows:
 
-- **Guest agent:** Connected, with the reported operating system, hostname and addresses.
+- **Guest agent: Ready**, with the reported operating system, hostname and addresses.
   Loopback and link-local addresses are left out.
-- **Console clipboard:** Ready (graphical session with spice-vdagent, and qemu-guest-agent
-  running), or **Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest**
-  until then.
-- **Display resize:** Available only when the VM has a VirtIO display **and** the guest is
-  running the vdagent that acts on a resize request and qemu-guest-agent — that is, when **Console clipboard**
+- **Clipboard: Ready** (graphical session with spice-vdagent, and qemu-guest-agent running), or
+  **Waiting** until then; its **Why?** reads *Waiting for guest tools (qemu-guest-agent and
+  spice-vdagent) in the guest*.
+- **Display resize: Ready** only when the VM has a VirtIO display **and** the guest is running
+  the vdagent that acts on a resize request and qemu-guest-agent — that is, when **Clipboard**
   reads **Ready**. The console then offers **Resize guest to window**. A VirtIO display on
   its own means the host would send the request, not that the guest would follow it, so
   Nex does not offer the option until the guest can use it.
 
 Channel states refresh with every host report, about every ten seconds; the operating
 system, hostname and addresses are asked from the agent about once a minute. While the VM
-is stopped the panel says guest tools are observed only while it runs. A connected agent reports facts and lets
+is stopped every row reads **Unknown** and the block says guest tools are observed while the VM
+is running. A connected agent reports facts and lets
 the host ask the guest for information; it is not proof that the guest's applications work.
 
 ### Reported operating system
@@ -93,25 +101,26 @@ running, and its definition carries no balloon device. See the
 - **Windows** needs the virtio-win guest tools from step 1, which carry the balloon driver
   and its service alongside the QEMU guest agent. Without that package there is no reclaim.
 
-Controller does not report reclaim as its own state, so read the **Guest tools** panel as the
-practical per-VM signal: on Windows, **Guest agent: Connected** means the virtio-win package
-that carries both is installed, while **Not running in the guest** or **Attached but not
-answering** on a Maximum Windows VM means freed memory is probably not coming back yet.
+Controller does not report reclaim as its own state, so read the **Guest tools** block as the
+practical per-VM signal: on Windows, **Guest agent: Ready** means the virtio-win package
+that carries both is installed, while **Not running** or **Not answering** on a Maximum Windows
+VM means freed memory is probably not coming back yet.
 
 Nothing in this build grows or shrinks a guest under host memory pressure. The driver lets a
 guest hand back pages it has already freed; it does not make Nex rebalance memory between VMs.
 
 ## Troubleshooting
 
-- **Not running in the guest:** the channel exists but nothing in the guest opened it.
+- **Guest agent: Not running** (*Not running in the guest*): the channel exists but nothing in the guest opened it.
   Install and start `qemu-guest-agent` (Linux) or the QEMU guest agent service (Windows).
-- **Attached but not answering:** the guest agent opened the channel but did not answer
+- **Guest agent: Not answering** (*Attached but not answering*): the guest agent opened the channel but did not answer
   within one second. It is usually starting or the guest is under load; the host asks again
   every ten seconds. A guest that never answers has a hung agent: restart the service.
-- **Channel missing:** the VM was created before guest tools support. Its console still
+- **Guest agent: Not available** (*Channel missing*): the VM was created before guest tools
+  support. Its console still
   works and **Type into VM** sends text as keystrokes; recreate the VM to gain the channels.
-- **Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the guest** on the
-  Console clipboard: both agents must run. Nex reports the clipboard ready only while the
+- **Clipboard: Waiting** (*Waiting for guest tools (qemu-guest-agent and spice-vdagent) in the
+  guest*): both agents must run. Nex reports the clipboard ready only while the
   QEMU guest agent channel is also open, so a guest running spice-vdagent without
   qemu-guest-agent still reads waiting; install and start `qemu-guest-agent` as in step 1
   (the **Guest agent** row shows whether it is running). Then sign in to a graphical
@@ -121,7 +130,7 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
   `SPICE_VDAGENTD_EXTRA_ARGS=-X` in `/etc/default/spice-vdagentd` and restart it.
 - **Display resize: Not available** on a VM that has a VirtIO display: the guest is not
   running both the vdagent and qemu-guest-agent, so Nex does not treat it as able to change
-  resolution. Check **Console clipboard** on the same panel — it reads **Ready** exactly when
+  resolution. Check **Clipboard** in the same block — it reads **Ready** exactly when
   resize becomes available. Install both tools as in step 1, make sure `qemu-guest-agent` is
   running, and sign in to a graphical session. On a VM whose display is not VirtIO, resize stays unavailable whatever is installed; recreate the VM.
 - **The guest reports a different operating system than you installed:** the panel shows
@@ -131,19 +140,24 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
 - **No guest observation yet:** the host runs an older Nex Core build that does not report
   guest tools, or the first report after starting the VM has not arrived. Upgrade Nex Core
   or wait for the next report.
-- **The advisory does not go away after installing:** confirm the services are running
+- **Guest agent stays Not running after installing:** confirm the services are running
   (`systemctl status qemu-guest-agent`), and that the VM has the guest agent channel (a
   **Channel missing** VM was created before guest tools support and must be recreated).
 - **Addresses look wrong:** the panel shows what the guest reports, including addresses on
   networks Controller does not manage. Use the console to inspect the guest.
-- **A Maximum VM holds all its memory:** on Windows, check the **Guest tools** panel for that
-  VM; an agent that is not **Connected** means the virtio-win package is missing, so install
+- **A Maximum VM holds all its memory:** on Windows, check the **Guest tools** block for that
+  VM; a **Guest agent** that is not **Ready** means the virtio-win package is missing, so install
   it as in step 1. On Linux the driver is in the kernel, and what returns is what the guest
   counts as free — pages held as file cache stay with the guest, so a busy guest can sit near
   its ceiling legitimately. This build reclaims nothing under host pressure, so lower the
   ceiling or use **Dedicated** for a predictable reservation instead.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 Linux guest tools, the **Guest tools** panel and clipboard were walked through in a disposable
 nested-KVM lab; Windows guests and physical hardware were not. See the

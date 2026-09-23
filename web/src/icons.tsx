@@ -1,27 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { ReactNode } from "react";
-
-export type IconKind = "site" | "pool" | "host" | "home" | "refresh" | "tasks" | "vm" | "new-vm" | "back" | "forward" | "start" | "shutdown" | "reboot" | "stop" | "console" | "delete";
-const stroke = { strokeWidth: 1.25, strokeLinecap: "round", strokeLinejoin: "round" } as const;
-const vm = <><rect x="2" y="3" width="16" height="11" rx="1.5" fill="#93c5fd" stroke="#1d4ed8" /><path d="M7 17h6M10 14v3" stroke="#1d4ed8" /><path d="m8 6 5 3-5 3z" fill="#fff" /></>;
-export function Icon({ kind }: { kind: IconKind }) {
-  const paths: Record<IconKind, ReactNode> = {
-    vm,
-    "new-vm": <>{vm}<circle cx="16" cy="4.5" r="3.4" fill="#facc15" stroke="#a16207" /><path d="M16 2.8v3.4M14.3 4.5h3.4" stroke="#713f12" strokeWidth="1.5" /></>,
-    home: <><rect x="1.5" y="1.5" width="17" height="17" rx="4.5" fill="#3478ff" /><path d="M6.5 14.5V9.5a3.5 3.5 0 0 1 7 0v5" stroke="#fff" strokeWidth="2.4" /></>,
-    site: <><path d="M3 18.5V4.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v14" fill="#4f8dff" stroke="#1d4ed8" /><path d="M12 8h4.5a1 1 0 0 1 1 1v9.5" fill="#a8caff" stroke="#1d4ed8" /><path d="M5 6h2M8 6h2M5 9.5h2M8 9.5h2M5 13h2M8 13h2M14 11h1.5M14 14h1.5" stroke="#fff" strokeWidth="1.5" /><path d="M1.5 18.5h17" stroke="#1d4ed8" /></>,
-    pool: <><rect x="2" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><rect x="11" y="3" width="7" height="10" rx="1.2" fill="#a78bfa" stroke="#6d28d9" /><path d="M4 6h3M4 8.5h3M13 6h3M13 8.5h3" stroke="#fff" strokeWidth="1.3" /><circle cx="7.5" cy="11" r=".9" fill="#4c1d95" /><circle cx="16.5" cy="11" r=".9" fill="#4c1d95" /><path d="M5.5 13v3h9v-3M10 16v2" stroke="#6d28d9" /><circle cx="10" cy="18" r="1.4" fill="#7c3aed" /></>,
-    host: <><rect x="4" y="2" width="12" height="16" rx="1.5" fill="#2dd4bf" stroke="#0f766e" /><rect x="6" y="4.5" width="8" height="2.2" rx=".6" fill="#f0fdfa" /><rect x="6" y="8" width="8" height="2.2" rx=".6" fill="#f0fdfa" /><circle cx="7.5" cy="14.5" r="1.1" fill="#134e4a" /><rect x="10" y="13.7" width="4" height="1.6" rx=".6" fill="#134e4a" /></>,
-    refresh: <><circle cx="10" cy="10" r="8.5" fill="#dbeafe" /><path d="M16.5 8.5A7 7 0 1 0 17 11.5" stroke="#2563eb" strokeWidth="2" /><path d="M17 3v5.5h-5.5" stroke="#2563eb" strokeWidth="2" /></>,
-    tasks: <><rect x="4" y="3.5" width="12" height="14.5" rx="1.5" fill="#fbbf24" stroke="#b45309" /><rect x="7" y="2" width="6" height="3" rx="1" fill="#fff7ed" stroke="#b45309" /><path d="m6.5 10 1.6 1.6L11 8.6" stroke="#fff" strokeWidth="1.7" /><path d="M12.5 10h1.5M6.5 14h7" stroke="#fff" strokeWidth="1.5" /></>,
-    back: <><circle cx="10" cy="10" r="8.5" fill="#4ade80" stroke="#15803d" /><path d="M13.5 10h-7M9.5 7l-3 3 3 3" stroke="#fff" strokeWidth="2" /></>,
-    forward: <><circle cx="10" cy="10" r="8.5" fill="#4ade80" stroke="#15803d" /><path d="M6.5 10h7M10.5 7l3 3-3 3" stroke="#fff" strokeWidth="2" /></>,
-    start: <><circle cx="10" cy="10" r="8.5" fill="#22c55e" stroke="#15803d" /><path d="m8 6.5 5.5 3.5L8 13.5z" fill="#fff" /></>,
-    shutdown: <><circle cx="10" cy="10" r="8.5" fill="#ef4444" stroke="#991b1b" /><path d="M10 5v5" stroke="#fff" strokeWidth="2" /><path d="M7.2 7.3a4 4 0 1 0 5.6 0" stroke="#fff" strokeWidth="2" /></>,
-    reboot: <><circle cx="10" cy="10" r="8.5" fill="#22c55e" stroke="#15803d" /><path d="M13.6 8.5A4 4 0 1 0 14 11.3" stroke="#fff" strokeWidth="2" /><path d="M14.2 5.5v3.2H11" stroke="#fff" strokeWidth="2" /></>,
-    stop: <><circle cx="10" cy="10" r="8.5" fill="#b91c1c" stroke="#7f1d1d" /><rect x="6.8" y="6.8" width="6.4" height="6.4" rx="1" fill="#fff" /></>,
-    console: <><rect x="2" y="3" width="16" height="12" rx="1.5" fill="#64748b" stroke="#334155" /><rect x="3.5" y="4.5" width="13" height="8" rx=".6" fill="#0f172a" /><path d="M6 8.5h2.5M6 11h5" stroke="#94a3b8" strokeWidth="1.4" /><path d="M7 17h6M10 15v2" stroke="#334155" /></>,
-    delete: <><circle cx="10" cy="10" r="8.5" fill="#b91c1c" stroke="#7f1d1d" /><path d="M7.2 7.2l5.6 5.6M12.8 7.2l-5.6 5.6" stroke="#fff" strokeWidth="2" /></>,
-  };
-  return <svg className={`resource-icon icon-${kind}`} viewBox="0 0 20 20" fill="none" {...stroke} aria-hidden="true">{paths[kind]}</svg>;
+// The outline icon set: 24 px grid, 1.6 stroke, round caps, drawn in currentColor.
+const paths = {
+  overview: <><path d="M4 13a8 8 0 1 1 16 0" /><path d="M12 13l4-4" /><path d="M4 17h16" /></>,
+  vm: <><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M8 20h8M12 16v4" /></>,
+  host: <><rect x="4" y="3" width="16" height="7" rx="1" /><rect x="4" y="14" width="16" height="7" rx="1" /><path d="M8 6.5h.01M8 17.5h.01" /></>,
+  storage: <><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></>,
+  network: <><circle cx="12" cy="5" r="2" /><circle cx="5" cy="19" r="2" /><circle cx="19" cy="19" r="2" /><path d="M12 7v5M5 17v-3h14v3" /></>,
+  backup: <><path d="M4 12a8 8 0 1 0 2.3-5.6" /><path d="M4 4v4h4" /><path d="M12 8v4l3 2" /></>,
+  containers: <><rect x="4" y="4" width="7" height="7" rx="2" /><rect x="13" y="4" width="7" height="7" rx="2" /><rect x="4" y="13" width="7" height="7" rx="2" /><rect x="13" y="13" width="7" height="7" rx="2" /></>,
+  tasks: <><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /></>,
+  events: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8" /><path d="M10 20a2 2 0 0 0 4 0" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>,
+  search: <><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>,
+  chevron: <path d="M6 9l6 6 6-6" />,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  theme: <><circle cx="12" cy="12" r="8" /><path d="M12 4v16a8 8 0 0 0 0-16z" fill="currentColor" /></>,
+  account: <><circle cx="12" cy="9" r="4" /><path d="M4 20c1.5-4 5-5 8-5s6.5 1 8 5" /></>,
+  refresh: <><path d="M20 12a8 8 0 1 1-2.3-5.6" /><path d="M20 4v4h-4" /></>,
+  start: <path d="M7 5l12 7-12 7z" />,
+  shutdown: <><path d="M12 3v8" /><path d="M7 6.5a7 7 0 1 0 10 0" /></>,
+  reboot: <><path d="M4 12a8 8 0 1 0 2.3-5.6" /><path d="M4 4v4h4" /></>,
+  stop: <rect x="6" y="6" width="12" height="12" rx="1" />,
+  warning: <><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17h.01" /></>,
+  failed: <><circle cx="12" cy="12" r="8" /><path d="M9 9l6 6M15 9l-6 6" /></>,
+  info: <><circle cx="12" cy="12" r="8" /><path d="M12 11v5M12 8h.01" /></>,
+  migrate: <path d="M4 8h13l-3-3M20 16H7l3 3" />,
+  snapshot: <><rect x="3" y="7" width="18" height="13" rx="2" /><circle cx="12" cy="13.5" r="3.5" /><path d="M8 7l1.5-3h5L16 7" /></>,
+  console: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9l3 3-3 3M12 15h5" /></>,
+};
+export type IconKind = keyof typeof paths;
+export function Icon({ kind, size = 16 }: { kind: IconKind; size?: number }) {
+  return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
 }

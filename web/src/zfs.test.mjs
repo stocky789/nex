@@ -163,6 +163,6 @@ assert.match(src, /Type this by-id device name to erase its old data<input[\s\S]
 // Blank stays muted whether or not a Spare column is last (SR-112).
 const styleSource = readFileSync(new URL("./style.css", import.meta.url), "utf8");
 assert.doesNotMatch(styleSource, /\.zfs-layout label \{/);
-assert.match(styleSource, /\.zfs-disk-table td:last-child:not\(\.muted\):not\(\.zfs-old\) \{ color: inherit; \}/);
+assert.doesNotMatch(styleSource, /^td:last-child \{[^}]*color/m, "no blanket muting of the last column; blank cells carry .muted themselves");
 
 console.log("zfs.test.mjs: ok");

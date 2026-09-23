@@ -4,6 +4,7 @@
 // no timer and no generation of its own, so this file never invents progress either.
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { confirmMatches } from "./managed";
+import { Menu } from "./ui";
 
 export type Transfer = {
   operation_id: string; action: string; role: string; target_host_id: string; stage: string;
@@ -199,8 +200,7 @@ export function ejectBlock(report: AuthorityReport, member: AuthorityMember) {
   return "";
 }
 
-// One compact disclosure per row, in the table's trailing column: it expands in flow rather
-// than being clipped by the table's own scroll container.
+// One compact menu per row, at the end of the member's name line.
 // `extra` carries the row's other actions (maintenance, promotion and fence device), so one
 // row keeps one disclosure instead of growing a second.
 export function MemberActions({ report, member, onMasterChange, onEject, extra, blockedReason }: {
@@ -211,18 +211,15 @@ export function MemberActions({ report, member, onMasterChange, onEject, extra, 
   const reasonID = useId();
   const describedBy = (reason: string, suffix: string) => [blockedReason ? "pool-actions-blocked" : "", reason ? `${reasonID}-${suffix}` : ""].filter(Boolean).join(" ") || undefined;
   // The master can never be made master or ejected, so its row does not offer either.
-  return <details className="pool-row-actions">
-    <summary>Actions<span className="sr-only"> for {member.name || member.host_id}</span></summary>
-    <div>
-      {extra}
-      {member.role !== "master" && <>
-        <button type="button" aria-describedby={describedBy(promote, "promote")} disabled={Boolean(promote)} onClick={onMasterChange}>Make pool master</button>
-        {promote && <small id={`${reasonID}-promote`}>{promote}</small>}
-        <button type="button" className="danger" aria-describedby={describedBy(eject, "eject")} disabled={Boolean(eject)} onClick={onEject}>Eject from pool</button>
-        {eject && <small id={`${reasonID}-eject`}>{eject}</small>}
-      </>}
-    </div>
-  </details>;
+  return <Menu align="end" className="pool-row-actions" label={<>Actions<span className="sr-only"> for {member.name || member.host_id}</span></>}>
+    {extra}
+    {member.role !== "master" && <>
+      <button type="button" aria-describedby={describedBy(promote, "promote")} disabled={Boolean(promote)} onClick={onMasterChange}>Make pool master</button>
+      {promote && <small id={`${reasonID}-promote`}>{promote}</small>}
+      <button type="button" className="danger" aria-describedby={describedBy(eject, "eject")} disabled={Boolean(eject)} onClick={onEject}>Eject from pool</button>
+      {eject && <small id={`${reasonID}-eject`}>{eject}</small>}
+    </>}
+  </Menu>;
 }
 
 // The live picture, assembled from the master's own report plus each participant's. A host
@@ -237,8 +234,8 @@ export function TransferStrip({ report, onCancel, cancelBusy, cancelError, onRes
   const resume = transferResumePrompt(report);
   if (!transfer && !last && !conflict) return null;
   const participants = (report.members || []).filter(member => transfer && (member.host_id === transfer.target_host_id || member.transfer));
-  return <section className="panel pool-transfer-strip" aria-label="Pool master change">
-    <div className="section-heading"><h3>Pool master change</h3></div>
+  return <section className="substrip pool-transfer-strip" aria-label="Pool master change">
+    <h3>Pool master change</h3>
     {conflict && <p className="alert" role="alert">{conflict}</p>}
     {!report.authoritative
       ? <p className="warning" role="status">The pool master is {report.master_connection}, so the state of any master change or eject is <strong>unknown</strong>. Nothing from its last report is repeated here as if it still applied.</p>

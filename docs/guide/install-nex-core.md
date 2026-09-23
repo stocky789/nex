@@ -21,7 +21,7 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.7` tree is not a released artifact.
+  The current working `0.4.8` tree is not a released artifact.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.
@@ -101,10 +101,7 @@ required, and the installed driver ISO is unchanged.
    available; leave every adapter disabled for a fully offline host. These choices take
    effect on the installed host's first boot, not while the installer runs.
 6. On **Choose the installation disks**, explicitly select the **blank disposable disk**, or
-   two or more of them for a mirrored system disk. The list shares its width across the
-   columns; drag a column's header divider to widen or narrow it if a model or serial is cut off.
-   The serial comes from the disk itself (NVMe, SATA, SAS, SCSI and virtio disks all report one);
-   Xen virtual disks report neither a model nor a serial and show **—** in both columns.
+   two or more of them for a mirrored system disk.
    The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
    least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
    One disk erases that disk and installs a whole-disk ext4 layout. Two or more disks are
@@ -207,7 +204,7 @@ Offline mode creates no management bridge. Selecting a management adapter create
 either installation mode, with MAC-bound `nexN` interface names. The installer does not enable a firewall policy. Keep this alpha isolated until
 you have validated access controls.
 
-A mirrored system disk appears as one `md` array holding an ext4 `/`. The installer installs GRUB on
+A mirrored system disk appears as one `md` array holding `/`. The installer installs GRUB on
 every selected disk and is meant to boot from whichever member survives; when a mirror disk
 fails, the host is meant to keep running on the remaining disk with its virtual machines
 uninterrupted until the array is repaired. The EFI partition each disk carries is not part of
@@ -283,10 +280,8 @@ The packaging efficiency checks and disposable offline-installation results are
 tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).
 
 BMC/IPMI-sized layout (Disk step wrap, no sideways page scroll, denser chrome at
-≤1024×768), the Disk list's column spread and draggable dividers, and the serial fallback
-for SATA/SAS/SCSI and virtio disks are covered by `tests/integration/installer-disk.py` (the
-column check drags the real list under Xvfb) and `tests/integration/installer-text-wizard.py`
-in the working tree; a native QEMU capture at 800×600 / 1024×768 against a
+≤1024×768) is covered by `tests/integration/installer-disk.py` and related installer
+harnesses in the working tree; a native QEMU capture at 800×600 / 1024×768 against a
 rebuilt ISO that includes this change remains outstanding.
 
 Mirrored system-disk installs (two or more disks): both wizards' Disk steps and two-disk

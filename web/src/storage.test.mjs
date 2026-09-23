@@ -11,9 +11,11 @@ const dir = mkdtempSync(join(tmpdir(), "storage-check-"));
 const file = join(dir, "storage.mjs");
 const stubbed = code
   .replace('from "react"', 'from "data:text/javascript,export const Fragment=()=>null;export const useEffect=()=>{};export const useRef=()=>({});export const useState=()=>[undefined,()=>{}];"')
-  .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;export const ZFSReplaceDialog=()=>null;export const zfsFailedDevices=(pool)=>(pool?.devices||[]).filter(d=>d.state!==\'ONLINE\').map(d=>{const item={device:d.path||d.name,state:d.state};if(d.parent)item.parent=d.parent;return item;});export const zfsReplaceableDevices=(pool)=>zfsFailedDevices(pool).filter(d=>d.parent!==\'replacing\'&&d.parent!==\'spare\');"');
+  .replace('from "./zfs"', 'from "data:text/javascript,export const ZFSProvisionWizard=()=>null;export const ZFSReplaceDialog=()=>null;export const zfsFailedDevices=(pool)=>(pool?.devices||[]).filter(d=>d.state!==\'ONLINE\').map(d=>{const item={device:d.path||d.name,state:d.state};if(d.parent)item.parent=d.parent;return item;});export const zfsReplaceableDevices=(pool)=>zfsFailedDevices(pool).filter(d=>d.parent!==\'replacing\'&&d.parent!==\'spare\');"')
+  .replace('from "./ui"', 'from "data:text/javascript,export const About=()=>null;export const AccessLights=()=>null;export const Badge=()=>null;export const MiniBar=()=>null;export const Section=()=>null;export const badgeTone=()=>\'neutral\';export const size=(b)=>b+\' B\';"')
+  .replace('from "./labels"', 'from "data:text/javascript,export const relativeTime=()=>\'\';"');
 writeFileSync(file, stubbed);
-const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText } = await import(`file://${file}`);
+const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText, storageScope, storageHostAccess } = await import(`file://${file}`);
 
 // D1: only a registration the pool master refused is a discardable Controller request record.
 // A queued one has no id to address and is still the host's business; a succeeded one is a
@@ -32,6 +34,14 @@ assert.match(src, /await api\(`storage\/\$\{encodeURIComponent\(s\.id\)\}`, "DEL
 assert.match(src, /catch \(e\) \{ setError\(\(e as Error\)\.message\); \}/);
 // A failed row offers the discard instead of the repository actions, never beside them.
 assert.match(src, /registrationDiscardable\(s\) \? <button type="button"[\s\S]*?>Discard failed registration<\/button> : <>[\s\S]*?>Recheck<\/button>[\s\S]*?>Detach<\/button><\/>\}/);
+
+// Scope never calls a local disk shared: only NFS, SMB and clustered GFS2 iSCSI are.
+assert.equal(storageScope({ kind: "nfs" }), "Shared");
+assert.equal(storageScope({ kind: "iscsi", source: { iscsi: { mode: "clustered_gfs2" } } }), "Shared");
+assert.equal(storageScope({ kind: "iscsi", source: { iscsi: { mode: "exclusive" } } }), "One host");
+assert.equal(storageScope({ kind: "zfs", zfs_provisioned: true, zfs_scope: "pool" }), "Per host");
+assert.equal(storageScope({ kind: "zfs" }), "One host");
+assert.equal(storageScope({ kind: "local" }), "One host");
 
 // One freshness rule for every Core observation: undated, unparseable, older than 30 s or dated
 // in the future is not current access.
@@ -150,5 +160,25 @@ assert.match(managedSrc, /zfs_pool\?: ZFSPoolStatus/);
 // disk and the resilver are visible next to the Replace disk button that repairs them.
 assert.match(src, /<ZFSPoolLines pool=\{pool\}/);
 assert.match(src, /\{result\?\.layout \|\| "—"\}/);
+
+// One access light per pool host. Only a current report is green; a host that is not reporting,
+// a member the master has not reported and a stale report are Unknown (drawn hollow).
+const lights = (repo, pool) => storageHostAccess(repo, pool).map(a => [a.host.id, a.tone, a.label]);
+const poolHosts = [{ id: "master", hostname: "core-a", connection: "fresh", revoked: false }, { id: "host-1", hostname: "core-b", connection: "fresh", revoked: false }, { id: "host-2", hostname: "core-c", connection: "fresh", revoked: false }];
+const shared = { ...ready, kind: "nfs", host_id: "master", generation: 2, member_access: [member] };
+assert.deepEqual(lights(shared, poolHosts), [["master", "ok", "Accessible"], ["host-1", "ok", "Accessible"], ["host-2", "unknown", "Unknown"]]);
+assert.deepEqual(lights(shared, poolHosts.map(h => ({ ...h, connection: "stale" }))).map(l => l[1]), ["unknown", "unknown", "unknown"], "a host that is not reporting is never green");
+assert.deepEqual(lights({ ...shared, member_access: [{ ...member, observed_at: new Date(Date.now() - 31_000).toISOString() }] }, poolHosts)[1], ["host-1", "unknown", "Unknown"]);
+assert.deepEqual(lights({ ...shared, member_access: [{ ...member, generation: 1 }] }, poolHosts)[1], ["host-1", "warn", "Pending"]);
+assert.deepEqual(lights({ ...shared, member_access: [{ ...member, locking: false }] }, poolHosts)[1], ["host-1", "bad", "No access"]);
+assert.deepEqual(lights({ ...shared, member_access: [{ ...member, error: "mount failed" }] }, poolHosts)[1], ["host-1", "bad", "Error"]);
+assert.deepEqual(lights({ ...shared, access: undefined }, poolHosts)[0], ["master", "unknown", "Unknown"], "an unchecked repository is not accessible");
+assert.deepEqual(lights({ ...shared, access: { status: "unknown", error: "probe timed out" } }, poolHosts)[0], ["master", "unknown", "Unknown"], "Core's unknown is Unknown, not a failure");
+assert.deepEqual(lights({ ...shared, access: { status: "unavailable", error: "mount failed" } }, poolHosts)[0], ["master", "bad", "No access"]);
+assert.deepEqual(lights({ ...shared, access: { ...ready.access, status: "degraded" } }, poolHosts)[0], ["master", "warn", "Degraded"]);
+// Local storage is on one host; the others have no access by design, not an unknown one, even
+// while one of them is not reporting.
+assert.deepEqual(lights({ ...ready, kind: "local", host_id: "master" }, [...poolHosts.slice(0, 2), { ...poolHosts[2], connection: "stale" }]), [["master", "ok", "Accessible"], ["host-1", "neutral", "No access"], ["host-2", "neutral", "No access"]]);
+assert.deepEqual(lights({ ...zfsLocal, host_id: "master" }, [...poolHosts, { id: "member", hostname: "core-d", connection: "fresh", revoked: false }]).map(l => l.slice(1)), [["unknown", "Unknown"], ["bad", "No access"], ["unknown", "Unknown"], ["ok", "Accessible"]]);
 
 console.log("storage.test.mjs: ok");

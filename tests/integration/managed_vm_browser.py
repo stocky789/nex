@@ -161,12 +161,18 @@ def acceptance(config, password, iso, evidence, mode):
             filename = 'browser-' + mode + '-' + name + '.png'
             page.screenshot(path=str(evidence / filename), full_page=True)
             captures.append(filename)
-        def pool(tab):
+        def pool(screen):
+            # #/pools/{id} chooses that pool in the scope menu and returns to the overview.
             page.goto(config['url'] + '/#/pools/' + config['pool_id'])
-            page.get_by_role('navigation', name='Resource views').get_by_role('button', name=tab, exact=True).click()
+            expect(page).to_have_url(re.compile(r'#/$'))
+            page.goto(config['url'] + '/#/' + {'General': 'settings/overview', 'Virtual machines': 'vms', 'Storage': 'storage',
+                                              'Networking': 'networks', 'ISO library': 'storage'}[screen])
+        def panel_tab(name):
+            page.get_by_role('tab', name=name, exact=True).click()
         def wait_row(name, marker='succeeded'):
             row = page.locator('tr:not([aria-label="ISO upload to Controller"])').filter(has_text=name)
-            expect(row).to_contain_text(marker, timeout=180000)
+            # Status badges read capitalised labels (Healthy, Succeeded).
+            expect(row).to_contain_text(re.compile(re.escape(marker), re.I), timeout=180000)
         pending = []
         # The login screen skips an unauthenticated session probe; make this browser look like
         # one whose previous session expired so the existing loading-state check remains valid.
@@ -188,24 +194,26 @@ def acceptance(config, password, iso, evidence, mode):
         capture('unauthorized')
         page.get_by_label('Password', exact=True).fill(password)
         page.keyboard.press('Enter')
-        expect(page.get_by_role('heading', name='Your workspace', exact=True)).to_be_visible()
-        assert 'local-workstation' not in page.get_by_role('navigation', name='Infrastructure', exact=True).inner_text()
+        expect(page.get_by_role('navigation', name='Sections', exact=True)).to_be_visible()
+        assert 'local-workstation' not in page.locator('body').inner_text()
         passed('Loading and rejected login captured; keyboard sign-in succeeds; enrolled fixture labels are neutral')
         pool('General')
-        master = page.locator('.metric').filter(has_text='Pool master')
-        expect(master).to_be_visible()
-        hostname = master.locator('strong').inner_text()
+        master = page.locator('dt').filter(has_text='Master').locator('xpath=following-sibling::dd[1]')
+        expect(master.get_by_role('link')).to_be_visible()
+        hostname = master.inner_text()
         assert hostname and hostname != 'Unknown', hostname
-        tree = page.get_by_role('navigation', name='Infrastructure', exact=True)
-        expect(tree.locator('a[href^="#/hosts/"]').first).to_contain_text(hostname + ' · master')
+        expect(page.get_by_role('navigation', name='Settings', exact=True)).to_contain_text('master ' + hostname)
         capture('pool-master')
-        tree.locator('a[href^="#/hosts/"]').first.click()
-        expect(page.locator('.host-overview').get_by_text('Pool master', exact=True)).to_be_visible()
+        page.goto(config['url'] + '/#/hosts')
+        host_row = page.get_by_role('row').filter(has=page.get_by_role('link', name=hostname, exact=True))
+        expect(host_row.locator('.badge')).to_have_text('Master')
+        host_row.get_by_role('link', name=hostname, exact=True).click()
+        expect(page.get_by_role('region', name=hostname, exact=True).locator('.sub')).to_contain_text('Master of ')
         capture('host-master-badge')
-        passed('Pool General shows the automatic pool master hostname; the tree suffixes the master and the host badge reads Pool master')
+        passed('Pool settings overview shows the automatic pool master hostname; the host list role reads Master and the host panel reads Master of its pool')
         pool('Virtual machines')
         if mode == 'simulated':
-            expect(page.get_by_text('No virtual machines in this pool.', exact=False)).to_be_visible()
+            expect(page.get_by_text('No virtual machines in this scope.', exact=False)).to_be_visible()
             capture('empty')
         pool('Storage')
         page.get_by_role('button', name='Register storage', exact=True).click()
@@ -264,14 +272,25 @@ def acceptance(config, password, iso, evidence, mode):
             page.locator('.iso-drop').dispatch_event('drop', {'dataTransfer': transfer})
         else:
             page.get_by_label('ISO file', exact=True).set_input_files(str(iso))
+        # Hold the browser->Controller upload so its Tasks row is observed while it runs.
+        held = []
+        page.route(re.compile(r'/api/v1/media\?'), lambda route: held.append(route) if route.request.method == 'POST' else route.continue_())
         page.get_by_role('button', name='Upload and transfer ISO').click()
-        # The browser->Controller upload is a row of the Recent tasks table, not a panel above it.
-        upload_row = page.locator('.activity-dock table tbody tr[aria-label="ISO upload to Controller"]')
+        expect(page.get_by_role('link', name='1 task running', exact=True)).to_be_visible()
+        page.get_by_role('link', name='1 task running', exact=True).click()
+        # The upload is a row of the Tasks table, not a panel above it.
+        upload_row = page.locator('table tbody tr[aria-label="ISO upload to Controller"]')
         expect(upload_row).to_be_visible()
+        expect(upload_row).to_contain_text('Upload ISO')
         expect(upload_row).to_contain_text(iso.name)
         expect(upload_row.get_by_role('progressbar')).to_be_visible()
-        assert page.locator('.activity-dock section[aria-label="ISO upload to Controller"]').count() == 0
+        expect(upload_row.get_by_role('button', name='Cancel', exact=True)).to_be_visible()
+        assert page.locator('section[aria-label="ISO upload to Controller"]').count() == 0
         capture('iso-upload-row')
+        assert len(held) == 1, held
+        held[0].continue_()
+        page.unroute(re.compile(r'/api/v1/media\?'))
+        page.go_back()
         wait_row(iso.name)
         capture('iso')
         page.get_by_role('button', name='Close', exact=True).click()
@@ -434,8 +453,7 @@ def acceptance(config, password, iso, evidence, mode):
         expect(page.get_by_role('heading', name='Create VM · 6 of 6:', exact=False)).to_be_focused()
         expect(page.get_by_text('as the last step of the creation task', exact=False)).to_be_visible()
         expect(page.get_by_text('you will see two tasks', exact=False)).to_have_count(0)
-        # Scoped to the wizard: the fixed toolbar also has a Back button (browser history), which
-        # would otherwise make this locator ambiguous in strict mode.
+        # Scoped to the wizard so another Back button on the page cannot make it ambiguous.
         page.get_by_role('region', name='Create VM', exact=True).get_by_role('button', name='Back', exact=True).click()  # entries survive stepping back
         expect(page.get_by_role('group', name='Boot order', exact=True).locator('li').first).to_contain_text('Install media')
         expect(page.get_by_label('Firmware')).to_have_value('bios')
@@ -459,19 +477,22 @@ def acceptance(config, password, iso, evidence, mode):
         capture('interrupted-create')
         page.unroute('**/api/v1/vms')
         page.reload()
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Virtual machines', exact=True).click()
+        expect(page).to_have_url(re.compile(r'#/vms$'))
         page.get_by_role('button', name='Create VM', exact=True).click()
         expect(page.get_by_label('VM name', exact=True)).to_have_value(vm_name)
         for _ in range(5):
             page.get_by_role('button', name='Next', exact=True).click()
         page.get_by_role('button', name='Create stopped VM').click()
-        expect(page.get_by_role('heading', name='VM details', exact=True)).to_be_visible()
-        expect(page.locator('.details')).to_contain_text('succeeded', timeout=180000)
-        expect(page.locator('.details')).to_contain_text('shut off', timeout=30000)
+        # The panel shows the creation task until the host reports the VM, then the VM itself.
+        expect(page.get_by_role('region', name=vm_name, exact=True)).to_be_visible(timeout=180000)
+        panel_tab('Configuration')
+        definition = page.get_by_role('region', name='VM definition', exact=True)
+        expect(definition).to_contain_text(re.compile('succeeded', re.I), timeout=180000)
+        expect(definition).to_contain_text('Shut off', timeout=30000)
         for label, value in [('Virtual CPUs', '2'), ('Memory', '512 MiB'), ('Disks', 'system'), ('Disks', 'data'),
                              ('Networks', 'Intel E1000E'), ('Networks', '52:54:00:ab:cd:ef'), ('Install ISO', iso.name),
-                             ('Firmware', 'BIOS'), ('Creation task', 'succeeded')]:
-            expect(page.locator('dt').filter(has_text=label).locator('xpath=following-sibling::dd[1]')).to_contain_text(value)
+                             ('Firmware', 'BIOS'), ('Creation task', 'Succeeded')]:
+            expect(definition.locator('dt').filter(has_text=label).locator('xpath=following-sibling::dd[1]')).to_contain_text(value)
         vms = page.request.get(config['url'] + '/api/v1/vms').json()
         assert len([v for v in vms if v['name'] == vm_name]) == 1
         # The retry must reconcile the original request, so exactly one submission body exists.
@@ -509,10 +530,10 @@ def acceptance(config, password, iso, evidence, mode):
             creation = page.get_by_role('region', name='Creation task', exact=True)
             expect(creation).to_contain_text('Creation failed', timeout=30000)
             expect(creation).to_contain_text('pool master rejected placement', timeout=30000)
-            expect(creation.get_by_role('link', name='Task history', exact=True)).to_have_attribute('href', '#/tasks')
+            expect(creation.get_by_role('link', name='Tasks', exact=True)).to_have_attribute('href', '#/tasks')
             capture('core-rejected-placement')
             page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
-            passed('A Core without master-owned placement is rejected before dispatch; a simulated Core placement rejection shows its Task history route, while the earlier interrupted-request retry succeeds')
+            passed('A Core without master-owned placement is rejected before dispatch; a simulated Core placement rejection shows its Tasks link, while the earlier interrupted-request retry succeeds')
         page.set_viewport_size({'width': 360, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'details narrow page overflow'
         capture('created-360')
@@ -527,6 +548,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=usage_vms) if route.request.method == 'GET' else route.continue_())
         page.set_viewport_size({'width': 1440, 'height': 1000})
         page.reload()
+        panel_tab('Performance')
         usage_panel = page.get_by_role('region', name='VM usage', exact=True)
         expect(usage_panel).to_contain_text('125% of allocated vCPUs')
         expect(usage_panel).to_contain_text('4 GiB assigned · 8 GiB maximum')
@@ -549,16 +571,18 @@ def acceptance(config, password, iso, evidence, mode):
                  'series': [{'key': f'cpu.vcpu.{i}', 'group': 'cpu', 'label': f'vCPU {i}', 'unit': 'percent', 'values': [60] * 60} for i in range(3)]}
         page.route('**/api/v1/vms/*/stats*', lambda route: route.fulfill(json=stats))
         page.set_viewport_size({'width': 1440, 'height': 1000})
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Stats', exact=True).click()
+        page.reload()
+        panel_tab('Performance')
         cpu_chart = page.locator('figure.stats-chart').filter(has_text='CPU usage')
         page.get_by_label('Stacked').check()
         expect(cpu_chart.locator('canvas')).to_be_visible()
-        # Count canvas pixels in the middle column by fill depth: one translucent fill (~0x40 alpha)
-        # versus two overlapping fills (~0x70). Strokes and grid lines are opaque and ignored.
-        fills = '''(canvas) => { const c = canvas.getContext('2d'), x = Math.floor(canvas.width / 2);
-            const a = c.getImageData(x, 0, 1, canvas.height).data; let one = 0, two = 0;
-            for (let i = 3; i < a.length; i += 4) { if (a[i] >= 48 && a[i] <= 80) one++; else if (a[i] >= 96 && a[i] <= 128) two++; }
-            return [one, two]; }'''
+        # Count canvas pixels in a middle column by fill depth: one translucent fill (~0x40 alpha)
+        # versus two overlapping fills (~0x70). Strokes and grid lines are opaque and ignored, so three
+        # columns are read and the one with the most fill kept: a vertical grid line can sit on any one.
+        fills = '''(canvas) => { const c = canvas.getContext('2d');
+            return [0.4, 0.5, 0.6].map(f => { const a = c.getImageData(Math.floor(canvas.width * f), 0, 1, canvas.height).data; let one = 0, two = 0;
+              for (let i = 3; i < a.length; i += 4) { if (a[i] >= 48 && a[i] <= 80) one++; else if (a[i] >= 96 && a[i] <= 128) two++; }
+              return [one, two]; }).reduce((best, col) => col[0] + col[1] > best[0] + best[1] ? col : best); }'''
         page.wait_for_timeout(500)
         one_all, two_all = cpu_chart.locator('canvas').evaluate(fills)
         cpu_chart.get_by_role('button', name='vCPU 1', exact=True).click()
@@ -571,11 +595,12 @@ def acceptance(config, password, iso, evidence, mode):
         assert one_all > 50 and two_all < 5, (one_all, two_all)
         assert abs(one_hidden - one_all) <= one_all * .1 and two_hidden < 5, ('UH-8 stacked fill with hidden middle series', one_all, two_all, one_hidden, two_hidden)
         page.unroute('**/api/v1/vms/*/stats*')
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='General', exact=True).click()
+        panel_tab('Overview')
         passed(f'Stacked CPU chart with vCPU 1 hidden keeps one non-overlapping fill band per visible vCPU (single-fill pixels {one_all} before, {one_hidden} after; overlapping {two_hidden})')
         if mode == 'simulated':
             page.set_viewport_size({'width': 1440, 'height': 1000})
-            page.get_by_role('button', name='Edit', exact=True).click()
+            panel_tab('Configuration')
+            page.get_by_role('button', name='Edit hardware', exact=True).click()
             editor = page.get_by_role('form', name='Edit VM', exact=True)
             expect(editor.get_by_label('Name', exact=True)).to_have_value(vm_name)
             editor.get_by_label('Name', exact=True).fill('guest/name')
@@ -586,9 +611,9 @@ def acceptance(config, password, iso, evidence, mode):
             capture('rename')
             editor.get_by_role('button', name='Save changes').focus()
             page.keyboard.press('Enter')
-            expect(page.get_by_role('heading', name=vm_name, exact=True)).to_be_visible(timeout=30000)
+            expect(page.get_by_role('region', name=vm_name, exact=True)).to_be_visible(timeout=30000)
             page.reload()
-            expect(page.get_by_role('heading', name=vm_name, exact=True)).to_be_visible()
+            expect(page.get_by_role('region', name=vm_name, exact=True)).to_be_visible()
             vms = page.request.get(config['url'] + '/api/v1/vms').json()
             assert next(v for v in vms if v['name'] == vm_name)['spec']['name'] == vm_name
             capture('renamed')
@@ -600,20 +625,22 @@ def acceptance(config, password, iso, evidence, mode):
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'freshness': 'stale', 'state': 'unknown'} for v in vms]))
         page.reload()
         expect(page.get_by_text('Current execution state is unknown.', exact=False)).to_be_visible()
-        # 2g: a VM on a host that is not fresh is greyed in the tree with a title saying why.
-        stale_link = page.get_by_role('navigation', name='Infrastructure', exact=True).locator(f'a[href="#/vms/{created_vm["id"]}"]')
-        expect(stale_link).to_have_class(re.compile(r'\bvm-unknown\b'))
-        expect(stale_link).to_have_attribute('title', 'State unknown: host not fresh')
-        assert 'grayscale' in stale_link.locator('.resource-icon').evaluate('(el) => getComputedStyle(el).filter'), '2g stale tree icon is not greyed'
+        # 2g: a VM on a host that is not fresh reads Unknown, never stopped, in its list row and panel.
+        stale_row = page.locator(f'tr[data-vm="{created_vm["id"]}"]')
+        expect(stale_row.locator('.badge')).to_have_text('Unknown')
+        expect(stale_row.locator('.dot')).to_have_class(re.compile(r'\bwarn\b'))
+        expect(page.get_by_role('region', name=vm_name, exact=True).get_by_role('heading').first.locator('.badge')).to_have_text('Unknown')
+        expect(page.get_by_role('button', name=re.compile('^Needs attention'))).to_contain_text('1')
         expect(page.get_by_text(f'Last reported state: {last_state}', exact=False)).to_be_visible()
         page.get_by_text(f'Last reported state: {last_state}', exact=False).scroll_into_view_if_needed()
         capture('stale-warning')
+        panel_tab('Performance')
         stale_usage_panel = page.get_by_role('region', name='VM usage', exact=True)
         expect(stale_usage_panel).to_contain_text('No usage sample reported. This is not zero usage')
         stale_usage_panel.scroll_into_view_if_needed()
         capture('stale')
         page.unroute('**/api/v1/vms')
-        passed(f'Stale VM warning shows the last state from host inventory ({last_state}) while the listing reports unknown; the tree greys the VM with "State unknown: host not fresh" (2g)')
+        passed(f'Stale VM warning shows the last state from host inventory ({last_state}) while the listing reports unknown; the list row and panel badge read Unknown and the VM counts as Needs attention (2g)')
         # UI-2: a VM page whose create task failed after its 202 names that task after the 10 s poll.
         # The failed operation and the VM's absence are injected at the browser boundary.
         operations = page.request.get(config['url'] + '/api/v1/operations').json()
@@ -628,14 +655,14 @@ def acceptance(config, password, iso, evidence, mode):
         expect(creation).to_contain_text('Creation failed')
         page.wait_for_timeout(11000)
         expect(creation).to_contain_text('insufficient free storage including reserve.')
-        expect(creation.get_by_role('link', name='Task history', exact=True)).to_have_attribute('href', '#/tasks')
-        expect(page.get_by_text('Object not found', exact=True)).to_have_count(0)
+        expect(creation.get_by_role('link', name='Tasks', exact=True)).to_have_attribute('href', '#/tasks')
+        expect(page.get_by_role('region', name='VM not found', exact=True)).to_have_count(0)
         capture('failed-create-route')
         page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
-        expect(page.get_by_role('heading', name='Object not found', exact=True)).to_be_visible()
+        expect(page.get_by_role('region', name='VM not found', exact=True)).to_be_visible()
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/vms')
-        passed('A VM route naming its failed vm-create task shows the task error and a Task history link after an inventory poll, not Object not found')
+        passed('A VM route naming its failed vm-create task shows the task error and a Tasks link after an inventory poll, not VM not found')
         # UI-3: the VM Activity tab lists only rows audited against the VM id.
         audit = [{'id': 9001, 'actor': 'root', 'action': 'console.open', 'resource_id': created_vm['id'], 'created_at': operations[0]['created_at']},
                  {'id': 9002, 'actor': 'root', 'action': 'vm-power', 'resource_id': created_vm['id'], 'created_at': operations[0]['created_at']},
@@ -645,14 +672,14 @@ def acceptance(config, password, iso, evidence, mode):
         page.route('**/api/v1/audit', lambda route: route.fulfill(json=audit))
         page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
         page.reload()  # a hash-only goto keeps the loaded inventory
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Activity', exact=True).click()
+        panel_tab('Activity')
         history = page.locator('section.panel').filter(has=page.get_by_role('heading', name='Activity and health history', exact=True))
         expect(history.locator('tbody tr')).to_have_count(3)
-        for action in ('console · open', 'vm power', 'vm update'):
+        for action in ('VM console opened', 'Vm power', 'Vm update'):  # audit labels; unknown actions are humanised
             expect(history).to_contain_text(action)
         expect(history.locator('tbody tr').first).to_contain_text(vm_name)
-        expect(history).not_to_contain_text('pool · create')
-        expect(history).not_to_contain_text('host · check')
+        expect(history).not_to_contain_text('Pool create')
+        expect(history).not_to_contain_text('Host check')
         capture('vm-activity')
         page.unroute('**/api/v1/audit')
         passed('VM Activity lists console.open, vm-power and vm-update rows for the VM and omits pool and host rows')
@@ -668,34 +695,39 @@ def acceptance(config, password, iso, evidence, mode):
         page.reload()
         offer = page.locator('.install-media-offer')
         expect(offer).to_contain_text('Every start boots the ISO first')
-        note = page.locator('.panel-note').filter(has_text='open the Console tab and use Start VM on its toolbar')
-        expect(note).to_be_visible()
         expect(page.get_by_text('Creation provisions a stopped VM', exact=False)).to_have_count(0)
         capture('general-running')
+        panel_tab('Configuration')
+        expect(page.get_by_role('region', name='VM definition', exact=True).get_by_text('use Start VM on its toolbar', exact=False)).to_be_visible()
+        capture('configuration-running')
+        panel_tab('Overview')
         power = page.get_by_role('group', name='VM power', exact=True)
         style = "(el) => { const s = getComputedStyle(el); return [s.borderTopColor, s.backgroundImage, s.backgroundColor]; }"
-        toolbar_border, _, toolbar_background = power.get_by_role('button', name='Force stop', exact=True).evaluate(style)
-        assert toolbar_border == 'rgba(0, 0, 0, 0)' and toolbar_background == 'rgba(0, 0, 0, 0)', ('toolbar buttons stay flat', toolbar_border, toolbar_background)
+        # Start and Shut down are quick actions; the forced actions sit in the More menu.
+        expect(power.get_by_role('button', name='Force stop', exact=True)).to_be_hidden()
+        power.locator('summary').filter(has_text='More').click()
         power.get_by_role('button', name='Force stop', exact=True).click()
-        confirm = page.get_by_role('dialog').get_by_role('button', name='Confirm force stop', exact=True)
+        dialog = page.get_by_role('dialog')
+        confirm = dialog.get_by_role('button', name='Confirm force stop', exact=True)
         expect(confirm).to_be_visible()
         danger_border, _, _ = confirm.evaluate(style)
         assert danger_border != 'rgba(0, 0, 0, 0)', ('UI-5 danger confirmation keeps its border', danger_border)
         capture('power-dialog-force-stop')
-        page.get_by_role('dialog').get_by_role('button', name='Cancel', exact=True).click()
+        dialog.get_by_role('button', name='Cancel', exact=True).click()
         power.get_by_role('button', name='Shut down', exact=True).click()
-        _, primary_image, _ = page.get_by_role('dialog').get_by_role('button', name='Confirm shut down', exact=True).evaluate(style)
-        assert primary_image != 'none', ('UI-5 primary confirmation keeps its background', primary_image)
+        _, primary_image, primary_color = dialog.get_by_role('button', name='Confirm shut down', exact=True).evaluate(style)
+        _, cancel_image, cancel_color = dialog.get_by_role('button', name='Cancel', exact=True).evaluate(style)
+        assert (primary_image, primary_color) != (cancel_image, cancel_color) and (primary_image != 'none' or primary_color != 'rgba(0, 0, 0, 0)'), ('UI-5 primary confirmation keeps its background', primary_image, primary_color)
         capture('power-dialog-shut-down')
-        page.get_by_role('dialog').get_by_role('button', name='Cancel', exact=True).click()
-        passed('Running VM General tab shows the generic ISO banner and console-first install note; power confirmations keep danger and primary styling while toolbar buttons stay flat')
+        dialog.get_by_role('button', name='Cancel', exact=True).click()
+        passed('Running VM panel shows the generic ISO banner and, in Configuration, the console-first install note; forced actions sit in the More menu; power confirmations keep danger and primary styling')
         page.unroute('**/api/v1/vms')
         # 2c: a fresh running VM whose guest agent is disconnected names that state, never "stale".
         guest = {'agent': 'disconnected', 'clipboard': 'unavailable', 'resize': False}
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'state': 'running', 'freshness': 'fresh', 'guest': guest} for v in vms]) if route.request.method == 'GET' else route.continue_())
         page.reload()
-        guest_badge = page.get_by_role('region', name='Guest tools', exact=True).locator('.section-heading .badge')
-        expect(guest_badge).to_have_text('disconnected')
+        guest_badge = page.get_by_role('region', name='Guest tools', exact=True).get_by_role('heading').locator('.badge')
+        expect(guest_badge).to_have_text('Disconnected')
         guest_badge.scroll_into_view_if_needed()
         capture('guest-tools-disconnected')
         page.unroute('**/api/v1/vms')
@@ -708,16 +740,17 @@ def acceptance(config, password, iso, evidence, mode):
         page.goto(config['url'] + f"/#/vms/{created_vm['id']}/injected-queued-create")
         page.reload()
         expect(page.get_by_role('region', name='Creation task', exact=True)).to_contain_text('Creation queued')
-        expect(page.get_by_role('heading', name='VM details', exact=True)).to_have_count(0)
-        expect(page.get_by_role('button', name='Edit', exact=True)).to_have_count(0)
+        expect(page.get_by_role('tab', name='Configuration', exact=True)).to_have_count(0)
+        expect(page.get_by_role('region', name='VM definition', exact=True)).to_have_count(0)
+        expect(page.get_by_role('button', name='Edit hardware', exact=True)).to_have_count(0)
         expect(page.get_by_role('button', name='Delete VM', exact=True)).to_have_count(0)
         capture('queued-create-route')
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/vms')
         passed('A VM route for a create that is still queued shows the Creation task without VM details, Edit or Delete (2a)')
         # 2d and 2b: every Start path on a protected, shut-off Controller appliance opens the
-        # two-Controllers confirmation and sends nothing until confirmed. The confirmed task's
-        # notice clears when that task leaves queued, and on a tab change.
+        # two-Controllers confirmation or skips it, and sends nothing until confirmed. The confirmed
+        # task's notice clears when that task leaves queued, and on navigation.
         power_posts, power_ops = [], {}
         def power_post(route):
             op_id = f'injected-power-{len(power_posts) + 1}'
@@ -733,24 +766,31 @@ def acceptance(config, password, iso, evidence, mode):
         page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
         page.reload()
         warning = 'starting it runs two Controllers'
-        page.get_by_role('group', name='VM power', exact=True).get_by_role('button', name='Start', exact=True).click()
+        start = page.get_by_role('group', name='VM power', exact=True).get_by_role('button', name='Start', exact=True)
+        start.click()
         expect(page.get_by_role('dialog').get_by_text(warning, exact=False)).to_be_visible()
-        capture('protected-start-toolbar')
+        capture('protected-start-panel')
         page.get_by_role('dialog').get_by_role('button', name='Cancel', exact=True).click()
-        tree_link = page.get_by_role('navigation', name='Infrastructure', exact=True).locator(f'a[href="#/vms/{created_vm["id"]}"]')
-        tree_link.click(button='right')
-        page.get_by_role('menu').get_by_role('menuitem', name='Start', exact=True).click()
-        expect(page.get_by_role('dialog').get_by_text(warning, exact=False)).to_be_visible()
-        capture('protected-start-context-menu')
-        page.get_by_role('dialog').get_by_role('button', name='Cancel', exact=True).click()
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Console', exact=True).click()
+        # The list's bulk Start leaves the appliance to its own panel instead of starting it.
+        page.get_by_label(f'Select {vm_name}', exact=True).check()
+        page.get_by_role('group', name='Selected VMs', exact=True).get_by_role('button', name='Start', exact=True).click()
+        bulk = page.get_by_role('dialog')
+        expect(bulk).to_contain_text('Controller appliance: use its own panel.')
+        expect(bulk.get_by_role('button', name='Start 0 VMs', exact=True)).to_be_disabled()
+        capture('protected-start-bulk')
+        bulk.get_by_role('button', name='Cancel', exact=True).click()
+        page.get_by_label(f'Select {vm_name}', exact=True).uncheck()
+        page.goto(config['url'] + f"/#/console/{created_vm['id']}")
         page.get_by_role('button', name='Start VM', exact=True).click()
         console_dialog = page.get_by_role('dialog')
         expect(console_dialog.get_by_text(warning, exact=False)).to_be_visible()
         capture('protected-start-console')
         page.wait_for_timeout(500)
         assert not power_posts, ('2d protected Start sent before confirmation', power_posts)
-        console_dialog.get_by_role('button', name='Confirm start', exact=True).click()
+        console_dialog.get_by_role('button', name='Cancel', exact=True).click()
+        page.get_by_role('link', name='Nex Controller', exact=True).click()
+        start.click()
+        page.get_by_role('dialog').get_by_role('button', name='Confirm start', exact=True).click()
         notice = page.locator('.notice[role="status"]').filter(has_text='Start queued for')
         expect(notice).to_be_visible()
         assert len(power_posts) == 1 and power_posts[0]['action'] == 'start', power_posts
@@ -758,11 +798,11 @@ def acceptance(config, password, iso, evidence, mode):
         power_ops['injected-power-1'] = 'succeeded'
         expect(notice).to_have_count(0, timeout=15000)  # the next inventory poll sees the task settle
         capture('start-notice-cleared')
-        tree_link.click(button='right')
-        page.get_by_role('menu').get_by_role('menuitem', name='Start', exact=True).click()
+        start.click()
         page.get_by_role('dialog').get_by_role('button', name='Confirm start', exact=True).click()
         expect(notice).to_be_visible()
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Activity', exact=True).click()
+        page.get_by_role('region', name=vm_name, exact=True).get_by_role('button', name='Close', exact=True).click()
+        expect(page).to_have_url(re.compile(r'#/vms$'))
         expect(notice).to_have_count(0)
         assert len(power_posts) == 2, power_posts
         # A refused confirmed Start shows its error inside the modal dialog, and a retry reuses
@@ -773,7 +813,7 @@ def acceptance(config, password, iso, evidence, mode):
             route.fulfill(status=409, json={'error': 'Injected power refusal'})
         page.unroute('**/api/v1/vms/*/power')
         page.route('**/api/v1/vms/*/power', lambda route: refuse_power(route) if route.request.method == 'POST' else route.continue_())
-        page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Console', exact=True).click()
+        page.goto(config['url'] + f"/#/console/{created_vm['id']}")
         page.get_by_role('button', name='Start VM', exact=True).click()
         console_dialog.get_by_role('button', name='Confirm start', exact=True).click()
         expect(console_dialog.get_by_role('alert').filter(has_text='Injected power refusal')).to_be_visible()
@@ -787,10 +827,12 @@ def acceptance(config, password, iso, evidence, mode):
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/vms/*/power')
         page.unroute('**/api/v1/vms')
-        passed('Toolbar, context-menu and console Start on a protected appliance open the two-Controllers confirmation and send nothing until confirmed (2d); the Start queued notice clears when its task succeeds and on a tab change (2b)')
+        passed('Panel and console Start on a protected appliance open the two-Controllers confirmation and bulk Start skips it, sending nothing until confirmed (2d); the Start queued notice clears when its task succeeds and on navigation (2b)')
         page.route('**/api/v1/vms', lambda route: route.fulfill(json=[{**v, 'freshness': 'fresh'} for v in vms]) if route.request.method == 'GET' else route.continue_())
         page.route('**/api/v1/vms/*', lambda route: route.fulfill(status=202, json={'vm_id': created_vm['id'], 'operation': {'id': 'injected-delete', 'status': 'queued'}}) if route.request.method == 'DELETE' else route.continue_())
+        page.goto(config['url'] + f"/#/vms/{created_vm['id']}")
         page.reload()
+        panel_tab('Configuration')
         page.get_by_role('button', name='Delete VM', exact=True).click()
         # 2f: the wipe checkbox sits next to its label text instead of stretching across the dialog.
         # The input box itself is measured: a stretched box centres its glyph far from the text.
@@ -802,7 +844,7 @@ def acceptance(config, password, iso, evidence, mode):
         capture('delete-dialog-checkbox')
         page.get_by_role('dialog').get_by_label('VM name', exact=True).fill(vm_name)
         page.get_by_role('dialog').get_by_role('button', name='Delete VM', exact=True).click()
-        expect(page).to_have_url(re.compile(r'#/hosts/'))
+        expect(page).to_have_url(re.compile(r'#/vms$'))
         expect(page.get_by_text(f'Delete queued for {vm_name}', exact=False)).to_be_visible()
         page.wait_for_timeout(1000)
         expect(page.get_by_text(f'Delete queued for {vm_name}', exact=False)).to_be_visible()
@@ -810,7 +852,7 @@ def acceptance(config, password, iso, evidence, mode):
         page.unroute('**/api/v1/vms/*')
         page.unroute('**/api/v1/vms')
         page.unroute('**/api/v1/hosts')
-        passed('Injected 202 delete from the VM page lands on the host page with the Delete queued notice (GM-10)')
+        passed('Injected 202 delete from the VM panel lands on the VM list with the Delete queued notice (GM-10)')
         page.route('**/api/v1/storage', lambda route: route.fulfill(status=503, json={'error': 'Injected Controller unavailable'}))
         pool('Storage')
         page.reload()

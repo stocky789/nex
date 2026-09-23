@@ -11,6 +11,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { confirmMatches } from "./managed";
 import { hostName } from "./pool-authority";
+import { Badge } from "./ui";
+import { capitalize } from "./labels";
 
 export type PromotionCheck = { name: string; status: "passed" | "blocked" | "unknown"; reason?: string; hosts?: string[]; vms?: string[] };
 export type PromotionHost = {
@@ -131,8 +133,6 @@ const checkTitles: Record<string, string> = {
   "accepted-ownership": "Every pool virtual machine's owner agrees with the copy",
   "old-master-exclusion": "The old pool master is shut out",
 };
-// Text carries the verdict; the badge colour only repeats it.
-const checkBadges: Record<string, string> = { passed: "ok", blocked: "failed", unknown: "unknown" };
 const vmStates: Record<string, string> = {
   confirmed: "confirmed by its owner",
   fenced: "its owner is fenced",
@@ -282,10 +282,10 @@ export function bmcReenableOffered(member: PromotionMember, authoritative: boole
   return authoritative && Boolean(member.fence?.provisioning_disabled);
 }
 
-// ------------------------------------------------------------------ the Fencing column
+// ------------------------------------------------------------------ the Fencing check
 
 // How a host would be shut out, said in the fewest words that are true, with the reasons
-// underneath. Every judgement here is the pool master's: this only chooses the wording.
+// in the row's details. Every judgement here is the pool master's: this only chooses the wording.
 //
 //   - The master is not reporting            → unknown. Its record is the only one.
 //   - It reports no readiness at all         → not reported. An older Core; never ready.
@@ -366,22 +366,21 @@ export function watchdogText(member: PromotionMember, authoritative: boolean) {
   return `Watchdog: ${method.reason || method.state}`;
 }
 
-// The Fencing cell: one badge whose text carries the state, the reasons under it, and what
-// every other host's last look at this host's fence device found. Nothing here is colour
-// alone, and nothing is hidden behind a hover.
-export function FencingCell({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
+// The Fencing details under a member's row: the state in full, the reasons, the fence device
+// and what every other host's last look at it found. The row's status strip carries the short
+// result; nothing here is colour alone.
+export function FencingDetail({ member, authoritative }: { member: PromotionMember; authoritative: boolean }) {
   const fencing = fencingText(member, authoritative);
   const checks = fenceCheckLines(member, authoritative);
+  // "not reported" is the pool master's answer for every row; the pool strip says it once.
+  const reasons = fencing.label === "not reported" ? [] : fencing.reasons;
   return <>
-    <span className={`badge ${fencing.badge}`}>{fencing.label}</span>
-    {fencing.reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
+    <small className={fencing.badge === "failed" ? "task-error" : undefined}>{capitalize(fencing.label)}</small>
+    {reasons.map((reason, index) => <small key={index} className={fencing.badge === "failed" ? "task-error" : undefined}>{reason}</small>)}
     <small>{fenceText(member, authoritative)}</small>
     {watchdogText(member, authoritative) && <small>{watchdogText(member, authoritative)}</small>}
     {bmcText(member, authoritative) && <small>{bmcText(member, authoritative)}</small>}
-    {checks.length > 0 && <details className="pool-fence-checks">
-      <summary>What each host found</summary>
-      <ul>{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>
-    </details>}
+    {checks.length > 0 && <ul className="pool-fence-checks">{checks.map((line, index) => <li key={index}>{line}</li>)}</ul>}
   </>;
 }
 
@@ -415,7 +414,7 @@ export function RestrictedNote({ report, member }: { report: PromotionReport; me
   if (!restricted) return null;
   const conflicts = restricted.conflicts || [];
   return <div className="pool-restricted" role="status">
-    <span className="badge failed">Restricted</span>
+    <Badge value="failed" label="Restricted" />
     <small className="task-error">{restricted.reason}</small>
     {restricted.since && <small>Since {restricted.since}</small>}
     {conflicts.length > 0 && <small>Virtual machines this host still defines that the pool records elsewhere: {conflicts.join(", ")}</small>}
@@ -429,19 +428,23 @@ export function RestrictedNote({ report, member }: { report: PromotionReport; me
 // A host that is restricted is not doing what an operator expects, and its own page is where
 // that is looked for. The membership is pool-scoped, so this reads the one pool report the
 // host belongs to; it is the same projection the Hosts view renders and nothing is kept here.
-export function HostRestrictedBanner({ poolID, hostID, api }: {
+export function HostRestrictedBanner({ poolID, hostID, api, report: provided }: {
   poolID: string; hostID: string; api: <T>(path: string) => Promise<T>;
+  report?: PromotionReport | null;
 }) {
-  const [report, setReport] = useState<PromotionReport | null>(null);
+  const [fetched, setFetched] = useState<PromotionReport | null>(null);
   const load = useRef<() => void>(() => {});
   load.current = () => {
     api<PromotionReport>(`pools/${encodeURIComponent(poolID)}/members`)
-      .then(answer => setReport(answer), () => {});
+      .then(answer => setFetched(answer), () => {});
   };
+  // Parent host panel may already poll members; only fetch here when no report is supplied.
   useEffect(() => {
-    setReport(null);
+    if (provided !== undefined) return;
+    setFetched(null);
     load.current();
-  }, [poolID, hostID]);
+  }, [poolID, hostID, provided]);
+  const report = provided !== undefined ? provided : fetched;
   const member = (report?.members || []).find(entry => entry.host_id === hostID);
   const restricted = Boolean(member?.restricted);
   useEffect(() => {
@@ -466,8 +469,8 @@ export function PromotionActions({ report, member, authoritative, onPromote, onF
   const promote = promotionBlock(report, member);
   const fence = fenceProfileBlock(report, member);
   return <>
-    {/* What the fence device is and what Nex Core found on the controller is in the
-        Fencing column; this is only what an operator can do about it. */}
+    {/* What the fence device is and what Nex Core found on the controller is in the row's
+        Fencing details; this is only what an operator can do about it. */}
     {/* One entry point to this host's fence device. On a host Nex Core configured itself
         there is nothing to type, so it opens on the device that is there and its Clear
         action — which is also what removes the account Core created. */}
@@ -497,7 +500,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
   return <div className="pool-promotion-verdict">
     <p>Nex Core on {hostName(report, verdict.candidate_host_id)} checked this itself and reported the following at {verdict.observed_at || "an unreported time"}. It holds copy {verdict.authority_generation} of the pool records.</p>
     <ul className="pool-promotion-checks">{checks.map(check => <li key={check.name}>
-      <span className={`badge ${checkBadges[check.status] || "unknown"}`}>{check.status}</span> {checkTitle(check.name)}
+      <Badge value={check.status} /> {checkTitle(check.name)}
       {check.reason && <small className={check.status === "blocked" ? "task-error" : undefined}>{check.reason}</small>}
       {(check.hosts || []).length > 0 && <small>Hosts: {(check.hosts || []).map(id => hostName(report, id)).join(", ")}</small>}
       {(check.vms || []).length > 0 && <small>Virtual machines: {(check.vms || []).join(", ")}</small>}
@@ -514,7 +517,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
         <td>{host.reachable ? host.authority_generation || 0 : "unknown"}</td>
         <td>{host.reachable ? host.replica_generation || 0 : "unknown"}</td>
         <td>{host.reachable ? host.membership_generation || 0 : "unknown"}</td>
-        <td><span className={`badge ${host.blocks ? "failed" : "ok"}`}>{host.blocks ? "stops it" : "no"}</span></td>
+        <td><Badge value={host.blocks ? "failed" : "ok"} label={host.blocks ? "stops it" : "no"} /></td>
         <td className={host.blocks && !fenceHostIDs(verdict).includes(host.host_id) ? "task-error" : undefined}>
           {fenceCellText(verdict, host)}
           {/* Advisory: the candidate's own last non-destructive check of that device.
@@ -534,7 +537,7 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
         <tbody>{vms.map(vm => <tr key={vm.vm_id}>
           <td>{vm.vm_id}</td>
           <td>{hostName(report, vm.host_id)}</td>
-          <td><span className={`badge ${vm.state === "confirmed" ? "ok" : vm.state === "blocked" ? "failed" : "warning"}`}>{vmStates[vm.state] || vm.state}</span></td>
+          <td><Badge value={vm.state === "confirmed" ? "ok" : vm.state === "blocked" ? "failed" : "warning"} label={vmStates[vm.state] || vm.state} /></td>
           <td>{vm.reason ? <small className={vm.state === "blocked" ? "task-error" : undefined}>{vm.reason}</small> : null}</td>
         </tr>)}</tbody>
       </table></div>
@@ -668,8 +671,8 @@ export function PromotionStrip({ report }: { report: PromotionReport }) {
   const promotion = report.promotion;
   const last = lastPromotionText(report.last_promotion);
   if (!promotion && !last) return null;
-  return <section className="panel pool-promotion-strip" aria-label="Pool master promotion">
-    <div className="section-heading"><h3>Pool master promotion</h3></div>
+  return <section className="substrip pool-promotion-strip" aria-label="Pool master promotion">
+    <h3>Pool master promotion</h3>
     {promotion && <>
       <p>
         Candidate <strong>{hostName(report, promotion.host_id)}</strong> ·

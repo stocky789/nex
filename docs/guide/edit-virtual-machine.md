@@ -2,14 +2,17 @@
 
 ## Status
 
-This development workflow changes an existing VM's definition from its **General** tab in
-Nex Controller: name, description and guest OS hint; vCPUs, topology and CPU model; memory
+This development workflow changes an existing VM's definition from the **Configuration** tab
+of its panel in Nex Controller: name, description and guest OS hint; vCPUs, topology and CPU model; memory
 mode and size; disks and network interfaces (add and remove); firmware, machine type, Secure
 Boot, TPM, boot order, install ISO and driver disc; and autostart. What a running guest can
 take is applied while it runs; the rest waits for the VM to be stopped and the form says so
 per field. Deleting a VM is
 covered in [Delete a virtual machine](delete-virtual-machine.md). Resizing a disk, moving a
 disk to other storage and moving a VM to another host are not available in this build.
+Tags are edited on the same tab's **Tags** card; see [Tag virtual machines](tag-virtual-machines.md).
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 ## Prerequisites
 
@@ -22,8 +25,10 @@ disk to other storage and moving a VM to another host are not available in this 
 
 ## Steps
 
-1. Sign in, select the VM in **Resources** and open **General**. Under **VM details**, select
-   **Edit**. The details turn into a form in the same place. The line above it says whether
+1. Sign in, choose the VM's pool (or its site's **all pools**) in the top-bar scope menu, select
+   **VMs** in the rail and select the VM's row. In its panel, open **Configuration** and, on the
+   **Definition** card, select **Edit hardware**. The details turn into a form in the same place
+   and the panel widens. The line above it says whether
    the VM is running and which fields therefore wait for a stop.
 2. Change what you need:
    - **Name**, **Virtual CPUs**, **Sockets / Cores / Threads**, **CPU model**, **Memory mode**,
@@ -91,19 +96,20 @@ disk to other storage and moving a VM to another host are not available in this 
 3. Select **Save changes**. Controller validates the request shape and queues a `vm-update`
    task. Core asks the pool master to approve the exact definition, then rechecks it before
    applying it. Select **Cancel** to discard the form.
-4. Follow the task under **Recent tasks** or **Task history**. The details update with the
-   host's next report once the task has succeeded.
+4. Follow the task on **Tasks** (the rail item, or the activity pill in the top bar). The
+   **Definition** card updates with the host's next report once the task has succeeded.
 
 ## Expected result
 
-The task shows `succeeded`, and after the next host report **VM details** show the new
+The task shows `succeeded`, and after the next host report the **Definition** card shows the new
 definition. For a stopped VM the host redefines it; for a running VM new devices appear in
 the guest immediately, removed ones disappear once the guest releases them (or after the next
-stop and start), and a changed ISO is visible in the guest's CD drive. **Activity** records `vm-update` with the administrator.
+stop and start), and a changed ISO is visible in the guest's CD drive. The panel's **Activity** tab records `vm-update` with the administrator.
 
 ## Observe VM usage
 
-The **VM usage** panel under the VM details shows the latest host sample for a running VM.
+The **Current usage** card at the top of the VM panel's **Performance** tab shows the latest host
+sample for a running VM.
 **CPU** is a percentage of this VM's allocated vCPUs, not of the host; **Memory allocation** is
 the amount assigned and its configured maximum, not memory used inside the guest; and **Host
 memory cost** is the VM process's resident host memory. Disk used and capacity describe only
@@ -120,7 +126,7 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   before saving the feature-bearing definition. Model-only definitions keep their previous
   semantics, and Nex does not rewrite an existing VM when membership changes.
 
-- **The Edit button is greyed:** hover it for the reason. The VM's host is not freshly
+- **Edit hardware is greyed:** hover it for the reason. The VM's host is not freshly
   connected, does not report `vm-update-v1`, or the VM is the protected Controller appliance.
   **Save changes** is refused if the selected host or pool master lacks master-owned placement;
   upgrade Controller, then Core on those two hosts.
@@ -132,12 +138,12 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   Nex Core older than 0.2.4 (see [Use the VM console](vm-console.md#troubleshooting)).
 - **"stop the VM and save its settings to apply the dedicated memory reservation before live editing":**
   this dedicated VM has an older memory definition. Shut it down, wait for **shut off**, then
-  use **Edit → Save changes** with the same memory settings. After the task succeeds, start
+  use **Edit hardware → Save changes** with the same memory settings. After the task succeeds, start
   the VM. Its RAM is now physically allocated and locked while running. The rejected live edit
   makes no device changes; a guest reboot alone does not apply this correction.
 - **"VM disk assignment or boot order differs from requested ownership":** the VM's recorded
   definition and its host disagree about a device. On a VM whose disc was ejected by a Nex Core
-  older than 0.2.4 this is the CD drive's boot order. Shut the VM down, then **Edit → Save
+  older than 0.2.4 this is the CD drive's boot order. Shut the VM down, then **Edit hardware → Save
   changes** once; set **CD drive boot order** in the same edit if you want the drive to boot
   first again.
 - **"stop the VM first to change Secure Boot" or "… the TPM":** both are firmware, not
@@ -191,7 +197,7 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   [Software updates](software-updates.md), or clear the **Driver disc** selection.
 - **"the driver disc ISO is not registered and verified on the VM's host and pool":** the ISO
   chosen as the driver disc is still importing, failed to import, or is stored on another host.
-  Wait for the import to succeed in **Task history**, or import the ISO to the VM's host. You can
+  Wait for the import to succeed on **Tasks**, or import the ISO to the VM's host. You can
   also insert or eject the driver disc from the [VM console](vm-console.md).
 - **"when removing, reordering or changing a network interface, give every existing interface
   its MAC address" after replacing a VM's only interface:** removing the only interface and adding
@@ -206,10 +212,15 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   interface with the same MAC before doing anything: no disk was created, nothing was attached,
   and the VM keeps its previous settings. Wait for the guest to release the device and save again,
   or stop the VM and save again, or give the new interface a different manual MAC.
-- **The details still show the old values after `succeeded`:** wait for the host's next
+- **The Definition card still shows the old values after `succeeded`:** wait for the host's next
   report; the mirror follows what the host reports as current.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 See [master placement evidence](../qa/2026-09-18-master-vm-placement.md) for the
 unreleased admission change. Browser checks use simulated Core responses; native
@@ -223,7 +234,7 @@ The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 
 disposable nested-KVM lab, headless Chromium) walked the edit steps in the browser on a real host:
 a rename collision refused by the host with nothing changed, a stopped CPU, memory and added
 interface change, and on the running guest an ISO insert the guest could read, an interface
-removal the guest released, and an eject, each listed in the VM **Activity** tab. After a
+removal the guest released, and an eject, each listed in the VM's **Activity** view (earlier layout). After a
 Controller replacement a stopped memory edit and a live interface add also succeeded. A **needs
 attention** result was not induced.
 

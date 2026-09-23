@@ -1,0 +1,81 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Every colour, radius, shadow and font the Controller UI uses (docs/design/controller-console).
+   style.css, stats.css and console.css reference these and never a literal colour
+   (tokens.test.mjs enforces it and checks contrast). The theme follows the system setting;
+   the top-bar toggle sets data-theme on <html> to the resolved light or dark value, so there
+   is one light block and one dark block. --s1…--s4 are sparklines; --series-1…--series-8 are
+   multi-series usage charts. */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #F6F7FC;
+  --panel: #FFFFFF;
+  --sunken: #EDF0F7;
+  --line: #C6CEE4;
+  --line-soft: #E1E5F0;
+  --text: #17233B;
+  --muted: #5B6478;
+  --accent: #2456D9;
+  --accent-hover: #3478FF;
+  --on-accent: #FFFFFF;
+  --select: #E4ECFF;
+  --rail: #17233B;
+  --on-rail: #AAB5C8;
+  --rail-hi: #FFFFFF;
+  --logo: #3478FF;
+  --spark: #7A9A12;
+  --focus: #2456D9;
+  --danger: #B42318;
+  --on-danger: #FFFFFF;
+  --ok: #176B42; --ok-bg: #DDF5E6;
+  --warn: #8A4B00; --warn-bg: #FFF1D6;
+  --bad: #B42318; --bad-bg: #FDE2E1;
+  --info: #2456D9; --info-bg: #E4ECFF;
+  --neutral: #5B6478; --neutral-bg: #E5E8F3;
+  --s1: #2456D9; --s2: #7C5CC4; --s3: #0E7490; --s4: #7A9A12;
+  --series-1: #2456D9; --series-2: #0E7490; --series-3: #7C3AED; --series-4: #0F8A5F;
+  --series-5: #9A6700; --series-6: #B42318; --series-7: #5B6478; --series-8: #3478FF;
+  --console-bg: #000000;
+  --on-topbar: #E5E8F3;
+  --brand-plate: #F6F7FC;
+  --radius-control: 2px;
+  --radius-panel: 3px;
+  --shadow-pop: 0 12px 32px rgba(23, 35, 59, .18), 0 1px 2px rgba(23, 35, 59, .08);
+  /* The rail is dark in both themes, so its hover and current fills are the same in both. */
+  --rail-hover: rgba(255, 255, 255, .06);
+  --rail-current: rgba(255, 255, 255, .1);
+  --backdrop: rgba(23, 35, 59, .45);
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111820;
+  --panel: #18222C;
+  --sunken: #1F2B36;
+  --line: #2C3B48;
+  --line-soft: #22303C;
+  --text: #E5E8F3;
+  --muted: #9AA6B8;
+  --accent: #5B93FF;
+  --accent-hover: #7DAAFF;
+  --on-accent: #0B1220;
+  --select: #1C3350;
+  --rail: #0B1419;
+  --on-rail: #7F8C9E;
+  --rail-hi: #E5E8F3;
+  --spark: #B5D43B;
+  --focus: #7DAAFF;
+  --danger: #F1A8A2;
+  --on-danger: #17233B;
+  --ok: #7FD8A4; --ok-bg: #173226;
+  --warn: #F2C067; --warn-bg: #362A12;
+  --bad: #F1A8A2; --bad-bg: #3F2022;
+  --info: #9CC0EA; --info-bg: #1C3350;
+  --neutral: #9AA6B8; --neutral-bg: #22303C;
+  --s1: #5B93FF; --s2: #B79CF2; --s3: #5EC4D6; --s4: #B5D43B;
+  --series-1: #7BA7D9; --series-2: #5EC4D6; --series-3: #B79CF2; --series-4: #7FD8A4;
+  --series-5: #F2C067; --series-6: #F1A8A2; --series-7: #AAB5C8; --series-8: #9CC0EA;
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, .55);
+  --backdrop: rgba(0, 0, 0, .6);
+}

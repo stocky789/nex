@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
+  Fragment,
+  startTransition,
   useEffect,
   useRef,
   useState,
@@ -7,119 +9,31 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
+import "./tokens.css";
 import "./style.css";
-import { HostISOs, ManagedVMs, VMDetails, VMPower, VMDelete, powerActions, powerBlocker, powerConfirmText, deleteBlocker, sentence, stateText, type VM, type Storage, type Network, type Media } from "./managed";
-import { Console } from "./console";
-import { Stats, RealtimeStats } from "./stats";
-import { Icon } from "./icons";
-import { PoolMembers } from "./pool-members";
-import { HostRestrictedBanner } from "./pool-promotion";
-import { HostNetwork } from "./host-network";
-import { followUpdate, versionLight, type UpdateStatus } from "./updates";
+import { powerActions, powerConfirmText, sentence, type VM, type Storage, type Network, type Media } from "./managed";
+import { Icon, type IconKind } from "./icons";
+import { followUpdate, type UpdateStatus } from "./updates";
+import { LoadError, LoadErrorAlert, Menu, ScreenBoundary, badgeTone, date } from "./ui";
+import { operationLabel, statusLabel } from "./labels";
+import { taskCounts, newFailures, readPreference, writePreference } from "./dock";
+import { attentionItems, sampleCounts } from "./overview-model";
+import { consoleBlocker } from "./vm-panel";
+import { hostConsoleBlocker } from "./host-model";
+import { SettingsHead, SettingsNav, movedSection, sections, type Upload } from "./settings";
+import {
+  LazyBackups, LazyConsole, LazyContainers, LazyEvents, LazyHostList, LazyManagedVMs,
+  LazyOverview, LazyRealtimeStats, LazyScreen, LazySettings, LazyTasks, LazyVMList,
+} from "./lazy-screens";
+import { rememberSignedIn, signedInBefore } from "./session";
+import { applyTheme, themeKey, watchSystemTheme } from "./theme";
+import type { API, Audit, Data, Host, Operation, Pool, Session, Site } from "./types";
 
-type Site = { id: string; name: string };
-type Pool = Site & { site_id: string; master_host_id: string };
-type Check = {
-  name: string;
-  status: string;
-  freshness: string;
-  observed_at: string;
-  last_success?: string;
-  error?: string;
-};
-type Inventory = {
-  observed_at: string;
-  hostname: string;
-  cpu_model: string;
-  cpu_count: number;
-  memory_bytes: number;
-  virtualization: string[];
-  os_version: string;
-  agent_version: string;
-  nics: { name: string; mac: string; kind?: string; master?: string; parent?: string; addresses: string[]; state: string }[];
-  disks: { name: string; size_bytes: number }[];
-  checks: Check[];
-};
-type Host = {
-  id: string;
-  pool_id: string;
-  hostname: string;
-  revoked: boolean;
-  capabilities?: string[];
-  connection: string;
-  last_seen: string | null;
-  inventory: Inventory | null;
-};
-type Operation = {
-  id: string;
-  host_id: string;
-  kind: string;
-  request_id: string;
-  status: string;
-  error?: string;
-  created_at: string;
-  updated_at: string;
-  actor: string;
-};
-type Audit = {
-  id: number;
-  actor: string;
-  action: string;
-  resource_id: string;
-  created_at: string;
-  detail?: string;
-};
-type Data = {
-  sites: Site[];
-  pools: Pool[];
-  hosts: Host[];
-  operations: Operation[];
-  audit: Audit[];
-  vms: VM[];
-  storage: Storage[];
-  networks: Network[];
-  media: Media[];
-};
-type Session = { username: string; csrf_token: string };
-function checkHealth(check: Check) {
-  return check.freshness === "fresh"
-    ? check.status
-    : check.freshness || "unknown";
-}
-type HealthIssue = { name: string; status: string; reason: string };
-type HealthSummary = { status: string; issues: HealthIssue[] };
-const healthSeverity: Record<string, number> = {
-  healthy: 0,
-  unsupported: 1,
-  degraded: 2,
-  unknown: 3,
-  stale: 4,
-  failed: 5,
-};
-function hostHealth(host: Host): HealthSummary {
-  if (host.revoked) return { status: "revoked", issues: [{ name: "Management access", status: "revoked", reason: "Access revoked; this host is not reporting." }] };
-  const checks = host.inventory?.checks || [];
-  const issues = checks.filter((check) => checkHealth(check) !== "healthy").map((check) => ({
-    name: check.name,
-    status: checkHealth(check),
-    reason: check.error || "No reason reported by Nex Core.",
-  }));
-  if (host.connection !== "fresh") {
-    issues.unshift({
-      name: "Management connection",
-      status: host.connection === "stale" ? "stale" : "unknown",
-      reason: host.connection === "stale" ? "The host is not reporting fresh data; current workload execution is unknown." : "The host has not reported a current management connection.",
-    });
-  }
-  if (!checks.length && host.connection === "fresh") {
-    return { status: "unknown", issues: [{ name: "Health checks", status: "unknown", reason: "No health checks have been observed." }] };
-  }
-  if (!issues.length) return { status: "healthy", issues };
-  return { status: issues.reduce((worst, issue) => healthSeverity[issue.status] > healthSeverity[worst] ? issue.status : worst, issues[0].status), issues };
-}
-function observedHealth(host: Host) {
-  return hostHealth(host).status;
-}
+export type { API, Audit, Check, Data, Host, Operation, Pool, Site } from "./types";
+
+// The scope the top bar filters by: a site, and one of its pools or "" for all of them. It is a
+// per-browser convenience; the pools themselves come from the hosts on every load.
+type Scope = { site: string; pool: string };
 const empty: Data = {
   sites: [],
   pools: [],
@@ -128,20 +42,6 @@ const empty: Data = {
   audit: [],
   vms: [], storage: [], networks: [], media: [],
 };
-const date = (value?: string | null) =>
-  value && !value.startsWith("0001-")
-    ? new Date(value).toLocaleString()
-    : "Not observed";
-const adoptedOutcomePrefix = "adopt-outcome:";
-export function taskTimestamp(operation: Pick<Operation, "id" | "host_id" | "request_id" | "updated_at">) {
-  const reobserved = operation.request_id === `${adoptedOutcomePrefix}${operation.host_id}:${operation.id}`;
-  return {
-    reobserved,
-    value: date(operation.updated_at),
-  };
-}
-const size = (value: number) =>
-  `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
 // A VM has two CD drives: the install drive and the driver disc drive beside it. Media requests
 // name the drive; "install" is also what every request sent before the second drive existed, so
 // it is left out of the body and stays byte-identical to those requests.
@@ -164,138 +64,77 @@ const vmMediaApplied = (vm: VM | undefined, drive: Drive, mediaID: string) =>
 // shown straight away when it cannot. It is a hint about this browser and never an
 // authorization: the Controller authenticates every request, and a marker left behind by an
 // expired session only costs the one 401 that ends it.
-const signedInKey = "nex-signed-in";
-function signedInBefore() {
-  // Without storage, keep probing: that is the previous behaviour and it restores a session.
-  try { return localStorage.getItem(signedInKey) !== null; } catch { return true; }
-}
-function rememberSignedIn(yes: boolean) {
-  try { if (yes) localStorage.setItem(signedInKey, "1"); else localStorage.removeItem(signedInKey); } catch {}
-}
 function Brand() {
   return <span className="brand" role="img" aria-label="Nex Controller" />;
 }
-function Badge({ value }: { value: string }) {
-  return <span className={`badge ${value}`}>{value.replaceAll("-", " ")}</span>;
+applyTheme(readPreference(themeKey));
+watchSystemTheme(() => applyTheme(""));
+function readScope(): Scope {
+  try {
+    const saved = JSON.parse(readPreference("nex.scope"));
+    return { site: String(saved.site || ""), pool: String(saved.pool || "") };
+  } catch { return { site: "", pool: "" }; }
 }
-function HostHealthSummary({ host }: { host: Host }) {
-  const summary = hostHealth(host);
-  return <div className="health-summary">
-    <Badge value={summary.status} />
-    {summary.status !== "healthy" && <>
-      <p>{summary.issues.length > 1 ? `${summary.issues.length} checks need attention.` : "1 check needs attention."}</p>
-      <ul>
-        {summary.issues.map((issue) => <li key={issue.name}><strong>{issue.name}</strong>: {issue.reason}</li>)}
-      </ul>
-      <a href={`#/hosts/${host.id}`}>View host health</a>
-    </>}
-  </div>;
-}
-type Upload = {
-  name: string;
-  loaded: number;
-  total: number;
-  percent: number;
-  rate: number;
-  state: "uploading" | "succeeded" | "failed" | "cancelled";
-  message: string;
-  actor: string;
-  updated_at: string;
-};
-const rate = (bytes: number) =>
-  bytes >= 1024 ** 2
-    ? `${(bytes / 1024 ** 2).toFixed(1)} MiB/s`
-    : `${Math.max(0, Math.round(bytes / 1024))} KiB/s`;
-// UploadRow covers only the browser-to-Controller transfer. The host import that follows it
-// is a durable task and stays in the task list and the ISO library.
-function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void }) {
-  const running = upload.state === "uploading";
-  return (
-    <tr aria-label="ISO upload to Controller">
-      <td>
-        <strong>iso-upload</strong>
-        <small>{upload.name} · Controller</small>
-        {upload.message && <p className="task-error">{upload.message}</p>}
-      </td>
-      <td>
-        {/* Only the outcome is announced; percent changes far too often for a live region. */}
-        <span role="status"><Badge value={upload.state} /></span>
-        <div className="upload-progress">
-          <small className="mono">
-            <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} style={{ width: 90, verticalAlign: "middle" }} />{" "}
-            {upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}
-          </small>
-          {running && <button onClick={onCancel}>Cancel</button>}
-        </div>
-      </td>
-      <td>{upload.actor}</td>
-      <td>{date(upload.updated_at)}</td>
-    </tr>
-  );
-}
-function Menu({ label, children }: { label: string; children: ReactNode }) {
-  const ref = useRef<HTMLDetailsElement>(null);
-  return <details className="menu" ref={ref}
-    onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.open = false; }}
-    onKeyDown={(e) => { if (e.key === "Escape") { e.currentTarget.open = false; e.currentTarget.querySelector("summary")?.focus(); } }}>
-    <summary>{label}</summary>
-    <div className="menu-items" onClick={() => { if (ref.current) ref.current.open = false; }}>{children}</div>
-  </details>;
-}
-function SitePicker({ sites, selected, onSelect }: { sites: Site[]; selected?: Site; onSelect: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
+// GlobalSearch jumps to a VM, a host (by name or IP address) or a settings section. It filters
+// the inventory already loaded in the browser; "/" focuses it from anywhere but a field. Under
+// 900 px the field folds behind a search button and opens across the top bar.
+function GlobalSearch({ data }: { data: Data }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const [position, setPosition] = useState({ top: 0, left: 0, width: 0, maxHeight: 320 });
-  const root = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const search = useRef<HTMLInputElement>(null);
-  const options = sites.filter(s => s.name.toLowerCase().includes(query.trim().toLowerCase()));
-  const activeSite = options[Math.min(active, options.length - 1)];
-  function close(restoreFocus = false) { setOpen(false); if (restoreFocus) trigger.current?.focus(); }
-  function locate() {
-    const box = trigger.current!.getBoundingClientRect();
-    const top = Math.min(box.bottom + 3, Math.max(8, innerHeight - 180));
-    setPosition({ top, left: box.left, width: box.width, maxHeight: Math.min(320, innerHeight - top - 8) });
-  }
-  function show() {
-    locate(); setQuery(""); setActive(Math.max(0, sites.findIndex(s => s.id === selected?.id))); setOpen(true);
-  }
-  function select(id: string) { close(true); onSelect(id); }
+  const [open, setOpen] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!open) return;
-    search.current?.focus();
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) close(); };
-    const scroll = (event: Event) => { if (!root.current?.contains(event.target as Node)) close(); };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("scroll", scroll, true);
-    window.addEventListener("resize", locate);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("scroll", scroll, true); window.removeEventListener("resize", locate); };
-  }, [open]);
-  useEffect(() => {
-    if (open && activeSite) document.getElementById(`site-option-${activeSite.id}`)?.scrollIntoView({ block: "nearest" });
-  }, [open, activeSite?.id]);
-  return <div className="site-picker" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) close(); }} onKeyDown={event => {
-    if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); close(true); }
-  }}>
-    <button ref={trigger} className="site-trigger" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? "site-options" : undefined} disabled={!sites.length}
-      onClick={() => open ? close() : show()} onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); show(); } }}>
-      <span><span className="sr-only">Site: </span>{selected?.name || "Choose site"}</span><span aria-hidden="true">▾</span>
-    </button>
-    {open && <div className="site-popup" style={position}>
-      <input ref={search} type="search" role="combobox" aria-label="Search sites" aria-autocomplete="list" aria-expanded="true" aria-controls="site-options" aria-activedescendant={activeSite ? `site-option-${activeSite.id}` : undefined}
-        placeholder="Search sites…" value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} onKeyDown={event => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive(index => Math.max(0, Math.min(options.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))); }
-          else if (event.key === "Enter") { event.preventDefault(); if (activeSite) select(activeSite.id); }
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.key === "/" && !target.closest("input, textarea, select, [contenteditable]")) { e.preventDefault(); setOpen(true); input.current?.focus(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  // The folded field is display:none until open, so it takes focus once it is shown.
+  useEffect(() => { if (open) input.current?.focus(); }, [open]);
+  const q = query.trim().toLowerCase();
+  const results = !q ? [] : [
+    ...data.vms.flatMap(v => {
+      const ip = v.guest?.addresses?.find(a => a.address.includes(q))?.address;
+      return v.name.toLowerCase().includes(q) || ip ? [{ href: `/vms/${encodeURIComponent(v.id)}`, label: v.name, detail: ip ? `VM · ${ip}` : "VM" }] : [];
+    }),
+    ...data.hosts.flatMap(h => {
+      const ip = h.inventory?.nics?.flatMap(n => n.addresses || []).find(a => a.includes(q));
+      return h.hostname.toLowerCase().includes(q) || ip ? [{ href: `/hosts/${encodeURIComponent(h.id)}`, label: h.hostname, detail: ip ? `Host · ${ip}` : "Host" }] : [];
+    }),
+    ...[...rail, ...railEnd].filter(([, label]) => label.toLowerCase().includes(q)).map(([path, label]) => ({ href: `/${path}`, label, detail: "Page" })),
+    ...sections.filter(s => s.label.toLowerCase().includes(q)).map(s => ({ href: `/settings/${s.key}`, label: s.label, detail: "Setting" })),
+  ].slice(0, 8);
+  const current = Math.min(active, results.length - 1);
+  function go(href: string) { location.hash = href; setQuery(""); setOpen(false); input.current?.blur(); }
+  return <>
+    <button type="button" ref={button} className="icon-button search-open" aria-label="Search" aria-expanded={open} onClick={() => setOpen(true)}><Icon kind="search" size={18} /></button>
+    <div className={`gsearch${open ? " open" : ""}`} role="search" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
+      <Icon kind="search" />
+      <input ref={input} type="search" role="combobox" aria-label="Search VMs, hosts, IP addresses and settings" aria-autocomplete="list" aria-expanded={Boolean(q)} aria-controls="search-results"
+        aria-activedescendant={results.length ? `search-result-${current}` : undefined} placeholder="Jump to a VM, host, IP or setting" value={query}
+        onChange={e => { setQuery(e.target.value); setActive(0); }}
+        onKeyDown={e => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); setActive(Math.max(0, Math.min(results.length - 1, current + (e.key === "ArrowDown" ? 1 : -1)))); }
+          else if (e.key === "Enter" && results.length) { e.preventDefault(); go(results[current].href); }
+          else if (e.key === "Escape") { e.preventDefault(); setQuery(""); if (open) { setOpen(false); button.current?.focus(); } }
         }} />
-      <div id="site-options" role="listbox" aria-label="Sites" className="site-options" tabIndex={-1}>
-        {options.map((item, index) => <button type="button" role="option" id={`site-option-${item.id}`} key={item.id} aria-selected={item.id === selected?.id} tabIndex={-1} className={activeSite?.id === item.id ? "active" : ""}
-          onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => select(item.id)}>{item.name}</button>)}
-      </div>
-      {!options.length && <p className="help" role="status">No matching sites.</p>}
-    </div>}
-  </div>;
+      <kbd>/</kbd>
+      {q && <ul id="search-results" role="listbox" aria-label="Search results">
+        {results.map((r, i) => <li key={r.href} id={`search-result-${i}`} role="option" aria-selected={i === current} onMouseDown={e => e.preventDefault()} onClick={() => go(r.href)}>{r.label}<small>{r.detail}</small></li>)}
+        {!results.length && <li className="muted">No matches</li>}
+      </ul>}
+    </div>
+  </>;
 }
+// Containers sits under VMs in the rail: container services run in Nex-managed node VMs.
+const rail: [string, string, IconKind][] = [["", "Overview", "overview"], ["vms", "VMs", "vm"], ["containers", "Containers", "containers"], ["hosts", "Hosts", "host"], ["storage", "Storage", "storage"], ["networks", "Networks", "network"], ["backups", "Backups", "backup"]];
+const railEnd: [string, string, IconKind][] = [["tasks", "Tasks", "tasks"], ["events", "Events", "events"], ["settings", "Settings", "settings"]];
+// The pool resource view (ManagedVMs) keeps its forms and the VM wizard mounted across these
+// screens; each of its tabs lives at one route, and the ISO library is part of Storage.
+const poolTabRoutes: Record<string, string> = { "Virtual machines": "/vms", Storage: "/storage", Networking: "/networks", "ISO library": "/storage" };
 function App() {
   const [session, setSession] = useState<Session | null>();
   const [data, setData] = useState<Data>(empty);
@@ -310,18 +149,14 @@ function App() {
   const setNotice = (text: string, operationID = "") => { noticeRoute.current = text ? (location.hash.slice(1) || "/") : ""; setNoticeText(text); setNoticeOp(operationID); };
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [search, setSearch] = useState("");
-  const [resourceSearch, setResourceSearch] = useState("");
-  const [selectedSiteID, setSelectedSiteID] = useState("");
-  const [tab, setTab] = useState("General");
-  const [vmMenu, setVmMenu] = useState<{ vm: VM; x: number; y: number } | null>(null);
-  const [menuPower, setMenuPower] = useState<{ vm: VM; item: typeof powerActions[number] } | null>(null);
-  const [menuPowerError, setMenuPowerError] = useState("");
-  const [menuPowerWorking, setMenuPowerWorking] = useState(false);
-  const [menuDeleteSignal, setMenuDeleteSignal] = useState(0);
-  const [menuDeleteVM, setMenuDeleteVM] = useState<VM | null>(null);
+  const [scope, setScopeState] = useState(readScope);
+  const [theme, setTheme] = useState(() => readPreference(themeKey));
+  const [eventsSeen, setEventsSeen] = useState(() => readPreference("nex.events-seen"));
+  const [powerConfirm, setPowerConfirm] = useState<{ vm: VM; item: typeof powerActions[number] } | null>(null);
+  const [powerConfirmError, setPowerConfirmError] = useState("");
+  const [powerConfirmWorking, setPowerConfirmWorking] = useState(false);
   const [form, setForm] = useState<
-    "site" | "enroll" | "revoke" | null
+    "site" | "enroll" | "reenroll" | "revoke" | null
   >(null);
   const [token, setToken] = useState<{
     token: string;
@@ -349,13 +184,19 @@ function App() {
   const requestID = useRef<string | null>(null);
   const generation = useRef(0);
   const reloadOrdinal = useRef(0);
+  // After the first inventory paint, later polls apply through a transition so rail and search
+  // stay responsive while lists update.
+  const inventoryPainted = useRef(false);
+  // The previous poll's operations, so reload() can tell a status that just became failed
+  // (announce it) from one that was already failed on the last poll (stay quiet).
+  const previousOperations = useRef<Operation[]>([]);
   // The browser-to-Controller upload outlives the form that started it, so the App shell owns
-  // the request and reports it in the activity dock until the operator navigates or reloads.
+  // the request and reports it in Tasks until the operator navigates or reloads.
   const [upload, setUpload] = useState<Upload | null>(null);
-  const [createVM, setCreateVM] = useState(false);
-  // newVM sets this so the hashchange handler keeps the Virtual machines tab instead of
-  // resetting to General and leaving the wizard hidden until a later effect runs.
-  const pendingNewVM = useRef(false);
+  // The VMs screen shows the create wizard instead of the list. Create VM from another screen sets
+  // pendingCreate so the hashchange handler keeps the wizard shown after navigating to #/vms.
+  const [creating, setCreating] = useState(false);
+  const pendingCreate = useRef(false);
   const [mediaNote, setMediaNote] = useState("");
   const [mediaChange, setMediaChange] = useState<{ vmID: string; action: "insert" | "eject"; drive: Drive; mediaID: string; operation: Operation } | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
@@ -363,42 +204,27 @@ function App() {
   const uploadCancelled = useRef(false);
   const uploadClear = useRef(0);
   const uploadSample = useRef({ at: 0, loaded: 0, rate: 0 });
-  const [kind, id] = route.split("/").filter(Boolean);
+  // A query after the path seeds a screen's filter, as Networks' VM counts do for the VM list.
+  const [routePath, search = ""] = route.split("?");
+  const [kind = "", id, routeOperation] = routePath.split("/").filter(Boolean);
   const vm = data.vms.find(v => (kind === "vms" || kind === "console") && v.id === id);
   const host = data.hosts.find((h) => (kind === "hosts" || kind === "host-console") && h.id === id);
-  const pool = data.pools.find(
-    (p) => p.id === (vm?.pool_id || host?.pool_id || (kind === "pools" ? id : "")),
-  );
-  const site = data.sites.find(
-    (s) => s.id === (pool?.site_id || (kind === "sites" ? id : "")),
-  );
-  const navigationSite = site || data.sites.find(s => s.id === selectedSiteID) || data.sites[0];
-  const matchResource = (name: string) => name.toLowerCase().includes(resourceSearch.trim().toLowerCase());
-  const navigationPools = data.pools.filter(p => p.site_id === navigationSite?.id && (
-    matchResource(p.name) || data.hosts.some(h => h.pool_id === p.id && matchResource(h.hostname)) || data.vms.some(v => v.pool_id === p.id && matchResource(v.name))
-  ));
-  useEffect(() => {
-    if (!session) return;
-    const key = `nex-selected-site/${session.username}`;
-    if (site) {
-      setSelectedSiteID(site.id);
-      try { sessionStorage.setItem(key, site.id); } catch {}
-    } else {
-      try { setSelectedSiteID(sessionStorage.getItem(key) || ""); } catch {}
-    }
-  }, [site?.id, session?.username]);
-  const scopedHosts = data.hosts.filter((h) =>
-    host
-      ? h.id === host.id
-      : pool
-        ? h.pool_id === pool.id
-        : site
-          ? data.pools.some((p) => p.id === h.pool_id && p.site_id === site.id)
-          : true,
-  );
-  const hosts = scopedHosts.filter((h) =>
-    h.hostname.toLowerCase().includes(search.toLowerCase()),
-  );
+  const site = data.sites.find(s => s.id === scope.site) || data.sites[0];
+  const sitePools = data.pools.filter(p => p.site_id === site?.id);
+  // A site with one pool is that pool, so its pool screens need no extra choice.
+  const pool = sitePools.find(p => p.id === scope.pool) || (sitePools.length === 1 ? sitePools[0] : undefined);
+  const inScope = (poolID: string) => pool ? poolID === pool.id : sitePools.some(p => p.id === poolID);
+  const scopedHosts = data.hosts.filter(h => inScope(h.pool_id));
+  const scopedVMs = data.vms.filter(v => inScope(v.pool_id));
+  const masterHost = data.hosts.find(h => h.id === pool?.master_host_id);
+  const section = kind === "settings" ? id || "overview" : "";
+  // Re-enroll and revoke act on the host whose panel is open; Add host adds to the scoped site.
+  const target = form === "reenroll" || form === "revoke" ? host : undefined;
+  const enrollSite = target ? data.sites.find(s => s.id === data.pools.find(p => p.id === target.pool_id)?.site_id) : site;
+  function setScope(next: Scope) {
+    setScopeState(next);
+    writePreference("nex.scope", JSON.stringify(next));
+  }
   async function api<T>(
     path: string,
     method = "GET",
@@ -435,6 +261,7 @@ function App() {
       generation.current++;
       rememberSignedIn(false);
       setSession(null);
+      inventoryPainted.current = false;
       setData(empty);
       setToken(null);
       setUpdate(null);
@@ -546,7 +373,7 @@ function App() {
       setMediaBusy(false);
     }
   }
-  // Start from the console issues the same durable power request as the toolbar. Opening the
+  // Start from the console issues the same durable power request as the panel. Opening the
   // console first and starting from there is how an operator catches a firmware boot prompt that
   // times out in a few seconds; the request, its task and its outcome are unchanged.
   const powerRequest = useRef<Record<string, string>>({});
@@ -555,14 +382,14 @@ function App() {
   async function startVM(target: VM) {
     // Start on a protected Controller appliance always goes through the confirmation dialog.
     const start = powerActions.find(item => item.action === "start")!;
-    if (powerConfirmText(start, target)) { setMenuPower({ vm: target, item: start }); return; }
+    if (powerConfirmText(start, target)) { setPowerConfirm({ vm: target, item: start }); return; }
     setStarting(target.id);
     setStartError("");
     powerRequest.current[target.id] ??= crypto.randomUUID();
     try {
       const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: powerRequest.current[target.id], action: "start" });
       delete powerRequest.current[target.id];
-      setNotice(`Start queued for ${target.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
+      setNotice(`Start queued for ${target.name}. Follow its progress in Tasks.`, res?.operation?.id);
       await reload();
     } catch (e) {
       setStartError((e as Error).message);
@@ -580,7 +407,7 @@ function App() {
     const task = data.operations.find(o => o.id === mediaChange.operation.id) || mediaChange.operation;
     const what = driveLabels[mediaChange.drive].toLowerCase();
     if (task.status === "failed" || task.status === "needs_attention") {
-      return task.error || `The ${what} change did not complete. Check Recent tasks.`;
+      return task.error || `The ${what} change did not complete. Check Tasks.`;
     }
     if (task.status !== "succeeded" && !vmMediaApplied(target, mediaChange.drive, mediaChange.mediaID)) {
       return mediaChange.action === "insert" ? `Inserting the ${what}…` : `Ejecting the ${what}…`;
@@ -635,14 +462,37 @@ function App() {
         api<VM[]>("vms"), api<Storage[]>("storage"), api<Network[]>("networks"), api<Media[]>("media"),
       ]);
       if (isCurrent()) {
-        setData({
+        // The notice bar only carries text, not a link (its operation id just tracks a queued
+        // task so the notice clears once that task resolves); a failed task is already resolved,
+        // so the id goes in the text itself instead of triggering that same clear-on-resolve effect.
+        // One call per poll: several failures in the same poll become one notice, not a series
+        // that only leaves the last one visible.
+        const failures = newFailures(previousOperations.current, operations || []);
+        const hostnameOf = (o: Operation) => hosts?.find((h) => h.id === o.host_id)?.hostname || o.host_id;
+        if (failures.length === 1) {
+          const o = failures[0];
+          const verb = o.status === "failed" ? "failed" : "needs attention";
+          setNotice(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
+        } else if (failures.length > 1) {
+          const items = failures.map((o) => `${operationLabel(o.kind)} on ${hostnameOf(o)} (${o.id})`).join(", ");
+          setNotice(`${failures.length} tasks failed: ${items}.`);
+        }
+        previousOperations.current = operations || [];
+        const next = {
           sites: sites || [],
           pools: pools || [],
           hosts: hosts || [],
           operations: operations || [],
           audit: audit || [],
           vms: vms || [], storage: storage || [], networks: networks || [], media: media || [],
-        });
+        };
+        sampleCounts(next);
+        if (!inventoryPainted.current) {
+          inventoryPainted.current = true;
+          setData(next);
+        } else {
+          startTransition(() => setData(next));
+        }
         setError("");
       }
     } catch (e) {
@@ -675,41 +525,46 @@ function App() {
     if (!session) return;
     setLoading(true);
     void reload();
-    const timer = setInterval(() => void reload(), 10000);
+    const timer = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 10000);
     return () => clearInterval(timer);
   }, [session]);
+  // The update status feeds the Overview, Hosts, Members and Updates screens; it is read once per
+  // session and again on Check, not on every route.
   useEffect(() => {
-    if (session && host) api<UpdateStatus>("updates").then(setUpdate, () => {});
-  }, [session, host?.id]);
+    if (session) api<UpdateStatus>("updates").then(setUpdate, () => {});
+  }, [session]);
+  // #/sites/{id} and #/pools/{id} set the scope and show its overview, and #/pools/{id}/{section}
+  // opens that pool's settings section; #/updates moved to settings, and Storage, Networks and the
+  // ISO library moved out of it.
   useEffect(() => {
-    if (!session || kind !== "updates") return;
-    setUpdateNote("");
-    void action(async () => {
-      setUpdate(await api<UpdateStatus>("updates"));
-    });
-  }, [session, kind]);
+    if (kind === "updates") location.replace("#/settings/updates");
+    const moved = kind === "settings" && movedSection(id);
+    if (moved) location.replace(moved);
+    const linked = kind === "sites" ? data.sites.find(s => s.id === id) && { site: id, pool: "" }
+      : kind === "pools" ? data.pools.filter(p => p.id === id).map(p => ({ site: p.site_id, pool: p.id }))[0] : undefined;
+    const settingsSection = kind === "pools" ? route.split("/").filter(Boolean)[2] : undefined;
+    if (linked) { setScope(linked); location.replace(settingsSection ? `#/settings/${settingsSection}` : "#/"); }
+  }, [kind, id, data.sites, data.pools]);
+  // Opening Events marks everything recorded so far as seen, which clears the rail's dot.
+  // Only warnings and failures raise the rail's dot; recorded changes do not.
+  const newestEvent = data.audit.filter(a => ["warn", "bad"].includes(badgeTone(a.action.split(".").pop() || ""))).reduce((newest, a) => a.created_at > newest ? a.created_at : newest, "");
   useEffect(() => {
-    if (!vmMenu) return;
-    const close = () => setVmMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-    const onPointer = (e: PointerEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest(".context-menu")) close();
-    };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("pointerdown", onPointer, true);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("pointerdown", onPointer, true);
-    };
-  }, [vmMenu]);
+    if (kind === "events" && newestEvent > eventsSeen) { setEventsSeen(newestEvent); writePreference("nex.events-seen", newestEvent); }
+  }, [kind, newestEvent]);
+  // Hash changes clear most transient chrome, but the create wizard stays open across its
+  // Storage / Networks / ISO side-trips so returning to #/vms resumes the form.
+  const wizardRoutes = new Set(["vms", "storage", "networks"]);
   useEffect(() => {
     const change = () => {
       const nextRoute = location.hash.slice(1) || "/";
+      const nextKind = nextRoute.split("/").filter(Boolean)[0] || "";
       setRoute(nextRoute);
-      setSearch("");
-      setResourceSearch("");
-      setTab(pendingNewVM.current ? "Virtual machines" : "General");
-      pendingNewVM.current = false;
+      if (pendingCreate.current) {
+        setCreating(true);
+        pendingCreate.current = false;
+      } else if (!wizardRoutes.has(nextKind)) {
+        setCreating(false);
+      }
       setForm(null);
       setToken(null);
       if (noticeRoute.current !== nextRoute) setNotice("");
@@ -722,16 +577,13 @@ function App() {
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, []);
-  // New VM from the toolbar or File menu opens the pool's VM wizard; the pool view shows it.
-  function newVM() {
-    if (!pool) return;
-    pendingNewVM.current = true;
-    setCreateVM(true);
-    setTab("Virtual machines");
-    const path = `/pools/${pool.id}`;
-    if ((location.hash.slice(1) || "/") === path) {
-      pendingNewVM.current = false;
-      return;
+  // Create VM opens the scoped pool's wizard on the VMs screen.
+  const newVM = () => showPoolTab("Virtual machines");
+  function showPoolTab(tab: string) {
+    const path = poolTabRoutes[tab];
+    if (tab === "Virtual machines") {
+      if ((location.hash.slice(1) || "/") === path) { setCreating(true); return; }
+      pendingCreate.current = true;
     }
     location.hash = path;
   }
@@ -758,8 +610,17 @@ function App() {
     setHostAdded(null);
     setHostRetry(null);
   }
+  // A form dialog returns focus to what opened it; a menu item has closed, so its menu's summary.
+  const formOpener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (form) return;
+    formOpener.current?.focus();
+    formOpener.current = null;
+  }, [form]);
   function open(next: typeof form) {
     if (busy) return;
+    const active = document.activeElement as HTMLElement | null;
+    formOpener.current = active?.closest("details")?.querySelector("summary") || active;
     setForm(next);
     setToken(null);
     setActionError("");
@@ -771,11 +632,10 @@ function App() {
       requestID.current ??= crypto.randomUUID();
       const op = await api<Operation>(`hosts/${host.id}/operations`, "POST", { kind: "refresh-inventory", request_id: requestID.current });
       requestID.current = null;
-      setNotice(`Inventory refresh ${op.status}. Follow its progress in Task history.`);
+      setNotice(`Inventory refresh ${statusLabel(op.status).toLowerCase()}. Follow its progress in Tasks.`);
       await reload();
     });
   }
-  const powerStatus = vm && `Observed ${stateText(vm.state)} · ${vm.freshness || "unknown"}. ${powerBlocker(vm, data.hosts.find(h => h.id === vm.host_id)) || "Use the toolbar to start, shut down, reboot, force stop or force reboot this VM."}`;
   const submitName = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name")).trim();
@@ -852,70 +712,76 @@ function App() {
         </footer>
       </main>
     );
-  // The power confirmation for the context menu and console Start; the console-only page renders it too.
-  // It opens modal, like the toolbar's, so the toolbar cannot cover it.
-  const closeMenuPower = () => { setMenuPower(null); setMenuPowerError(""); };
-  const menuPowerDialog = menuPower && <dialog className="confirm-dialog" ref={el => { if (el && !el.open) el.showModal(); }} aria-labelledby="menu-power-title"
-        onClose={closeMenuPower}
-        onCancel={e => { if (menuPowerWorking) e.preventDefault(); else closeMenuPower(); }}>
-        <form onSubmit={e => { e.preventDefault(); if (menuPowerWorking) return; void (async () => {
+  // The confirmation for console Start on a protected appliance; the console-only page renders it too.
+  const closePowerConfirm = () => { setPowerConfirm(null); setPowerConfirmError(""); };
+  const powerConfirmDialog = powerConfirm && <dialog className="confirm-dialog" ref={el => { if (el && !el.open) el.showModal(); }} aria-labelledby="power-start-title"
+        onClose={closePowerConfirm}
+        onCancel={e => { if (powerConfirmWorking) e.preventDefault(); else closePowerConfirm(); }}>
+        <form onSubmit={e => { e.preventDefault(); if (powerConfirmWorking) return; void (async () => {
           // One request_id per VM and action until it succeeds, so a retry after a lost reply is reconciled, not repeated.
-          const key = `${menuPower.vm.id}:${menuPower.item.action}`;
+          const key = `${powerConfirm.vm.id}:${powerConfirm.item.action}`;
           powerRequest.current[key] ??= crypto.randomUUID();
-          setMenuPowerWorking(true);
-          setMenuPowerError("");
+          setPowerConfirmWorking(true);
+          setPowerConfirmError("");
           try {
-            const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(menuPower.vm.id)}/power`, "POST", { request_id: powerRequest.current[key], action: menuPower.item.action });
+            const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(powerConfirm.vm.id)}/power`, "POST", { request_id: powerRequest.current[key], action: powerConfirm.item.action });
             delete powerRequest.current[key];
-            setNotice(`${menuPower.item.label} queued for ${menuPower.vm.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
-            closeMenuPower();
+            setNotice(`${powerConfirm.item.label} queued for ${powerConfirm.vm.name}. Follow its progress in Tasks.`, res?.operation?.id);
+            closePowerConfirm();
             await reload();
-          } catch (err) { setMenuPowerError((err as Error).message); }
-          finally { setMenuPowerWorking(false); }
+          } catch (err) { setPowerConfirmError((err as Error).message); }
+          finally { setPowerConfirmWorking(false); }
         })(); }}>
-          <h2 id="menu-power-title">{menuPower.item.label} {menuPower.vm.name}?</h2>
-          {powerConfirmText(menuPower.item, menuPower.vm) && <p>{powerConfirmText(menuPower.item, menuPower.vm)}</p>}
-          {menuPowerError && <p className="task-error" role="alert">{menuPowerError}</p>}
-          <div className="actions"><button type="button" disabled={menuPowerWorking} onClick={closeMenuPower}>Cancel</button>
-            <button disabled={menuPowerWorking} className={menuPower.item.action.startsWith("force-") ? "danger" : "primary"}>Confirm {menuPower.item.label.toLowerCase()}</button></div>
+          <h2 id="power-start-title">{powerConfirm.item.label} {powerConfirm.vm.name}?</h2>
+          {powerConfirmText(powerConfirm.item, powerConfirm.vm) && <p>{powerConfirmText(powerConfirm.item, powerConfirm.vm)}</p>}
+          {powerConfirmError && <p className="task-error" role="alert">{powerConfirmError}</p>}
+          <div className="actions"><button type="button" disabled={powerConfirmWorking} onClick={closePowerConfirm}>Cancel</button>
+            <button disabled={powerConfirmWorking} className={powerConfirm.item.action.startsWith("force-") ? "danger" : "primary"}>Confirm {powerConfirm.item.label.toLowerCase()}</button></div>
         </form>
       </dialog>;
-  // Console-only page for a separate browser window; the VM/host Console tabs link here.
+  // Console-only page: the VM panel's Console action opens it, and the host Console tab pops out to it.
   if (kind === "console" || kind === "host-console")
     return (
-      <div className="console-page">
+      <div className="console-page"><ScreenBoundary>
         {kind === "host-console" ? <>
           <div className="console-page-bar"><a href={`#/hosts/${id}`}>Nex Controller</a><strong>{host ? (host.hostname || host.id) : "Host console"}</strong>{host && <span className="muted">{host.connection}</span>}</div>
-          {host ? <Console key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />
-            : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Choose it from the Resources tree."}</p>}
-        </> : <>{menuPowerDialog}
-          <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}{startError && <span className="task-error" role="alert">{startError}</span>}</div>
-          {vm ? <div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div>
-            : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Choose it from the Resources tree."}</p>}
+          {host ? <LazyScreen><LazyConsole key={host.id} name={host.hostname || host.id} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} /></LazyScreen>
+            : <p className="empty">{loading ? "Loading…" : error || "This host is not known to Nex Controller. Open it from the Hosts list."}</p>}
+        </> : <>{powerConfirmDialog}
+          <div className="console-page-bar"><a href={`#/vms/${id}`}>Nex Controller</a><strong>{vm ? vm.name : "VM console"}</strong>{vm && <span className="muted">{vm.state || "unknown"}</span>}{startError && <span className="task-error" role="alert">{startError}</span>}{notice && <span role="status">{notice}</span>}</div>
+          {vm ? <div className="vm-console-panel" key={vm.id}><LazyScreen><LazyConsole key={vm.id} name={vm.name} guest={vm.guest} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id), Boolean(error))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><LazyRealtimeStats kind="vm" id={vm.id} api={api} /></LazyScreen></div>
+            : <p className="empty">{loading ? "Loading…" : error || "This VM is not known to Nex Controller. Open it from the VM list."}</p>}
         </>}
-      </div>
+      </ScreenBoundary></div>
     );
-  // A VM page opened on its creation route shows that task, not "not found" or VM details with Edit
-  // and Delete, until the create has succeeded.
-  const routeOperation = route.split("/").filter(Boolean)[2];
-  const createOperation = kind === "vms" && (!vm || (vm.status !== "succeeded" && vm.operation_id === routeOperation))
-    ? data.operations.find(o => o.kind === "vm-create" && o.id === routeOperation)
-    : undefined;
-  const invalid = Boolean(
-    kind &&
-    kind !== "tasks" &&
-    kind !== "updates" &&
-    kind !== "console" &&
-    kind !== "host-console" &&
-    (!id ||
-      !["sites", "pools", "hosts", "vms"].includes(kind) ||
-      (kind === "sites" && !site) ||
-      (kind === "pools" && !pool) ||
-      (kind === "hosts" && !host) ||
-      (kind === "vms" && !vm)),
-  );
+  const counts = taskCounts(data.operations);
+  const running = counts.running + (upload?.state === "uploading" ? 1 : 0);
+  const unseenEvents = Boolean(newestEvent) && newestEvent > eventsSeen;
+  // Nothing loaded, or a failed reload, is unknown: the dot is neutral rather than healthy.
+  const scopeTone = error || !scopedHosts.length ? "" : scopedHosts.every(h => h.connection === "fresh") ? "ok" : "warn";
+  const railLink = ([path, label, icon]: [string, string, IconKind]) => {
+    const current = path === kind || (path === "" && (kind === "sites" || kind === "pools"));
+    return <a key={path} href={`#/${path}`} className={path === "containers" ? "rail-sub" : undefined} aria-current={current ? "page" : undefined}><Icon kind={icon} size={20} />{label}{path === "events" && unseenEvents && <span className="dot warn" role="img" aria-label="New events" />}</a>;
+  };
+  const closeForm = () => {
+    setForm(null);
+    setToken(null);
+    setActionError("");
+    resetAddHost();
+  };
+  // An open slide-over covers the page, so it carries the load error and Retry instead.
+  const panelOpen = (kind === "vms" || kind === "hosts") && Boolean(id);
+  const loadError = { error, busy, onRetry: () => void reload() };
+  // #/sites/… and #/pools/… redirect into scope; show loading rather than notFound while that runs.
+  const scopeRedirect = kind === "sites" || kind === "pools";
+  const notFound = <section className="panel empty">
+    <h2>{error ? "Inventory unavailable" : "Object not found"}</h2>
+    <p>{error ? "Inventory could not be loaded. Use Retry above to load it again." : "This link does not match a site, pool, host or VM known to Nex Controller."}</p>
+    <a href="#/">Return to overview</a>
+  </section>;
   return (
-    <div className="desktop-app">
+    <LoadError.Provider value={loadError}>
+    <div className="app">
       <a
         className="skip"
         href="#main"
@@ -926,143 +792,65 @@ function App() {
       >
         Skip to content
       </a>
-      <header className="topbar">
-        <a href="#/" aria-label="Nex Controller home">
-          <Icon kind="home" /><span>Nex Controller</span>
-        </a>
-        <div className="account">
-          <span>{session.username}</span>
-          <button
-            onClick={() =>
-              void action(async () => {
-                await api("session", "DELETE");
-                generation.current++;
-                rememberSignedIn(false);
-                setSession(null);
-                setData(empty);
-                setToken(null);
-                setUpdate(null);
-              })
-            }
-            disabled={busy}
-          >
-            Sign out
-          </button>
+      <a className="logo" href="#/" aria-label="Nex Controller overview"><span aria-hidden="true">n</span></a>
+      <header className="top">
+        <Menu className="scope" summaryLabel={`Scope: ${site?.name || "no site"}, ${pool?.name || "all pools"}. Change scope`} label={<>
+          <span className={`dot ${scopeTone}`} aria-hidden="true" /><b>{site?.name || "No site"}</b>
+          <span className="sep" aria-hidden="true">/</span><b>{pool?.name || "All pools"}</b><span className="count">{scopedHosts.length} {scopedHosts.length === 1 ? "host" : "hosts"}</span><Icon kind="chevron" size={14} />
+        </>}>
+          {data.sites.map(s => <Fragment key={s.id}>
+            <button type="button" aria-current={s.id === site?.id && !pool ? "true" : undefined} onClick={() => setScope({ site: s.id, pool: "" })}>{s.name} · all pools</button>
+            {data.pools.filter(p => p.site_id === s.id).map(p => <button key={p.id} type="button" className="indent" aria-current={p.id === pool?.id ? "true" : undefined} onClick={() => setScope({ site: s.id, pool: p.id })}>{p.name}</button>)}
+          </Fragment>)}
+          <hr />
+          <button type="button" disabled={busy} onClick={() => open("site")}>Create site</button>
+          <button type="button" disabled={busy || !site} title={site ? undefined : "Create a site first."} onClick={() => open("enroll")}>Add host</button>
+        </Menu>
+        <GlobalSearch data={data} />
+        <div className="tools">
+          {/* Under 900 px the words fold away and the pill keeps the pulse and the count. */}
+          <a className="activity" href="#/tasks">{running ? <><span className="pulse" aria-hidden="true" />{running}<span className="activity-words"> {running === 1 ? "task" : "tasks"} running</span></>
+            : <><span className="activity-words">No tasks running</span><span className="activity-idle" aria-hidden="true">0</span></>}</a>
+          <button type="button" className="icon-button" aria-label={`Theme: ${theme || "system"}. Change theme`} title={`Theme: ${theme || "system"}`} onClick={() => {
+            const next = theme === "" ? "light" : theme === "light" ? "dark" : "";
+            setTheme(next);
+            writePreference(themeKey, next);
+            applyTheme(next);
+          }}><Icon kind="theme" size={18} /></button>
+          <Menu align="end" className="account" summaryLabel="Account" label={<Icon kind="account" size={18} />}>
+            <p>Signed in as <strong>{session.username}</strong></p>
+            <a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a>
+            <a href="/source">Nex source code</a>
+            <button
+              type="button"
+              onClick={() =>
+                void action(async () => {
+                  await api("session", "DELETE");
+                  generation.current++;
+                  rememberSignedIn(false);
+                  setSession(null);
+                  inventoryPainted.current = false;
+                  setData(empty);
+                  setToken(null);
+                  setUpdate(null);
+                })
+              }
+              disabled={busy}
+            >
+              Sign out
+            </button>
+          </Menu>
         </div>
       </header>
-      <div className="menubar" aria-label="Application menus">
-        <Menu label="File"><button disabled={busy} onClick={() => open("site")}>Create site</button><button disabled={busy || !site || Boolean(host)} onClick={() => open("enroll")}>Add host</button><button disabled={busy || !pool} onClick={newVM}>New VM</button></Menu>
-        <Menu label="View"><a href="#/">Overview</a><a href="#/tasks">Task history</a><a href="#/updates">Updates</a><button onClick={() => void reload()} disabled={busy}>Refresh view</button></Menu>
-        <Menu label="Host"><button disabled={busy || !host || host.revoked} onClick={refreshInventory}>Refresh inventory</button><button disabled={busy || !host?.revoked} onClick={() => open("enroll")}>Re-enroll host</button><button disabled={busy || !host || host.revoked} onClick={() => open("revoke")}>Revoke access</button></Menu>
-        <Menu label="Help"><a href="/api/docs/" target="_blank" rel="noreferrer">API reference</a><a href="/source">Source code</a></Menu>
-      </div>
-      {/* A fixed toolbar in the desktop-console style: every action stays in place and is greyed out,
-          with its reason as a tooltip, when it does not apply to the selected resource. */}
-      <div className="toolbar" aria-label="Controller actions">
-        <div className="toolbar-group" role="group" aria-label="Navigation">
-          <button type="button" onClick={() => history.back()}><Icon kind="back" />Back</button>
-          <button type="button" onClick={() => history.forward()}><Icon kind="forward" />Forward</button>
-        </div>
-        <div className="toolbar-group" role="group" aria-label="Create">
-          <button type="button" disabled={busy} onClick={() => open("site")}><Icon kind="site" />Create site</button>
-          <button type="button" disabled={busy || !site || Boolean(host)} title={!site ? "Select a site first." : host ? "Select the site or pool to add a host." : undefined} onClick={() => open("enroll")}><Icon kind="host" />Add host</button>
-          <button type="button" disabled={busy || !pool || Boolean(error)} title={pool ? undefined : "Select a pool, host or VM first."} onClick={newVM}><Icon kind="new-vm" />New VM</button>
-        </div>
-        <VMPower key={`power-${vm?.id || "none"}`} vm={vm} host={vm && data.hosts.find(h => h.id === vm.host_id)} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} describedBy={vm ? "vm-power-status" : undefined} />
-        <button type="button" className="toolbar-end" disabled={busy} onClick={() => void reload()}><Icon kind="refresh" />Refresh view</button>
-      </div>
-      <div className="shell">
-        <aside>
-          <div className="nav-title">Resources</div>
-          <div className="site-selector">
-            <SitePicker sites={data.sites} selected={navigationSite} onSelect={id => { setSelectedSiteID(id); setResourceSearch(""); location.hash = `/sites/${id}`; }} />
-            {navigationSite && <a href={`#/sites/${navigationSite.id}`}>Site overview</a>}
-            {!loading && !data.sites.length && <><p className="help">{error ? "Sites could not be loaded. Refresh the view to retry." : "No sites yet. Create a site to get started."}</p><button disabled={busy} onClick={() => open("site")}>Create site</button></>}
-          </div>
-          <label className="resource-search"><span className="sr-only">Search resources</span><input type="search" placeholder="Search resources…" value={resourceSearch} onChange={(e) => setResourceSearch(e.target.value)} /></label>
-          <nav aria-label="Infrastructure">
-            {navigationPools.map(p => <details key={`${p.id}/${resourceSearch}`} className="tree-branch" open>
-              <summary aria-label={`Expand or collapse ${p.name}`}><a className={`tree-node ${kind === "pools" && id === p.id ? "selected" : ""}`} aria-current={kind === "pools" && id === p.id ? "page" : undefined} href={`#/pools/${p.id}`}><Icon kind="pool" />{p.name}</a></summary>
-              <div className="tree">{data.hosts.filter(h => h.pool_id === p.id && (matchResource(p.name) || matchResource(h.hostname) || data.vms.some(v => v.host_id === h.id && v.pool_id === p.id && matchResource(v.name)))).map(h =>
-                <div key={h.id}><a className={`host-link ${host?.id === h.id ? "selected" : ""}`} aria-current={host?.id === h.id ? "page" : undefined} href={`#/hosts/${h.id}`}><Icon kind="host" />{h.hostname}{p.master_host_id === h.id && " · master"}<span className={`connection-dot ${h.connection}`} title={h.connection} aria-label={`Connection ${h.connection}`} /></a>
-                <div className="tree">{data.vms.filter(v => v.pool_id === p.id && v.host_id === h.id && (matchResource(p.name) || matchResource(h.hostname) || matchResource(v.name))).map(v => <a className={`host-link ${vm?.id === v.id ? "selected" : ""} ${v.freshness !== "fresh" ? "vm-unknown" : v.state === "shut off" ? "vm-off" : ""}`} title={v.freshness !== "fresh" ? "State unknown: host not fresh" : undefined} key={v.id} aria-current={vm?.id === v.id ? "page" : undefined} href={`#/vms/${v.id}`}
-                  onContextMenu={e => { e.preventDefault(); setVmMenu({ vm: v, x: e.clientX, y: e.clientY }); }}><Icon kind="vm" />{v.name}</a>)}</div></div>
-              )}</div>
-            </details>)}
-            {navigationSite && !navigationPools.length && <p className="empty">{resourceSearch ? "No matching resources in this site." : "No hosts in this site."}</p>}
-          </nav>
-          <div className="sidebar-foot"><a href="#/"><Icon kind="home" /> Infrastructure</a><a className={kind === "tasks" ? "selected" : ""} href="#/tasks"><Icon kind="tasks" /> Task history</a><a className={kind === "updates" ? "selected" : ""} href="#/updates">Updates</a></div>
-        </aside>
-        <main id="main" tabIndex={-1}>
-          <div className="breadcrumbs">
-            <a href="#/">Workspace</a>
-            {site && (
-              <>
-                {" "}
-                / <a href={`#/sites/${site.id}`}>{site.name}</a>
-              </>
-            )}
-            {pool && (
-              <>
-                {" "}
-                / <a href={`#/pools/${pool.id}`}>{pool.name}</a>
-              </>
-            )}
-            {host && <> / {host.hostname}</>}{vm && <> / {vm.name}</>}
-          </div>
-          <div className="page-heading">
-            <div>
-              <p className="eyebrow">
-                {host
-                  ? "HOST"
-                  : pool
-                    ? "POOL"
-                    : site
-                      ? "SITE"
-                      : kind === "tasks"
-                        ? "OPERATIONS"
-                        : kind === "updates"
-                          ? "UPDATES"
-                          : "INFRASTRUCTURE"}
-              </p>
-              <h1><Icon kind={vm ? "vm" : host ? "host" : pool ? "pool" : site ? "site" : kind === "tasks" ? "tasks" : "home"} />
-                {vm?.name || host?.hostname ||
-                  pool?.name ||
-                  site?.name ||
-                  (kind === "tasks" ? "Task history" : kind === "updates" ? "Software updates" : "Your workspace")}
-              </h1>
-              <p>
-                {vm
-                  ? <span id="vm-power-status">{powerStatus}</span>
-                  : host
-                  ? "Observed resources and management connectivity."
-                  : pool
-                    ? "Hosts, virtual machines, storage and guest networks for this pool. The pool master controls the pool."
-                    : site
-                      ? "Pools and hosts at this site."
-                      : kind === "tasks"
-                        ? "Durable requests, progress and outcomes."
-                        : kind === "updates"
-                          ? null
-                          : "Sites, pools and connected hosts."}
-              </p>
-            </div>
-          </div>
-          {kind !== "tasks" && kind !== "updates" && !invalid && <nav className="detail-tabs" aria-label="Resource views">
-            {(vm ? ["General", "Stats", "Console", "Activity"] : host ? ["General", "Stats", "Console", "Networking", "Storage", "Activity"] : pool ? ["General", "Hosts", "Virtual machines", "Storage", "Networking", "ISO library", "Activity"] : ["General", "Activity"]).map((name) =>
-              <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => { setTab(name); setNotice(""); }}>{name}</button>
-            )}
-          </nav>}
-          <div className="workspace-content">
-
-          {error && (
-            <div className="alert" role="alert">
-              {error}
-              <button disabled={busy} onClick={() => void reload()}>
-                Retry
-              </button>
-            </div>
-          )}
+      <nav className="rail" aria-label="Sections">
+        {rail.map(railLink)}
+        <span className="rail-gap" />
+        {railEnd.map(railLink)}
+      </nav>
+      <main id="main" tabIndex={-1} className="main">
+        {section && <SettingsNav section={section} pool={pool} master={masterHost} />}
+        <div className="page">
+          {error && !panelOpen && <LoadErrorAlert {...loadError} />}
           {actionError && !form && (
             <div className="alert" role="alert">
               {actionError}
@@ -1073,35 +861,96 @@ function App() {
               {notice}
             </div>
           )}
-          {loading && <p role="status">Loading your workspace…</p>}
-          {form && (
-            <section
-              className="panel form-panel"
-              aria-label={
-                form === "site"
-                  ? "Create site"
-                  : form === "revoke"
-                    ? "Confirm revoke"
-                    : "Add host"
-              }
-            >
+          <LazyScreen key={kind}>{kind === "" ? <LazyOverview data={data} site={site} pool={pool} hosts={scopedHosts} vms={scopedVMs} api={api} coreAvailable={update?.core_available_version} loading={loading} busy={busy} onCreateSite={() => open("site")} onAddHost={() => open("enroll")} />
+            : kind === "vms" ? !creating && <LazyVMList data={data} vms={scopedVMs} pool={pool} network={new URLSearchParams(search).get("network") || undefined} selectedID={id} operationID={routeOperation} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} loading={loading} onNotice={setNotice}
+              onCreateVM={newVM} mediaControls={vmMediaControls}
+              installMedia={target => ({ busy: mediaBusy, note: vmMediaNote(target), onEject: () => void changeVMMedia(target.id, "eject", "install") })} />
+            : kind === "hosts" ? <LazyHostList data={data} hosts={scopedHosts} selectedID={id} api={api} busy={busy} unavailable={Boolean(error)} loading={loading} coreAvailable={update?.core_available_version}
+              openHostConsole={openHostConsole} onRefreshInventory={refreshInventory} onReenroll={() => open("reenroll")} onRevoke={() => open("revoke")} />
+            : kind === "storage" || kind === "networks" ? <><h1 className="sr-only">{kind === "storage" ? "Storage" : "Networks"}</h1>{!pool && <p className="empty">Choose a pool in the scope menu to see its {kind}.</p>}</>
+            : section ? <SettingsHead section={section} pool={pool} master={masterHost} hostCount={scopedHosts.length} />
+            : kind === "backups" ? <LazyBackups />
+            : kind === "containers" ? <LazyContainers />
+            : kind === "tasks" ? <LazyTasks data={data} upload={upload} onCancelUpload={cancelUpload} />
+            : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />
+            : scopeRedirect || loading ? <p role="status">Loading…</p> : notFound}</LazyScreen>
+          {/* ManagedVMs owns the create wizard and the Storage / Networks tables for the scoped
+              pool. List screens (VMList, HostList) own #/vms and #/hosts; when creating is true
+              VMList is hidden and the wizard is shown here. Storage and Networks routes only
+              render a heading above, and this mount supplies the real tables. */}
+          {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
+          {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
+          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
+              update,
+              note: updateNote,
+              phase: updatePhase,
+              onCheck: () =>
+                void action(async () => {
+                  setUpdateNote("");
+                  setUpdatePhase("checking");
+                  try {
+                    setUpdate(await api<UpdateStatus>("updates"));
+                    setUpdatePhase("idle");
+                  } catch (e) {
+                    setUpdatePhase("error");
+                    throw e;
+                  }
+                }),
+              onApply: () =>
+                void (async () => {
+                  setBusy(true);
+                  setActionError("");
+                  setUpdateNote("");
+                  setUpdatePhase("applying");
+                  try {
+                    await api("updates/apply", "POST", {});
+                    const st = await followUpdate(api, setUpdate);
+                    if (st?.phase === "done") {
+                      setUpdateNote(st.message || "Update complete");
+                      setUpdatePhase("done");
+                    } else if (st) {
+                      setUpdatePhase("error");
+                      setActionError(st.error || st.message || "Update failed");
+                    } else {
+                      setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
+                      setUpdatePhase("idle");
+                    }
+                  } catch (e) {
+                    setUpdatePhase("error");
+                    setActionError((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                })(),
+            }} /></LazyScreen>}
+        </div>
+      </main>
+      {powerConfirmDialog}
+      {form && (
+        <dialog
+          className="form-dialog"
+          ref={el => { if (el && !el.open) el.showModal(); }}
+          onCancel={e => { e.preventDefault(); if (!busy) closeForm(); }}
+          aria-label={
+            form === "site"
+              ? "Create site"
+              : form === "revoke"
+                ? "Confirm revoke"
+                : "Add host"
+          }
+        >
               <div className="section-heading">
                 <h2>
                   {form === "site"
                     ? "Create a site"
                     : form === "revoke"
-                      ? `Revoke access for ${host?.hostname}?`
-                      : host
-                        ? `Re-enroll ${host.hostname}`
-                        : `Add host to ${site?.name}`}
+                      ? `Revoke access for ${target?.hostname}?`
+                      : target
+                        ? `Re-enroll ${target.hostname}`
+                        : `Add host to ${enrollSite?.name}`}
                 </h2>
                 <button
-                  onClick={() => {
-                    setForm(null);
-                    setToken(null);
-                    setActionError("");
-                    resetAddHost();
-                  }}
+                  onClick={closeForm}
                   disabled={busy}
                 >
                   Close
@@ -1139,7 +988,7 @@ function App() {
                     onSubmit={(e) => {
                       e.preventDefault();
                       void action(async () => {
-                        await api(`hosts/${host!.id}/revoke`, "POST", {});
+                        await api(`hosts/${target!.id}/revoke`, "POST", {});
                         setForm(null);
                         await reload();
                         setNotice(
@@ -1156,7 +1005,7 @@ function App() {
                         autoFocus
                         onChange={(e) =>
                           e.currentTarget.setCustomValidity(
-                            e.currentTarget.value === host!.hostname
+                            e.currentTarget.value === target!.hostname
                               ? ""
                               : "Enter the exact hostname.",
                           )
@@ -1169,14 +1018,14 @@ function App() {
                   </form>
                 </>
               )}
-              {form === "enroll" && (
+              {(form === "enroll" || form === "reenroll") && (
                 <>
                   <p>
                     Enroll only the intended host into{" "}
-                    <strong>{site?.name}</strong>. Confirm the certificate
+                    <strong>{enrollSite?.name}</strong>. Confirm the certificate
                     fingerprint the host presents before adding it.
                   </p>
-                  {!host && (
+                  {!target && (
                     <p className="help">
                       A new host becomes the master of a new pool in this site; a host that already belongs to a pool keeps it. Enrollment does not make local storage shared or enable high availability.
                     </p>
@@ -1184,11 +1033,11 @@ function App() {
                   {hostAdded ? (
                     <p role="status">
                       Host {hostAdded.host_id} enrolled in pool{" "}
-                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the tree after its first report. To make it a member of an existing pool, open that pool, then Hosts, then Add host to pool.
+                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the host list after its first report. To make it a member of an existing pool, open Settings → Members, then Add host to pool.
                     </p>
                   ) : hostProbe ? (
                     <>
-                      <Details>
+                      <dl className="details">
                         <dt>Address</dt>
                         <dd className="mono">{hostProbe.address}</dd>
                         <dt>Certificate fingerprint</dt>
@@ -1197,7 +1046,7 @@ function App() {
                         <dd>{hostProbe.subject}</dd>
                         <dt>Expires</dt>
                         <dd>{date(hostProbe.not_after)}</dd>
-                      </Details>
+                      </dl>
                       <p className="help">
                         Confirm this is the intended host before continuing.
                       </p>
@@ -1222,12 +1071,12 @@ function App() {
                               const added = await api<{
                                 host_id: string;
                                 pool_id: string;
-                              }>(`sites/${site!.id}/hosts`, "POST", {
+                              }>(`sites/${enrollSite!.id}/hosts`, "POST", {
                                 address: hostProbe.address,
                                 fingerprint: hostProbe.fingerprint,
                                 root_password: hostPassword,
                                 controller_url: hostControllerURL,
-                                ...(host ? { host_id: host.id } : {}),
+                                ...(target ? { host_id: target.id } : {}),
                               }).catch((e: Error & { status?: number; host_id?: string; retryable?: boolean; host_error?: string }) => {
                                 // Not a failure: the pool master has not reported this member yet.
                                 // Keep the confirmed probe and password so retrying is one click.
@@ -1321,9 +1170,7 @@ function App() {
                               await api(
                                 "enrollment-tokens",
                                 "POST",
-                                host
-                                  ? { site_id: pool!.site_id, host_id: host.id }
-                                  : { site_id: site!.id },
+                                { site_id: enrollSite!.id, ...(target ? { host_id: target.id } : {}) },
                               ),
                             ),
                           )
@@ -1347,7 +1194,7 @@ function App() {
                           this token is shown only here and is removed when
                           you close this panel.
                         </p>
-                        <EnrollmentInstructions host={host} />
+                        <EnrollmentInstructions host={target} />
                         <p className="help">
                           The host will appear here after enrollment. Keep
                           this page open to see its first report.
@@ -1357,696 +1204,10 @@ function App() {
                   </details>
                 </>
               )}
-            </section>
-          )}
-          {loading ? null : createOperation ? (
-            <section className="panel empty" aria-label="Creation task">
-              <h2>Creation {createOperation.status}</h2>
-              <p className={createOperation.error ? "task-error" : undefined}>
-                {createOperation.error ? sentence(createOperation.error) : "This VM appears here after its host reports it."}
-              </p>
-              <a href="#/tasks">Task history</a>
-            </section>
-          ) : invalid ? (
-            <section className="panel empty">
-              <h2>{error ? "Inventory unavailable" : "Object not found"}</h2>
-              <p>
-                {error
-                  ? "Retry the controller connection to load this object."
-                  : "This link does not match a site, pool, host or VM in your workspace."}
-              </p>
-              <a href="#/">Return to overview</a>
-            </section>
-          ) : kind === "tasks" ? (
-            <>
-              <Tasks operations={data.operations} hosts={data.hosts} upload={upload} onCancelUpload={cancelUpload} />
-              <Activity entries={data.audit} data={data} />
-            </>
-          ) : kind === "updates" ? (
-            <UpdatesPanel
-              update={update}
-              note={updateNote}
-              phase={updatePhase}
-              busy={busy}
-              onCheck={() =>
-                void action(async () => {
-                  setUpdateNote("");
-                  setUpdatePhase("checking");
-                  try {
-                    setUpdate(await api<UpdateStatus>("updates"));
-                    setUpdatePhase("idle");
-                  } catch (e) {
-                    setUpdatePhase("error");
-                    throw e;
-                  }
-                })
-              }
-              onApply={() =>
-                void (async () => {
-                  setBusy(true);
-                  setActionError("");
-                  setUpdateNote("");
-                  setUpdatePhase("applying");
-                  try {
-                    await api("updates/apply", "POST", {});
-                    const st = await followUpdate(api, setUpdate);
-                    if (st?.phase === "done") {
-                      setUpdateNote(st.message || "Update complete");
-                      setUpdatePhase("done");
-                    } else if (st) {
-                      setUpdatePhase("error");
-                      setActionError(st.error || st.message || "Update failed");
-                    } else {
-                      setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
-                      setUpdatePhase("idle");
-                    }
-                  } catch (e) {
-                    setUpdatePhase("error");
-                    setActionError((e as Error).message);
-                  } finally {
-                    setBusy(false);
-                  }
-                })()
-              }
-            />
-          ) : (
-            <>
-              {pool && !host && !vm && <ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={tab} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={setTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} createVM={createVM} onCreateVMShown={() => setCreateVM(false)} onNotice={setNotice} />}
-              {pool && !host && !vm && tab === "Hosts" && <PoolMembers key={pool.id} poolID={pool.id} api={api} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} />}
-              {vm && tab === "General" && <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={Boolean(error)} onNotice={setNotice} installMedia={{ busy: mediaBusy, note: vmMediaNote(vm), onEject: () => void changeVMMedia(vm.id, "eject", "install") }} />}
-              {vm && tab === "Console" && <>{startError && <p className="alert" role="alert">{startError}</p>}<div className="vm-console-panel" key={vm.id}><Console key={vm.id} name={vm.name} guest={vm.guest} popout={`#/console/${vm.id}`} disabled={consoleBlocker(vm, data.hosts.find(h => h.id === vm.host_id))} open={() => openConsole(vm.id)} media={vmMediaControls(vm)} power={vmPowerControls(vm)} /><RealtimeStats kind="vm" id={vm.id} api={api} /></div></>}
-              {vm && tab === "Stats" && <Stats key={vm.id} kind="vm" id={vm.id} api={api} />}
-              {host && !vm && tab === "Stats" && <Stats key={host.id} kind="host" id={host.id} api={api} capabilities={host.capabilities} poolID={host.pool_id} />}
-              {host && !vm && tab === "Console" && <Console key={host.id} name={host.hostname || host.id} popout={`#/host-console/${host.id}`} disabled={hostConsoleBlocker(host)} open={() => openHostConsole(host.id)} />}
-              {host && !vm && tab === "Networking" && <HostNetwork key={host.id} hostID={host.id} api={api} unavailable={Boolean(error)} />}
-              <div hidden={Boolean(vm) || tab === "Activity" || tab === "Console" || tab === "Stats" || Boolean(pool && !host && tab !== "General")}>
-              {!host && (
-                <div className="metrics">
-                  <Metric label="Hosts" value={scopedHosts.length} />
-                  <Metric
-                    label="Fresh connections"
-                    value={
-                      scopedHosts.filter((h) => h.connection === "fresh").length
-                    }
-                  />
-                  <Metric
-                    label="Need attention"
-                    value={
-                      scopedHosts.filter(
-                        (h) =>
-                          h.connection !== "fresh" ||
-                          observedHealth(h) !== "healthy",
-                      ).length
-                    }
-                  />
-                  {pool && (
-                    <div className="metric">
-                      <span className="tiny-label">Pool master</span>
-                      <strong>{data.hosts.find((h) => h.id === pool.master_host_id && !h.revoked)?.hostname || "Unknown"}</strong>
-                    </div>
-                  )}
-                  <div className="metric context">
-                    <span className="tiny-label">POOL MEMBERSHIP</span>
-                    <p>
-                      Local disks stay local.
-                      <br />
-                      Host access is always explicit.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {!host && !pool && (
-                <section className="panel">
-                  <div className="section-heading">
-                    <h2>{site ? "Pools" : "Sites"}</h2>
-                    <span className="muted">
-                      {site
-                        ? data.pools.filter((p) => p.site_id === site.id).length
-                        : data.sites.length}{" "}
-                      total
-                    </span>
-                  </div>
-                  {(site
-                    ? data.pools.filter((p) => p.site_id === site.id)
-                    : data.sites
-                  ).length ? (
-                    <div className="scope-list">
-                      {(site
-                        ? data.pools.filter((p) => p.site_id === site.id)
-                        : data.sites
-                      ).map((item) => (
-                        <a
-                          key={item.id}
-                          href={`#/${site ? "pools" : "sites"}/${item.id}`}
-                        >
-                          <span>{item.name}</span>
-                          <span aria-hidden="true">→</span>
-                        </a>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="empty">
-                      <h3>
-                        {site ? "Add your first host" : "Start with a site"}
-                      </h3>
-                      <p>
-                        {site
-                          ? "Each Nex Core host you add becomes the master of its own pool. Pools are created automatically; you do not create them by hand."
-                          : "Organize your hosts by location. Create a site, then connect your first host."}
-                      </p>
-                      <button
-                        disabled={busy}
-                        onClick={() => open(site ? "enroll" : "site")}
-                      >
-                        {site ? "Add host" : "Create site"}
-                      </button>
-                    </div>
-                  )}
-                </section>
-              )}
-              {pool && !host && tab === "General" && (
-                <section className="panel pool-health-summary">
-                  <div className="section-heading">
-                    <h2>Pool health</h2>
-                    <span className="muted">Current host observations</span>
-                  </div>
-                  {scopedHosts.length ? (
-                    <div className="pool-health-list">
-                      {scopedHosts.map((member) => <div key={member.id} className="pool-health-member">
-                        <a className="strong" href={`#/hosts/${member.id}`}>{member.hostname}</a>
-                        <HostHealthSummary host={member} />
-                      </div>)}
-                    </div>
-                  ) : <p className="empty">No hosts have been observed in this pool.</p>}
-                </section>
-              )}
-              {host ? (
-                <>
-                  {tab !== "Console" && host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} />}
-                  {tab !== "Console" && <HostDetails host={host} master={pool?.master_host_id === host.id} tab={tab} coreAvailable={update?.core_available_version} />}
-                  {tab === "Storage" && <HostISOs host={host} media={data.media} storage={data.storage} unavailable={Boolean(error)} />}
-                </>
-              ) : (
-                <section className="panel">
-                  <div className="section-heading">
-                    <h2>Hosts</h2>
-                    <label className="search">
-                      <span className="sr-only">Search hosts</span>
-                      <input
-                        type="search"
-                        placeholder="Search hosts…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                    </label>
-                  </div>
-                  {hosts.length ? (
-                    <div className="table-scroll">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Host</th>
-                            <th>Connection</th>
-                            <th>Last observed health</th>
-                            <th>CPU / memory</th>
-                            <th>Last report</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {hosts.map((h) => (
-                            <tr key={h.id}>
-                              <td>
-                                <a className="strong" href={`#/hosts/${h.id}`}>
-                                  {h.hostname}
-                                </a>
-                                <small>
-                                  {
-                                    data.pools.find((p) => p.id === h.pool_id)
-                                      ?.name
-                                  }
-                                </small>
-                              </td>
-                              <td>
-                                <Badge value={h.connection} />
-                              </td>
-                              <td>
-                                <HostHealthSummary host={h} />
-                              </td>
-                              <td>
-                                {h.inventory
-                                  ? `${h.inventory.cpu_count} CPUs / ${size(h.inventory.memory_bytes)}`
-                                  : "Not observed"}
-                              </td>
-                              <td>{date(h.last_seen)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="empty">
-                      <h3>
-                        {search ? "No matching hosts" : "No hosts enrolled"}
-                      </h3>
-                      <p>
-                        {search
-                          ? "Try another hostname."
-                          : "Select a site and use Add host to connect a Nex Core host."}
-                      </p>
-                    </div>
-                  )}
-                  <p className="panel-note">
-                    A stale connection means reachability is unknown. It does
-                    not mean virtual machines have stopped.
-                  </p>
-                </section>
-              )}
-              </div>
-              {tab === "Activity" && <>
-              <Activity
-                entries={data.audit
-                  .filter(
-                    (a) => vm ? a.resource_id === vm.id :
-                      !kind ||
-                      a.resource_id === site?.id ||
-                      a.resource_id === pool?.id ||
-                      scopedHosts.some(
-                        (h) =>
-                          a.resource_id === h.id ||
-                          a.resource_id.startsWith(h.id + "/"),
-                      ),
-                  )
-                  }
-                data={data}
-              />
-              </>}
-            </>
-          )}
-          </div>
-          {!loading && kind !== "tasks" && kind !== "updates" && <details className="activity-dock" open>
-            <summary>Recent tasks <span>{data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).length}</span></summary>
-            <Tasks operations={data.operations.filter((o) => scopedHosts.some((h) => h.id === o.host_id)).slice(0, 5)} hosts={data.hosts} recent upload={upload} onCancelUpload={cancelUpload} />
-          </details>}
-        </main>
-      </div>
-      {vmMenu && (() => {
-        const target = vmMenu.vm;
-        const targetHost = data.hosts.find(h => h.id === target.host_id);
-        const powerGate = powerBlocker(target, targetHost);
-        const deleteGate = deleteBlocker(target, targetHost);
-        const consoleGate = consoleBlocker(target, targetHost);
-        const closeMenu = () => setVmMenu(null);
-        return <ul className="context-menu" role="menu" style={{ left: Math.min(vmMenu.x, window.innerWidth - 200), top: Math.min(vmMenu.y, window.innerHeight - 280) }}
-          onContextMenu={e => e.preventDefault()}>
-          {powerActions.map(item => {
-            const disabled = busy || Boolean(error) || Boolean(powerGate) || !item.when(target.state);
-            return <li key={item.action} role="none"><button type="button" role="menuitem" className={item.action.startsWith("force-") ? "danger" : undefined}
-              disabled={disabled} title={powerGate || (!item.when(target.state) ? `Unavailable while ${target.state || "unknown"}` : undefined)}
-              onClick={() => {
-                closeMenu();
-                location.hash = `#/vms/${target.id}`;
-                if (powerConfirmText(item, target)) setMenuPower({ vm: target, item });
-                else void (async () => {
-                  try {
-                    const res = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(target.id)}/power`, "POST", { request_id: crypto.randomUUID(), action: item.action });
-                    setNotice(`${item.label} queued for ${target.name}. Follow its progress in Recent tasks.`, res?.operation?.id);
-                    await reload();
-                  } catch (e) { setNotice((e as Error).message); }
-                })();
-              }}><Icon kind={item.icon} /><span>{item.label}</span></button></li>;
-          })}
-          <li role="separator"><hr /></li>
-          <li role="none"><button type="button" role="menuitem" disabled={Boolean(consoleGate)} title={consoleGate || undefined}
-            onClick={() => { closeMenu(); location.hash = `#/console/${target.id}`; }}><Icon kind="console" /><span>Open console</span></button></li>
-          <li role="none"><button type="button" role="menuitem" className="danger" disabled={busy || Boolean(error) || Boolean(deleteGate)} title={deleteGate || undefined}
-            onClick={() => { closeMenu(); setMenuDeleteVM(target); setMenuDeleteSignal(s => s + 1); }}><Icon kind="delete" /><span>Delete…</span></button></li>
-        </ul>;
-      })()}
-      {menuPowerDialog}
-      {menuDeleteVM && <VMDelete vm={menuDeleteVM} host={data.hosts.find(h => h.id === menuDeleteVM.host_id)} api={api} reload={reload}
-        busy={busy} unavailable={Boolean(error)} onNotice={setNotice} openSignal={menuDeleteSignal} showButton={false}
-        onOpenChange={open => { if (!open) setMenuDeleteVM(null); }} />}
-      <footer className="statusbar"><span>{loading ? "Loading inventory…" : error ? "Controller request failed · inventory may be out of date" : "Observed state · refreshes every 10 seconds"}</span><span>{data.hosts.length} hosts · {data.hosts.filter((h) => h.connection === "fresh").length} fresh connections</span><a href="/source">Nex source code</a></footer>
+        </dialog>
+      )}
     </div>
-  );
-}
-
-function UpdatesPanel({
-  update,
-  note,
-  phase,
-  busy,
-  onCheck,
-  onApply,
-}: {
-  update: UpdateStatus | null;
-  note: string;
-  phase: "idle" | "checking" | "applying" | "done" | "error";
-  busy: boolean;
-  onCheck: () => void;
-  onApply: () => void;
-}) {
-  const working = phase === "checking" || phase === "applying";
-  const pct = typeof update?.progress === "number" ? update.progress : undefined;
-  // Updates run through apt in fixed steps, so prefer the step the server reports
-  // over a percentage; "downloading" now covers refreshing the package index too.
-  const label =
-    phase === "checking" ? "Checking…"
-      : update?.message && update.phase && update.phase !== "done" ? `${update.message}…`
-        : update?.phase === "downloading" ? "Downloading…"
-          : update?.phase === "installing" ? "Installing…"
-            : update?.phase === "restarting" ? "Restarting…"
-              : phase === "applying" ? "Updating…"
-                : note || "Done";
-  return (
-    <section className="panel">
-      <dl className="details">
-        <div>
-          <dt>Installed</dt>
-          <dd>{update?.installed_version || "—"}</dd>
-        </div>
-        <div>
-          <dt>Available</dt>
-          <dd>{!update ? "—" : update.update_available ? (update.available_version || "—") : update.error ? "—" : "Up to date"}</dd>
-        </div>
-      </dl>
-      {(working || phase === "done") && <p className="small" role="status">{label}</p>}
-      {working && (
-        <progress
-          aria-label={phase === "checking" ? "Checking for updates" : "Applying update"}
-          max={100}
-          value={phase === "applying" && pct !== undefined ? pct : undefined}
-        />
-      )}
-      {update?.error && <p className="warning" role="status">{update.error}</p>}
-      {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
-      <div className="actions">
-        <button disabled={busy} onClick={onCheck}>Check</button>
-        <button className="primary" disabled={busy || !update?.update_available} onClick={onApply}>Update</button>
-      </div>
-    </section>
-  );
-}
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="metric">
-      <span className="tiny-label">{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-function Details({ children }: { children: ReactNode }) {
-  return <dl className="details">{children}</dl>;
-}
-// consoleBlocker explains why a console cannot be opened now; an empty result means it can.
-function consoleBlocker(vm: VM, host?: Host): string {
-  if (!host || host.revoked || host.connection !== "fresh") return "The VM's host is not freshly connected. Its console cannot be opened until the host reports again.";
-  if (!host.capabilities?.includes("console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
-  if (vm.freshness !== "fresh") return "Current VM state is unknown; wait for a fresh host report before opening the console.";
-  if (vm.state !== "running") return `The VM is observed ${stateText(vm.state)}. Use Start in the toolbar, wait for the next host report, then connect.`;
-  return "";
-}
-function hostConsoleBlocker(host: Host): string {
-  if (host.revoked || host.connection !== "fresh") return "The host is not freshly connected. Its console cannot be opened until it reports again.";
-  // Must match the gate openHostConsole applies (protocol.HostConsoleCapability); the VM
-  // console above uses console-v1, which an old Core advertises without a host console.
-  if (!host.capabilities?.includes("host-console-v1")) return "The host agent does not support browser consoles. Upgrade Nex Core on this host.";
-  return "";
-}
-function HostDetails({ host, master, tab, coreAvailable }: { host: Host; master: boolean; tab: string; coreAvailable?: string }) {
-  const inv = host.inventory;
-  const light = inv && versionLight(inv.os_version, coreAvailable);
-  return (
-    <div className="host-details" data-tab={tab}>
-      <section className="panel host-overview" hidden={tab === "Console"}>
-        <div className="section-heading">
-          <h2>Host overview</h2>
-          <span><span className="badge">{master ? "Pool master" : "Member"}</span> <Badge value={host.connection} /></span>
-        </div>
-        {host.connection !== "fresh" && (
-          <p className="warning">
-            {host.revoked
-              ? "Access revoked. Re-enroll this host to resume reporting."
-              : "The host is not reporting fresh data. Last known observations are shown below; workload execution is unknown."}
-          </p>
-        )}
-        <div hidden={tab !== "General"}>
-        <Details>
-          <dt>Host identity</dt>
-          <dd className="mono">{host.id}</dd>
-          <dt>Last connection</dt>
-          <dd>{date(host.last_seen)}</dd>
-          <dt>Inventory observed</dt>
-          <dd>{date(inv?.observed_at)}</dd>
-          {inv && (
-            <>
-              <dt>Processor</dt>
-              <dd>
-                {inv.cpu_model} · {inv.cpu_count} CPUs
-              </dd>
-              <dt>Memory</dt>
-              <dd>{size(inv.memory_bytes)}</dd>
-              <dt>Virtualization features</dt>
-              <dd>{inv.virtualization?.join(", ") || "None reported"}</dd>
-              <dt>Version</dt>
-              <dd>{light ? <><span className={`version-light ${light.level}`} aria-hidden="true" /><span title={light.title}>{inv.os_version} · {light.label}</span></> : inv.os_version}</dd>
-            </>
-          )}
-        </Details>
-        {!inv && (
-          <p className="empty">Waiting for the first inventory report.</p>
-        )}
-        </div>
-      </section>
-      {inv && (
-        <>
-          <section className="panel host-health" hidden={tab !== "General"}>
-            <div className="section-heading">
-              <h2>Health checks</h2>
-              <span className="muted">Last observed results</span>
-            </div>
-            {inv.checks?.length ? (
-              <div className="check-list">
-                {inv.checks.map((c) => (
-                  <div className="check" key={c.name}>
-                    <div>
-                      <strong>{c.name}</strong>
-                      <p>{c.error || "No error reported"}</p>
-                      <small>
-                        Observed {date(c.observed_at)} · Last success{" "}
-                        {date(c.last_success)}
-                      </small>
-                    </div>
-                    <Badge value={checkHealth(c)} />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="empty">No health checks reported.</p>
-            )}
-          </section>
-          <div className="two-column">
-            <section className="panel host-network" hidden={tab !== "Networking"}>
-              <div className="section-heading">
-                <h2>Network interfaces</h2>
-              </div>
-              {inv.nics?.length ? (() => {
-                const nics = inv.nics;
-                const uplinks = nics.filter((n) => !n.kind || n.kind === "physical" || n.kind === "bond");
-                const carried = (name: string) => [
-                  ...nics.filter((b) => b.kind === "bridge" && nics.some((p) => p.name === name && p.master === b.name)).map((b) => `untagged → ${b.name}${b.addresses?.length ? ` (${b.addresses.join(", ")})` : ""}`),
-                  ...nics.filter((v) => v.kind === "vlan" && v.parent === name).map((v) => `VLAN ${v.name.slice(name.length + 1)}${v.master ? ` → ${v.master}` : ""}`),
-                ];
-                return <>
-                  {uplinks.map((n) => (
-                    <div className="resource" key={n.name}>
-                      <strong>{n.name}</strong>
-                      <Badge value={n.state} />
-                      <p>{carried(n.name).join(" · ") || (n.addresses?.length ? n.addresses.join(", ") : "Not used by any network")}</p>
-                      <small className="mono">{n.mac}</small>
-                    </div>
-                  ))}
-                  <details>
-                    <summary>All interfaces ({nics.length}) · bridges, VLAN devices and VM ports</summary>
-                    {nics.map((n) => (
-                      <div className="resource" key={n.name}>
-                        <strong>{n.name}</strong>
-                        <Badge value={n.state} />
-                        <p>{n.kind ? `${n.kind} · ` : ""}{n.master ? `port of ${n.master} · ` : ""}{n.parent ? `on ${n.parent} · ` : ""}{n.addresses?.join(", ") || "No addresses reported"}</p>
-                        <small className="mono">{n.mac}</small>
-                      </div>
-                    ))}
-                  </details>
-                </>;
-              })() : (
-                <p className="empty">No interfaces reported.</p>
-              )}
-            </section>
-            <section className="panel host-disks" hidden={tab !== "Storage"}>
-              <div className="section-heading">
-                <h2>Disks</h2>
-              </div>
-              {inv.disks?.length ? (
-                inv.disks.map((d) => (
-                  <div className="resource" key={d.name}>
-                    <strong>{d.name}</strong>
-                    <span>{size(d.size_bytes)}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="empty">No disks reported.</p>
-              )}
-              <p className="panel-note">
-                Observed device capacity. Pool membership does not make disks
-                shared.
-              </p>
-            </section>
-          </div>
-        </>
-      )}
-      {!inv && tab !== "General" && <p className="empty">Waiting for the first inventory report.</p>}
-    </div>
-  );
-}
-function Tasks({
-  operations,
-  hosts,
-  recent = false,
-  upload,
-  onCancelUpload,
-}: {
-  operations: Operation[];
-  hosts: Host[];
-  recent?: boolean;
-  upload?: Upload | null;
-  onCancelUpload?: () => void;
-}) {
-  return (
-    <section className="panel">
-      <div className="section-heading">
-        <h2>{recent ? "Recent tasks" : "Tasks"}</h2>
-        {recent && <a href="#/tasks">View all tasks →</a>}
-      </div>
-      {operations.length || upload ? (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Action / target</th>
-                <th>Status</th>
-                <th>Actor</th>
-                <th>Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {upload && onCancelUpload && <UploadRow upload={upload} onCancel={onCancelUpload} />}
-              {operations.map((o) => {
-                const timestamp = taskTimestamp(o);
-                return <tr key={o.id}>
-                  <td>
-                    <strong>
-                      {o.kind === "refresh-inventory"
-                        ? "Refresh inventory"
-                        : o.kind}
-                    </strong>
-                    <small>
-                      <a href={`#/hosts/${o.host_id}`}>
-                        {hosts.find((h) => h.id === o.host_id)?.hostname ||
-                          o.host_id}
-                      </a>
-                    </small>
-                    {o.error && <p className="task-error">{o.error}</p>}
-                    <small className="mono">{o.id}</small>
-                  </td>
-                  <td>
-                    <Badge value={o.status} />
-                    {o.status === "dispatched" && (
-                      <small>Awaiting agent result</small>
-                    )}
-                  </td>
-                  <td>{o.actor}</td>
-                  <td>{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : timestamp.value}</td>
-                </tr>
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="empty">
-          No tasks yet. Host inventory refresh requests will appear here.
-        </p>
-      )}
-      <p className="panel-note">
-        Pending results survive reconnects. A delayed response is not proof that
-        an operation failed.
-      </p>
-    </section>
-  );
-}
-function Activity({
-  entries,
-  data,
-  recent = false,
-}: {
-  entries: Audit[];
-  data: Data;
-  recent?: boolean;
-}) {
-  return (
-    <section className="panel">
-      <div className="section-heading">
-        <h2>{recent ? "Recent activity" : "Activity and health history"}</h2>
-        {recent && <a href="#/tasks">View all activity →</a>}
-      </div>
-      {entries.length ? (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Action / target</th>
-                <th>Actor</th>
-                <th>Recorded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => {
-                const [hostID, check] = entry.resource_id.split("/");
-                const target =
-                  data.hosts.find((h) => h.id === hostID)?.hostname ||
-                  data.vms.find((v) => v.id === entry.resource_id)?.name ||
-                  data.pools.find((p) => p.id === entry.resource_id)?.name ||
-                  data.sites.find((s) => s.id === entry.resource_id)?.name ||
-                  entry.resource_id;
-                return (
-                  <tr key={entry.id}>
-                    <td>
-                      <strong>
-                        {entry.action
-                          .replaceAll(".", " · ")
-                          .replaceAll("-", " ")}
-                      </strong>
-                      <small>
-                        {target}
-                        {check ? ` / ${check}` : ""}
-                      </small>
-                      {entry.detail && <p className="help">{entry.detail}</p>}
-                    </td>
-                    <td>{entry.actor}</td>
-                    <td>{date(entry.created_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="empty">No activity recorded in this scope.</p>
-      )}
-      <p className="panel-note">
-        Recorded changes and debounced health transitions. Current check results
-        are shown on each host.
-      </p>
-    </section>
+    </LoadError.Provider>
   );
 }
 function EnrollmentInstructions({ host }: { host?: Host }) {

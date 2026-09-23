@@ -23,19 +23,25 @@ def login(page, url, password):
     page.get_by_label('Username', exact=True).fill('root')
     page.get_by_label('Password', exact=True).fill(password)
     page.keyboard.press('Enter')
-    expect(page.get_by_role('button', name='Sign out', exact=True)).to_be_visible()
+    expect(page.get_by_role('navigation', name='Sections', exact=True)).to_be_visible()
     page.wait_for_load_state('networkidle')
 
 
 def host_storage(page, url, host_id):
     from playwright.sync_api import expect
     page.goto(url + '/#/hosts/' + host_id)
-    storage = page.get_by_role('navigation', name='Resource views').get_by_role('button', name='Storage', exact=True)
+    storage = page.get_by_role('tab', name='Storage', exact=True)
     storage.focus()
     page.keyboard.press('Enter')
     panel = page.get_by_role('region', name='Host ISO images')
     expect(panel).to_be_visible()
     return panel
+
+
+def refresh(page):
+    # The console re-reads inventory every ten seconds; wait for the next ISO read.
+    with page.expect_response(lambda r: r.url.endswith('/api/v1/media'), timeout=15000):
+        pass
 
 
 def main():
@@ -107,7 +113,7 @@ def main():
                         route.fulfill(response=response, json=values)
                     page.route('**/api/v1/hosts', hosts_route)
                     page.route('**/api/v1/media', lambda route: route.fulfill(json=rows))
-                    page.get_by_role('button', name='Refresh view', exact=True).click()
+                    refresh(page)
                     expect(panel.get_by_text('Transfer succeeded · not rescanned', exact=True)).to_be_visible()
                     for name, availability in [('queued', 'Pending transfer'), ('dispatched', 'Dispatched · awaiting result'), ('failed', 'Transfer failed'), ('needs_attention', 'Needs attention')]:
                         expect(panel.get_by_role('row').filter(has_text=name + '.iso')).to_contain_text(availability)
@@ -118,11 +124,11 @@ def main():
                     # Matching IDs from another scope must not supply a storage name or access proof.
                     for scope in ('host_id', 'pool_id'):
                         page.route('**/api/v1/storage', lambda route: route.fulfill(json=[{**storage, 'status': 'succeeded', scope: 'foreign-scope', 'name': 'Foreign storage must stay hidden'}]))
-                        page.get_by_role('button', name='Refresh view', exact=True).click()
+                        refresh(page)
                         expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text('Availability unknown · storage access unverified')
                         expect(panel.get_by_text('Foreign storage must stay hidden', exact=True)).to_have_count(0)
                         page.unroute('**/api/v1/storage')
-                    page.get_by_role('button', name='Refresh view', exact=True).click()
+                    refresh(page)
                     expect(panel.get_by_text('Transfer succeeded · not rescanned', exact=True)).to_be_visible()
                     checks.append('A matching storage ID from another host or pool supplies neither a name nor access verification')
                     shot('statuses-desktop')
@@ -136,26 +142,26 @@ def main():
                     shot('task-keyboard-360')
                     page.keyboard.press('Enter')
                     expect(page).to_have_url(url + '/#/tasks')
-                    expect(page.get_by_role('heading', name='Task history', exact=True)).to_be_visible()
+                    expect(page.get_by_role('heading', name='Tasks', exact=True).first).to_be_attached()
+                    expect(page.get_by_role('row').filter(has_text=media['operation_id'])).to_be_visible()
                     panel = host_storage(page, url, host['id'])
                     checks.append('Keyboard opens host Storage and the real transfer task history; 360px document has no horizontal overflow')
                     for name, override, label in [('stale', {'connection': 'stale'}, 'Availability unknown · host is not freshly connected'),
                         ('revoked', {'revoked': True}, 'Unavailable · host access revoked'),
                         ('old-agent', {'capabilities': []}, 'Unavailable · host agent upgrade required')]:
                         host_override.clear(); host_override.update(override)
-                        page.get_by_role('button', name='Refresh view', exact=True).click()
+                        refresh(page)
                         expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text(label)
                         shot(name)
                     host_override.clear(); host_override['inventory'] = None
-                    page.get_by_role('button', name='Refresh view', exact=True).click()
+                    refresh(page)
                     expect(panel.get_by_text('available.iso', exact=True)).to_be_visible()
                     shot('no-inventory')
                     host_override.clear()
-                    page.get_by_role('button', name='Refresh view', exact=True).click()
+                    refresh(page)
                     expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text('Transfer succeeded · not rescanned')
                     page.route('**/api/v1/storage', lambda route: route.abort('failed'))
-                    page.get_by_role('button', name='Refresh view', exact=True).click()
-                    expect(page.get_by_role('alert')).to_be_visible()
+                    expect(page.get_by_role('alert')).to_be_visible(timeout=15000)
                     expect(panel.get_by_role('row').filter(has_text='available.iso')).to_contain_text('Availability unknown · Controller data may be stale')
                     shot('controller-unavailable')
                     page.unroute('**/api/v1/storage')
@@ -165,17 +171,18 @@ def main():
                     checks.append('Injected stale/revoked/old-agent/no-inventory states preserve honest ISO records; failed Controller refresh retains records as unknown and Retry recovers')
                     assert not failures, failures
                 else:
-                    picker = page.get_by_role('button', name='Site:', exact=False)
-                    selected_site = picker.inner_text().replace('▾', '').replace('Site:', '').strip()
-                    picker.click()
-                    search = page.get_by_role('combobox', name='Search sites', exact=True)
-                    search.fill(selected_site)
-                    expect(page.get_by_role('option', name=selected_site, exact=True)).to_be_visible()
-                    shot('site-picker')
-                    search.press('Enter')
-                    expect(search).to_have_count(0)
+                    scope = page.locator('summary[aria-label^="Scope:"]')
+                    selected_site = scope.get_attribute('aria-label').removeprefix('Scope: ').split(',')[0]
+                    scope.focus()
+                    page.keyboard.press('Enter')
+                    choice = page.get_by_role('button', name=selected_site + ' · all pools', exact=True)
+                    expect(choice).to_be_visible()
+                    shot('scope-menu')
+                    choice.focus()
+                    page.keyboard.press('Enter')
+                    expect(choice).to_be_hidden()
                     panel = host_storage(page, url, host['id'])
-                    checks.append('Actual site picker opens, filters the current site and selects it with Enter without changing records')
+                    checks.append('Actual scope menu opens and selects the current site with Enter without changing records')
                     media = page.request.get(url + '/api/v1/media').json()
                     selected = [m for m in media if m['host_id'] == host['id'] and m['pool_id'] == host['pool_id']]
                     assert selected, 'native host must have existing dispatched media'

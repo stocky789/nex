@@ -4,10 +4,13 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./stats.css";
 import { SystemDiskMirror, SYSTEM_DISK_CAPABILITY, type MDArray } from "./md";
+import { Sparkline } from "./ui";
 
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 export type StatsSeries = { key: string; group: string; label: string; unit: string; values: (number | null)[] };
 export type StatsHistory = { object: string; id: string; host_id?: string; range: string; step_seconds: number; start: string; series: StatsSeries[] };
+// A reply without series (an older or failing Core) reads as no data rather than breaking every chart.
+export const statsHistory = (reply: StatsHistory): StatsHistory => ({ ...reply, series: reply?.series || [] });
 
 export const ranges = [["10m", "Last 10 minutes"], ["24h", "Last 24 hours"], ["30d", "Last 30 days"], ["1y", "Last year"]] as const;
 // Live refresh only where new points arrive often enough to matter; longer ranges refresh on demand.
@@ -110,6 +113,28 @@ export function timestamps(history: StatsHistory): number[] {
   const length = Math.max(0, ...history.series.map(s => s.values.length));
   return Array.from({ length }, (_, i) => start + i * history.step_seconds);
 }
+
+// sparkRows condenses a VM's history into one line per resource. CPU is the total; memory is the
+// most telling series the host reports (guest used, then host resident); disk and network add
+// their byte rates. Only the shape matters beside the current value, so each line is scaled to
+// its busiest point in view, and a gap is left out rather than drawn as zero.
+// Distinct from host-panel hostSparkRows (host series keys and null gaps).
+export function vmSparkRows(history: StatsHistory) {
+  const rows = [["CPU", "cpu", 1], ["Memory", "memory", 2], ["Disk", "disk", 3], ["Network", "network", 4]] as const;
+  return rows.map(([label, group, series]) => {
+    const all = history.series.filter(s => s.group === group && s.values.some(v => v != null));
+    const one = all.find(isTotal) || all.find(s => s.key.endsWith(".guest_used")) || all.find(s => s.key.endsWith(".host")) || all[0];
+    const parts = group === "disk" || group === "network" ? all.filter(s => s.unit === "bytes_per_second") : one ? [one] : [];
+    const unit = parts[0]?.unit ?? "";
+    const length = Math.max(0, ...parts.map(s => s.values.length));
+    const values = Array.from({ length }, (_, i) => parts.some(s => s.values[i] != null) ? parts.reduce((sum, s) => sum + (s.values[i] ?? 0), 0) : null);
+    const known = values.filter((v): v is number => v != null);
+    const top = unit === "percent" ? 100 : Math.max(0, ...known) || 1;
+    return { label, series, detail: parts.map(s => s.label).join(" + "), values: known.map(v => (v / top) * 100), text: formatValue(unit, lastValue(values)) };
+  });
+}
+/** @deprecated use vmSparkRows */
+export const sparkRows = vmSparkRows;
 
 // Realtime turns itself off after this long so a forgotten tab does not keep a host sampling every second.
 export const REALTIME_LIMIT_MS = 10 * 60 * 1000;
@@ -278,7 +303,7 @@ function Section({ title, note, count, children }: { title: string; note: string
   </details>;
 }
 
-function HardwareSections({ hw }: { hw: HostHardware }) {
+export function HardwareSections({ hw }: { hw: HostHardware }) {
   const sys = hw.system ?? {}, cpu = hw.cpu ?? {};
   const modules = hw.memory?.modules ?? [], disks = hw.disks?.devices ?? [], pci = hw.pci?.devices ?? [], sensors = hw.sensors?.temperatures ?? [];
   return <>
@@ -334,7 +359,7 @@ function HardwareSections({ hw }: { hw: HostHardware }) {
   </>;
 }
 
-function HardwarePanel({ hardware, loading, failure, onRetry, id, poolID, api, replaceSupported }: { hardware: HostHardware | null; loading: boolean; failure: StatsFailure | null; onRetry: () => void; id: string; poolID: string; api: API; replaceSupported: boolean }) {
+export function HardwarePanel({ hardware, loading, failure, onRetry, id, poolID, api, replaceSupported }: { hardware: HostHardware | null; loading: boolean; failure: StatsFailure | null; onRetry: () => void; id: string; poolID: string; api: API; replaceSupported: boolean }) {
   // Hardware is read once when the tab opens, so Retry is the only way to reread it — including
   // after a report loaded and the host has since changed or gone stale.
   const mdView = hardware ? mdArraysView(hardware.md_arrays) : null;
@@ -401,7 +426,7 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
       if (pending || document.visibilityState !== "visible") return;
       pending = true;
       try {
-        const next = await api<StatsHistory>(`${kind}s/${encodeURIComponent(id)}/stats?range=live`);
+        const next = statsHistory(await api<StatsHistory>(`${kind}s/${encodeURIComponent(id)}/stats?range=live`));
         if (!stopped) { setHistory(next); setUpdated(Date.now()); }
       } catch (e) {
         if (stopped) return;
@@ -453,10 +478,16 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
   </div>;
 }
 
-export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitMS = REALTIME_LIMIT_MS }: { kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; poolID?: string; realtimeLimitMS?: number }) {
+// A host panel that shows the hardware report on a tab of its own passes hardwarePanel={false};
+// the report is still read, for the temperature gauges' thresholds, unless skipHardwareFetch and
+// a parent-supplied hardware report are passed. initialHistory seeds the 10m range from a list poll.
+export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitMS = REALTIME_LIMIT_MS, hardwarePanel = true, initialHistory, hardware: hardwareProp, skipHardwareFetch = false }: {
+  kind: "vm" | "host"; id: string; api: API; capabilities?: string[]; poolID?: string; realtimeLimitMS?: number; hardwarePanel?: boolean;
+  initialHistory?: StatsHistory | null; hardware?: HostHardware | null; skipHardwareFetch?: boolean;
+}) {
   const [range, setRange] = useState("10m");
   const [stacked, setStacked] = useState(false);
-  const [history, setHistory] = useState<StatsHistory | null>(null);
+  const [history, setHistory] = useState<StatsHistory | null>(() => range === "10m" ? initialHistory ?? null : null);
   const [failure, setFailure] = useState<StatsFailure | null>(null);
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -466,7 +497,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
   // Hardware is static, so it is read once when the tab opens and on an explicit Retry. An older
   // Core that does not report the capability is not asked at all.
   const hardwareSupported = kind === "host" && !!capabilities?.includes(HARDWARE_CAPABILITY);
-  const [hardware, setHardware] = useState<HostHardware | null>(null);
+  const [hardware, setHardware] = useState<HostHardware | null>(hardwareProp ?? null);
   const [hardwareFailure, setHardwareFailure] = useState<StatsFailure | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareAttempt, setHardwareAttempt] = useState(0);
@@ -475,7 +506,11 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
   const rereadHardware = useCallback(() => setHardwareAttempt(a => a + 1), []);
 
   useEffect(() => {
-    if (!hardwareSupported) return;
+    if (hardwareProp) setHardware(hardwareProp);
+  }, [hardwareProp]);
+
+  useEffect(() => {
+    if (!hardwareSupported || skipHardwareFetch) return;
     let stopped = false;
     setHardwareLoading(true);
     api<HostHardware>(`hosts/${encodeURIComponent(id)}/hardware`)
@@ -484,14 +519,14 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
       .catch(e => { if (!stopped) setHardwareFailure(statsFailure(e)); })
       .finally(() => { if (!stopped) setHardwareLoading(false); });
     return () => { stopped = true; };
-  }, [id, hardwareSupported, hardwareAttempt]);
+  }, [id, hardwareSupported, hardwareAttempt, skipHardwareFetch]);
 
   useEffect(() => {
     let stopped = false, inFlight = false;
     // Refresh and Retry keep the charts and zoom; only a different object or range starts over.
     if (shown.current !== `${kind}|${id}|${range}`) {
       shown.current = `${kind}|${id}|${range}`;
-      setHistory(null);
+      setHistory(range === "10m" && initialHistory ? initialHistory : null);
       setFailure(null);
     }
     async function load() {
@@ -499,7 +534,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
       inFlight = true;
       setLoading(true);
       try {
-        const next = await api<StatsHistory>(`${kind}s/${encodeURIComponent(id)}/stats?range=${range}`);
+        const next = statsHistory(await api<StatsHistory>(`${kind}s/${encodeURIComponent(id)}/stats?range=${range}`));
         if (!stopped) { setHistory(next); setFailure(null); }
       } catch (e) {
         if (!stopped) {
@@ -522,7 +557,7 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
 
   const hasData = history?.series.some(s => s.values.some(v => v != null));
   return <>
-    {hardwareSupported && hardwareFailure?.kind !== "capability" &&
+    {hardwarePanel && hardwareSupported && hardwareFailure?.kind !== "capability" &&
       <HardwarePanel hardware={hardware} loading={hardwareLoading} failure={hardwareFailure} onRetry={rereadHardware}
         id={id} poolID={poolID} api={api} replaceSupported={systemDiskReplaceSupported(capabilities)} />}
     <section className="panel stats" aria-label="Usage history">
@@ -543,6 +578,9 @@ export function Stats({ kind, id, api, capabilities, poolID = "", realtimeLimitM
     {failure?.kind === "error" && <div className="alert" role="alert">{history ? `Could not refresh; showing the last loaded history. ${failure.message}` : failure.message} <button type="button" disabled={loading} onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}
     {!history && !failure && <p className="empty" role="status">Connecting to host… the first load can take up to 30 seconds.</p>}
     {history && !hasData && <p className="empty">No history recorded yet. Usage is recorded while {kind === "vm" ? "the VM is running" : "the host agent runs"}.</p>}
+    {kind === "vm" && history && hasData && <div className="stats-sparks">{vmSparkRows(history).map(row => <div key={row.label} className="spark-row" title={row.detail}>
+      <span className="muted">{row.label}</span><Sparkline values={row.values} series={row.series} width={240} height={30} /><b>{row.text}</b>
+    </div>)}</div>}
     {history && hasData && <div className="stats-grid">
       {charts(history, stacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`stats-${kind}-${id}`} hidden={hidden.current} plots={plots.current} />)}
     </div>}
@@ -635,7 +673,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
     shape.current = signature;
     const style = getComputedStyle(el);
     const color = (i: number) => style.getPropertyValue(`--series-${i % PALETTE_SIZE + 1}`).trim() || "#2456d9";
-    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: "#e3e6ea" }, values: (_u, ticks, _axis, _space, incr) => formatTicks(unit, ticks, incr), ...(unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
+    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: style.getPropertyValue("--line-soft").trim() }, values: (_u, ticks, _axis, _space, incr) => formatTicks(unit, ticks, incr), ...(unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
     const opts: uPlot.Options = {
       width: el.clientWidth || 400,
       height,
@@ -645,7 +683,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
       scales: Object.fromEntries(units.map(unit => [unit, { range: (_u: uPlot, min: number, max: number): uPlot.Range.MinMax =>
         chart.stacked && unit === "percent" ? [0, stackedPercentMax(raw.current, hidden)] : [unit === "percent" || chart.stacked ? 0 : Math.min(0, min), max > 0 ? max * 1.1 : 1] }])),
       // Compact realtime charts label seconds on one line; uPlot's default two-line date labels overlap at that width.
-      axes: [{ stroke: style.getPropertyValue("--muted").trim(), grid: { stroke: "#e3e6ea" }, ...(zoom ? {} : { space: 60, values: (_u: uPlot, ticks: number[]) => ticks.map(t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })) }) }, // Compact charts drop the right-hand axis: its width left no room for time labels. A second unit
+      axes: [{ stroke: style.getPropertyValue("--muted").trim(), grid: { stroke: style.getPropertyValue("--line-soft").trim() }, ...(zoom ? {} : { space: 60, values: (_u: uPlot, ticks: number[]) => ticks.map(t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })) }) }, // Compact charts drop the right-hand axis: its width left no room for time labels. A second unit
       // (IOPS beside bytes/s) keeps its own scale and is still read from the tooltip.
       ...units.slice(0, zoom ? 2 : 1).map((unit, i) => axis(unit, i ? 1 : 3))],
       series: [{}, ...chart.series.map((s, i): uPlot.Series => ({

@@ -10,6 +10,8 @@ registration path and can hold ISO images when Core reports that capability. Sup
 **OpenZFS dataset**, **SMB3 share** and **iSCSI LUN**. Nex Core owns the registration,
 connection details and credentials; Controller shows the state Core reports, and a rebuilt
 Controller recovers the same repositories when the host reconnects.
+Navigation on this page follows the development build 0.4.8 console layout; see
+[Navigate the Controller console](navigate-the-controller-console.md).
 
 Local directories, existing OpenZFS datasets and ordinary ext4/XFS iSCSI LUNs are assigned
 to one Core host. A provisioned ZFS repository can cover every configured host, with separate
@@ -62,7 +64,14 @@ for production workloads. Use an explicitly selected disposable lab host.
 
 ## Steps
 
-1. In **Resources**, select the pool for the selected Core host, then open **Storage**.
+1. In the top-bar scope menu, choose the pool for the selected Core host, then select **Storage**
+   in the rail (`#/storage`; the older link `#/settings/storage` opens the same screen). The
+   **Storage** table shows each repository's **Type**, **Scope**, **Capacity**, **Health**,
+   **Host access** (one light per pool host: **Accessible**, **Degraded**, **Pending**,
+   **No access**, **Not eligible**, **Error**, or a hollow **Unknown** when that host is not
+   reporting current access), **Last check**, and the **Manage** buttons. Point at a light for the
+   host's own detail; select it to open that host. **About storage**, below the table, explains
+   the two ways to add storage and when a member may use shared storage.
    The host's own **Local storage** registration at `/var/lib/libvirt/images` may already be
    listed. It is a local directory registration and can hold both ISOs and VM disks. A host
    that first connected to an earlier Core keeps the name it recorded then, usually **ISO**;
@@ -107,9 +116,10 @@ for production workloads. Use an explicitly selected disposable lab host.
 
 5. Select **Register and check access**. Core connects or inspects the source, confirms its
    identity and tests Core and QEMU access. SMB and iSCSI credentials go to Core and are not shown
-   in the repository table or **Task history**. Wait for `healthy`, **Readable**, **Writable** and
-   a recent check time. `Unknown` or `unavailable` is not ready for VM disks.
-6. To use the repository, open **Virtual machines** and select **Create VM**. On **Disks**, select
+   in the repository table or on **Tasks**. Wait for **Health** to read **Healthy**, the host's
+   **Host access** light to read **Accessible** and a recent **Last check**. **Unknown** or
+   **Unavailable** is not ready for VM disks.
+6. To use the repository, select **VMs** in the rail and select **Create VM** below the list. On **Disks**, select
    it from **Storage**. Only healthy, writable, VM-disk-capable storage available on the placement
    host appears under **Select VM-ready storage**. An install ISO can live on a different
    repository from the VM's disks; see [Create a virtual machine](create-virtual-machine.md).
@@ -140,7 +150,7 @@ Use matching development builds on disposable lab hosts. The
 [verification report](../qa/2026-09-19-zfs-provisioning.md) distinguishes tested paths from
 open native and image-delivery checks.
 
-1. Open the pool's **Storage** page and select **Add ZFS storage**. The **Add ZFS storage**
+1. With the pool chosen in the scope menu, select **Storage** in the rail and select **Add ZFS storage**. The **Add ZFS storage**
    dialog opens on **Choose disks** and asks every connected host for its disks.
 2. Enter a **Storage name**, then tick the hosts to include. Ticking several hosts, or the
    only host of a one-host pool, gives each configured host an independent local zpool under
@@ -219,8 +229,8 @@ storage and keeps the zpool and data intact.
 
 #### When a disk in a provisioned ZFS repository fails
 
-A mirror or RAIDZ pool that loses a disk keeps working. The repository's host row on the
-**Storage** page shows **Pool degraded**, the failed device by its by-id name and its state
+A mirror or RAIDZ pool that loses a disk keeps working. The repository's host row in the
+**Storage** section shows **Pool degraded**, the failed device by its by-id name and its state
 (for example `offline`, `faulted` or `unavail`), and the scrub or resilver that is running,
 with the percentage it has finished and how much of the pool it has examined. The same line
 appears on the host's row under **ZFS storage by host**, beside the **Replace disk** button
@@ -230,7 +240,7 @@ Nex Core reports this from the pool itself; it is what `zpool status` on
 that host shows.
 
 A registered OpenZFS dataset (Register storage, not Add ZFS storage) shows the same pool
-line on its repository row under **Host access**, because that path has no per-host ZFS
+line on its repository row under **Health**, because that path has no per-host ZFS
 table.
 
 The repository stays readable and writable while it is degraded. Running VMs keep running,
@@ -255,7 +265,7 @@ Controller is unreachable.
 
 1. Fit the replacement disk in that host. It must be at least as large as the disk it
    replaces. Nothing else has to be prepared: the disk is erased as part of the replacement.
-2. On the pool's **Storage** page, scroll to **ZFS storage by host** for that repository.
+2. With the pool chosen in the scope menu, select **Storage** in the rail and scroll to **ZFS storage by host** for that repository.
    Find the host row that reports **Pool degraded** and select **Replace disk** in its
    **Action** column. The button is only on that panel, and only while the host is freshly
    connected, its pool observation is current, and it reports ZFS replace and storage discovery.
@@ -302,9 +312,10 @@ is not offered.
 
 Register the NFS or SMB repository on the **pool master** only; do not register it again on a
 member. The member's Core receives the master's record (SMB credentials move Core-to-Core) and
-reports its own access. In **Pool storage repositories**, wait for that member to show a current
-generation plus **Readable**, **Writable**, **QEMU writable** and **Locking** before VMs placed on
-it can select the repository. A failed, stale or missing report is not overridable: fix the
+reports its own access. On **Storage**, wait for that member's **Host access** light to read
+**Accessible** — Core has checked the current registration there and found it readable, writable,
+QEMU-writable and locking — before VMs placed on it can select the repository. **Pending** means the
+member has not checked the current registration yet. A failed, stale or missing report is not overridable: fix the
 member's export/share, identity, QEMU permissions, capacity or locking and wait for recheck.
 
 ISO library entries imported onto that shared repository also reach joined members after the
@@ -322,9 +333,9 @@ Never attach the same exclusive iSCSI filesystem to another Core.
 
 ### Set up clustered iSCSI / GFS2 (development only)
 
-Use **Resources → Storage → Clustered iSCSI / GFS2** only for shared block storage; the ordinary
+Use **Storage → Clustered iSCSI / GFS2** (pool chosen in the scope menu) only for shared block storage; the ordinary
 **iSCSI LUN** form stays exclusive to one Core. The panel sits folded at the bottom of the
-**Storage** page until Core reports a configuration or a problem; select its heading to open
+**Storage** section until Core reports a configuration or a problem; select its heading to open
 it. In a selected disposable lab, provide:
 
 - Three to five fresh, enrolled Cores in the pool that advertise clustered-iSCSI support, and a
@@ -401,7 +412,7 @@ Controller replacement, reconnect the same Core; do not register the repository 
 credentials unless Core reports a rotation is needed.
 
 Core periodically reconciles interrupted storage tasks when it can prove continuation is
-safe, and updates **Task history** with the outcome. For ZFS provisioning, an ambiguous
+safe, and updates **Tasks** with the outcome. For ZFS provisioning, an ambiguous
 erase or changed device remains **Needs attention**; automatic recovery never authorizes
 another erase. Inspect the reported cause before taking further action.
 A terminal `failed` task is not retried; fix the cause and submit a new request.
@@ -443,15 +454,15 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   path manually if needed. SMB names with internal spaces and `$` are supported; other
   unsupported names are not offered. A stale or unsupported Core cannot browse. An **E** badge
   marks a folder that already has a Nex repository marker.
-- **Registration or Recheck fails:** read the Core error in the row and **Task history**. Check
+- **Registration or Recheck fails:** read the Core error in the row and on **Tasks**. Check
   reachability, source identity, filesystem health, capacity, mount permissions and QEMU access,
   then **Recheck**. Do not create an empty local directory at an unavailable remote mount point.
 - **`remote storage is not mounted`:** the NFS or SMB server or share was unreachable when Core
   tried to mount it. Restore the server or network; Core retries about once a minute, or select
   **Recheck** to retry now. Core also mounts a registered repository again if its mount was stopped by
   hand, so to keep a repository offline, detach it.
-- **A storage task is pending or needs attention:** fix the reported cause and wait for **Task
-  history**. Do not register again, rotate or detach meanwhile. Then **Recheck**.
+- **A storage task is pending or needs attention:** fix the reported cause and wait for the result
+  on **Tasks**. Do not register again, rotate or detach meanwhile. Then **Recheck**.
 - **NFS access fails:** confirm NFSv4, server/export path and UID/GID or root-squash policy. Do not
   switch to a soft mount. If server or filesystem identity changed, restore the original source.
   Earlier registrations without a filesystem ID stay unavailable.
@@ -470,9 +481,9 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
 - **A VM cannot select or start on storage:** wait for a fresh `healthy`, readable, writable result
   on the placement host, check capacity including headroom, and place the ISO on one of the VM's
   disk repositories.
-- **A URL ISO download was refused:** read the reason in the **ISO library** row and **Task
-  history**. Core reports why it refused, and never repeats the URL, because a download link can
-  carry a credential. `ISO download refused this server's redirect from HTTPS to plain HTTP; use a
+- **A URL ISO download was refused:** read the reason in the **ISO library** row (on **Storage**,
+  below the repositories) and on **Tasks**. Core reports why it refused, and never repeats the URL,
+  because a download link can carry a credential. `ISO download refused this server's redirect from HTTPS to plain HTTP; use a
   direct HTTPS link to the ISO` means the mirror answers its HTTPS link with a redirect to plain
   HTTP; Core never follows that downgrade, so use the mirror's direct HTTPS file URL instead of a
   "latest" or "stable" alias. The other refusals name themselves too: more than five redirects, a
@@ -512,6 +523,11 @@ A terminal `failed` task is not retried; fix the cause and submit a new request.
   protection and is unsupported.
 
 ## Verification
+
+The GUI navigation on this page was rewritten for the Controller console redesign (development
+build 0.4.8); the walkthrough is recorded in the
+[console redesign checks](../qa/controller-console-redesign/checks.md). Evidence below was
+captured on the earlier layout and still applies to the behaviour it describes.
 
 **Replace a failed disk** was walked through against a running build in a disposable lab; see
 [replacing a failed disk in a provisioned ZFS pool](../qa/2026-09-22-zfs-replace.md). The

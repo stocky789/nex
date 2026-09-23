@@ -55,11 +55,10 @@ def main():
             page.add_init_script("localStorage.setItem('nex-signed-in', '1')")
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.route('**/api/v1/**', route_api)
-            url = f'http://127.0.0.1:{server.server_port}/#/pools/pool-demo'
+            url = f'http://127.0.0.1:{server.server_port}/#/storage'
             def open_iso():
                 page.goto(url)
                 page.wait_for_load_state('networkidle')
-                page.get_by_role('navigation', name='Resource views').get_by_role('button', name='ISO library', exact=True).click()
                 page.get_by_role('button', name='Upload ISO', exact=True).click()
             open_iso()
             expect(page.get_by_label('ISO file', exact=True)).to_be_visible()
@@ -90,7 +89,6 @@ def main():
             original = submissions[0]
             page.reload()
             page.wait_for_load_state('networkidle')
-            page.get_by_role('navigation', name='Resource views').get_by_role('button', name='ISO library', exact=True).click()
             expect(page.get_by_label('Public ISO URL')).to_have_value(original['url'])
             expect(page.get_by_label('ISO name', exact=True)).to_have_value(original['name'])
             mode['failure'] = False

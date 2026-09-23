@@ -335,12 +335,19 @@ type VMCreateSpec struct {
 	DriversMediaID   string `json:"drivers_media_id,omitempty"`
 	StartAfterCreate bool   `json:"start_after_create"`
 	Autostart        bool   `json:"autostart"`
+	// Tags are operator labels kept with the definition, so a new Controller adopts them with
+	// the VM. They change nothing on the guest.
+	Tags []string `json:"tags,omitempty"`
 	// Revision is 0 at creation and current + 1 for each edit; Core refuses any other value.
 	Revision int `json:"revision"`
 }
 
 // UpdateCapability is reported by agents that apply vm-update commands.
 const UpdateCapability = "vm-update-v1"
+
+// VMTagsCapability is reported by agents that journal VMCreateSpec.Tags. An older agent would
+// drop them, so Controller refuses tags unless the VM's host and its pool master report it.
+const VMTagsCapability = "vm-tags-v1"
 
 // DeleteCapability is reported by agents that apply vm-delete commands.
 const DeleteCapability = "vm-delete-v1"
@@ -439,6 +446,7 @@ func NICMAC(vmID string, index int, n VMNIC) string {
 	return DerivedMAC(vmID, index)
 }
 
+var vmTag = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 var diskName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 var machineType = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
 var cpuModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -498,6 +506,17 @@ func ValidateVMSpec(v VMCreateSpec) error {
 	}
 	if len(v.Description) > 4096 {
 		return errors.New("description must be at most 4096 characters")
+	}
+	if len(v.Tags) > 16 {
+		return errors.New("a VM allows at most 16 tags")
+	}
+	for i, t := range v.Tags {
+		if !vmTag.MatchString(t) {
+			return fmt.Errorf("tag %q must be 1 to 32 lowercase letters, digits or hyphens", t)
+		}
+		if slices.Contains(v.Tags[:i], t) {
+			return fmt.Errorf("tag %q is repeated", t)
+		}
 	}
 	if v.CPU.Count < 1 {
 		return errors.New("a VM needs at least 1 vCPU")
