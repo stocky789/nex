@@ -73,10 +73,10 @@
         "Local development 0.3.2 snapshot: matching package/ISO source verified, Core service restart/reboot checked, and the bundled appliance booted separately with DHCP, verified TLS and bootstrap-secret cleanup",
         "The whole chain from a 0.4.5 development ISO in disposable virtual machines: offline installation, eject and reboot, bundled Controller deployment, a second host added and joined, and a first managed VM, with recovery access while the Controller was stopped",
         "Installation under enforcing Secure Boot in emulation, and on machines with several disks: one disk chosen with the other left untouched, or two disks as a mirror",
-        "An installation with the network cable unplugged, and a power cut during installation followed by a clean reinstall"
+        "An installation with the network cable unplugged, and a power cut during installation followed by a clean reinstall",
+        "A Controller deployment interrupted part-way on a freshly installed host, which now starts again and finishes"
       ],
       open: [
-        "A Controller deployment interrupted part-way, checked on a freshly installed host",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
         "Replacing the Controller appliance on the same host that runs it, which is still being decided; today a replacement Controller runs on another machine and takes the pool back from its hosts"
@@ -102,7 +102,8 @@
         "Restricted hosts: boot-time refusal, autostart suppression, rejoin and post-clear start/stop — reviewed S6-14 evidence",
         "Remote management-network edits with staged apply and rollback — reviewed G3 and S3 subset evidence",
         "Maintenance mode: enter, stop, refused start and exit — reviewed G2 browser evidence",
-        "Phase 4 gate closed for disposable virtual-lab scope on 2026-09-20"
+        "Phase 4 gate closed for disposable virtual-lab scope on 2026-09-20",
+        "Master-owned VM placement: lost replies, storage loss, membership races, interrupted changes and Controller replacement passed in a disposable multi-host lab (2026-09-23)"
       ],
       open: [
         "Physical/BMC fencing and five-host scale — not claimed for disposable virtual-lab acceptance",
@@ -110,7 +111,6 @@
         "Authentic owner-conflict S6-12/16 fixture — unavailable; contradictory-owner subcase not exercised",
         "Broader duplicate-writer, workload-continuity and fault-matrix evidence — permanent limits for this lab class",
         "Automatic master succession: requires quorum majority and verified fencing; separate from VM restart policies",
-        "Master-owned VM placement: native multi-host fault and recovery acceptance remains open",
         "Clustered iSCSI storage shared by several hosts with fencing: built for development, not yet for real use",
         "ZFS provisioning from selected disks: in development; external image delivery remains open",
         "G2 maintenance reboot/autostart walkthrough and remaining browser coverage for transfer/recovery views"

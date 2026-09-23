@@ -1,7 +1,7 @@
 # Host-local Controller appliance bootstrap
 
 Date: 2026-09-08
-Status: Historical bounded appliance slice accepted in disposable nested KVM, including clean package deployment, separate-host manual recovery and replacement-host reboot. Core installation-media integration was initially open; the later recorded 0.3.2 artifact check covers package/ISO inclusion, while the complete deploy-to-enrollment chain remains open.
+Status: Historical bounded appliance slice accepted in disposable nested KVM, including clean package deployment, separate-host manual recovery and replacement-host reboot. The later 0.3.2 artifact check covers package/ISO inclusion. The complete ISO deploy-to-enrollment chain, including an interrupted deployment, passed for disposable virtual-lab scope on 2026-09-23; physical hardware remains open.
 
 ## Authorized scope
 
@@ -84,10 +84,12 @@ Keep development and simulation limits explicit. No invented successful walkthro
   offline BIOS/KVM install/reboot, installed Core service and standalone appliance
   boot/authentication/secret cleanup passed in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md).
   The NIC-less ISO service test used explicit loopback recovery configuration.
-- [ ] Complete that exact ISO's local deployment → enrollment/adoption → first
-  managed VM and installation/bootstrap failure-recovery integration. Standalone
-  appliance boot does not prove this chain; hardware/Secure Boot remain separate.
-  See the [current priorities](2026-09-14-production-readiness-handoff.md#recommended-next-work).
+- [x] ISO local deployment → enrollment/adoption → first managed VM, and
+  installation/bootstrap failure recovery, on the 0.4.5 development ISO in a disposable
+  nested-KVM lab (2026-09-23, [lab record](../qa/2026-09-23-phase3-placement-lab.md)). An interrupted deployment
+  found BUG-0540 (a deploy killed while copying its disk could never be retried); after the
+  fix it resumes to `ready` under the same VM ID. Physical hardware and host Secure Boot on
+  real firmware remain separate gates.
 
 Evidence: [clean deployment and recovery](../qa/appliance/lab.md),
 [package installation](../qa/appliance/package.md), [browser states](../qa/appliance/browser.md),

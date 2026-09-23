@@ -332,7 +332,9 @@ accepts `{}` and resumes that persisted intent without asking for its password a
 `ready` with progress `100` requires Controller enrollment/adoption and seed cleanup;
 `booted` alone does not. The operation also reports the Controller certificate SHA-256
 fingerprint for independent browser identity verification. Progress represents workflow stages, not elapsed time or bytes.
-`needs_attention` retains the original VM/disk identity. Power actions use separate stable
+`needs_attention` retains the original VM/disk identity. A deployment interrupted before its VM
+was defined (stage `copying_disk` or `creating_seed`), for which libvirt lists no domain with
+its UUID or name, restarts its disk copy under the same UUID on retry or service start (BUG-0540). Power actions use separate stable
 request IDs; replay the same action to reconcile its journal, and inspect fresh VM inventory.
 A completed graceful shutdown request does not establish that the guest has stopped.
 
@@ -2855,7 +2857,7 @@ that refuses a `vm-create` or `vm-update` before executing it (for example becau
 reply to `define` or `update-reserve` was lost) journals the operation as `failed` at stage
 `validating`, exactly as Core records its own refusals; a redelivery returns that failure and never
 executes. A `vm-create` interrupted while still `validating` settles as `failed` on its exact retry,
-because Core saves `allocating` before the first VM-specific effect. The inventory carries that
+or on its own after about a minute without one, because Core saves `allocating` before the first VM-specific effect. The inventory carries that
 proof to the master: `deleted` also lists a VM whose only create failed at `validating`, so the
 master releases the owner record it took at admission, and the new optional `aborted` map (operation
 ID → the same `FailedVMUpdateEvidence` `update-abort` uses) lets the master abort a matching

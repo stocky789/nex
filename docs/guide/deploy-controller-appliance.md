@@ -148,7 +148,9 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 - **Deployment needs attention or unknown outcome:** inspect the saved operation and the
   existing VM before retrying. Do not erase local state, create another appliance or reuse
   its disk. Select **Retry deployment** on that saved operation to reconcile it. The service
-  also resumes recorded work after restart. Root diagnosis uses `journalctl -u nex-core-local`.
+  also resumes recorded work after restart. A deployment interrupted before its VM existed
+  (still copying the disk or preparing its settings) starts again under the same VM ID; one
+  interrupted later is only reconciled. Root diagnosis uses `journalctl -u nex-core-local`.
 - **Waiting for network:** allow the guest to boot and obtain its DHCP lease. If it cannot
   find one usable address within five minutes, fix the DHCP/bridge connection and retry
   the original operation; do not create another Controller VM.

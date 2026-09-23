@@ -370,7 +370,7 @@ failed and uncertain transfers show their own status.
   check the guest vendor's requirements separately.
 
 - **An upload to Local storage fails with *storage ancestors must be root-owned directories,
-  executable by others for QEMU…*:** hosts installed from 0.3.0 up to and including 0.4.5
+  executable by others for QEMU…*:** hosts installed from 0.3.0 up to and including 0.4.4
   created the local ISO folder without the permission the hypervisor needs. On that host's
   console run `chmod 0711 /var/lib/libvirt/images/nex-media`, discard the failed import in
   **ISO library**, and upload again. Hosts installed from a later build are not affected.

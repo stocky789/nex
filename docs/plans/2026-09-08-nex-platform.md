@@ -559,10 +559,12 @@ storage edits. This is an unpublished local build, not full phase acceptance.
 - [x] BIOS/KVM and UEFI/TCG boot-menu review; nested KVM execution and persisted
   host marker/domain definition; Core service restart on the installed ISO host
   with explicitly configured loopback management in the NIC-less lab.
-- [ ] Full Phase 3: exact ISO → local appliance deployment or external enrollment
-  → first managed VM, multi-disk safety, interrupted installation/bootstrap and
-  recovery, real management networking, representative Intel/AMD hardware and
-  host Secure Boot. Current-build UEFI installation remains untested.
+- [x] Full Phase 3 chain for disposable virtual-lab scope (2026-09-23,
+  [lab record](../qa/2026-09-23-phase3-placement-lab.md)): exact 0.4.5 ISO → local appliance deployment →
+  second-host enrollment → first managed VM, multi-disk safety, interrupted installation
+  and interrupted appliance deployment with recovery, real bridged management networking,
+  and UEFI installation under emulated enforcing Secure Boot. BUG-0533 to BUG-0540 were fixed.
+- [ ] Representative physical Intel/AMD hardware and host Secure Boot on real firmware.
 - [ ] Package removal preserving guest disks, cross-version upgrades and green
   hosted release checks are not established by this lab.
 
@@ -580,8 +582,8 @@ Guide impact: **updated**, verification evidence only. State owner: **none**.
 **Agreed 2026-09-08; Phase 3 requirements.** The bounded appliance/package,
 local UI and separate-host recovery slice is implemented and lab-accepted in the
 [appliance plan](2026-09-08-controller-appliance.md#acceptance-evidence). Exact current
-ISO installation/service checks are signed off above; integrated bootstrap/enrollment
-and the full Phase 3 gate remain open; see the
+ISO installation/service checks and the integrated bootstrap/enrollment chain are signed off
+above for disposable virtual-lab scope; physical hardware remains open; see the
 [prioritized handoff](2026-09-14-production-readiness-handoff.md#recommended-next-work).
 The requirements below remain the acceptance target, not evidence that every path ran.
 

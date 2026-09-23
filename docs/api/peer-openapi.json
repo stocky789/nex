@@ -3068,6 +3068,16 @@
               "$ref": "#/components/schemas/VMUpdateEvidence"
             }
           },
+          "aborted": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "$ref": "#/components/schemas/VMUpdateEvidence"
+            },
+            "description": "Operation ID to journal proof that this exact next-revision vm-update failed while validating and was never applied, so the master can release a pending_update reservation whose reply it lost. An older member omits it, and the reservation stays blocked."
+          },
           "observed_at": {
             "type": "string",
             "format": "date-time"

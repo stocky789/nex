@@ -6,12 +6,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.5` →
-> Debian `0.4.5`).
+> development software. Builds use the newest numbered changelog heading (`0.4.6` →
+> Debian `0.4.6`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.6] — 2026-09-23
+
+### Bug Fixes
+
+- A host that has never run a VM can report its VMs to the pool, and a VM creation it refuses
+  is recorded so the pool master frees the name (BUG-0539).
+- A Controller deployment interrupted while copying the appliance disk now starts again on
+  **Retry deployment** or after the host service restarts, instead of staying stuck with a
+  half-copied disk (BUG-0540).
+
+### Miscellaneous
+
+- The installable host and its Controller bootstrap passed the whole chain in disposable
+  virtual machines, including a Controller deployment interrupted part-way, and master-owned
+  VM placement passed its fault and recovery checks. Real Intel and AMD hardware remains
+  untested.
 
 ## [0.4.5] — 2026-09-23
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
@@ -114,5 +115,35 @@ func TestRefusedUpdateReleasesMasterReservation(t *testing.T) {
 	record := publishPlacementRecovery(t, master, member, membership).VMs[vm.ID]
 	if record.PendingUpdate != nil || record.Spec.Revision != 0 || record.LastAbortedUpdate == nil {
 		t.Fatalf("refused update left the master reservation: %+v", record)
+	}
+}
+
+// BUG-0537: the worker itself must journal an update the master refused before any local
+// journal entry existed; otherwise nothing ever proves the reservation failed unapplied.
+func TestManagedWorkerJournalsRefusedUpdate(t *testing.T) {
+	master, member, masterServer, _ := cpuPeerPair(t)
+	member.State.PoolID = master.State.PoolID
+	masterServer.Close()
+	vm := poolVMTestSpec("44444444-4444-4444-8444-444444444444", member.State.HostID)
+	vm.PoolID, vm.Revision = member.State.PoolID, 1
+	update := protocol.Command{OperationID: "update-refused", Kind: "vm-update", VM: vm}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commands, results := make(chan protocol.Command, 1), make(chan managedCompletion, 1)
+	done := make(chan struct{})
+	go func() { defer close(done); managedWorker(ctx, member.dir, member.State, commands, results) }()
+	commands <- update
+	select {
+	case completion := <-results:
+		if completion.result.Status != "failed" {
+			t.Fatalf("refused update = %+v", completion)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not settle refused update")
+	}
+	cancel()
+	<-done
+	if _, ok := vmhost.NewManaged(filepath.Join(member.dir, "managed-vms")).JournaledCommand(update.OperationID); !ok {
+		t.Fatal("refused update was not journaled")
 	}
 }

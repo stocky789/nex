@@ -234,6 +234,41 @@ func TestInterruptedRetryNeverRecreates(t *testing.T) {
 		t.Fatalf("operation duplication: %v %+v", err, ops)
 	}
 }
+
+// A deploy killed while copying its disk defined no domain. When libvirt lists no domain with
+// its UUID or name, a retry removes the partial files and runs again under the same UUID
+// instead of staying needs_attention for ever; a listed domain keeps the no-replay path.
+func TestRetryRestartsDeployInterruptedBeforeDefine(t *testing.T) {
+	for _, listed := range []struct{ uuid, name string }{{"", ""}, {"5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "other"}, {"6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "nex-controller"}} {
+		e := testEngine(t)
+		s := validSpec(t)
+		b, _ := json.Marshal(s)
+		sum := sha256.Sum256(b)
+		id := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+		j := journal{Operation: Operation{ID: s.RequestID, VMID: id, Kind: "deploy", Status: "needs_attention", Stage: "copying_disk"}, Digest: hex.EncodeToString(sum[:]), Name: s.Name, Disk: filepath.Join(e.config.StorageDir, id, "controller.qcow2"), Bridge: e.config.Bridge}
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(j.Disk), 0711); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(j.Disk, []byte("partial"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		fakeCommand(t, "virsh", `case "$3" in list) echo "$VMHOST_LISTED";; domname) echo "$VMHOST_NAME";; domstate) echo "shut off";; *) exit 99;; esac`)
+		t.Setenv("VMHOST_LISTED", listed.uuid)
+		t.Setenv("VMHOST_NAME", listed.name)
+		op, err := e.Deploy(context.Background(), s)
+		_, statErr := os.Stat(j.Disk)
+		// This test host cannot pass preflight, which proves the retry reached the create path.
+		if listed.uuid == "" && (!os.IsNotExist(statErr) || err == nil || !strings.Contains(err.Error(), "preflight")) {
+			t.Fatalf("absent domain: partial disk kept (%v) or retry not restarted: %+v %v", statErr, op, err)
+		}
+		if listed.uuid != "" && (statErr != nil || op.Status != "needs_attention") {
+			t.Fatalf("listed domain: partial disk removed (%v) or effects replayed: %+v", statErr, op)
+		}
+	}
+}
 func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 	e := testEngine(t)
 	bundle := t.TempDir()

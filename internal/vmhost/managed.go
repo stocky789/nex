@@ -350,6 +350,9 @@ func (e *ManagedEngine) RecordRefusal(ctx context.Context, c protocol.Command, r
 	if err := validateManaged(c); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		return err
+	}
 	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
 	if err != nil {
 		return err
@@ -3670,6 +3673,9 @@ func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
 // when it admitted the create. Call after Applied, which settles interrupted creates.
 func (e *ManagedEngine) NeverCreatedVMs() ([]string, error) {
 	js, err := e.journals()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

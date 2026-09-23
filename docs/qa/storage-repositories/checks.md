@@ -1,7 +1,6 @@
 # VM storage repository checks
 
-Date: 2026-09-11. Development working tree; implementation acceptance is open. See the
-[handover](../../plans/2026-09-11-storage-handover.md). Gates live in the
+Date: 2026-09-11. Development working tree; implementation acceptance is open. Gates live in the
 [implementation plan](../../plans/2026-09-11-vm-storage-repositories.md); bug root causes and
 fixes live in the [bug ledger](../../BUG_LEDGER.md).
 

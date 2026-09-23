@@ -5,7 +5,7 @@
 Available in Nex Core / Controller development builds (alpha) that include
 the Updates APIs and packaged installers. Both packages ship the Nex archive signing
 key and configure the signed APT source, so an available package is signature-verified.
-The working `0.4.5` version is not evidence of a published candidate. Updates appear once
+The working `0.4.6` version is not evidence of a published candidate. Updates appear once
 the Release workflow has published packages to the signed APT archive.
 
 ## Prerequisites

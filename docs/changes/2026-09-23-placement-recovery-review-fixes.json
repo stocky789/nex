@@ -1,0 +1,66 @@
+{
+  "summary": "Closes the Phase 3 interrupted appliance deployment gate and follows up the placement recovery fixes. A Controller deployment interrupted before its VM was defined restarts under the same UUID instead of staying stuck (BUG-0540, found in the fresh-install lab). A host with no managed-VM journal yet can publish pool VM inventory and journal a refused create or update (BUG-0539). The peer OpenAPI contract gains the inventory's `aborted` map, with a worker-level BUG-0537 regression test. Lab harness unit tests supply the now-configurable hostname, and the ledger and API wording are corrected. The QA record, readiness handoff, roadmap and lab handover record the result. Platform, appliance and readiness plans, README and roadmap mark the Phase 3 chain and placement fault acceptance closed for disposable virtual-lab scope, with physical hardware still open. Finished interim handover notes are removed (the 2026-09-23 lab, 2026-09-11 storage and 2026-09-16 Windows 11 handovers); their results live in the plans, QA records and roadmap.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "internal/agent/placement_recovery_test.go",
+    "tests/test_fresh_install_host.py",
+    "tests/test_fresh_install_recovery.py",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/qa/2026-09-23-phase3-placement-lab.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-23-lab-handover.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "CHANGELOG.md",
+    "README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-08-controller-appliance.md",
+    "docs/plans/2026-09-11-storage-handover.md",
+    "docs/plans/2026-09-16-windows-11-batch-handover.md",
+    "docs/qa/storage-repositories/checks.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/changes/2026-09-23-placement-recovery-review-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Deploy the Controller appliance troubleshooting now says a deployment interrupted before its VM existed starts again on Retry deployment or service restart, while a later interruption is only reconciled.",
+    "pages": [
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "POST /api/local/v1/deployments/{id}/retry and service startup keep their request and response shapes; a deploy interrupted at copying_disk or creating_seed with no libvirt domain of its UUID or name now restarts under the same UUID instead of staying needs_attention. The Core-peer POST /api/v1/pool/vms/inventory already sent the optional `aborted` map documented in docs/API.md, and the machine-readable peer contract now declares it. No Controller/Core version compatibility change.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The interrupted Controller deployment on a freshly installed host moves from open to done, and master-owned VM placement fault/recovery acceptance (closed in the same lab) moves from open to done.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The deploy journal and its disk live on the host. Refusal evidence is the member's managed journal, and the master's pool-vms.json consumes it. The Controller stores nothing new.",
+    "record": "Host: /var/lib/nex/core-local/vmhost/<request>.json deploy journal and the appliance disk under its UUID. Member: /var/lib/nex-core-agent/managed-vms journal. Master: /var/lib/nex-core-agent/pool-vms.json. A fresh Controller re-adopts the master's records and the deployed appliance."
+  },
+  "verification": {
+    "method": "go test -race ./internal/agent ./internal/vmhost ./internal/controller ./internal/localcore passes. TestRetryRestartsDeployInterruptedBeforeDefine, TestManagedWorkerJournalsRefusedUpdate and the four agent tests named in BUG-0539 failed before their fixes. python3 -m unittest discover -s tests passes, and python3 scripts/generate_api.py --check passes. Lab (nested KVM, disposable, one host): a fresh ISO install of host C from the rebuilt 0.4.5 ISO. nex-core-local was SIGKILLed at copying_disk of a DHCP appliance deploy and the deploy stayed stuck; after the fixed binary was swapped in, the restarted service resumed it to ready under the same UUID, with one domain, the Controller answering and the host enrolled. nex-media was 0711 on a fresh install. Not covered: a fresh ISO install carrying the BUG-0540 fix, and physical hardware.",
+    "evidence": [
+      "docs/qa/2026-09-23-phase3-placement-lab.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
