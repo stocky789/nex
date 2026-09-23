@@ -246,6 +246,40 @@ func TestEnrollmentSuccessPersistsAndReportsOnHost(t *testing.T) {
 	}
 }
 
+// TestEnrollmentRecordsServerName covers a Controller whose certificate names only its
+// hostname (the appliance deployed with DHCP): the push carries that name, the host verifies
+// its Controller connection by it and keeps it with the rest of its identity.
+func TestEnrollmentRecordsServerName(t *testing.T) {
+	s, cfg := testService(t)
+	cookie, csrf := loginLocal(t, s)
+	srv, trust := fakeController(t, func(protocol.EnrollRequest) (int, protocol.EnrollResponse) {
+		return http.StatusOK, protocol.EnrollResponse{HostID: "host-1"}
+	})
+	body := func(name string) map[string]string {
+		return map[string]string{"controller_url": srv.URL, "ca_pem": trust, "token": "s3cr3t-enrollment-token", "server_name": name}
+	}
+	for _, bad := range []string{"192.0.2.10", "not a name", strings.Repeat("a", 64) + ".example"} {
+		if w := callLocal(s, "POST", "/api/local/v1/enrollment", body(bad), cookie, csrf, "https://core.test"); w.Code != 400 {
+			t.Fatalf("server_name %q accepted: %d %s", bad, w.Code, w.Body)
+		}
+	}
+	// httptest's certificate names example.com, so verifying by that name succeeds.
+	if w := callLocal(s, "POST", "/api/local/v1/enrollment", body("example.com"), cookie, csrf, "https://core.test"); w.Code != 200 {
+		t.Fatalf("enrollment with server_name failed: %d %s", w.Code, w.Body)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := agent.OpenStore(cfg.AgentStateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stored.Close()
+	if stored.State.ControllerServerName != "example.com" || stored.State.HostID == "" {
+		t.Fatalf("server name not kept with the identity: %q host %q", stored.State.ControllerServerName, stored.State.HostID)
+	}
+}
+
 // TestEnrollmentReplaceHostSuccess exercises the re-enrollment success path directly
 // against POST /api/local/v1/enrollment: a non-empty replace_host that matches the
 // store's already-persisted host ID must be accepted (not just rejected when it does

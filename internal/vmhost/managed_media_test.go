@@ -109,16 +109,29 @@ func TestAdoptSharedMediaDoesNotRehashAnAdoptedISO(t *testing.T) {
 	}
 }
 
-// A hung remote mount must not pin the converge goroutine past its deadline: the whole
-// point of the per-item context is that the next pass can run.
-func TestAdoptSharedMediaHonoursACancelledContext(t *testing.T) {
-	e, media, _ := sharedMediaFixture(t, strings.Repeat("ef", 32))
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := e.AdoptSharedMedia(ctx, media); err == nil {
-		t.Fatal("cancelled adoption still hashed the ISO")
+// Converge gives each ISO one probe timeout (3s), too short to hash a few GiB off remote
+// storage, so first adoption never finished (BUG-0541). Adoption checks presence and size;
+// every attach verifies the digest.
+func TestAdoptSharedMediaDoesNotHashOnFirstAdoption(t *testing.T) {
+	e, media, path := sharedMediaFixture(t, strings.Repeat("ef", 32))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(appliedMedia(t, e)) != 0 {
-		t.Fatal("cancelled adoption journalled media")
+	if err = os.WriteFile(path, body[:len(body)-1], 0644); err != nil {
+		t.Fatal(err)
+	}
+	if e.AdoptSharedMedia(context.Background(), media) == nil || len(appliedMedia(t, e)) != 0 {
+		t.Fatal("a shared ISO of the wrong size was adopted")
+	}
+	body[0] ^= 0xff
+	if err = os.WriteFile(path, body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.AdoptSharedMedia(context.Background(), media); err != nil {
+		t.Fatalf("first adoption hashed the ISO: %v", err)
+	}
+	if len(appliedMedia(t, e)) != 1 {
+		t.Fatal("adopted ISO was not journalled")
 	}
 }

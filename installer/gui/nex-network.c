@@ -17,6 +17,26 @@ gboolean nex_install_disk_name_supported(const char *name)
         g_str_has_prefix(name, "xvd") || g_str_has_prefix(name, "nvme");
 }
 
+/* NVMe reports device/serial and virtio-blk serial. SATA, SAS and SCSI disks only
+ * expose the unit-serial VPD page: a 4-byte binary header, then the serial. */
+gchar *nex_install_disk_serial(const char *block)
+{
+    static const struct { const char *attribute; gsize header; } sources[] =
+        { { "device/serial", 0 }, { "serial", 0 }, { "device/vpd_pg80", 4 } };
+    for (guint i = 0; i < G_N_ELEMENTS(sources); i++) {
+        gchar *path = g_build_filename(block, sources[i].attribute, NULL), *data = NULL, *serial;
+        gsize length = 0;
+        gboolean found = g_file_get_contents(path, &data, &length, NULL);
+        g_free(path);
+        if (!found) continue;
+        serial = length > sources[i].header ? g_strstrip(g_strndup(data + sources[i].header, length - sources[i].header)) : g_strdup("");
+        g_free(data);
+        if (*serial) return serial;
+        g_free(serial);
+    }
+    return g_strdup("");
+}
+
 static char *value(GKeyFile *c, const char *group, const char *key)
 {
     char *v = g_key_file_get_string(c, group, key, NULL);

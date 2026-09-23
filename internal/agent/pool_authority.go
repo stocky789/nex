@@ -958,6 +958,11 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	}
 	recordPoolReplicaObservation(s, member.HostID, status)
 	if poolReplicaPostAckMatches(s, member.HostID, replica.Generation, digest) {
+		// The member already holds this generation; this read is the fresh acknowledgement,
+		// or the master's check goes stale a minute after every push (BUG-0542).
+		if status.Verified && status.Error == "" && status.Generation == replica.Generation && status.Digest == digest {
+			recordPoolReplicaAck(s, member.HostID, status)
+		}
 		return nil
 	}
 	key, ok := peerCertificates.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)

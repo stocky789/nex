@@ -227,15 +227,16 @@ BLOCKS = {
     'sdd': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:48'},      # installation media
     'sdf': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:80',
             'partition': '1', 'device/model': 'QEMU HARDDISK'},                   # partition
+    # SATA/SAS/SCSI disks have no device/serial: only the binary unit-serial VPD page.
     'sdg': {'size': '67108864', 'ro': '0', 'removable': '0', 'dev': '8:96',
-            'queue/rotational': '1',
-            'device/serial': 'TESTSERIAL2', 'device/model': 'QEMU HARDDISK'},     # mirror partner
+            'queue/rotational': '1', 'device/model': 'QEMU HARDDISK',
+            'device/vpd_pg80': b'\x00\x80\x00\x14TESTSERIAL2         \x00'},        # mirror partner
     'sdh': {'size': '33554432', 'ro': '0', 'removable': '0', 'dev': '8:112',
             'queue/rotational': '0',
             'device/serial': 'TESTSERIAL3', 'device/model': 'QEMU HARDDISK'},     # half the size
     'sdi': {'size': '63753421', 'ro': '0', 'removable': '0', 'dev': '8:128',
             'queue/rotational': '0',
-            'device/serial': 'TESTSERIAL4', 'device/model': 'QEMU HARDDISK'},     # ~5% smaller
+            'serial': 'TESTSERIAL4', 'device/model': 'QEMU HARDDISK'},            # ~5% smaller; virtio-style serial
 }
 
 DISK_ONE = 'sda - 32 GiB - SSD - QEMU HARDDISK - TESTSERIAL1 - blank'
@@ -254,7 +255,10 @@ REJECTION = 'Disk serial changed; select the disk again.'
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    if isinstance(text, bytes):
+        path.write_bytes(text)
+    else:
+        path.write_text(text)
 
 
 def executable(path, text):
@@ -294,7 +298,7 @@ def build_fixture(root, nics=NICS, blocks=BLOCKS, prepared=True):
     for name, attributes in blocks.items():
         base = root / 'sys/class/block' / name
         for attribute, value in attributes.items():
-            write(base / attribute, value + '\n')
+            write(base / attribute, value if isinstance(value, bytes) else value + '\n')
     # A leftover partition on the mirror partner: the wizard reports it as "has partitions"
     # so the operator sees which disk still holds data.
     write(root / 'sys/class/block/sdg/sdg1/partition', '1\n')

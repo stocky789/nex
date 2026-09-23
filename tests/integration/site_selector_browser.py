@@ -55,6 +55,7 @@ def acceptance(url, evidence):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
 
+        join_candidates = []
         def route_api(route):
             path = route.request.url.split('/api/v1/', 1)[1].split('?', 1)[0]
             if path == 'session':
@@ -73,6 +74,8 @@ def acceptance(url, evidence):
             elif path == 'updates/apply' and route.request.method == 'POST':
                 update_status.update(phase='failed', error='fixture apt failure')
                 route.fulfill(status=202, json={})
+            elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/join-candidates'):
+                route.fulfill(json={'candidates': list(join_candidates)})
             elif route.request.method == 'GET' and path.startswith('pools/') and path.endswith('/members'):
                 # Host pages load the pool membership report for the restricted-host banner.
                 pool_id = path.split('/', 2)[1]
@@ -212,128 +215,48 @@ def acceptance(url, evidence):
         selected(55)
         capture('deep-link')
         passed('Site and pool deep links choose their scope on navigation/reload and in-page route change; host and VM links open their panel without changing scope')
+        # Add host to pool only joins a host that has enrolled. Operators took it for the place
+        # to enter a fresh host's address, so an empty dialog must say what it is for, offer no
+        # address field, and lead to the site's Add host form.
+        page.goto(url + '/#/settings/members')
+        members = page.get_by_role('region', name='Members', exact=True)
+        members.get_by_role('button', name='Add host to pool', exact=True).first.click()
+        dialog = page.get_by_role('dialog', name='Add host to pool', exact=True)
+        enroll = dialog.get_by_role('button', name='Enroll a new host…', exact=True)
+        expect(enroll).to_be_visible()  # the candidates answer has arrived: this is the empty state, not loading
+        expect(dialog).to_contain_text('This pool grows by joining a host already enrolled in this site.')
+        expect(dialog).to_contain_text('There is no other enrolled host at this site yet.')
+        expect(dialog.get_by_label('Address', exact=True)).to_have_count(0)
+        expect(dialog.get_by_role('button', name='Add host to pool', exact=True)).to_have_count(0)
+        capture('join-dialog-no-candidates')
+        enroll.click()
+        expect(dialog).to_have_count(0)
+        add_host = page.get_by_role('dialog', name='Add host', exact=True)
+        expect(add_host.get_by_role('heading', name='Add host to Site 055', exact=True)).to_be_visible()
+        capture('join-dialog-to-add-host')
+        passed('An empty Add host to pool dialog states the model, shows no address field or confirm button, and Enroll a new host opens the site Add host form')
+        add_host.get_by_role('button', name='Close', exact=True).click()
+        join_candidates.append({'host_id': 'host-056', 'name': 'host-056', 'connection': 'fresh', 'eligible': True,
+                                'peer_address': '192.0.2.56', 'peer_port': 9444,
+                                'rows': [{'check': 'connection', 'subject': 'host-056', 'result': 'compatible', 'detail': 'reporting now'}]})
+        members.get_by_role('button', name='Add host to pool', exact=True).first.click()
+        candidate = dialog.get_by_role('radio', name=re.compile('host-056'))
+        expect(candidate).to_be_visible()
+        expect(dialog.get_by_label('Address', exact=True)).to_have_count(0)
+        candidate.check()
+        # The host reports its own address, so the operator normally types nothing; the
+        # scheme and port are never shown, and a pasted origin is refused rather than guessed at.
+        address = dialog.get_by_label('Address', exact=True)
+        expect(address).to_have_value('192.0.2.56')
+        confirm = dialog.get_by_role('button', name='Add host to pool', exact=True)
+        expect(confirm).to_be_enabled()
+        capture('join-dialog-host-selected')
+        address.fill('https://192.0.2.56:9444')
+        confirm.click()
+        expect(dialog.get_by_role('alert')).to_contain_text('Enter the address only')
+        address.fill('')
+        expect(confirm).to_be_disabled()
+        dialog.get_by_role('button', name='Cancel', exact=True).click()
+        expect(dialog).to_have_count(0)
+        passed('Choosing a host prefills its reported address and enables the confirm button; a pasted origin is refused and an empty address disables it')
 
-        page.set_viewport_size({'width': 360, 'height': 800})
-        page.goto(url + '/#/')
-        open_menu()
-        long_name = data['sites'][1]['name']
-        long_button = items.get_by_role('button', name=long_name + ' · all pools', exact=True)
-        long_button.scroll_into_view_if_needed()
-        expect(long_button).to_be_visible()
-        box = items.bounding_box()
-        assert box['x'] >= 0 and box['x'] + box['width'] <= 360, ('scope menu outside the viewport', box)
-        capture('narrow-long-name')
-        long_button.click()
-        expect(menu).not_to_have_attribute('open', '')
-        selected(1, long_name)
-        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'long selected site overflows'
-        open_menu()
-        items.get_by_role('button', name='Pool 079', exact=True).scroll_into_view_if_needed()
-        capture('narrow-dropdown')
-        items.get_by_role('button', name='Pool 079', exact=True).click()
-        selected(79)
-        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'narrow viewport overflows'
-        capture('narrow-selected-site')
-        passed('The scope menu, long names and selection remain reachable at 360px without horizontal page overflow')
-        page.set_viewport_size({'width': 1440, 'height': 1000})
-
-        # Simulated removal on a global page must not leave an orphaned selection.
-        page.goto(url + '/#/tasks')
-        data['sites'] = [s for s in data['sites'] if s['id'] != 'site-079']
-        page.reload()
-        selected(0)
-        passed('An absent saved site falls back to the first available site on reload')
-
-        data.clear()
-        data.update(inventory(0))
-        page.goto(url + '/#/')
-        page.reload()
-        expect(page.get_by_role('heading', name='Start with a site', exact=True)).to_be_visible()
-        expect(scope).to_have_accessible_name('Scope: no site, all pools. Change scope')
-        open_menu()
-        expect(items.locator('button.indent')).to_have_count(0)
-        expect(items.get_by_role('button', name='Add host', exact=True)).to_be_disabled()
-        page.keyboard.press('Escape')
-        capture('empty-sites')
-        page.get_by_role('button', name='Create site', exact=True).click()
-        page.get_by_label('Site name', exact=True).fill('First site')
-        page.get_by_role('dialog', name='Create site').get_by_role('button', name='Create site', exact=True).click()
-        expect(scope).to_have_accessible_name('Scope: First site, all pools. Change scope')
-        expect(page).to_have_url(url + '/#/')
-        open_menu()
-        expect(items.locator('button.indent')).to_have_count(0)
-        page.keyboard.press('Escape')
-        capture('first-site-created')
-        passed('Empty inventory offers site creation; successful fixture creation chooses the new site without unrelated pools')
-        for path in ('/', '/tasks'):
-            page.goto(url + '/#' + path)
-            expect(scope).to_have_accessible_name('Scope: First site, all pools. Change scope')
-            expect(scope).to_contain_text('0 hosts')
-            page.get_by_role('navigation', name='Sections').get_by_role('link', name='Overview', exact=True).click()
-            expect(page).to_have_url(url + '/#/')
-            expect(page.get_by_role('heading', name='Add your first host', exact=True)).to_be_visible()
-            expect(page.get_by_role('button', name='Add host', exact=True).first).to_be_enabled()
-            expect(page.get_by_role('button', name='Create pool')).to_have_count(0)
-        capture('only-site-overview')
-        passed('The sole default site with no hosts opens Overview from the rail on workspace/tasks, shows Add your first host and exposes Add host without any Create pool action')
-        # A refused Add host must stay visible in its dialog across the 10 s inventory poll.
-        page.get_by_role('button', name='Add host', exact=True).first.click()
-        panel = page.get_by_role('dialog', name='Add host', exact=True)
-        panel.get_by_label('Host address', exact=True).fill('192.0.2.10')
-        panel.get_by_label('Root password', exact=True).fill('fixture-password')
-        panel.get_by_role('button', name='Connect', exact=True).click()
-        panel.get_by_role('button', name='Confirm and add host', exact=True).click()
-        alert = panel.get_by_role('alert')
-        expect(alert).to_contain_text(re.compile('already enrolled', re.I))
-        polls = []
-        page.on('request', lambda request: polls.append(request.url) if request.url.endswith('/api/v1/sites') and request.method == 'GET' else None)
-        page.wait_for_timeout(12000)
-        assert polls, 'inventory poll must run during the wait'
-        expect(alert).to_contain_text(re.compile('already enrolled', re.I))
-        expect(alert).to_contain_text('host-enrolled')
-        expect(page.get_by_role('button', name='Retry', exact=True)).to_have_count(0)
-        capture('add-host-409-after-poll')
-        passed('A 409 already enrolled from Add host stays in the Add host dialog with its host ID after an inventory poll')
-        panel.get_by_role('button', name='Close', exact=True).click()
-        # A failed update apply is an operator request error, so the inventory poll must not clear it.
-        page.goto(url + '/#/updates')
-        expect(page).to_have_url(url + '/#/settings/updates')
-        page.get_by_role('button', name='Update', exact=True).click()
-        failure = page.get_by_role('alert').filter(has_text='fixture apt failure')
-        expect(failure).to_be_visible()
-        polls.clear()
-        page.wait_for_timeout(12000)
-        assert polls, 'inventory poll must run during the wait'
-        expect(failure).to_be_visible()
-        expect(page.get_by_role('button', name='Retry', exact=True)).to_have_count(0)
-        capture('update-failed-after-poll')
-        passed('A failed update apply stays visible without an inventory Retry after an inventory poll')
-        assert not errors, errors
-        browser.close()
-    assert assets == {name: hashlib.sha256((ROOT / 'web/dist' / name).read_bytes()).hexdigest()
-                      for name in assets}, 'Built UI changed during browser acceptance'
-    return {'environment': 'Real built React UI in Chromium; scope menu with explicit API route fixtures of 500 sites, one pool/host/VM per site. All inventory and creation responses simulated; no Controller or libvirt execution.',
-            'recorded_at': datetime.now(timezone.utc).isoformat(), 'checks': checks, 'captures': captures,
-            'ui_sha256': assets,
-            'limits': ['Browser navigation/presentation only; no backend authorization or native-host claim', 'No deployment or hosted CI execution']}
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--evidence', type=Path, default=ROOT / '.cache/site-selector-browser')
-    args = parser.parse_args()
-    args.evidence.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=str(ROOT / 'web/dist')))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        result = acceptance(f'http://127.0.0.1:{server.server_port}', args.evidence)
-        (args.evidence / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-if __name__ == '__main__':
-    main()

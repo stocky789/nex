@@ -1,0 +1,44 @@
+{
+  "summary": "Members adopt large shared ISOs without hashing inside the probe timeout (BUG-0541); a steady master refreshes member replica acknowledgements from the status read (BUG-0542).",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_media_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_replica_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Both checks now report the state the guide already describes; no operator step changed."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No route or field changed. The pool-media-reconciliation and pool-authority-replica checks keep their documented meaning; docs/API.md now states that adoption checks size and attach verifies the digest, and that a matching status read refreshes the acknowledgement.",
+    "pages": [
+      "docs/API.md"
+    ],
+    "contracts": [
+      "GET /api/v1/pool/media",
+      "GET /api/v1/pool/replica",
+      "Inventory.checks"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes only."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The adopted iso-import journal entry and the replica acknowledgement stay on the member and master; the acknowledgement remains memory-only as before.",
+    "record": "member managed-vms iso-import journal entry (unchanged shape)"
+  },
+  "verification": {
+    "method": "Regression tests failed before each fix and pass after; go test ./internal/agent ./internal/vmhost ./internal/controller. Lab redeploy to the two-host test pool not yet done.",
+    "evidence": [
+      "internal/vmhost/managed_media_test.go",
+      "internal/agent/pool_replica_test.go"
+    ]
+  }
+}

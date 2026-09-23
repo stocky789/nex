@@ -13395,6 +13395,14 @@
             "items": {
               "$ref": "#/components/schemas/PoolJoinCandidateRow"
             }
+          },
+          "peer_address": {
+            "type": "string",
+            "description": "Host part of the peer origin this candidate reports for itself (inventory.managed.peer_origin), or empty when it reports none. The dialog shows and lets the operator edit only this."
+          },
+          "peer_port": {
+            "type": "integer",
+            "description": "Port of that reported peer origin, or Core's default pool-peer port 9444 when the host reports none. The dialog composes peer_origin as https://<peer_address>:<peer_port>."
           }
         },
         "required": [
@@ -13402,7 +13410,9 @@
           "name",
           "connection",
           "eligible",
-          "rows"
+          "rows",
+          "peer_address",
+          "peer_port"
         ]
       },
       "PoolJoinCandidateRow": {
@@ -15010,6 +15020,10 @@
               }
             ],
             "description": "This host's own Core-enforced refusal to act on pool authority, reported by whichever host holds it. It is a host report like any other: a restricted old master reports it for itself, which is how an operator sees that it came back and is starting nothing."
+          },
+          "peer_origin": {
+            "type": "string",
+            "description": "This host's own pool-peer origin as it works it out at report time from its configured peer listener (bind address, or the management address behind its default route, plus port): what a pool master would dial to reach it. An observation for the join dialog to prefill, mirrored by the Controller for display only; the join records the member's peer origin durably on the master. Omitted when the host has no route to work it out."
           }
         },
         "required": [],

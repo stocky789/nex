@@ -86,7 +86,7 @@ def main():
     args = p.parse_args()
     vm_id = str(uuid.UUID(args.vm_id))
     lab = validate_lab(args.lab_dir)
-    assert ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab'
+    assert ssh(lab, 'hostname', text=True).stdout.strip() == json.loads((lab / 'config.json').read_text())['hostname']
     assert vm_id in ssh(lab, 'virsh -c qemu:///system list --uuid', text=True).stdout.split(), 'guest must be running'
     args.evidence.mkdir(parents=True, exist_ok=True)
     record = args.evidence / 'guest-marker.json'

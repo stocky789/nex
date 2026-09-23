@@ -1,0 +1,50 @@
+{
+  "summary": "Add host to pool prefills the joining host's address from what the host reports and shows the operator only the address; the scheme and port are composed in the client from the host's report.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/pooljoin_test.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "tests/integration/site_selector_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/join-a-pool.md",
+    "docs/plans/2026-09-23-add-host-enrollment-and-join.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-join-peer-address-prefill.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Join step 4 now says the address is prefilled from the host's own report, that only a bare address is entered when it must change, and that an older host leaves the field empty.",
+    "pages": ["docs/guide/join-a-pool.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Additive: Core inventory gains managed.peer_origin (an observation; omitted when the host cannot work it out) and GET join-candidates gains peer_address and peer_port per candidate, with Core's default port for a host that reports none. POST join is unchanged. Documented in docs/API.md and the Controller OpenAPI contract; an older Controller ignores the inventory field and an older host simply reports none.",
+    "pages": ["docs/API.md", "docs/api/openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The reported peer origin is a per-report observation the host recomputes every time and the Controller mirrors for display in the same stored-inventory column as the other per-host observations, never acting on it. The durable record stays what it was: the member's peer origin in the master's membership, written by the join itself."
+  },
+  "verification": {
+    "method": "go test ./internal/agent/ -run TestReportCarriesOwnPeerOrigin (report carries the origin derived from the configured peer listener); go test ./internal/controller/ -run TestPoolJoinCandidates (no report gives an empty address and the default port; a reported origin gives its address and port); node web/src/pool-members.test.mjs (origin composition from address and port, refusal of pasted origins, ports, paths and credentials); .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py against the rebuilt web/dist in headless Chromium with route fixtures: selecting a fixture candidate prefills 192.0.2.56 and enables the confirm button, a pasted origin is refused with the address-only message, an empty address disables confirm; capture join-dialog-host-selected.png inspected. Not exercised against a real Controller with two enrolled hosts.",
+    "evidence": [
+      "internal/agent/pool_storage_test.go",
+      "internal/controller/pooljoin_test.go",
+      "web/src/pool-members.test.mjs",
+      "tests/integration/site_selector_browser.py"
+    ]
+  }
+}

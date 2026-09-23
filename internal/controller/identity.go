@@ -694,7 +694,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			// Membership is retained only as the master's latest Core report so a
 			// replacement Controller can enroll a proven peer. Other managed state is
 			// projected into managed_resources and must not be duplicated in inventory.
-			if merged.Managed != nil && (merged.Managed.Membership != nil || merged.Managed.Join != nil || merged.Managed.Replica != nil || merged.Managed.Transfer != nil || merged.Managed.Authority != nil || merged.Managed.Promotion != nil || merged.Managed.Restricted != nil || len(merged.Managed.ZFSProvisions) != 0) {
+			if merged.Managed != nil && (merged.Managed.Membership != nil || merged.Managed.Join != nil || merged.Managed.Replica != nil || merged.Managed.Transfer != nil || merged.Managed.Authority != nil || merged.Managed.Promotion != nil || merged.Managed.Restricted != nil || len(merged.Managed.ZFSProvisions) != 0 || merged.Managed.PeerOrigin != "") {
 				// These are Core's master-journal outcomes, retained only as the latest
 				// host observation so the Controller can render per-host status. A fresh
 				// Controller re-adopts them from the next Core inventory report.
@@ -711,7 +711,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				// same minimal way, and for a sharper reason: they are what an operator
 				// reads when the pool master is gone, so a Controller that restarts must be
 				// able to show them from the last report until the next one arrives.
-				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions}
+				// PeerOrigin is the host's own observation of its peer address, kept so the
+				// join dialog can offer it; the join records it durably on the master.
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin}
 			} else {
 				stored.Managed = nil
 			}

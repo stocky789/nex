@@ -5,9 +5,8 @@ Status: implemented and accepted for this defect batch. All eighteen findings ar
 recorded as BUG-0196 through BUG-0213. Three further defects surfaced while fixing and verifying
 them: BUG-0214, BUG-0215 and BUG-0216 are also fixed. Disposable labs verified the Core-side fixes
 against real libvirt, QEMU and Windows, and deployed Controller, installer and browser acceptance
-closed their applicable checks. See the [verification report](../qa/2026-09-16-windows-11-fix-verification.md),
-[final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md) and the
-[handover](2026-09-16-windows-11-batch-handover.md).
+closed their applicable checks. See the [verification report](../qa/2026-09-16-windows-11-fix-verification.md)
+and [final ISO and Controller acceptance](../qa/2026-09-16-final-iso-controller-acceptance.md).
 
 ## Authorized scope
 

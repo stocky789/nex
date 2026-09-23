@@ -927,7 +927,7 @@ function App() {
             : loading ? <p role="status">Loading…</p> : notFound}</ScreenBoundary>
           {pool && <ScreenBoundary><ManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></ScreenBoundary>}
           {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
-          {section && <ScreenBoundary key={section}><Settings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} updates={{
+          {section && <ScreenBoundary key={section}><Settings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
               update,
               note: updateNote,
               phase: updatePhase,
@@ -1080,7 +1080,7 @@ function App() {
                   {hostAdded ? (
                     <p role="status">
                       Host {hostAdded.host_id} enrolled in pool{" "}
-                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the host list after its first report.
+                      {data.pools.find((p) => p.id === hostAdded.pool_id)?.name || hostAdded.pool_id}; it appears in the host list after its first report. To make it a member of an existing pool, open Settings → Members, then Add host to pool.
                     </p>
                   ) : hostProbe ? (
                     <>

@@ -128,7 +128,8 @@ class FakeHost:
 
 class RebootStageTests(unittest.TestCase):
     def run_stage(self, host, stage, evidence):
-        argv = ['fresh_install_recovery.py', '--lab-dir', 'lab', '--stage', stage, '--evidence', str(evidence),
+        (evidence / 'config.json').write_text(json.dumps({'hostname': 'nex-fresh-lab'}))
+        argv = ['fresh_install_recovery.py', '--lab-dir', str(evidence), '--stage', stage, '--evidence', str(evidence),
                 '--vm-name', GUEST['name'], '--guest', 'installed']
         with mock.patch.object(recovery, 'ssh', host), mock.patch.object(recovery, 'validate_lab', lambda path: path), \
                 mock.patch.object(sys, 'argv', argv), mock.patch('builtins.print'):

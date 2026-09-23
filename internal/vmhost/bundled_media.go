@@ -75,7 +75,7 @@ func (e *ManagedEngine) seedBundledMedia(ctx context.Context, pool, host, defaul
 	default:
 	}
 	dir := filepath.Join(storagePath, "nex-media")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if _, _, err := managedDirectory(dir); err != nil {
 		return err
 	}
 	id, op := hostID(), hostID()

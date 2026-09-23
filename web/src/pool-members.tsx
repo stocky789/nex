@@ -25,7 +25,7 @@ export type Replica = { generation: number; digest?: string; verified: boolean; 
 export type Member = { host_id: string; name: string; role: "master" | "member"; status: string; error?: string; peer_origin?: string; connection: Connection; checks?: Check[]; access?: Access; failures?: Failure[]; join?: JoinStatus | null; maintenance?: boolean | null; maintenance_since?: string; guests?: Guests; last_maintenance?: MemberOperation | null; replica?: Replica | null; transfer?: Transfer | null; transfer_supported?: boolean; fence?: MemberFence | null; restricted?: Restricted | null; joined_at?: string };
 export type Report = { pool_id: string; pool_name: string; master_host_id: string; master_connection: Connection; master_seen_at?: string; generation: number; authoritative: boolean; maintenance_supported?: boolean; replica_supported?: boolean; transfer_supported?: boolean; host_fencing_supported?: boolean; fence?: FenceSummary | null; authority?: Authority | null; transfer?: Transfer | null; last_transfer?: LastTransfer | null; master_conflict?: string[]; promotion?: Promotion | null; last_promotion?: LastPromotion | null; members?: Member[] };
 type CandidateRow = { check: string; subject: string; result: "compatible" | "will_not_converge" | "refuses_join"; detail?: string };
-export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[] };
+export type Candidate = { host_id: string; name: string; connection: Connection; eligible: boolean; rows?: CandidateRow[]; peer_address?: string; peer_port: number };
 
 const checkNames: Record<string, string> = {
   "pool-storage-reconciliation": "Storage",
@@ -88,13 +88,18 @@ export function joinProgressText(join?: JoinStatus | null) {
   return `Joining · next step: ${step}.`;
 }
 
-// Core refuses anything but a bare https origin, so say so here instead of spending a round trip
-// on a 400. A trailing slash is the same origin and is normalized rather than refused.
-export function peerOriginOf(value: string) {
+// The operator sees only the address: the scheme is always https and the port is the one the
+// host reports for its peer listener (the Controller fills in Core's default for a host that
+// reports none). The origin Core wants is composed here, and anything that is not a bare
+// address, such as a pasted origin or an address with a port, is refused rather than guessed at.
+export function peerOriginOf(address: string, port: number) {
+  const value = address.trim();
+  const only = { origin: "", error: "Enter the address only, for example 192.0.2.12. The port is the host's own." };
+  if (!value || /[\/@?#\s]/.test(value)) return only;
+  const literal = value.includes(":") ? `[${value}]` : value;
   let url: URL;
-  try { url = new URL(value.trim()); } catch { return { origin: "", error: "Enter an https address, for example https://192.0.2.12:9444." }; }
-  if (url.protocol !== "https:") return { origin: "", error: "The address must use https." };
-  if (url.username || url.password || url.search || url.hash || (url.pathname !== "" && url.pathname !== "/")) return { origin: "", error: "Enter the address only, with no path, query string or credentials." };
+  try { url = new URL(`https://${literal}:${port}`); } catch { return only; }
+  if (url.host !== `${literal.toLowerCase()}:${port}`) return only;
   return { origin: url.origin, error: "" };
 }
 
@@ -452,9 +457,9 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
   </>;
 }
 
-export function AddHostDialog({ candidates, loading, error, busy, submitError, onConfirm, onClose, onRetryCandidates }: {
+export function AddHostDialog({ candidates, loading, error, busy, submitError, onConfirm, onClose, onRetryCandidates, onEnrollHost }: {
   candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string;
-  onConfirm: (hostID: string, peerOrigin: string) => void; onClose: () => void; onRetryCandidates: () => void;
+  onConfirm: (hostID: string, peerOrigin: string) => void; onClose: () => void; onRetryCandidates: () => void; onEnrollHost?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -463,7 +468,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
   const [showOriginError, setShowOriginError] = useState(false);
   useEffect(() => { if (!dialog.current?.open) dialog.current?.showModal(); heading.current?.focus(); }, []);
   const selected = candidates.find(candidate => candidate.host_id === hostID);
-  const peer = peerOriginOf(origin);
+  const peer = peerOriginOf(origin, selected?.peer_port ?? 0);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setShowOriginError(true);
@@ -476,15 +481,21 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
     <div className="section-heading"><h2 id="add-host-title" ref={heading} tabIndex={-1}>Add host to pool</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
     {submitError && <p className="alert" role="alert">{submitError}</p>}
     {error && <p className="alert" role="alert">{error} <button type="button" onClick={onRetryCandidates}>Retry</button></p>}
+    {/* The model first: operators expect this dialog to take a fresh host's address, and it
+        cannot. Enrollment is the site's Add host; this only joins a host that has enrolled. */}
+    <p className="help">This pool grows by joining a host already enrolled in this site. Every enrolled host starts as the master of its own pool.</p>
     <form onSubmit={submit}>
       <fieldset disabled={busy}>
         <legend>Host to add</legend>
         {loading && !candidates.length ? <p role="status">Asking the hosts for their current state…</p>
-          : !candidates.length ? <p className="empty">There is no other enrolled host at this site to add. Enroll the new host first with <strong>Add host</strong> in the scope menu; once it reports, it appears here.</p>
+          : !candidates.length ? <div className="empty">
+            <p>There is no other enrolled host at this site yet. Enroll the new host first; once it reports, it appears here.</p>
+            {onEnrollHost && <button type="button" onClick={onEnrollHost}>Enroll a new host…</button>}
+          </div>
             : <ul className="pool-candidates">{candidates.map(candidate => {
               const refusals = (candidate.rows || []).filter(row => row.result === "refuses_join");
               return <li key={candidate.host_id}>
-                <label><input type="radio" name="join-candidate" value={candidate.host_id} disabled={!candidate.eligible} checked={hostID === candidate.host_id} onChange={() => setHostID(candidate.host_id)} /> <strong>{candidate.name || candidate.host_id}</strong> · {candidate.connection}{candidate.eligible ? "" : " · cannot join"}</label>
+                <label><input type="radio" name="join-candidate" value={candidate.host_id} disabled={!candidate.eligible} checked={hostID === candidate.host_id} onChange={() => { setHostID(candidate.host_id); setOrigin(candidate.peer_address || ""); setShowOriginError(false); }} /> <strong>{candidate.name || candidate.host_id}</strong> · {candidate.connection}{candidate.eligible ? "" : " · cannot join"}</label>
                 {refusals.map((row, index) => <small key={`${row.check}-${index}`} className="task-error">{resultNames.refuses_join}: {row.subject || row.check} · {row.detail || "Nex Core refuses this host."}</small>)}
               </li>;
             })}</ul>}
@@ -499,16 +510,19 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
         </tr>)}</tbody>
       </table></div>}
       {selected && (selected.rows || []).some(row => row.result === "will_not_converge") && <p className="warning">Some pool settings will not converge on this host. It can still join; the settings that cannot be applied are reported against it afterwards.</p>}
-      <fieldset disabled={busy}>
+      {/* The address and the confirm button wait for a chosen host: an empty dialog must
+          offer nothing that reads as "type the new host's address here". The address is the
+          host's own report, so the usual case is to change nothing. */}
+      {selected && <fieldset disabled={busy}>
         <legend>Address of the joining host</legend>
-        <label htmlFor="peer-origin">Peer address</label>
-        <input id="peer-origin" required inputMode="url" autoComplete="off" placeholder="https://192.0.2.12:9444" aria-describedby="peer-origin-help" value={origin} onChange={event => { setOrigin(event.target.value); setShowOriginError(false); }} />
-        <p className="help" id="peer-origin-help">The https address the pool master uses to reach this host, with its port and no path. The master connects to the host at this address, so it must be reachable from the master, not only from this browser.</p>
+        <label htmlFor="peer-origin">Address</label>
+        <input id="peer-origin" required autoComplete="off" placeholder="192.0.2.12" aria-describedby="peer-origin-help" value={origin} onChange={event => { setOrigin(event.target.value); setShowOriginError(false); }} />
+        <p className="help" id="peer-origin-help">{selected.peer_address ? "Reported by the host as the address the pool master can reach it at. Change it only if the master must reach this host another way." : "This host does not report its address. Enter the address the pool master uses to reach it."} The master connects to the host itself, so the address must be reachable from the master, not only from this browser.</p>
         {showOriginError && peer.error && <p className="alert" role="alert">{peer.error}</p>}
-      </fieldset>
+      </fieldset>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || !selected?.eligible || !origin.trim()}>{busy ? "Submitting…" : "Add host to pool"}</button>
+        {selected && <button className="primary" disabled={busy || !selected.eligible || !origin.trim()}>{busy ? "Submitting…" : "Add host to pool"}</button>}
       </div>
     </form>
   </dialog>;
@@ -543,7 +557,7 @@ export function MaintenanceDialog({ member, busy, submitError, submitReady, onCo
   </dialog>;
 }
 
-export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable }: { poolID: string; api: API; unavailable: boolean; hosts?: Host[]; coreAvailable?: string }) {
+export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, onEnrollHost }: { poolID: string; api: API; unavailable: boolean; hosts?: Host[]; coreAvailable?: string; onEnrollHost?: () => void }) {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -807,6 +821,7 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable }: 
     {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError}
       onConfirm={(fence, credential) => void setFenceProfile(fenceTarget, fence, credential)}
       onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }} />}
-    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()} />}
+    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()}
+      onEnrollHost={onEnrollHost && (() => { setOpen(false); onEnrollHost(); })} />}
   </Section>;
 }

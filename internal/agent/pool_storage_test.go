@@ -1173,6 +1173,33 @@ func TestPoolMemberStorageIntentLetsCoreResolveClusteredISCSIMount(t *testing.T)
 	}
 }
 
+// The join dialog offers the address the master would dial; the host works it out the same
+// way a master works out its own, from its configured peer listener.
+func TestReportCarriesOwnPeerOrigin(t *testing.T) {
+	previous := PoolPeerListen
+	t.Cleanup(func() { PoolPeerListen = previous })
+	PoolPeerListen = "192.0.2.50:9500"
+	reports := make(chan protocol.ReportRequest, 1)
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		reports <- request
+		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s := testStore(t)
+	s.State = identity
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	request := <-reports
+	if request.Inventory.Managed == nil || request.Inventory.Managed.PeerOrigin != "https://192.0.2.50:9500" {
+		t.Fatalf("own peer origin was not reported: %#v", request.Inventory.Managed)
+	}
+}
+
 func TestReportProjectsCoreMembershipForControllerAdoption(t *testing.T) {
 	reports := make(chan protocol.ReportRequest, 1)
 	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

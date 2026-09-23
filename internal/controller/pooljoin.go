@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -956,6 +957,11 @@ type joinCandidate struct {
 	Connection string             `json:"connection"`
 	Eligible   bool               `json:"eligible"`
 	Rows       []joinCandidateRow `json:"rows"`
+	// PeerAddress is the host part of the peer origin the host reports for itself, or ""
+	// when it reports none; PeerPort is that origin's port, else Core's default. The dialog
+	// shows the operator only the address and composes the origin from the two.
+	PeerAddress string `json:"peer_address"`
+	PeerPort    int    `json:"peer_port"`
 }
 
 // poolJoinCandidates previews what the operator would be choosing. Every row is composed
@@ -1020,7 +1026,15 @@ func (c *Controller) poolJoinCandidates(w http.ResponseWriter, r *http.Request, 
 }
 
 func candidatePreview(tx *sql.Tx, host, master hostRow, masterJoins bool, resources []poolResource) joinCandidate {
-	v := joinCandidate{HostID: host.id, Name: host.hostname, Connection: host.connection, Eligible: true}
+	v := joinCandidate{HostID: host.id, Name: host.hostname, Connection: host.connection, Eligible: true, PeerPort: protocol.DefaultPoolPeerPort}
+	if host.inventory.Managed != nil {
+		if u, err := url.Parse(normalizedHTTPSOrigin(host.inventory.Managed.PeerOrigin)); err == nil && u.Host != "" {
+			v.PeerAddress = u.Hostname()
+			if port, err := strconv.Atoi(u.Port()); err == nil {
+				v.PeerPort = port
+			}
+		}
+	}
 	add := func(check, subject, result, detail string) {
 		v.Rows = append(v.Rows, joinCandidateRow{Check: check, Subject: subject, Result: result, Detail: detail})
 	}

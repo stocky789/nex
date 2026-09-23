@@ -376,6 +376,11 @@ failed and uncertain transfers show their own status.
   provide. A supported CPU model is not proof that a particular guest OS can run on it;
   check the guest vendor's requirements separately.
 
+- **An upload to Local storage fails with *storage ancestors must be root-owned directories,
+  executable by others for QEMU…*:** hosts installed from 0.3.0 up to and including 0.4.4
+  created the local ISO folder without the permission the hypervisor needs. On that host's
+  console run `chmod 0711 /var/lib/libvirt/images/nex-media`, discard the failed import in
+  **ISO library**, and upload again. Hosts installed from a later build are not affected.
 - **A URL download fails:** use a direct public ISO download link, not a web page or a
   login page. Core rejects non-public addresses even after DNS resolution or redirects,
   permits at most five redirects, and stops a transfer after two hours. Check host DNS,

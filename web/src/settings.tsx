@@ -73,13 +73,13 @@ export function SettingsHead({ section, pool, master, hostCount }: { section: st
   </>;
 }
 
-export function Settings({ section, pool, hosts = [], api, busy, unavailable, updates }: {
-  section: string; pool?: Pool; hosts?: Host[]; api: API; busy: boolean; unavailable: boolean; updates: Updates;
+export function Settings({ section, pool, hosts = [], api, busy, unavailable, updates, onEnrollHost }: {
+  section: string; pool?: Pool; hosts?: Host[]; api: API; busy: boolean; unavailable: boolean; updates: Updates; onEnrollHost?: () => void;
 }) {
   const current = sections.find(s => s.key === section);
   if (!current) return <section className="panel empty"><h2>Object not found</h2><p>This link does not match a settings section.</p><a href="#/settings">Return to settings</a></section>;
   if (current.pool && !pool) return <><h1>{current.label}</h1><p className="empty">Choose a pool in the scope menu to see its {current.label.toLowerCase()}.</p></>;
-  const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} />;
+  const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
   const updatesPanel = <UpdatesPanel {...updates} busy={busy} />;
   switch (section) {
     case "overview": return <>{members}<HighAvailability /><BackupRepositories />{updatesPanel}</>;

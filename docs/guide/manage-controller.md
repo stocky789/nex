@@ -89,7 +89,12 @@ development build 0.4.8 console layout; see
      is a reminder that the host, not your browser, must be able to open this address.
      A loopback or port-forwarded browser address such as `https://127.0.0.1:…` is never
      reachable from the host; replace it with the Controller's address on the management
-     network.
+     network. The host verifies Controller's certificate against this address. When the
+     certificate names only a hostname, as a bundled appliance deployed with DHCP does,
+     Controller also tells the host that hostname to verify by, so entering the appliance's
+     IP address here works. A host running an older Nex Core does not accept that name:
+     the panel then says so, and either upgrading the host or entering the hostname the
+     certificate names, resolvable from the host, lets it enroll.
 
    Select **Connect**. Controller opens an unauthenticated TLS handshake to the host and
    shows the certificate's **Address**, **Certificate fingerprint** (`sha256:…`),
@@ -97,9 +102,11 @@ development build 0.4.8 console layout; see
    output before continuing — this confirmation is the only trust check before the root
    password is used, so do not skip it. Select **Confirm and add host** to proceed, or
    **Cancel** to change the address. On success the panel shows
-   `Host <id> enrolled in pool <pool>; it appears in the host list after its first report.` and the
-   password field is cleared. `<pool>` is the pool the host reports: a new pool for a new host,
-   or the host's existing pool when it already belonged to one.
+   `Host <id> enrolled in pool <pool>; it appears in the host list after its first report.`, tells
+   you that making it a member of an existing pool is done from **Settings** → **Members**
+   with **Add host to pool** (see [Join a host to a pool](join-a-pool.md)), and clears the
+   password field. `<pool>` is the pool the host reports: a new pool for a new host, or the
+   host's existing pool when it already belonged to one.
    The host then trusts exactly the certificates in Controller's `-tls-cert` file when it
    connects to Controller. With the server certificate followed by its issuing CA, the host
    accepts a renewed server certificate from that CA. A file holding only the server
@@ -126,6 +133,9 @@ development build 0.4.8 console layout; see
    ```
 
    `enroll` verifies Controller's HTTPS certificate and creates the host identity locally.
+   When `--controller` is an address the certificate does not name (a bundled appliance
+   deployed with DHCP names only its hostname), add `--server-name` with the hostname the
+   certificate carries; the agent keeps it for every later connection.
    Keep `agent-state` across restarts. Remove the secret token file after successful
    enrollment. The agent connects outbound; it does not require an inbound management API.
 5. After enrollment the site contains a new pool named after the host. Choose that pool in the

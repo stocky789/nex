@@ -117,6 +117,9 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('mapfile -t packages < installer/packages.txt', iso_builder)
         # Only the separately staged ovmf-generic is excluded from the APT closure.
         self.assertIn('[[ $package == ovmf-generic ]] || apt_packages+=("$package")', iso_builder)
+        # BUG-0533: its exact pin must come from an immutable snapshot; live sid drops it.
+        self.assertIn("deb https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main", iso_builder)
+        self.assertNotIn("deb.debian.org/debian sid", iso_builder)
         self.assertIn('--no-install-recommends', iso_builder)
         self.assertIn('install "${apt_packages[@]}"', iso_builder)
         self.assertIn("pacemaker", installer)

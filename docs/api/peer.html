@@ -3137,6 +3137,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/VMUpdateEvidence&quot;
       }
     },
+    &quot;aborted&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/VMUpdateEvidence&quot;
+      },
+      &quot;description&quot;: &quot;Operation ID to journal proof that this exact next-revision vm-update failed while validating and was never applied, so the master can release a pending_update reservation whose reply it lost. An older member omits it, and the reservation stays blocked.&quot;
+    },
     &quot;observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;

@@ -15,7 +15,8 @@ and usage history. Development multi-host work includes Core-local member join,
 per-host resource checks and shared configuration convergence; its remaining acceptance
 gates are tracked separately.
 Phase 2 one-host VM management is closed. Phase 3 host installation and Controller
-bootstrap, and Phase 4 multi-host and shared-storage work, are in testing. Backups,
+bootstrap has passed its full chain in a disposable virtual lab and awaits physical
+hardware testing; Phase 4 multi-host and shared-storage work is in testing. Backups,
 migration, HA and managed Docker applications remain planned work. Docker services will
 run inside Nex-managed VMs.
 

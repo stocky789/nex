@@ -437,8 +437,7 @@ func Handoff(ctx context.Context, c HandoffConfig) error {
 		return err
 	}
 	if a.hostID == "" {
-		a.store.State.ControllerServerName = c.ServerName
-		if err = agent.Enroll(ctx, a.store, c.ControllerURL, c.TrustPEM, state.Token, ""); err != nil {
+		if err = agent.Enroll(ctx, a.store, c.ControllerURL, c.TrustPEM, state.Token, "", c.ServerName); err != nil {
 			return err
 		}
 		a.hostID = a.store.State.HostID

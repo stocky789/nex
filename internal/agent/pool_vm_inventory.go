@@ -26,6 +26,9 @@ type poolVMInventory struct {
 	// for a current revision. It lets the master settle a pre-existing pending
 	// transition after a restart, never makes inventory itself authoritative.
 	Updates map[string]vmhost.VMUpdateEvidence `json:"updates,omitempty"`
+	// Aborted maps an operation ID to journal proof that this exact next-revision update
+	// failed unapplied, so the master can release a reservation whose outcome it never saw.
+	Aborted map[string]vmhost.VMUpdateEvidence `json:"aborted,omitempty"`
 	// Deleted names the VMs this host durably deleted: succeeded vm-delete tombstones
 	// from its own journal. It is the positive evidence the master prunes owner records
 	// with; absence from VMs above is never read as a deletion.
@@ -186,13 +189,33 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 			}
 		}
 	}
+	aborted := make(map[string]vmhost.VMUpdateEvidence)
+	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
+	for _, outcome := range managed.Outcomes {
+		if outcome.Kind != "vm-update" || outcome.Status != "failed" {
+			continue
+		}
+		cmd, ok := engine.JournaledCommand(outcome.OperationID)
+		if !ok || cmd.VM == nil {
+			continue
+		}
+		if evidence, err := engine.FailedVMUpdateEvidence(ctx, cmd.VM.ID, outcome.OperationID, *cmd.VM); err == nil {
+			aborted[outcome.OperationID] = evidence
+		}
+	}
 	deleted := make([]string, 0, len(managed.DeletedVMs))
 	for _, tombstone := range managed.DeletedVMs {
 		if tombstone.ID != "" && tombstone.HostID == s.State.HostID && tombstone.PoolID == s.State.PoolID {
 			deleted = append(deleted, tombstone.ID)
 		}
 	}
-	return poolVMInventory{HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, Updates: updates, Deleted: deleted, ObservedAt: time.Now().UTC()}, nil
+	// A create proven never to have run here releases its admission record the same way.
+	neverCreated, err := engine.NeverCreatedVMs()
+	if err != nil {
+		return poolVMInventory{}, errors.New("managed VM journal is unavailable")
+	}
+	deleted = append(deleted, neverCreated...)
+	return poolVMInventory{HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, Updates: updates, Aborted: aborted, Deleted: deleted, ObservedAt: time.Now().UTC()}, nil
 }
 
 func vmUsesInventorySharedStorage(vm protocol.VMCreateSpec, storage map[string]protocol.StorageIdentity) bool {
@@ -341,6 +364,9 @@ func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolV
 				if err := settlePoolVMInventoryDefinition(&old, host, vm, &evidence); err != nil {
 					return err
 				}
+				state.VMs[vm.ID] = old
+			} else if old.PendingUpdate != nil && host == observedHost && abortPoolVMUpdate(&old, host, inv.Aborted[old.PendingUpdate.OperationID]) == nil {
+				// The owner proved the reserved update failed unapplied; release the reservation.
 				state.VMs[vm.ID] = old
 			} else if old.HostID == host && host == observedHost && old.State != "starting" {
 				// Only the just-authenticated owner's fresh native observation may

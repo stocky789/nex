@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,6 +80,28 @@ func TestSeedBundledMediaPublishesOnce(t *testing.T) {
 	}
 	if got := journalsOf(t, e); len(got) != 2 {
 		t.Fatalf("second seed added entries: %+v", got)
+	}
+}
+
+// BUG-0534: the service runs with UMask=0077, and the media directory the seed creates
+// first must stay traversable by QEMU or every later ISO import to that storage fails.
+func TestSeedBundledMediaCreatesTraversableDirectoryUnderServiceUmask(t *testing.T) {
+	storage := bundledMediaFixture(t)
+	e := startEngine(t)
+	if err := e.save(storageRegisterJournal("storage-op", "storage-1", storage)); err != nil {
+		t.Fatal(err)
+	}
+	old := syscall.Umask(0077)
+	defer syscall.Umask(old)
+	if err := e.seedBundledMedia(context.Background(), "pool-1", "host-1", storage); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(storage, "nex-media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0711 {
+		t.Fatalf("nex-media mode %v, want 0711", info.Mode().Perm())
 	}
 }
 

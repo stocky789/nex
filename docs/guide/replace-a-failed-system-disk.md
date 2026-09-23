@@ -2,10 +2,11 @@
 
 ## Status
 
-Development build. A Nex Core host installed onto a **mirrored system disk** keeps running when one
-of the two disks fails: the Linux kernel carries on with the surviving disk, the host stays
-connected, and its virtual machines are not interrupted. This page covers replacing the failed disk
-from Nex Controller so the mirror is rebuilt and the host can boot from either disk again.
+Development build. A Nex Core host installed onto a **mirrored system disk** (Linux **md** RAID1
+with an **ext4** root — chosen at install time, not ZFS) keeps running when one of the disks
+fails: the Linux kernel carries on with the surviving disk, the host stays connected, and its
+virtual machines are not interrupted. This page covers replacing the failed disk from Nex
+Controller so the mirror is rebuilt and the host can boot from either disk again.
 
 The host panel's **Storage** tab shows a **System disk mirror** block below the host's disks. It names
 the array, its level and its state — **Healthy**, **Degraded** or **Rebuilding** with a progress

@@ -2,6 +2,7 @@
 package controller
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -28,6 +30,14 @@ import (
 // CA, mirroring the deployed appliance. The push must send this served certificate as
 // the host's trust; pushing c.ca.pem instead makes the fake host's agent.Enroll fail TLS.
 func controllerTLSServer(t *testing.T, c *Controller) *httptest.Server {
+	return controllerTLSServerWith(t, c, func(tmpl *x509.Certificate) {
+		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	})
+}
+
+// controllerTLSServerWith lets a test shape the served certificate's names: the appliance
+// deployed with DHCP carries only its hostname, never the address a host connects to.
+func controllerTLSServerWith(t *testing.T, c *Controller, shape func(*x509.Certificate)) *httptest.Server {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -41,8 +51,8 @@ func controllerTLSServer(t *testing.T, c *Controller) *httptest.Server {
 		SerialNumber: serial, Subject: pkix.Name{CommonName: "controller"},
 		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
+	shape(tmpl)
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +74,11 @@ type fakeLocalHost struct {
 	csrf       string
 	dir        string // temp agent state dir; unique per fakeLocalHost
 	failEnroll bool
+	older      bool // a nex-core-local from before server_name rejects the field it does not know
 
 	mu         sync.Mutex
 	loginCalls int
+	serverName string // server_name from the last enrollment push
 }
 
 func newFakeLocalHost(t *testing.T, password string) *fakeLocalHost {
@@ -113,8 +125,18 @@ func (f *fakeLocalHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			CAPEM         string `json:"ca_pem"`
 			Token         string `json:"token"`
 			ReplaceHost   string `json:"replace_host"`
+			ServerName    string `json:"server_name"`
 		}
-		json.NewDecoder(r.Body).Decode(&v)
+		raw, _ := io.ReadAll(r.Body)
+		if f.older && bytes.Contains(raw, []byte(`"server_name"`)) {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON request"})
+			return
+		}
+		json.Unmarshal(raw, &v)
+		f.mu.Lock()
+		f.serverName = v.ServerName
+		f.mu.Unlock()
 		store, err := agent.OpenStore(f.dir)
 		if err != nil {
 			w.WriteHeader(502)
@@ -122,7 +144,7 @@ func (f *fakeLocalHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer store.Close()
-		if err := agent.Enroll(r.Context(), store, v.ControllerURL, v.CAPEM, v.Token, v.ReplaceHost); err != nil {
+		if err := agent.Enroll(r.Context(), store, v.ControllerURL, v.CAPEM, v.Token, v.ReplaceHost, v.ServerName); err != nil {
 			w.WriteHeader(502)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
@@ -137,6 +159,12 @@ func (f *fakeLocalHost) loginAttempts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.loginCalls
+}
+
+func (f *fakeLocalHost) pushedServerName() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.serverName
 }
 
 // addr strips the scheme from an httptest.Server URL for use as an "address" field.
@@ -183,6 +211,9 @@ func TestAddSiteHostSuccess(t *testing.T) {
 	}, nil, 200), &v)
 	if v.HostID == "" || v.PoolID == "" {
 		t.Fatalf("incomplete add-host response: %+v", v)
+	}
+	if got := fake.pushedServerName(); got != "" {
+		t.Fatalf("the certificate covers the Controller address, yet server_name %q was pushed", got)
 	}
 
 	hosts := a.hosts()
@@ -236,6 +267,50 @@ func TestAddSiteHostSuccess(t *testing.T) {
 	var unused int
 	if a.c.db.QueryRow("SELECT count(*) FROM tokens WHERE csr IS NULL").Scan(&unused) != nil || unused != 0 {
 		t.Fatalf("unused token row left behind: %d", unused)
+	}
+}
+
+// addHostByIPTo enrolls a fake host against a Controller served under the given certificate
+// shape, with the Controller address given by IP as an operator would type it.
+func addHostByIPTo(t *testing.T, shape func(*x509.Certificate), older bool, status int) (*fakeLocalHost, map[string]string) {
+	t.Helper()
+	a := newClient(t)
+	controller := controllerTLSServerWith(t, a.c, shape)
+	t.Cleanup(controller.Close)
+	site := a.site()
+	fake := newFakeLocalHost(t, "correct horse battery staple")
+	fake.older = older
+	host := httptest.NewTLSServer(fake)
+	t.Cleanup(host.Close)
+	var probe probeResponse
+	read(t, a.call("POST", "/api/v1/hosts/probe", map[string]string{"address": addr(host)}, nil, 200), &probe)
+	var body map[string]string
+	read(t, a.call("POST", "/api/v1/sites/"+site+"/hosts", addHostRequest{
+		Address: addr(host), Fingerprint: probe.Fingerprint, RootPassword: fake.password, ControllerURL: controller.URL,
+	}, nil, status), &body)
+	return fake, body
+}
+
+// TestAddSiteHostSendsCertificateServerName reproduces adding a host to an appliance deployed
+// with DHCP: its certificate names only its hostname and the operator gives the Controller
+// address by IP. Without the certificate's name the host's own TLS check fails with
+// "cannot validate certificate ... because it doesn't contain any IP SANs".
+func TestAddSiteHostSendsCertificateServerName(t *testing.T) {
+	fake, body := addHostByIPTo(t, func(tmpl *x509.Certificate) { tmpl.DNSNames = []string{"nex-controller"} }, false, 200)
+	if body["host_id"] == "" {
+		t.Fatalf("incomplete add-host response: %v", body)
+	}
+	if got := fake.pushedServerName(); got != "nex-controller" {
+		t.Fatalf("server_name pushed = %q, want the certificate's hostname", got)
+	}
+}
+
+// An older nex-core-local rejects the field; the operator must be told what to do, not
+// shown "invalid JSON request".
+func TestAddSiteHostOlderHostRejectsServerName(t *testing.T) {
+	_, body := addHostByIPTo(t, func(tmpl *x509.Certificate) { tmpl.DNSNames = []string{"nex-controller"} }, true, 502)
+	if !strings.Contains(body["error"], "nex-controller") || !strings.Contains(body["error"], "upgrade") {
+		t.Fatalf("expected the certificate name and the upgrade in the error: %v", body)
 	}
 }
 

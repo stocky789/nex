@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -185,6 +186,35 @@ func TestPoolReplicaPushShortCircuitsOnPostAckOnly(t *testing.T) {
 	}
 	if posts.Load() != 2 {
 		t.Fatalf("idempotent push POST count = %d, want 2", posts.Load())
+	}
+}
+
+// A steady pool never re-POSTs, so the skipped push's GET must refresh the acknowledgement
+// or the master reports the replica stale a minute after every push (BUG-0542).
+func TestPoolReplicaSkippedPushKeepsTheMasterCheckFresh(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	var posts atomic.Int32
+	serveMemberPeerCountingPosts(t, master, member, &posts)
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	poolReplicaMu.Lock()
+	ack := poolReplicaAcks[master.dir][member.State.HostID]
+	ack.ReceivedAt = ack.ReceivedAt.Add(-2 * time.Minute)
+	poolReplicaAcks[master.dir][member.State.HostID] = ack
+	poolReplicaMu.Unlock()
+	if checks := PoolReplicaChecks(master, 10*time.Second); checks[0].Freshness != "stale" {
+		t.Fatalf("aged ack check = %#v", checks)
+	}
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err != nil {
+		t.Fatalf("steady push: %v", err)
+	}
+	if posts.Load() != 1 {
+		t.Fatalf("steady push POST count = %d, want 1", posts.Load())
+	}
+	if checks := PoolReplicaChecks(master, 10*time.Second); len(checks) != 1 || checks[0].Status != "healthy" {
+		t.Fatalf("steady master check = %#v", checks)
 	}
 }
 
@@ -635,7 +665,8 @@ func TestPoolAuthorityReplicaGrantsNoExecution(t *testing.T) {
 }
 
 // Defect 5: owner records are pruned only from their owner's own delete tombstones, never
-// from absence, and never while an update is unresolved or another host still defines it.
+// from absence or while another host still defines it. BUG-0538: a tombstone also prunes a
+// record whose update never settled, because a deleted VM ID can take no further update.
 func TestPrunePoolVMOwnersUsesDeleteTombstonesOnly(t *testing.T) {
 	deleted := "11111111-1111-4111-8111-111111111111"
 	kept := "22222222-2222-4222-8222-222222222222"
@@ -654,20 +685,18 @@ func TestPrunePoolVMOwnersUsesDeleteTombstonesOnly(t *testing.T) {
 		},
 	}
 	pruned := prunePoolVMOwners(&state, "member-1")
-	if len(pruned) != 1 || pruned[0] != deleted {
+	slices.Sort(pruned)
+	if !slices.Equal(pruned, []string{deleted, pending}) {
 		t.Fatalf("pruned = %#v", pruned)
 	}
-	if _, ok := state.VMs[deleted]; ok {
-		t.Fatal("a deleted VM kept its owner record")
-	}
-	for _, id := range []string{kept, pending, elsewhere} {
+	for _, id := range []string{kept, elsewhere} {
 		if _, ok := state.VMs[id]; !ok {
 			t.Fatalf("owner record %s was pruned", id)
 		}
 	}
 	// A host cannot prune a record it does not own, and absence alone prunes nothing.
 	state.Inventory["member-2"] = poolVMInventory{HostID: "member-2", Generation: 2}
-	if pruned = prunePoolVMOwners(&state, "member-2"); len(pruned) != 0 || len(state.VMs) != 3 {
+	if pruned = prunePoolVMOwners(&state, "member-2"); len(pruned) != 0 || len(state.VMs) != 2 {
 		t.Fatalf("absence pruned records: %#v / %#v", pruned, state.VMs)
 	}
 }

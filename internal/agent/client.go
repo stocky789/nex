@@ -25,6 +25,12 @@ import (
 var controllerDNSName = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$`)
 
 // tlsConfig builds the Controller trust and optional enrolled client identity.
+// ValidControllerServerName accepts the DNS hostname a Controller certificate is verified
+// by when the connection address is not one of the certificate's own names.
+func ValidControllerServerName(name string) bool {
+	return len(strings.TrimSuffix(name, ".")) <= 253 && controllerDNSName.MatchString(name) && net.ParseIP(name) == nil
+}
+
 func tlsConfig(s State, authenticated bool) (*tls.Config, error) {
 	u, err := url.Parse(s.Controller)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -34,7 +40,7 @@ func tlsConfig(s State, authenticated bool) (*tls.Config, error) {
 	if !roots.AppendCertsFromPEM([]byte(s.TrustPEM)) {
 		return nil, errors.New("controller CA file contains no certificates")
 	}
-	if name := s.ControllerServerName; name != "" && (len(strings.TrimSuffix(name, ".")) > 253 || !controllerDNSName.MatchString(name) || net.ParseIP(name) != nil) {
+	if s.ControllerServerName != "" && !ValidControllerServerName(s.ControllerServerName) {
 		return nil, errors.New("controller TLS server name must be a DNS hostname")
 	}
 	config := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: s.ControllerServerName}
@@ -232,7 +238,11 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 	}
 	return nil
 }
-func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost string) error {
+
+// Enroll takes the Controller's HTTPS origin and trust; serverName is the DNS name to verify
+// its certificate by when the origin's host is not among the certificate's names (an
+// appliance deployed with DHCP names only its hostname), or empty to verify by the origin.
+func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost, serverName string) error {
 	if strings.TrimSpace(token) == "" {
 		return errors.New("enrollment token is empty")
 	}
@@ -280,6 +290,7 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 		// A first enrollment has no active certificate to preserve, so retaining
 		// its intended endpoint/trust makes its pending identity retryable.
 		next.Controller, next.TrustPEM = controller, ca
+		next.ControllerServerName = cmp.Or(serverName, next.ControllerServerName)
 	}
 	// Identity is host-owned: a first-time host mints its own host and pool identity and
 	// persists them before asking, so retries present the same IDs and every Controller,
@@ -297,7 +308,7 @@ func Enroll(ctx context.Context, s *Store, controller, ca, token, replaceHost st
 	}
 	candidate := s.State
 	if switching {
-		candidate.Controller, candidate.TrustPEM, candidate.ControllerServerName = controller, ca, ""
+		candidate.Controller, candidate.TrustPEM, candidate.ControllerServerName = controller, ca, serverName
 	}
 	c, err := client(candidate, false)
 	if err != nil {

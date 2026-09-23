@@ -171,12 +171,21 @@ fingerprint against the confirmed one: a mismatch fails the handshake and return
 host's own login rate limit, 502 on any other transport failure), mints a token through
 the same `mintEnrollmentToken` helper `createEnrollmentToken` uses (same expiry, hash, and
 `enrollment-token.create` audit event), and pushes `{controller_url, ca_pem, token,
-replace_host}` to the host's `POST /api/local/v1/enrollment` with the login response's
-CSRF token. `ca_pem` is the Controller's own served HTTPS certificate (`-tls-cert`), which
-the host pins for its Controller connection; it is not the host-identity CA. A Controller
-without a configured served certificate returns 503 before contacting the host. A host-side 409 (already enrolled with this same Controller URL and trust) passes through with that host's
-`host_id`; any other host-side failure returns 502 naming `controller_url` so the operator
-knows which address the host tried to reach. Success returns `{host_id, pool_id}` (the
+replace_host, server_name}` to the host's `POST /api/local/v1/enrollment` with the login
+response's CSRF token. `ca_pem` is the Controller's own served HTTPS certificate
+(`-tls-cert`), which the host pins for its Controller connection; it is not the
+host-identity CA. `server_name` is sent only when that certificate does not name the host
+in `controller_url` and does carry a DNS name: it is the certificate's first DNS name, and
+the host verifies its Controller connection by it, exactly as the appliance deployment
+handoff already tells the deploying host to (the appliance deployed with DHCP is minted
+before it has an address, so its certificate names only its hostname while operators reach
+it by IP). Without it that host fails with `x509: cannot validate certificate for <ip>
+because it doesn't contain any IP SANs`. A Controller without a configured served
+certificate returns 503 before contacting the host. A host-side 409 (already enrolled with
+this same Controller URL and trust) passes through with that host's `host_id`; a host-side
+400 after `server_name` was sent is an older host that does not know the field and returns
+502 naming the certificate's name and the upgrade; any other host-side failure returns 502
+naming `controller_url` so the operator knows which address the host tried to reach. Success returns `{host_id, pool_id}` (the
 pool the host's enrollment created or kept, looked up from the `hosts` table) and audits
 `host.add` against the site. The root password is used once for that single login and is
 never stored, logged, or included in any error message. Any failure after a token is
@@ -187,7 +196,9 @@ without a second side effect.
 
 `localEnroll` is a host-local route (root session + CSRF, same as other mutations under
 `/api/local/v1`) that receives that pushed request and calls the same `agent.Enroll` the
-`nex-core-agent enroll` CLI uses. Attempts are serialized per host so a retried click
+`nex-core-agent enroll` CLI uses (`--server-name` is the CLI's form of `server_name`). An
+invalid `server_name` (not a DNS hostname, or an IP address) is a 400 before anything is
+stored; a valid one is persisted with the identity and used for every later report. Attempts are serialized per host so a retried click
 cannot race the embedded agent's on-disk state; the host-local handoff registry lock is
 held only to look up or start the agent, never across the network call to Controller.
 Already-enrolled-under-a-different-identity returns 409 `{error, host_id}`; a Controller
@@ -214,6 +225,10 @@ Version compatibility: this is new, additive surface. An older host without
 `nex-core-agent enroll` flow (unchanged) for such hosts. An older Controller without
 `probeHost`/`addSiteHost` simply lacks the "Add host" UI path; its manual token flow and
 `POST /api/v1/agent/enroll` are unaffected. Neither addition changes Core protocol version 1.
+`server_name` is additive and conditional: an older host still enrolls whenever the
+Controller's certificate names the address it is given, and when it does not, the operator
+is told to upgrade that host or use an address the certificate names. An older Controller
+never sends the field and an upgraded host does not require it.
 
 ## Controller appliance handoff
 
@@ -317,7 +332,9 @@ accepts `{}` and resumes that persisted intent without asking for its password a
 `ready` with progress `100` requires Controller enrollment/adoption and seed cleanup;
 `booted` alone does not. The operation also reports the Controller certificate SHA-256
 fingerprint for independent browser identity verification. Progress represents workflow stages, not elapsed time or bytes.
-`needs_attention` retains the original VM/disk identity. Power actions use separate stable
+`needs_attention` retains the original VM/disk identity. A deployment interrupted before its VM
+was defined (stage `copying_disk` or `creating_seed`), for which libvirt lists no domain with
+its UUID or name, restarts its disk copy under the same UUID on retry or service start (BUG-0540). Power actions use separate stable
 request IDs; replay the same action to reconcile its journal, and inspect fresh VM inventory.
 A completed graceful shutdown request does not establish that the guest has stopped.
 
@@ -1087,6 +1104,14 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   baseline. Each row is `compatible`, `will_not_converge` or `refuses_join`; `eligible` is false
   if and only if some row is `refuses_join`, and `will_not_converge` rows do not block a join.
   It is presentation, not authorization: Core decides every refusal again at submission.
+  Each candidate also carries `peer_address` and `peer_port`: the host and port of the peer
+  origin the candidate reports for itself in `inventory.managed.peer_origin` (an observation
+  it works out from its configured peer listener at every report, the same way a master works
+  out its own origin; the Controller mirrors it for display and stores it nowhere else), or
+  `""` and Core's default port `9444` for a host that reports none. The dialog shows the
+  operator only the address, prefilled, and composes the `peer_origin` it submits from the
+  two; the POST contract above is unchanged. The join records the member's peer origin
+  durably on the master as before.
 
 **What is stored, and for how long.** The operation row, the managed-resource row (payload = the
 client request verbatim, with no invitation) and one audit row (`action = pool-join`, actor = the
@@ -1385,7 +1410,9 @@ an input to the generation equality rule, and a member that has never acknowledg
 reported at `0`, honestly. Both sides also report a `pool-authority-replica` health check: on a
 member `unknown`/`unknown` while awaiting the first push, `failed` with the refusal text, and
 `unknown`/`stale` after two probe intervals (at least one minute) with no push and no master poll;
-on the master, one check covering its ready members, `unknown` until a member has acknowledged,
+on the master, one check covering its ready members, `unknown` until a member has acknowledged
+(a member's status read that matches the current generation and digest refreshes its
+acknowledgement, so a steady pool stays `healthy` without re-posting),
 `failed` with that member's refusal, and `unknown`/`stale` when an acknowledgement is old or behind
 the master's current generation.
 
@@ -1420,7 +1447,7 @@ memory.
 **Related hygiene landed with it.** `pool-vms.json` owner records are now pruned, but only on
 positive evidence: the publishing host is the record's owner, its inventory is complete and at the
 current membership generation, it carries a succeeded `vm-delete` tombstone for that VM ID in the
-new `deleted` field of `PoolVMInventory`, the record has no pending update, and no other host's
+new `deleted` field of `PoolVMInventory`, and no other host's
 stored inventory still defines that VM ID. Absence is never read as deletion. The pool storage peer
 list now also fails closed with `503 pool resource list unavailable: managed journal is incomplete`
 when the managed journal is incomplete, matching networks and media, so a member never converges
@@ -2842,6 +2869,18 @@ it is valid for its own pool, names the same master, keeps the member's own cert
 unchanged, and has a strictly newer generation; it persists that membership and retries the inventory
 once. Any invalid, foreign, identity-changing, non-newer or second stale reply remains refused.
 
+**Settling operations the master reserved but never saw finish (BUG-0536–BUG-0538).** A member
+that refuses a `vm-create` or `vm-update` before executing it (for example because the master's
+reply to `define` or `update-reserve` was lost) journals the operation as `failed` at stage
+`validating`, exactly as Core records its own refusals; a redelivery returns that failure and never
+executes. A `vm-create` interrupted while still `validating` settles as `failed` on its exact retry,
+or on its own after about a minute without one, because Core saves `allocating` before the first VM-specific effect. The inventory carries that
+proof to the master: `deleted` also lists a VM whose only create failed at `validating`, so the
+master releases the owner record it took at admission, and the new optional `aborted` map (operation
+ID → the same `FailedVMUpdateEvidence` `update-abort` uses) lets the master abort a matching
+`pending_update` whose outcome it never received. Every other ambiguity still stays
+`needs_attention`. Older members omit `aborted` and keep the previous behaviour.
+
 API impact: **existing external contract; changed authenticated Core-peer contract** — a
 pool-shared `vm-update` now advances the master-owned VM definition through a durable private
 transition, rather than letting a member's local update leave the master's specification stale.
@@ -2914,8 +2953,8 @@ status (uplink present, bridge name, generation, error). Only `kind=vlan` regist
 listed; host-local bridges and libvirt networks are not. Members materialize the bridge locally
 with the master's network ID, then report access. ISO library metadata for media whose
 `storage_id` is pool-shared is listed at `/api/v1/pool/media` with the same access-report shape;
-bytes ride the shared repository mount, and members journal an adopted `iso-import` after digest
-verification. Controller placement uses `member_access` the same way it does for shared storage.
+bytes ride the shared repository mount, and members journal an adopted `iso-import` once the
+file is present at the listed size; every attach verifies the digest. Controller placement uses `member_access` the same way it does for shared storage.
 
 The synchronous peer lock check uses `POST` and `DELETE` at
 `/api/v1/pool/storage/{repository_id}/lock`, with the current `generation` and a
@@ -2982,8 +3021,9 @@ Members report `pool-network-reconciliation` and `pool-media-reconciliation` in 
 master's guest VLANs and shared ISO entries; the master reports neither. API impact: existing
 contract — no route or field is added, and the process-local observation is not durable state.
 A member re-creates a journalled VLAN guest bridge it observes missing **while the master still
-lists that network**, and skips re-hashing an already adopted ISO whose published file still has
-the recorded size; every media attach still verifies the digest. Once the master has durably
+lists that network**, and adopts or keeps a shared ISO whose file has the recorded size without
+hashing it, since one probe timeout cannot hash a multi-GiB ISO (BUG-0541); every media attach
+verifies the digest. Once the master has durably
 removed the network, the member's journal holds a tombstone instead, so the bridge is torn down
 and never rebuilt. A member's own refusal to remove (a local VM still uses the resource) appears
 in these same two checks, appended to the outcome word from this member's own resource and VM

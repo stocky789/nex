@@ -97,6 +97,9 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
    handoff. Compare the browser certificate's SHA-256 fingerprint with the value shown
    beside the ready link before accepting its trust warning. DHCP uses a hostname certificate
    while the link uses its discovered IP, so the browser may also report a name mismatch.
+   Hosts added later with **Add host** are told that hostname to verify by, so giving them
+   the appliance's IP as the Controller address works; see
+   [Set up Nex Controller and enroll a host](manage-controller.md).
    Check that the chosen Site and the automatically created pool appear in Controller's scope
    menu, and that the enrolled host appears under **Hosts** with the **Master** role. The
    appliance remains visible in the host-local **Virtual machines** list and in Controller's
@@ -146,7 +149,9 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 - **Deployment needs attention or unknown outcome:** inspect the saved operation and the
   existing VM before retrying. Do not erase local state, create another appliance or reuse
   its disk. Select **Retry deployment** on that saved operation to reconcile it. The service
-  also resumes recorded work after restart. Root diagnosis uses `journalctl -u nex-core-local`.
+  also resumes recorded work after restart. A deployment interrupted before its VM existed
+  (still copying the disk or preparing its settings) starts again under the same VM ID; one
+  interrupted later is only reconciled. Root diagnosis uses `journalctl -u nex-core-local`.
 - **Waiting for network:** allow the guest to boot and obtain its DHCP lease. If it cannot
   find one usable address within five minutes, fix the DHCP/bridge connection and retry
   the original operation; do not create another Controller VM.

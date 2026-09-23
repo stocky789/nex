@@ -287,6 +287,11 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 						if journaled, ok := engine.JournaledCommand(cmd.OperationID); ok && reflect.DeepEqual(journaled, cmd) {
 							result.Status, result.Error = "needs_attention", err.Error()
 							replayBlocked, err = true, nil
+						} else if !ok {
+							// The master may have reserved this operation before its reply was
+							// lost. Journal the refusal so the next inventory proves it failed
+							// unapplied and the master releases that reservation.
+							_ = engine.RecordRefusal(ctx, cmd, err.Error())
 						}
 					}
 					if err == nil && !replayBlocked {

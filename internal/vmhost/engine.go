@@ -577,21 +577,34 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 		return Operation{}, err
 	}
 	defer unlock(lock)
+	id := ""
 	if j, err := e.load(s.RequestID); err == nil {
 		if j.Digest != digest || j.Kind != "deploy" {
 			return Operation{}, errors.New("request ID already used with different input")
 		}
-		return e.reconcile(ctx, j)
+		if !e.undefinedDeploy(ctx, j) {
+			return e.reconcile(ctx, j)
+		}
+		// Interrupted before its domain was defined: only its own partial files exist.
+		// Start the copy again under the same UUID.
+		if err = os.RemoveAll(filepath.Dir(j.Disk)); err != nil {
+			return Operation{}, err
+		}
+		if err = os.RemoveAll(filepath.Join(e.config.StateDir, j.VMID+"-seed")); err != nil {
+			return Operation{}, err
+		}
+		id = j.VMID
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Operation{}, err
-	}
-	entries, err := e.journals()
-	if err != nil {
-		return Operation{}, err
-	}
-	for _, j := range entries {
-		if j.Kind == "deploy" {
-			return Operation{}, errors.New("this host already has an appliance deployment; inspect its existing operation")
+	} else {
+		entries, err := e.journals()
+		if err != nil {
+			return Operation{}, err
+		}
+		for _, j := range entries {
+			if j.Kind == "deploy" {
+				return Operation{}, errors.New("this host already has an appliance deployment; inspect its existing operation")
+			}
 		}
 	}
 	p, err := e.Preflight(ctx, s)
@@ -617,9 +630,10 @@ func (e *Engine) Deploy(ctx context.Context, s DeploySpec) (Operation, error) {
 			return Operation{}, errors.New("VM name already exists")
 		}
 	}
-	id, err := newUUID()
-	if err != nil {
-		return Operation{}, err
+	if id == "" {
+		if id, err = newUUID(); err != nil {
+			return Operation{}, err
+		}
 	}
 	dir := filepath.Join(e.config.StorageDir, id)
 	j := journal{Operation: Operation{ID: s.RequestID, VMID: id, Kind: "deploy", Status: "running", Stage: "copying_disk", Progress: 10, ControllerURL: staticURL(s)}, Digest: digest, Name: s.Name, Disk: filepath.Join(dir, "controller.qcow2"), Bridge: e.config.Bridge}
@@ -833,6 +847,26 @@ func managementAddress(data []byte, managementMAC string) (string, error) {
 		return "", errors.New("waiting for a usable DHCP IPv4 address on the Controller management interface")
 	}
 	return found, nil
+}
+
+// undefinedDeploy reports a deploy interrupted before "defining_vm" whose domain libvirt
+// definitely does not have: a successful listing shows neither its UUID nor its name. Any
+// observation failure keeps the operation for reconcile, which never replays effects.
+func (e *Engine) undefinedDeploy(ctx context.Context, j journal) bool {
+	if (j.Status != "running" && j.Status != "needs_attention") || (j.Stage != "copying_disk" && j.Stage != "creating_seed") ||
+		!uuidPattern.MatchString(j.VMID) || j.Disk != filepath.Join(e.config.StorageDir, j.VMID, "controller.qcow2") {
+		return false
+	}
+	vms, err := e.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, v := range vms {
+		if v.ID == j.VMID || v.Name == j.Name {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) reconcile(ctx context.Context, j journal) (Operation, error) {

@@ -13906,6 +13906,14 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolJoinCandidateRow&quot;
       }
+    },
+    &quot;peer_address&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Host part of the peer origin this candidate reports for itself (inventory.managed.peer_origin), or empty when it reports none. The dialog shows and lets the operator edit only this.&quot;
+    },
+    &quot;peer_port&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;Port of that reported peer origin, or Core&#x27;s default pool-peer port 9444 when the host reports none. The dialog composes peer_origin as https://&lt;peer_address&gt;:&lt;peer_port&gt;.&quot;
     }
   },
   &quot;required&quot;: [
@@ -13913,7 +13921,9 @@
     &quot;name&quot;,
     &quot;connection&quot;,
     &quot;eligible&quot;,
-    &quot;rows&quot;
+    &quot;rows&quot;,
+    &quot;peer_address&quot;,
+    &quot;peer_port&quot;
   ]
 }</pre></details>
 <details id="PoolJoinCandidateRow"><summary>PoolJoinCandidateRow</summary><pre>{
@@ -15521,6 +15531,10 @@
         }
       ],
       &quot;description&quot;: &quot;This host&#x27;s own Core-enforced refusal to act on pool authority, reported by whichever host holds it. It is a host report like any other: a restricted old master reports it for itself, which is how an operator sees that it came back and is starting nothing.&quot;
+    },
+    &quot;peer_origin&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;This host&#x27;s own pool-peer origin as it works it out at report time from its configured peer listener (bind address, or the management address behind its default route, plus port): what a pool master would dial to reach it. An observation for the join dialog to prefill, mirrored by the Controller for display only; the join records the member&#x27;s peer origin durably on the master. Omitted when the host has no route to work it out.&quot;
     }
   },
   &quot;required&quot;: [],

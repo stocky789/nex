@@ -1094,7 +1094,7 @@
    "post": {
     "operationId": "localRetryDeployment",
     "summary": "Reconcile the existing deployment",
-    "description": "Explicitly retry the original persisted intent by its request ID without reposting the administrator password. Concurrent retries share the existing worker; a ready static operation remains unchanged, while DHCP rediscovery can refresh its address. VM effects reconcile the original journal and UUID instead of recreating or repeating an uncertain start. Handoff can resume after Controller connectivity returns. DHCP retry and service startup rediscover the original VM address and verify its saved certificate/hostname; ready DHCP startup does this before resuming the existing enrolled agent. A changed lease with an active agent returns needs_attention requiring a local-service restart. This retains VM/host identities and does not require the original administrator password. Leases are not monitored periodically. A 202 response only accepts the retry; poll the original operation until ready or needs_attention.",
+    "description": "Explicitly retry the original persisted intent by its request ID without reposting the administrator password. Concurrent retries share the existing worker; a ready static operation remains unchanged, while DHCP rediscovery can refresh its address. VM effects reconcile the original journal and UUID instead of recreating or repeating an uncertain start; a deploy interrupted before its VM was defined (copying_disk or creating_seed), for which libvirt lists no domain with its UUID or name, removes its own partial files and restarts under the same UUID. Handoff can resume after Controller connectivity returns. DHCP retry and service startup rediscover the original VM address and verify its saved certificate/hostname; ready DHCP startup does this before resuming the existing enrolled agent. A changed lease with an active agent returns needs_attention requiring a local-service restart. This retains VM/host identities and does not require the original administrator password. Leases are not monitored periodically. A 202 response only accepts the retry; poll the original operation until ready or needs_attention.",
     "security": [
      {
       "LocalSession": []
@@ -1242,7 +1242,7 @@
    "post": {
     "operationId": "localEnroll",
     "summary": "Push an enrollment token to this host",
-    "description": "Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent's on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller's rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.",
+    "description": "Lets the Controller enroll this host over its existing local session instead of the manual nex-core-agent enroll step. controller_url must be a bare HTTPS origin (no userinfo, path, query or fragment); ca_pem must contain at least one certificate; token must be 1-256 bytes with no control characters; replace_host, when set, is an existing revoked host id being replaced and must be at most 128 characters. server_name, when set, is the DNS hostname the Controller certificate is verified by and is kept with the identity for every later report; it must be a DNS hostname, not an IP address. Enrollment attempts on this host are serialized; a retried request queues rather than racing the embedded agent's on-disk identity. Already enrolled with a different replace_host returns 409 with the current host_id and changes nothing. On success the embedded agent persists its new identity, starts reporting to the Controller, and the response host_id also appears from GET /api/local/v1/host. The Controller's rejection of the token (expired, already used, wrong site) surfaces as 502 and leaves this host unenrolled; retrying with a fresh token is safe. The token and ca_pem are never logged or echoed back.",
     "security": [
      {
       "LocalSession": []
@@ -2333,6 +2333,10 @@
      "replace_host": {
       "type": "string",
       "description": "Existing revoked host id being re-enrolled, at most 128 characters. Omit for a new host."
+     },
+     "server_name": {
+      "type": "string",
+      "description": "DNS hostname to verify the Controller certificate by when controller_url's host is not one of the certificate's names, for example the hostname of a Controller appliance deployed with DHCP. Must be a DNS hostname, never an IP address. Omit to verify by controller_url's host."
      }
     },
     "required": [

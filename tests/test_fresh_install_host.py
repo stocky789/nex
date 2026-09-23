@@ -65,9 +65,10 @@ class FreshInstallHostTests(unittest.TestCase):
             self.assertTrue(any(host.services_active_command(units) in command for units in
                                 [('nex-core-local', 'libvirtd.socket', 'ssh'), ('nex-core-local', 'libvirtd.socket', 'ssh', 'networking', 'chrony')]))
             raise subprocess.CalledProcessError(1, command)
-        with patch.object(host, 'ssh', side_effect=ssh):
+        with tempfile.TemporaryDirectory() as lab, patch.object(host, 'ssh', side_effect=ssh):
+            (Path(lab) / 'config.json').write_text(json.dumps({'hostname': 'nex-fresh-lab'}))
             with self.assertRaises(subprocess.CalledProcessError):
-                host.baseline(Path('/lab'), Path('/no-evidence'))
+                host.baseline(Path(lab), Path('/no-evidence'))
             with patch.object(host.time, 'monotonic', side_effect=[0, 0, 2]), patch.object(host.time, 'sleep'):
                 with self.assertRaisesRegex(AssertionError, 'did not return'):
                     host.wait_for_host_reboot(Path('/lab'), '01234567-89ab-cdef-0123-456789abcdef', timeout=1)

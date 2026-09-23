@@ -246,7 +246,7 @@ def bios_guest_persistence(lab, evidence, expected_version, image_path, key_path
 
 
 def baseline(lab, evidence, expected_version='0.1.0+managed1'):
-    assert ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab'
+    assert ssh(lab, 'hostname', text=True).stdout.strip() == json.loads((lab / 'config.json').read_text())['hostname']
     ssh(lab, services_active_command(('nex-core-local', 'libvirtd.socket', 'ssh', 'networking', 'chrony')), text=True)
     output = ssh(lab, '''set -eu
 uname -a

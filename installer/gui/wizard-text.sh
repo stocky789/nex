@@ -88,7 +88,17 @@ nocomma() { printf '%s' "$1" | tr ',' ' '; }
 
 # sysfs pads serials and model names; nex-config compares stripped values, so a
 # kept space would look like the disk or adapter had been swapped.
-read_attr() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" 2>/dev/null || true; }
+read_attr() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$@" 2>/dev/null || true; }
+
+# NVMe reports device/serial and virtio-blk serial. SATA, SAS and SCSI disks only
+# expose the unit-serial VPD page: a 4-byte binary header, then the serial; the
+# same order as nex_install_disk_serial, which nex-config compares against.
+disk_serial() {
+    serial=$(read_attr "$SYS/class/block/$1/device/serial")
+    [ -n "$serial" ] || serial=$(read_attr "$SYS/class/block/$1/serial")
+    [ -n "$serial" ] || serial=$(tail -c +5 "$SYS/class/block/$1/device/vpd_pg80" 2>/dev/null | tr '\000' '\n' | head -n 1 | read_attr)
+    printf '%s' "$serial"
+}
 
 # SSD, HDD or NVMe, and whether a disk already holds partitions: the same facts the
 # graphical wizard shows in its columns, so the operator can tell the disks apart.
@@ -374,7 +384,7 @@ step_disk() {
     for name in $disks; do
         sectors=$(read_attr "$SYS/class/block/$name/size")
         model=$(read_attr "$SYS/class/block/$name/device/model")
-        serial=$(read_attr "$SYS/class/block/$name/device/serial")
+        serial=$(disk_serial "$name")
         entry=$(nocomma "$name - $((sectors / 2097152)) GiB - $(disk_kind "$name")${model:+ - $model}${serial:+ - $serial} - $(disk_contents "$name")")
         if [ -z "$choices" ]; then choices=$entry; else choices="$choices, $entry"; fi
     done
@@ -412,7 +422,7 @@ step_erase() {
     targets= ; capacities= ; serials=
     for name in $v_disks; do
         sectors=$(read_attr "$SYS/class/block/$name/size")
-        serial=$(read_attr "$SYS/class/block/$name/device/serial")
+        serial=$(disk_serial "$name")
         targets="${targets:+$targets, }/dev/$name"
         capacities="${capacities:+$capacities, }$((sectors / 2097152)) GiB ($((sectors * 512)) bytes)"
         serials="${serials:+$serials, }${serial:-not reported}"
@@ -492,7 +502,7 @@ write_config() {
                 case $key in
                     disk) printf '/dev/%s;' "$name" ;;
                     disk_size) printf '%s;' "$(($(read_attr "$SYS/class/block/$name/size") * 512))" ;;
-                    disk_serial) printf '%s;' "$(ini_list "$(read_attr "$SYS/class/block/$name/device/serial")")" ;;
+                    disk_serial) printf '%s;' "$(ini_list "$(disk_serial "$name")")" ;;
                     disk_major_minor) printf '%s;' "$(ini_list "$(read_attr "$SYS/class/block/$name/dev")")" ;;
                 esac
             done

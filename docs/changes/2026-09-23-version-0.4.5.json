@@ -1,5 +1,5 @@
 {
-  "summary": "Bump the changelog-derived project version from 0.4.4 (tagged v0.4.4) to 0.4.5 and record the Controller web UI modernization under the new heading.",
+  "summary": "Bump the changelog-derived project version from 0.4.4 to 0.4.5 and move the installer disk-column resize and disk-serial fixes (BUG-0529, BUG-0530) under the new heading. API impact: none — no operation is introduced or changed, so no x-introduced-version stamp moves.",
   "paths": [
     "CHANGELOG.md",
     "installer/README.md",
@@ -14,7 +14,7 @@
   ],
   "guide": {
     "impact": "updated",
-    "reason": "Working-version stamps on install, updates, publish and pool guide pages move to 0.4.5; operator workflows unchanged by the bump.",
+    "reason": "Working-version stamps on install, updates, publish and pool guide pages move to 0.4.5; operator workflows unchanged.",
     "pages": [
       "docs/guide/install-nex-core.md",
       "docs/guide/software-updates.md",
@@ -27,7 +27,7 @@
   },
   "api": {
     "impact": "none",
-    "reason": "No operation is introduced or changed in 0.4.5; existing x-introduced-version values name the releases that introduced each operation and stay as they are. generate_api.py --check is unchanged.",
+    "reason": "Installer-only fixes ship in 0.4.5; no Controller or Core operation is introduced or changed, so the generated API reference keeps its existing version stamps.",
     "pages": []
   },
   "roadmap": {
@@ -40,7 +40,7 @@
     "reason": "No durable product setting or resource is introduced."
   },
   "verification": {
-    "method": "python3 scripts/release-version.py --current --format both returns 0.4.5; python3 -m unittest tests.test_release_version; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree.",
+    "method": "python3 scripts/release-version.py --current --format both and --tag v0.4.5 return 0.4.5; python3 -m unittest tests.test_release_version; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p test_repository_privacy.py.",
     "evidence": [
       "scripts/release-version.py",
       "tests/test_release_version.py",

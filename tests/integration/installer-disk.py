@@ -68,12 +68,14 @@ static gboolean contents(const gchar *path, gchar **out, gsize *length, GError *
         else if (g_str_has_suffix(path,"/dev")) s=!strcmp(scenario,"identity") ? "202:16"
             : strstr(path,"/xvdc/") ? "202:32"
             : strstr(path,"/xvdb/") ? "202:16" : "202:0";
-        else if (g_str_has_suffix(path,"/device/serial")) s=!strcmp(scenario,"serial") ? "replacement"
-            : strstr(path,"/xvdc/") ? "third-disk"
-            : strstr(path,"/xvdb/") ? "partner-disk" : "test-disk";
     }
     assert(s && "unexpected filesystem read");
     *out=g_strdup(s); return TRUE;
+}
+static char *stub_serial(const char *block) {
+    return g_strdup(!strcmp(scenario,"serial") ? "replacement"
+        : strstr(block,"/xvdc") ? "third-disk"
+        : strstr(block,"/xvdb") ? "partner-disk" : "test-disk");
 }
 static int disk_stat(const char *path, struct stat *st) {
     assert(g_str_has_prefix(path,"/dev/"));
@@ -93,6 +95,7 @@ static char *disk_realpath(const char *path, char *resolved) {
     return strdup("/sys/devices/vbd/block/xvda");
 }
 #define g_file_get_contents contents
+#define nex_install_disk_serial stub_serial
 #define stat(path, out) disk_stat(path, out)
 #define g_file_test file_test
 #define realpath disk_realpath
@@ -154,14 +157,96 @@ int main(void) {
     return 0;
 }
 '''
+# BUG-0529: GTK2 expand columns could never be dragged narrower and the other columns sat at
+# their minimum widths. Allocate the real disk list under Xvfb and drag its dividers with XTest.
+columns = wizard[wizard.index('/* Wide Model/Serial columns must ellipsize'):wizard.index('/* GtkLabel wrap ignores')]
+column_harness = r'''
+#include <gtk/gtk.h>
+#include <assert.h>
+enum { DISK_SELECTED, DISK_NAME, DISK_CAPACITY, DISK_TYPE, DISK_MODEL, DISK_SERIAL, DISK_CONTENTS, DISK_INDEX, DISK_COLUMNS };
+static void disk_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer unused) { (void)cell; (void)path; (void)unused; }
+static gboolean disk_key(GtkWidget *widget, GdkEventKey *event, gpointer unused) { (void)widget; (void)event; (void)unused; return FALSE; }
+''' + columns + r'''
+static GtkWidget *view;
+static gint width(gint i) { return gtk_tree_view_column_get_width(gtk_tree_view_get_column(GTK_TREE_VIEW(view), i)); }
+static void settle(void) { gdk_flush(); g_usleep(150000); while (gtk_events_pending()) gtk_main_iteration(); }
+/* Drag a column's right-hand divider (its own 6 px handle window) by dx pixels through
+ * xdotool, a separate X client, exactly as an operator's pointer arrives; the main loop
+ * keeps running meanwhile so the list handles the press, motion and release live. */
+static void drag(gint i, gint dx)
+{
+    GtkTreeViewColumn *column = gtk_tree_view_get_column(GTK_TREE_VIEW(view), i);
+    gint x, y; gchar *command;
+    gdk_window_get_origin(column->window, &x, &y);
+    x += 3; y += column->button->allocation.height / 2;
+    command = g_strdup_printf("xdotool mousemove %d %d sleep 0.1 mousedown 1 sleep 0.2 mousemove %d %d sleep 0.1 mousemove %d %d sleep 0.1 mouseup 1",
+        x, y, x + dx / 2, y, x + dx, y);
+    assert(g_spawn_command_line_async(command, NULL));
+    g_free(command);
+    for (i = 0; i < 10; i++) settle();
+    g_printerr("after dragging %s by %d:", gtk_tree_view_column_get_title(column), dx);
+    for (i = 0; i < 7; i++) g_printerr(" %d", width(i));
+    g_printerr("\n");
+}
+int main(int argc, char **argv)
+{
+    GtkWidget *window, *scroll; GtkTreeIter iter; GtkAdjustment *h;
+    gtk_init(&argc, &argv);
+    window = gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_default_size(GTK_WINDOW(window), 940, 200);
+    view = disk_list_widget();
+    gtk_list_store_append(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(view))), &iter);
+    gtk_list_store_set(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(view))), &iter, DISK_NAME, "/dev/nvme0n1",
+        DISK_CAPACITY, "1863.0 GiB", DISK_TYPE, "NVMe", DISK_MODEL, "Example Vendor Datacentre NVMe 2TB Model Name",
+        DISK_SERIAL, "EXAMPLE0123456789SERIAL", DISK_CONTENTS, "Has partitions", -1);
+    scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_container_add(GTK_CONTAINER(scroll), view); gtk_container_add(GTK_CONTAINER(window), scroll);
+    gtk_widget_show_all(window); settle();
+    /* Default spread: Use 40 px, then 13/12/8/25/22/20 % of the remaining 900 px, filling the list. */
+    assert(width(0) == 40 && width(1) == 117 && width(2) == 108 && width(3) == 72);
+    assert(width(4) == 225 && width(5) == 198 && width(6) == 180);
+    h = gtk_tree_view_get_hadjustment(GTK_TREE_VIEW(view));
+    assert(gtk_adjustment_get_upper(h) == gtk_adjustment_get_page_size(h));
+    drag(4, -60); assert(width(4) == 165 && width(6) == 240);  /* Model shrinks; Contents takes the slack */
+    drag(5, -50); assert(width(5) == 148 && width(6) == 290);
+    drag(1, 40); assert(width(1) == 157 && width(6) == 250);  /* Device grows at Contents' expense */
+    return 0;
+}
+'''
+serial_harness = r'''
+#include <stdio.h>
+#include "nex-network.h"
+int main(int argc, char **argv) { gchar *s = nex_install_disk_serial(argv[argc - 1]); printf("%s", s); g_free(s); return 0; }
+'''
 with tempfile.TemporaryDirectory(prefix='nex-disk-check-') as directory:
     path=Path(directory)
     (path/'check.c').write_text(harness)
+    (path/'serial.c').write_text(serial_harness)
     (path/'summary.c').write_text(summary_harness)
     flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','glib-2.0'],text=True))
     subprocess.run(['cc','-Wall','-Wextra','-Werror','-Iinstaller/gui',str(path/'check.c'),'installer/gui/nex-network.c','-o',str(path/'check'),*flags],check=True)
     subprocess.run(['cc','-Wall','-Wextra','-Werror',str(path/'summary.c'),'-o',str(path/'summary'),*flags],check=True)
     subprocess.run([str(path/'summary')],check=True)
+    subprocess.run(['cc','-Wall','-Wextra','-Werror','-Iinstaller/gui',str(path/'serial.c'),'installer/gui/nex-network.c','-o',str(path/'serial'),*flags],check=True)
+    # BUG-0530: only NVMe has device/serial. virtio-blk reports serial and SATA/SAS/SCSI only
+    # the binary unit-serial VPD page, so the same helper falls back in that order.
+    for name, files, expected in [
+        ('nvme0n1', {'device/serial': b'  NVME0123456   \n', 'device/vpd_pg80': b'\x00\x80\x00\x05OTHER'}, 'NVME0123456'),
+        ('vda', {'serial': b'virtio-serial-1\n'}, 'virtio-serial-1'),
+        ('sda', {'device/vpd_pg80': b'\x00\x80\x00\x14S3Z8NB0K123456X     \x00\x00', 'device/model': b'EXAMPLE SSD\n'}, 'S3Z8NB0K123456X'),
+        ('sdb', {'device/vpd_pg80': b'\x00\x80\x00\x00'}, ''),
+        ('xvda', {'device/model': b'\n'}, ''),
+    ]:
+        block=path/'sys/class/block'/name
+        for attribute, data in files.items():
+            (block/attribute).parent.mkdir(parents=True, exist_ok=True); (block/attribute).write_bytes(data)
+        actual=subprocess.run([str(path/'serial'),str(block)],capture_output=True,text=True,check=True).stdout
+        assert actual==expected, (name, actual, expected)
+    (path/'columns.c').write_text(column_harness)
+    gtk=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-2.0'],text=True))
+    subprocess.run(['cc','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',str(path/'columns.c'),'-o',str(path/'columns'),*gtk],check=True)
+    # xvfb-run's default screen is 640x480: wide enough for a BMC console, not for the 940 px list.
+    subprocess.run(['xvfb-run','--auto-servernum','--server-args=-screen 0 1280x1024x24',str(path/'columns')],check=True)
     def check(scenario, disk, error=None):
         result=subprocess.run([str(path/'check'),scenario,disk],capture_output=True,text=True)
         assert result.returncode==(1 if error else 0), (scenario,disk,result.returncode,result.stderr)
@@ -193,3 +278,5 @@ with tempfile.TemporaryDirectory(prefix='nex-disk-check-') as directory:
     check('valid','','Select the disk or disks')
 print('PASS: actual disk validator accepts Xen/SCSI/virtio/NVMe whole disks, validates every mirror member, and rejects unsafe targets (simulated device boundary)')
 print('PASS: disk_summary_text reports single, equal mirror, 5%-apart, over-10% and empty selections')
+print('PASS: disk list columns share the width by weight and every divider drags narrower or wider (Xvfb)')
+print('PASS: nex_install_disk_serial reads NVMe device/serial, virtio-blk serial and the SCSI unit-serial VPD page, in that order')

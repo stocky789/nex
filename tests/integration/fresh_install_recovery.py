@@ -125,7 +125,7 @@ def main():
         path = evidence / (stem + ('-' + args.label if args.label else '') + dot + ext)
         assert not new or not path.exists(), 'refusing to overwrite existing evidence ' + path.name
         return path
-    assert ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab'
+    assert ssh(lab, 'hostname', text=True).stdout.strip() == json.loads((lab / 'config.json').read_text())['hostname']
     browser = json.loads((evidence / 'browser-managed-results.json').read_text())
     # Guests created later by the browser create-vm stage are recorded in their own results.
     recorded = {v['id']: v for path in [evidence / 'browser-managed-results.json', *sorted(evidence.glob('browser-create-vm-*-results.json'))]

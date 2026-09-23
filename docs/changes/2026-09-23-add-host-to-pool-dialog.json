@@ -1,0 +1,41 @@
+{
+  "summary": "Add host to pool states that it joins an already enrolled host, offers Enroll a new host… when there is none, and shows the peer address and confirm button only after a host is chosen; the enrollment success line points to the join (BUG-0532).",
+  "paths": [
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/main.tsx",
+    "tests/integration/site_selector_browser.py",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/manage-controller.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-23-add-host-to-pool-dialog.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Join step 2 describes the dialog's opening sentence, the empty state's Enroll a new host… action and where it leads; step 4 says the peer address appears once a host is selected and names the 9444 peer port against the 9443 setup port; the Controller guide's Add host success text gains the pointer to the join.",
+    "pages": ["docs/guide/join-a-pool.md", "docs/guide/manage-controller.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI text and placement only; the same GET join-candidates and POST join calls are made with the same payloads.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation only; no durable state anywhere."
+  },
+  "verification": {
+    "method": "node web/src/pool-members.test.mjs and npx tsc --noEmit in web/ (model sentence rendered; no peer-origin input or confirm button before a selection; Enroll a new host… only when the page supplies the form); .cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py against the rebuilt web/dist in headless Chromium with API route fixtures: empty dialog states the model and offers no address field, Enroll a new host… closes it and opens Add host to Site 055, a fixture candidate reveals the peer address and the confirm button which enables once an address is entered; captures join-dialog-no-candidates.png, join-dialog-to-add-host.png and join-dialog-host-selected.png inspected. Not exercised against a real Controller with two enrolled hosts.",
+    "evidence": [
+      "web/src/pool-members.test.mjs",
+      "tests/integration/site_selector_browser.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

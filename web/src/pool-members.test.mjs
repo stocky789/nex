@@ -93,11 +93,11 @@ assert.equal(convergenceSummary(member, false), "Checks 1 healthy, 1 failed · A
 
 // The dialog: an incompatible uplink does not block the join, a refusing candidate cannot be picked.
 const candidates = [
-  { host_id: "host-c", name: "core-c", connection: "fresh", eligible: true, rows: [
+  { host_id: "host-c", name: "core-c", connection: "fresh", eligible: true, peer_port: 9444, rows: [
     { check: "version", subject: "0.3.5", result: "compatible" },
     { check: "uplink", subject: "VLAN 100 on lab0", result: "will_not_converge", detail: "uplink lab0 does not exist on core-c" },
   ] },
-  { host_id: "host-d", name: "core-d", connection: "fresh", eligible: false, rows: [
+  { host_id: "host-d", name: "core-d", connection: "fresh", eligible: false, peer_port: 9444, rows: [
     { check: "vms", subject: "2 virtual machines", result: "refuses_join", detail: "a host with virtual machines cannot join a pool" },
   ] },
 ];
@@ -107,12 +107,13 @@ assert.match(dialog, /<input type="radio" name="join-candidate" value="host-c"/,
 assert.match(dialog, /<input type="radio" disabled="" name="join-candidate" value="host-d"/, "a refusing candidate is visible but not selectable");
 assert.match(dialog, /refuses join: 2 virtual machines · a host with virtual machines cannot join a pool/);
 assert.doesNotMatch(dialog, /one way in this release|cannot be removed from the pool again/, "S5 gave the pool an eject, so the join dialog no longer says joining is one way");
-// The peer origin is a labelled input with help text that says whose reachability it is.
-assert.match(dialog, /<label for="peer-origin">/);
-assert.match(dialog, /id="peer-origin"[^>]*aria-describedby="peer-origin-help"/);
-assert.match(dialog, /the pool master uses to reach this host/);
-// Nothing is selected on open, so the confirm button cannot submit a join by itself.
-assert.match(dialog, /disabled[^>]*>Add host to pool</);
+// The dialog says what it is for before anything else: operators took it for the place to
+// enter a fresh host's address. Until a host is chosen there is no address field and no
+// confirm button, so nothing reads as "type the new host's address here"; the selected
+// state is walked through in the browser (tests/integration/site_selector_browser.py).
+assert.match(dialog, /This pool grows by joining a host already enrolled in this site\. Every enrolled host starts as the master of its own pool\./);
+assert.doesNotMatch(dialog, /peer-origin|Add host to pool<\/button>/);
+assert.match(dialog, /<button type="button">Cancel<\/button>/);
 // The master works out its own peer address, so the dialog never asks for it.
 assert.doesNotMatch(dialog, /master-url|Pool master peer address/);
 // An error carries the server's own message, for example the 409 the Controller returns.
@@ -121,18 +122,24 @@ assert.match(conflict, /role="alert"[^>]*>host core-d is already a member of poo
 // Loading and candidate-error states.
 assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [], loading: true })), /Asking the hosts for their current state/);
 assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [], error: "pool master is not connected" })), /pool master is not connected/);
-// An empty list is not "no master": the host to add has not enrolled yet, so say how to enroll it.
-const noCandidates = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [] }));
-assert.match(noCandidates, /There is no other enrolled host at this site to add\. Enroll the new host first with <strong>Add host<\/strong> in the scope menu/);
-assert.doesNotMatch(noCandidates, /master of its own single-host pool/);
+// An empty list is not "no master": the host to add has not enrolled yet, so lead to enrolling
+// it. The button is the page's own Add host form; without a page there is only the sentence.
+const noCandidates = renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [], onEnrollHost: () => {} }));
+assert.match(noCandidates, /There is no other enrolled host at this site yet\. Enroll the new host first; once it reports, it appears here\./);
+assert.match(noCandidates, /<button type="button">Enroll a new host…<\/button>/);
+assert.doesNotMatch(noCandidates, /peer-origin|Add host to pool<\/button>|master of its own single-host pool/);
+assert.doesNotMatch(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [] })), /Enroll a new host/);
 
-// peer_origin is validated here so an obvious mistake does not spend a round trip on a 400.
-assert.deepEqual(peerOriginOf(" https://192.0.2.12:9444 "), { origin: "https://192.0.2.12:9444", error: "" });
-assert.deepEqual(peerOriginOf("https://192.0.2.12:9444/"), { origin: "https://192.0.2.12:9444", error: "" });
-assert.match(peerOriginOf("192.0.2.12:9444").error, /https address/);
-assert.match(peerOriginOf("http://192.0.2.12:9444").error, /must use https/);
-assert.match(peerOriginOf("https://192.0.2.12:9444/api").error, /no path/);
-assert.match(peerOriginOf("https://user:pw@192.0.2.12:9444").error, /no path/);
+// The operator enters only the address; the origin Core wants is composed with the port the
+// host reports. Anything but a bare address is refused rather than guessed at.
+assert.deepEqual(peerOriginOf(" 192.0.2.12 ", 9444), { origin: "https://192.0.2.12:9444", error: "" });
+assert.deepEqual(peerOriginOf("Core-B.example", 9500), { origin: "https://core-b.example:9500", error: "" });
+assert.deepEqual(peerOriginOf("fd00::12", 9444), { origin: "https://[fd00::12]:9444", error: "" });
+for (const bad of ["", "192.0.2.12:9444", "https://192.0.2.12:9444", "192.0.2.12/", "192.0.2", "host name"]) assert.match(peerOriginOf(bad, 9444).error, /address only/, bad);
+// A candidate carries the address it reports and the port the origin is composed with.
+assert.match(renderToStaticMarkup(createElement(AddHostDialog, { ...dialogProps, candidates: [{ ...candidates[0], peer_address: "192.0.2.12", peer_port: 9444 }] })), /host-c/);
+assert.match(peerOriginOf("https://192.0.2.12:9444/api", 9444).error, /address only/);
+assert.match(peerOriginOf("user:pw@192.0.2.12", 9444).error, /address only/);
 
 // One request identity per submitted payload: a retry after a lost reply replays it, and only a
 // real edit mints a new one.

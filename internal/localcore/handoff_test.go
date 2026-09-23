@@ -143,7 +143,7 @@ func TestHandoffControllerLostResponses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = agent.Enroll(context.Background(), store, srv.URL, trust, state.Token, ""); err == nil {
+	if err = agent.Enroll(context.Background(), store, srv.URL, trust, state.Token, "", ""); err == nil {
 		t.Fatal("expected lost enrollment response")
 	}
 	csr := store.State.CSRPEM
@@ -153,7 +153,7 @@ func TestHandoffControllerLostResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err = agent.Enroll(context.Background(), store, srv.URL, trust, state.Token, ""); err != nil {
+	if err = agent.Enroll(context.Background(), store, srv.URL, trust, state.Token, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if store.State.HostID == "" || store.State.CSRPEM != csr {
