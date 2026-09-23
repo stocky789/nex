@@ -66,6 +66,16 @@ exercised by this slice's checks.
 
 ## Recorded outcome
 
+**Native fault/recovery acceptance closed for disposable virtual-lab scope, 2026-09-23.** The
+remaining matrix (Controller replacement, storage identity loss, membership changes during
+placement, interrupted multi-host definition recovery, lost replies) passed on ISO-installed
+hosts with `tests/integration/placement_faults.py`; see the
+[lab record](../qa/2026-09-23-phase3-placement-lab.md). It found BUG-0536 to BUG-0538. Decisions
+(project owner, 2026-09-23): a create interrupted while validating settles as failed and releases
+its master record; a member journals an operation it refused before executing, and its pool
+inventory's new `aborted` evidence lets the master release the matching update reservation. API
+impact: **changed contract** (Core-peer pool VM inventory: `deleted` meaning, new `aborted`).
+
 Controller, Core, peer contracts and guide changes are implemented. Full Go race
 checks, a final agent race rerun, API/reference checks, simulated browser workflows
 and documentation/privacy gates passed; see the [QA report](../qa/2026-09-18-master-vm-placement.md).

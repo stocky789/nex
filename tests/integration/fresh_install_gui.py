@@ -30,27 +30,28 @@ def main():
         key(lab, 'alt', mnemonic); key(lab, 'ctrl', 'a'); type_text(lab, value)
     if args.stage == 'configure':
         shot('installer-welcome')
-        click(lab, 740, 543); time.sleep(.5)
+        click(lab, 745, 566); time.sleep(.5)
         field('h', config['hostname'])
         password = Path(config['root_password_file']).read_text()
         field('r', password); field('p', password)
         shot('installer-host')
-        click(lab, 740, 543); time.sleep(.5)
-        click(lab, 500, 284); key(lab, 'home'); key(lab, 'down'); key(lab, 'ret')
+        click(lab, 745, 566); time.sleep(.5)
+        click(lab, 585, 203); key(lab, 'home'); key(lab, 'down'); key(lab, 'ret')
         time.sleep(6)
-        click(lab, 500, 438); key(lab, 'home'); key(lab, 'down'); key(lab, 'ret')
+        click(lab, 517, 341); key(lab, 'home'); key(lab, 'down'); key(lab, 'ret')
         shot('installer-network')
-        click(lab, 740, 543); time.sleep(.5)
-        # Tick the Use column (row highlight alone does nothing). Around x=180 on the 800x600 UI.
-        click(lab, 180, 217)
+        # The Disk page probes disks on entry; a tick before it settles only highlights the row.
+        click(lab, 745, 566); time.sleep(3)
+        # Tick the Use column (row highlight alone does nothing). Around x=138 on the 800x600 UI.
+        click(lab, 138, 163)
         if args.mirror:
             # Wait so GTK does not read the two ticks as one double click.
             time.sleep(1)
-            click(lab, 180, 240)
+            click(lab, 138, 185)
         shot('installer-target')
-        click(lab, 740, 543)
+        click(lab, 745, 566)
         shot('installer-review')
-        click(lab, 740, 543)
+        click(lab, 745, 566)
         shot('installer-confirmation-required')
         for target in lab_disks(lab):
             with target.open('rb') as disk:
@@ -62,7 +63,7 @@ def main():
                 assert disk.read(1024 * 1024) == bytes(1024 * 1024), 'installation stage only accepts still-blank new lab targets'
         key(lab, 'alt', 'e')
         shot('installer-confirmed')
-        click(lab, 740, 543)
+        click(lab, 745, 566)
         time.sleep(5)
         shot('installer-progress-start')
     elif args.stage == 'restart':

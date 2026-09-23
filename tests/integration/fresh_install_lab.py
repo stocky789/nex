@@ -115,23 +115,40 @@ def start(lab, iso, evidence, installed=False, uefi=False, detach=(), uefi_code=
         '-device', 'qemu-xhci,id=xhci', '-device', 'usb-tablet,bus=xhci.0',
         '-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{p["ssh"]}-10.0.2.15:22,hostfwd=tcp:127.0.0.1:{p["core"]}-10.0.2.15:9443,hostfwd=tcp:127.0.0.1:{p["controller"]}-10.0.2.20:8443',
         '-device', 'virtio-net-pci,netdev=n0,mac=52:54:00:91:20:15', '-no-reboot']
+    if config.get('tap'):
+        # Multi-host lab: share an isolated, uplink-free bridge instead of private user
+        # networking. Loopback forwards keep the same ports; the caller owns the bridge.
+        command[command.index('-netdev') + 1] = f'tap,id=n0,ifname={config["tap"]},script=no,downscript=no'
+        command[command.index('-netdev') + 3] = f'virtio-net-pci,netdev=n0,mac={config["mac"]}'
+        for name, target in (('ssh', f'{config["address"]}:22'), ('core', f'{config["address"]}:9443'), ('controller', '10.0.2.20:8443')):
+            subprocess.Popen(['socat', f'TCP-LISTEN:{p[name]},bind=127.0.0.1,reuseaddr,fork', f'TCP:{target}'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     # Every prepared target, minus any the caller detached to prove the host still boots.
     for index, disk in enumerate(lab_disks(lab)):
         if disk.name in detach:
             continue
         command.extend(['-drive', f'file={disk},format=raw,if=none,id=hostdisk{index}',
             '-device', f'virtio-blk-pci,drive=hostdisk{index},serial=NEX-FRESH-QA-ONLY-{index},bootindex={index + 2}'])
-    if uefi:
+    if config.get('secure_boot'):
+        # Enforcing Secure Boot: SMM-protected OVMF with the Microsoft keys enrolled.
+        ovmf_code, ovmf_vars = Path(config['secure_boot']['code']), Path(config['secure_boot']['vars'])
+        uefi = True
+    elif uefi:
         ovmf_code, ovmf_vars = resolve_ovmf(uefi_code)
+    if uefi:
         firmware = lab / 'OVMF_VARS.fd'
         if not firmware.exists():
             firmware.write_bytes(ovmf_vars.read_bytes())
         command.extend(['-drive', f'if=pflash,format=raw,readonly=on,file={ovmf_code}',
-            '-drive', f'if=pflash,format=raw,file={firmware}',
-            '-machine', 'q35'])
+            '-drive', f'if=pflash,format=raw,file={firmware}'])
+        if config.get('secure_boot'):
+            command.extend(['-machine', 'q35,smm=on', '-global', 'driver=cfi.pflash01,property=secure,value=on'])
+        else:
+            command.extend(['-machine', 'q35'])
     if not installed:
         iso = iso.resolve(strict=True)
-        command.extend(['-cdrom', str(iso), '-boot', 'd'])
+        # bootindex, not -boot d: the disks carry bootindex, which wins once they are not blank.
+        command.extend(['-drive', f'file={iso},media=cdrom,if=none,id=cd0,readonly=on', '-device', 'ide-cd,drive=cd0,bootindex=1'])
         config['iso'] = str(iso)
         config['iso_sha256'] = hashlib.file_digest(iso.open('rb'), 'sha256').hexdigest()
         (lab / 'config.json').write_text(json.dumps(config, indent=2) + '\n')

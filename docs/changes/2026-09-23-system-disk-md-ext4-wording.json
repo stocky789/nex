@@ -1,0 +1,35 @@
+{
+  "summary": "Clarify operator docs that a mirrored system disk is Linux md RAID1 with an ext4 root, not ZFS.",
+  "paths": [
+    "docs/guide/install-nex-core.md",
+    "docs/guide/replace-a-failed-system-disk.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Install guide already named md RAID1 and ext4; replace guide and expected-result wording now say the same so the replace workflow is not read as ZFS. Changelog minor-feature line matches.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/replace-a-failed-system-disk.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Wording only; no Controller or Core contract changed.",
+    "operations": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation wording only; durable mirror state is unchanged."
+  },
+  "verification": {
+    "method": "Inspected docs/guide/install-nex-core.md steps already stating Linux software RAID1 (md) with one ext4 root; confirmed replace guide and changelog now match that wording. No new install walkthrough; layout unchanged from the existing installer-mirror QA.",
+    "evidence": [
+      "docs/qa/iso/2026-09-22-installer-mirror.md"
+    ]
+  }
+}

@@ -366,9 +366,10 @@ func trustedPoolVMAutostartStateDir(path string) error {
 // prunePoolVMOwners removes owner records for VMs their owner has provably deleted. The
 // rule is positive evidence only, never absence: a record is removed when the host that
 // just published its inventory is the record's owner, that inventory carries a succeeded
-// vm-delete tombstone for the same pool and host, the record has no pending update to
-// reconcile, and no other host's stored inventory still defines that VM. A deleted VM ID
-// can never be defined again on the same host, so the tombstone cannot prune a later VM.
+// vm-delete tombstone (or a create it proved failed before allocating) for the same pool
+// and host, and no other host's stored inventory still defines that VM. A deleted VM ID
+// can never be defined again on the same host, so the tombstone cannot prune a later VM,
+// and a pending update for it can no longer take effect.
 // Everything else is kept: an unreported, unreachable or mid-placement VM keeps its owner
 // record, because a lost record is a lost fence. It returns the pruned IDs.
 func prunePoolVMOwners(state *poolVMState, observedHost string) []string {
@@ -388,7 +389,7 @@ func prunePoolVMOwners(state *poolVMState, observedHost string) []string {
 	var pruned []string
 	for _, id := range inventory.Deleted {
 		record, exists := state.VMs[id]
-		if !exists || record.HostID != observedHost || record.PendingUpdate != nil || defined[id] {
+		if !exists || record.HostID != observedHost || defined[id] {
 			continue
 		}
 		delete(state.VMs, id)

@@ -70,14 +70,14 @@
         "One changelog version for the ISO and both Debian packages, built together for release with their declared versions checked before publication",
         "A documented export of the Controller's database and identity, and a restore onto a replacement appliance",
         "A Controller package that starts: fixed from 0.3.0 and checked in published 0.3.1; the local development 0.3.2 snapshot also passed installation, crash recovery, same-version reinstall and reboot with saved site identity",
-        "Local development 0.3.2 snapshot: matching package/ISO source verified, Core service restart/reboot checked, and the bundled appliance booted separately with DHCP, verified TLS and bootstrap-secret cleanup"
+        "Local development 0.3.2 snapshot: matching package/ISO source verified, Core service restart/reboot checked, and the bundled appliance booted separately with DHCP, verified TLS and bootstrap-secret cleanup",
+        "The whole chain from a 0.4.5 development ISO in disposable virtual machines: offline installation, eject and reboot, bundled Controller deployment, a second host added and joined, and a first managed VM, with recovery access while the Controller was stopped",
+        "Installation under enforcing Secure Boot in emulation, and on machines with several disks: one disk chosen with the other left untouched, or two disks as a mirror",
+        "An installation with the network cable unplugged, and a power cut during installation followed by a clean reinstall"
       ],
       open: [
-        "The complete release-candidate ISO to Controller deployment or enrollment and first managed VM, including interrupted installation/bootstrap and recovery; separate package and appliance tests do not close this chain",
-        "Green hosted checks and release verification for the final source; internal ZFS image checks do not clear external distribution gates",
-        "Secure Boot installation of the host — earlier UEFI installation passed in emulation; the local 0.3.2 snapshot has UEFI menu coverage only",
+        "A Controller deployment interrupted part-way, checked on a freshly installed host",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
-        "Machines with several disks, and the safety of that choice",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
         "Replacing the Controller appliance on the same host that runs it, which is still being decided; today a replacement Controller runs on another machine and takes the pool back from its hosts"
       ]

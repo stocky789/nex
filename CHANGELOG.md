@@ -36,6 +36,18 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Add host to pool** no longer looks like the place to add a brand-new host: it explains that
   it joins a host already enrolled in the site, offers **Enroll a new host…** when there is none,
   and asks for the peer address only after a host is chosen (BUG-0532).
+- The ISO builds again: the pinned UEFI firmware package is fetched from a fixed Debian snapshot
+  instead of Debian's moving development suite, which had dropped that version (BUG-0533).
+- A freshly installed host can upload ISOs to its **Local storage** again; the media folder the
+  host created for the bundled driver disc was unreadable to the hypervisor (BUG-0534). Hosts
+  installed from 0.3.0 onward can be repaired with `chmod 0711 /var/lib/libvirt/images/nex-media`.
+- After a host joins a pool, its own untagged network is shown in that pool instead of under the
+  removed single-host pool (BUG-0535).
+- A VM creation interrupted before any disk was made now ends as a plain failure that frees the
+  name, instead of leaving a VM that could neither be used nor deleted and that blocked removing
+  its host from the pool (BUG-0536).
+- An edit that lost the pool master's reply, and a VM deleted while such an edit was unresolved,
+  no longer leave the pool master holding that VM for ever (BUG-0537, BUG-0538).
 
 ## [0.4.4] — 2026-09-22
 
@@ -47,9 +59,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
-- The Nex Core installer can put the system disk on a **Linux md RAID1 mirror**: tick two or more
-  disks at install time. The host keeps running if one of those disks fails; replace the failed
-  disk from the host's **Stats** tab.
+- The Nex Core installer can put the system disk on a **Linux md RAID1 mirror** with an **ext4**
+  root: tick two or more disks at install time. The host keeps running if one of those disks
+  fails; replace the failed disk from the host's **Stats** tab.
 - **Replace disk** on a degraded ZFS repository (or a degraded system mirror) clears a spare and
   rebuilds onto it from Nex Controller. ZFS pools may also take hot spares and a three-disk mirror
   or RAIDZ3 when every selected host supports disk replace.

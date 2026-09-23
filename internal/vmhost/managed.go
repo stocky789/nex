@@ -342,6 +342,31 @@ func (e *ManagedEngine) JournaledCommand(operationID string) (protocol.Command, 
 	return protocol.Command{}, false
 }
 
+// RecordRefusal journals a command refused before it reached Execute as failed while still
+// validating, exactly as Execute records its own refusals. The entry is the durable proof a
+// pool master needs to release a reservation it took for this operation, and a redelivery of
+// the same operation returns this failure instead of executing. An existing entry is kept.
+func (e *ManagedEngine) RecordRefusal(ctx context.Context, c protocol.Command, reason string) error {
+	if err := validateManaged(c); err != nil {
+		return err
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return err
+	}
+	for _, old := range js {
+		if old.Command.OperationID == c.OperationID {
+			return nil
+		}
+	}
+	return e.save(managedJournal{Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "failed", Error: reason, ObservedAt: time.Now().UTC()}, Stage: "validating"})
+}
+
 // FailedVMUpdateEvidence proves that one exact vm-update failed without
 // replacing its predecessor. It derives that predecessor from the local
 // journal, so a member never needs a replicated master VM definition. A failed
@@ -2681,10 +2706,11 @@ func domains(ctx context.Context) map[string]bool {
 func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, running map[string]bool) []managedJournal {
 	var due []int
 	for i, j := range js {
-		if promotionUsesRemoteStorage(js, j) {
+		unallocatedCreate := j.Command.Kind == "vm-create" && j.Stage == "validating"
+		if promotionUsesRemoteStorage(js, j) && !unallocatedCreate {
 			continue
 		}
-		observable := (j.Command.Kind == "iso-import" && j.Command.Media.URL != "" && j.MediaPath != "") || (j.Command.Kind == "vm-create" && createObservable(j.Stage)) || (j.Command.Kind == "vm-update" && updateObservable(j.Stage))
+		observable := unallocatedCreate || (j.Command.Kind == "iso-import" && j.Command.Media.URL != "" && j.MediaPath != "") || (j.Command.Kind == "vm-create" && createObservable(j.Stage)) || (j.Command.Kind == "vm-update" && updateObservable(j.Stage))
 		if observable && (j.Result.Status == "needs_attention" || j.Result.Status == "pending") && !running[j.Command.OperationID] && time.Since(j.Result.ObservedAt) >= time.Minute {
 			due = append(due, i)
 		}
@@ -2704,6 +2730,15 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 		// Re-read under the lock: the entry may have moved on since it was listed.
 		j, err := e.readJournal(js[i].Command.OperationID + ".json")
 		if err != nil || (j.Result.Status != "needs_attention" && j.Result.Status != "pending") {
+			continue
+		}
+		if j.Command.Kind == "vm-create" && j.Stage == "validating" {
+			// No observation needed: the journal stage alone proves nothing was created.
+			j.Result.Status, j.Result.Error = "failed", errCreateInterruptedUnallocated
+			j.Result.ObservedAt = time.Now().UTC()
+			if e.save(j) == nil {
+				js[i] = j
+			}
 			continue
 		}
 		if j.Command.Kind == "iso-import" {
@@ -2746,6 +2781,10 @@ func promotionUsesRemoteStorage(js []managedJournal, j managedJournal) bool {
 }
 
 // createObservable reports whether a vm-create stage has a definition to observe.
+// errCreateInterruptedUnallocated settles a vm-create interrupted while validating: create saves
+// "allocating" before its first VM-specific effect, so nothing was created and the name is free.
+const errCreateInterruptedUnallocated = "creation was interrupted before any VM resource was created; submit it again"
+
 func createObservable(stage string) bool {
 	return stage == "defining" || stage == "defined" || stage == "starting" || stage == "started"
 }
@@ -3623,6 +3662,36 @@ func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
 		}
 	}
 	return out
+}
+
+// NeverCreatedVMs lists VMs whose every create and update failed while still validating.
+// Create saves "allocating" before its first VM-specific effect, so this is journal proof
+// that the VM never existed on this host; a pool master releases the owner record it took
+// when it admitted the create. Call after Applied, which settles interrupted creates.
+func (e *ManagedEngine) NeverCreatedVMs() ([]string, error) {
+	js, err := e.journals()
+	if err != nil {
+		return nil, err
+	}
+	touched, failed := map[string]bool{}, map[string]bool{}
+	for _, j := range js {
+		if (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil {
+			continue
+		}
+		if j.Result.Status == "failed" && j.Stage == "validating" {
+			failed[j.Command.VM.ID] = failed[j.Command.VM.ID] || j.Command.Kind == "vm-create"
+		} else {
+			touched[j.Command.VM.ID] = true
+		}
+	}
+	var ids []string
+	for id, created := range failed {
+		if created && !touched[id] {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // managedDeletedVMs lists VMs with a succeeded vm-delete entry.
@@ -4883,6 +4952,9 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r prot
 			}
 			j.Result.Error = err.Error()
 		}
+	}
+	if j.Command.Kind == "vm-create" && j.Stage == "validating" {
+		j.Result.Status, j.Result.Error = "failed", errCreateInterruptedUnallocated
 	}
 	if j.Command.Kind == "vm-create" && (j.Stage == "defining" || j.Stage == "defined") {
 		// The start step was never reached, so the re-sent creation runs it once now.

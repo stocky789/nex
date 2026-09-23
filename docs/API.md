@@ -1428,7 +1428,7 @@ memory.
 **Related hygiene landed with it.** `pool-vms.json` owner records are now pruned, but only on
 positive evidence: the publishing host is the record's owner, its inventory is complete and at the
 current membership generation, it carries a succeeded `vm-delete` tombstone for that VM ID in the
-new `deleted` field of `PoolVMInventory`, the record has no pending update, and no other host's
+new `deleted` field of `PoolVMInventory`, and no other host's
 stored inventory still defines that VM ID. Absence is never read as deletion. The pool storage peer
 list now also fails closed with `503 pool resource list unavailable: managed journal is incomplete`
 when the managed journal is incomplete, matching networks and media, so a member never converges
@@ -2849,6 +2849,18 @@ only the bounded authenticated master's `PoolMembership`. A member accepts that 
 it is valid for its own pool, names the same master, keeps the member's own certificate fingerprint
 unchanged, and has a strictly newer generation; it persists that membership and retries the inventory
 once. Any invalid, foreign, identity-changing, non-newer or second stale reply remains refused.
+
+**Settling operations the master reserved but never saw finish (BUG-0536–BUG-0538).** A member
+that refuses a `vm-create` or `vm-update` before executing it (for example because the master's
+reply to `define` or `update-reserve` was lost) journals the operation as `failed` at stage
+`validating`, exactly as Core records its own refusals; a redelivery returns that failure and never
+executes. A `vm-create` interrupted while still `validating` settles as `failed` on its exact retry,
+because Core saves `allocating` before the first VM-specific effect. The inventory carries that
+proof to the master: `deleted` also lists a VM whose only create failed at `validating`, so the
+master releases the owner record it took at admission, and the new optional `aborted` map (operation
+ID → the same `FailedVMUpdateEvidence` `update-abort` uses) lets the master abort a matching
+`pending_update` whose outcome it never received. Every other ambiguity still stays
+`needs_attention`. Older members omit `aborted` and keep the previous behaviour.
 
 API impact: **existing external contract; changed authenticated Core-peer contract** — a
 pool-shared `vm-update` now advances the master-owned VM definition through a durable private

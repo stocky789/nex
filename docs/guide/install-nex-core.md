@@ -207,7 +207,7 @@ Offline mode creates no management bridge. Selecting a management adapter create
 either installation mode, with MAC-bound `nexN` interface names. The installer does not enable a firewall policy. Keep this alpha isolated until
 you have validated access controls.
 
-A mirrored system disk appears as one `md` array holding `/`. The installer installs GRUB on
+A mirrored system disk appears as one `md` array holding an ext4 `/`. The installer installs GRUB on
 every selected disk and is meant to boot from whichever member survives; when a mirror disk
 fails, the host is meant to keep running on the remaining disk with its virtual machines
 uninterrupted until the array is repaired. The EFI partition each disk carries is not part of

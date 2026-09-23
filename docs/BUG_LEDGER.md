@@ -7338,3 +7338,57 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: The dialog opens with one sentence stating the model; with nothing to list it shows **Enroll a new host…**, which closes the dialog and opens the site's Add host form; the peer address and confirm button render only after a host is selected; the enrollment success line says the join is done from the pool's Hosts tab. Label unchanged (decision: project owner, 2026-09-23).
 - Regression: `node web/src/pool-members.test.mjs` (model sentence; no address field or confirm button before a selection; Enroll button only when the page provides the form) and `tests/integration/site_selector_browser.py` (empty dialog → Enroll a new host → Add host form; selection reveals the address and confirm), step "Verify searchable site selection" in both `phase1` workflows. Captures inspected under `.cache/site-selector-browser/join-dialog-*.png`.
 - Avoid: rendering a dialog's inputs before the choice they depend on; an empty list needs an action, not a pointer to another button.
+
+## BUG-0533 — ISO build fails: pinned ovmf-generic no longer in Debian sid
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found rebuilding the ISO for the Phase 3 lab.
+- Symptom: `installer/build.sh` stopped in `stage_ovmf_generic` with `E: Version '2026.05-2' for 'ovmf-generic' was not found`; no ISO could be built from current source.
+- Root cause: The exact `ovmf-generic`/`edk2` 2026.05-2 pin was fetched from the live `deb.debian.org` sid suite, which drops a version as soon as a newer one (2026.05-3, then 2026.08) replaces it. Every other build input already comes from immutable snapshots.
+- Fix: The isolated sid APT root reads `snapshot.debian.org/archive/debian/20260920T000000Z/` (the same timestamp as the build's source snapshot, which carries 2026.05-2 for both binary and source), with `Check-Valid-Until=false` as the main snapshot APT already uses. The binary SHA-256 and `.dsc` checks are unchanged.
+- Regression: `python3 -m unittest tests.test_storage_packaging` asserts the snapshot source and that no live sid source remains; it failed against the previous `build.sh` and passes with the fix. Run by the `tests/` suite in the phase1 workflows and the github.com job. A full ISO rebuild with the fix is recorded in the 2026-09-23 lab QA record.
+- Avoid: pinning an exact version while fetching it from a moving suite; pin the archive, not just the version.
+
+## BUG-0534 — Fresh host cannot import ISOs into its local storage
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found in the ISO-installed Phase 3 lab.
+- Symptom: On a freshly installed 0.4.5 host, the first ISO upload to **Local storage** failed with `storage ancestors must be root-owned directories, executable by others for QEMU, without group or other write access`. `/var/lib/libvirt/images/nex-media` was mode 0700.
+- Root cause: The bundled virtio-win seed (`internal/vmhost/bundled_media.go`) runs first on a new host and created `nex-media` with `os.MkdirAll(dir, 0755)`. The service runs with `UMask=0077`, so the directory became 0700; every later import to that storage then failed the traversal check, and QEMU could not reach the bundled ISO either. Present since 0.3.0.
+- Fix: Create the directory with the existing `managedDirectory`, which sets 0711 through the descriptor regardless of umask, as every other Core-owned directory already does.
+- Regression: `TestSeedBundledMediaCreatesTraversableDirectoryUnderServiceUmask` in `internal/vmhost` (sets umask 0077; failed with `-rwx------` before the fix). Run by `go test ./...` in the phase1 workflows and the github.com job. Hosts installed from 0.3.0–0.4.5 keep an existing 0700 directory; `chmod 0711 /var/lib/libvirt/images/nex-media` repairs one (applied in the lab).
+- Avoid: `os.MkdirAll` with a literal mode for any directory QEMU must traverse under the service umask.
+
+## BUG-0535 — A joined host's untagged network stays under its removed auto-pool
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found in the two-host placement lab.
+- Symptom: After host B joined host A's pool, B's auto-registered `nex0 untagged` network was still returned by `GET /api/v1/networks` with the pool ID of B's deleted auto-pool, so the UI could not offer it for VMs placed on B in the joined pool. B's local storage moved correctly.
+- Root cause: `adoptManaged` handled a held non-VLAN network by updating only the `pool_id`/`host_id` columns; the API serves the stored command JSON, which kept the old pool. Storage and VLAN networks go through their mirror projection, which rewrites both.
+- Fix: Every held network goes through `mirrorNetworkProjection` (validation plus attention for an unusable row), deleting the column-only branch.
+- Regression: `TestJoinedMemberNetworkProjectionFollowsJoinedPool` in `internal/controller`; failed with the stale pool ID before the fix. Run by `go test ./...` in the phase1 workflows and the github.com job.
+- Avoid: updating projection columns without the stored command the API reads.
+
+## BUG-0536 — An interrupted or refused VM create leaves a permanent phantom VM
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found by `tests/integration/placement_faults.py --case interrupt`.
+- Symptom: `nex-core-local` on the target was killed while a create was still `validating`. The create stayed `needs_attention` for ever, the name stayed reserved, the Controller listed the VM as `unknown` (delete and power returned 404), the pool master kept a `defined` owner record, and ejecting the host was refused because it "still owns pool VM records".
+- Root cause: Recovery treated every unfinished create as uncertain although create saves `allocating` before its first VM-specific effect, and the master only ever released an owner record from a delete tombstone, so no failed create could clear its admission record.
+- Fix: A create at `validating` settles as `failed` (on exact retry in `reconcile`, and on its own through the periodic `promote` observation after a minute); `Applied` reports a create that failed at `validating`, with no other create/update past validation, as a VM tombstone, which the master's existing prune and the Controller's tombstone mirror consume. Decision: project owner, 2026-09-23.
+- Regression: `TestInterruptedCreateAtValidatingSettlesAsProvenFailure`, `TestInterruptedCreateAtValidatingSettlesWithoutRetry` (`internal/vmhost`), `TestProvenFailedCreateReleasesMasterRecord` (`internal/agent`); each failed before the fix. Lab: the two live phantoms cleared within a minute of deploying the fix.
+- Avoid: reading "unfinished" as "uncertain" when the durable stage proves no effect; never infer absence without that proof.
+
+## BUG-0537 — A lost master reply leaves an update reservation nothing can settle
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found by `placement_faults.py --case interrupt`.
+- Symptom: The master was killed after saving a `pending_update`; the member saw `EOF`, the Controller task ended `failed`, and the master record kept `pending_update` indefinitely, blocking that VM's lifecycle.
+- Root cause: The member refused the operation before executing it and journaled nothing, so neither the report-time abort nor inventory evidence could ever name the operation as failed.
+- Fix: `RecordRefusal` journals a pre-execution refusal of a `vm-create`/`vm-update` as `failed` at `validating`; the pool VM inventory carries `aborted` (operation ID → `FailedVMUpdateEvidence`), and the master aborts a matching `pending_update` through `abortPoolVMUpdate`. Decision: project owner, 2026-09-23.
+- Regression: `TestRefusedUpdateReleasesMasterReservation` (`internal/agent`; failed with the reservation retained when the master-side abort was removed) and `TestRecordedRefusalIsReturnedOnRedelivery` (`internal/vmhost`).
+- Avoid: reporting a definite failure to the Controller without a durable host record that the master can also read.
+
+## BUG-0538 — A deleted VM keeps its master record while an update is unresolved
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found in the placement lab after BUG-0537.
+- Symptom: A VM whose master record had a stuck `pending_update` was deleted successfully on its host, but the master kept the record, so a replacement Controller would re-adopt it and the host could not be ejected.
+- Root cause: `prunePoolVMOwners` skipped any record with a pending update, even with the owner's delete tombstone.
+- Fix: Drop that condition; a deleted VM ID can take no further update, and `deleteVM` already refuses while a change for the VM is unresolved on the host.
+- Regression: `TestDeletedOwnerVMPrunesRecordWithUnresolvedUpdate` (failed before) and the updated `TestPrunePoolVMOwnersUsesDeleteTombstonesOnly` in `internal/agent`.
+- Avoid: letting an unrelated guard block pruning on positive deletion evidence.

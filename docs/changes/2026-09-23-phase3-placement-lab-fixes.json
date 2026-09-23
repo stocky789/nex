@@ -1,0 +1,68 @@
+{
+  "summary": "Phase 3 install chain and master-owned placement fault/recovery acceptance in an ISO-installed two-host lab; fixes found there: ISO build fetches its pinned OVMF from a snapshot (BUG-0533), bundled media folder is traversable under the service umask (BUG-0534), a joined host's network follows it into the pool (BUG-0535), a create interrupted before allocation or refused before execution settles as failed and releases its master record (BUG-0536), a refused update releases the master reservation (BUG-0537), and a delete prunes a record with an unresolved update (BUG-0538). Lab harnesses support a shared tap bridge, enforcing Secure Boot, reinstall onto used disks and the current wizard layout.",
+  "paths": [
+    "installer/build.sh",
+    "tests/test_storage_packaging.py",
+    "internal/vmhost/bundled_media.go",
+    "internal/vmhost/bundled_media_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/placement_recovery_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/join_network_projection_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/placement_recovery_test.go",
+    "internal/agent/pool_replica_test.go",
+    "tests/integration/placement_faults.py",
+    "tests/integration/fresh_install_lab.py",
+    "tests/integration/fresh_install_gui.py",
+    "tests/integration/fresh_install_host.py",
+    "tests/integration/fresh_install_recovery.py",
+    "tests/integration/phase2_gate_guest.py",
+    "tests/integration/vlan_lab.py",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/qa/2026-09-23-phase3-placement-lab.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-18-master-vm-placement.md",
+    "CHANGELOG.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/plans/2026-09-23-lab-handover.md",
+    "docs/changes/2026-09-23-phase3-placement-lab-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create a VM troubleshooting gains the repair for hosts installed 0.3.0-0.4.5 whose local ISO folder blocks uploads (BUG-0534). The interrupted-create and lost-reply fixes make existing guide statements true (a failed creation before Core defines a VM reserves no name) and need no new steps.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Core-peer POST /api/v1/pool/vms/inventory: `deleted` also lists VMs whose only create failed while validating, and new optional `aborted` (operation ID to FailedVMUpdateEvidence) lets the master abort a matching pending_update; the owner-record prune no longer waits on a pending update when a delete tombstone exists. Older members omit `aborted` and keep previous behaviour. Controller API and Controller/Core command contracts are unchanged; the Controller network projection fix restores the documented GET /api/v1/networks pool_id. Documented in docs/API.md.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The public roadmap moves the Phase 3 install chain, emulated Secure Boot install, several-disk install and interrupted install to done, keeps an interrupted Controller deployment open, and drops the hosted-checks item the project owner signed off; real hardware stays open.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Settlement evidence lives in each host's managed journal (a refused or interrupted create/update recorded failed at stage validating) and the pool master's pool-vms.json owner records; the Controller stores nothing new.",
+    "record": "Member: /var/lib/nex-core-agent/managed-vms journal entries (failed, stage validating). Master: /var/lib/nex-core-agent/pool-vms.json, pruned or with pending_update aborted from the owner's authenticated pool VM inventory. A fresh Controller re-adopts the master's records and therefore no longer sees phantom VMs."
+  },
+  "verification": {
+    "method": "Regression tests failing before and passing after each fix: tests.test_storage_packaging (BUG-0533), TestSeedBundledMediaCreatesTraversableDirectoryUnderServiceUmask (BUG-0534), TestJoinedMemberNetworkProjectionFollowsJoinedPool (BUG-0535), TestInterruptedCreateAtValidatingSettlesAsProvenFailure / TestInterruptedCreateAtValidatingSettlesWithoutRetry / TestProvenFailedCreateReleasesMasterRecord (BUG-0536), TestRefusedUpdateReleasesMasterReservation / TestRecordedRefusalIsReturnedOnRedelivery (BUG-0537), TestDeletedOwnerVMPrunesRecordWithUnresolvedUpdate (BUG-0538); go test ./internal/agent ./internal/vmhost ./internal/controller. Native: ISO-installed nested-KVM lab walkthrough recorded in the QA record, including the live phantom records clearing after the fixed nex-core-local was deployed and tests/integration/placement_faults.py lost-reply, shared-edit, storage-loss (stop and fsid), membership, interrupt and replacement passing. Physical hardware and the post-fix master-side lost-reply ordering were not observed.",
+    "evidence": [
+      "docs/qa/2026-09-23-phase3-placement-lab.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

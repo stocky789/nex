@@ -728,26 +728,19 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			if err != nil {
 				return err
 			}
-			if protocol.IsPoolSharedNetwork(n) {
-				// One unusable master row must not fail the whole report: record it the
-				// same way an unadoptable entry is recorded and keep the held mirror.
-				if !nameValid(n.Name) || !networkShapeValid(n.Kind, n.Source, n.Uplink, n.VLAN) {
-					if err = attention("network", "network-register", n.ID, n.Name, "invalid network name or shape"); err != nil {
-						return err
-					}
-					continue
-				}
-				if err = c.mirrorNetworkProjection(tx, pool, host, n); err != nil {
-					return err
-				}
-				if err = resolved("network", n.ID); err != nil {
+			// One unusable held row must not fail the whole report: record it the same way
+			// an unadoptable entry is recorded and keep the held mirror. The projection keeps
+			// the original operation and request, and follows a joined host into its new pool.
+			if !nameValid(n.Name) || !networkShapeValid(n.Kind, n.Source, n.Uplink, n.VLAN) {
+				if err = attention("network", "network-register", n.ID, n.Name, "invalid network name or shape"); err != nil {
 					return err
 				}
 				continue
 			}
-			// The Core report is the evidence that this existing journal entry now
-			// belongs to the joined pool. Preserve its original command/request/audit.
-			if _, err = tx.Exec("UPDATE managed_resources SET pool_id=?,host_id=? WHERE id=? AND kind='network-register'", pool, host, n.ID); err != nil {
+			if err = c.mirrorNetworkProjection(tx, pool, host, n); err != nil {
+				return err
+			}
+			if err = resolved("network", n.ID); err != nil {
 				return err
 			}
 			continue

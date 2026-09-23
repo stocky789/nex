@@ -43,7 +43,7 @@ def wait_ssh(lab, timeout=300):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            if ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab':
+            if ssh(lab, 'hostname', text=True).stdout.strip() == json.loads((lab / 'config.json').read_text())['hostname']:
                 return
         except Exception:
             pass
@@ -60,7 +60,7 @@ def main():
     lab = validate_lab(args.lab_dir)
     config = json.loads((lab / 'config.json').read_text())
     args.evidence.mkdir(parents=True, exist_ok=True)
-    assert ssh(lab, 'hostname', text=True).stdout.strip() == 'nex-fresh-lab'
+    assert ssh(lab, 'hostname', text=True).stdout.strip() == json.loads((lab / 'config.json').read_text())['hostname']
     checks = []
 
     def passed(message):

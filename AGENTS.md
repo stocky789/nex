@@ -1,312 +1,278 @@
 # Working rules for Nex
 
-This is the shared contributor contract for Nex Controller and Nex Core. Tool-specific files
-reference this file; keep working rules here rather than maintaining competing copies.
+This is the shared contributor contract for Nex Controller and Nex Core. Keep working rules here rather than maintaining competing copies.
 
-## The architecture invariant: Nex Core does the work, Nex Controller only asks
+## Architecture invariant: Core does the work, Controller only asks
 
-Read this before designing anything. It is the foundation of the product, and it is the rule
-implementation work keeps quietly breaking. It is not negotiable by convenience.
+This is the foundation of the product and is not negotiable for implementation convenience.
 
-- **Nex Core is the product.** Every capability — VMs, storage, networks, media, backup, containers
-  — is implemented in the host distribution and exposed through its API. Each host is either its
-  pool's **master** or a **member**; which one performs an operation depends on the feature, and the
-  master keeps the pool's durable record of it.
-- **Nex Controller is an orchestrator and nothing else.** It authenticates operators, renders the
-  UI, and calls host APIs. It is a replaceable front end onto the hosts. It does not own, compute,
-  or keep pool state; it asks a host and shows what the host reports.
-- **Every function happens over the API.** If a feature needs Nex Controller to do the work itself,
-  the feature is in the wrong process: implement it in Nex Core and give it an API call.
-- **The replacement test — apply it to every design.** Delete the Controller. Install a fresh one
-  tomorrow, connect the pool masters, and every pool setting, network, storage registration, VM,
-  identity, name, and policy comes back from the hosts while the workloads never stopped. If your
-  design would lose anything, or make an operator re-enter anything, the design is wrong. Fix the
-  design; do not add a recovery path, export, or migration to compensate.
-- **The only Controller-owned data** is Controller-scoped: sites, administrator accounts and roles,
-  audit history, enrollment tokens, the Controller CA, and backup/restore jobs, which are backed
-  up and restored separately. That list is closed. Adding to it is a product decision for project owner,
-  not an implementation choice. Decision: project owner, 2026-09-10 — backup and restore orchestration is
-  the one explicit exception to the no-jobs rule below: Nex Controller schedules and drives backup
-  and restore jobs and keeps their run history and catalog; backup repository registrations stay
-  pool-scoped on the master.
+- **Nex Core is the product.** VM, storage, network, media, backup, container, policy, and pool behavior lives on the host platform and is exposed through host APIs.
+- **Nex Controller is an orchestrator and UI.** It authenticates operators, renders the UI, and calls host APIs. It must not become the authoritative owner of pool/resource state.
+- **Every host capability must be possible through the API.** If Controller has to implement host behavior itself, the behavior belongs in Core.
+- **Replacement test:** delete Controller, install a fresh one, reconnect pool masters, and all pool/resource identities, settings, relationships, and policies must be recoverable from the hosts without interrupting workloads.
+- **Controller-owned durable data is limited to:** sites, administrator accounts/roles, audit history, enrollment tokens, Controller CA, and backup/restore job orchestration/history/catalog. Backup repository registrations remain pool-scoped on the master.
+- Pool-scoped state belongs on the pool master. Agents/libvirt report observed state; Controller presents it and handles stale/unknown state honestly.
+- Running VMs and local recovery must survive Controller loss. Never interpret an unreachable host as proof a VM stopped, and never permit duplicate writable execution after timeout/partition.
 
-A change breaks the invariant if it:
+A change violates the invariant if Controller becomes the only place that:
+- stores a pool/resource setting, identity, name, mapping, relationship, assignment, schedule, policy, or counter;
+- derives or reconciles state a host can report;
+- performs host behavior because adding a Core API is less convenient;
+- drives a multi-step host operation that should survive Controller disconnection;
+- stores operator-visible pool metadata that a fresh Controller could not reconstruct.
 
-- adds a Controller table, cache, or file that holds the only copy of anything — a setting, name,
-  ID, mapping, host assignment, schedule, or counter;
-- makes Nex Controller derive, remember, or reconcile state a host could report instead;
-- implements host behavior in Controller code because that is quicker than adding a Core API;
-- has Nex Controller schedule, poll, or drive a multi-step operation that a host should run and
-  report — any job the Controller must stay alive to finish (backup/restore jobs excepted, above);
-- gives a resource an identity, name, or relationship the host does not know, so a re-adopting
-  Controller could not reproduce it;
-- keeps operator-visible data about pool resources (tags, notes, custom names, layouts of pool
-  objects) with no host-side record, on the grounds that it is "not real state".
+If a requirement genuinely conflicts with this invariant, stop and raise it with the project owner instead of inventing an exception.
 
-If a requirement genuinely does not fit the invariant, stop and resolve it with project owner. Do not invent
-an exception, and do not leave the loophole for a later phase to clean up. Every change declares
-where its durable state lives in its `docs/changes/*.json` record (`state.owner`), and both the API
-impact check and phase acceptance gates verify it.
+## Delivery order
 
-## Core-first delivery and acceptance
+For pool capabilities, implement and prove work in this order:
 
-Design and review each pool capability in this order: **Core behavior → durable host-side
-state → host API → outage/recovery checks → Controller UI**. Nex Core, the Debian host
-platform, owns validation, placement decisions, policy enforcement and durable operations;
-Controller authenticates operators, submits requests and presents host-reported results.
-The closed Controller-scoped responsibilities and backup/restore exception above still apply.
+**Core behavior → durable host state → host API → failure/recovery behavior → Controller UI**
 
-Prove the capability through the host API, including interrupted requests, safe retries and
-Controller disconnection/replacement, before counting the slice as complete. Deliver the UI
-and guide in the same slice, but never treat a working screen as evidence that Core behavior
-or recovery works. Core operations must not depend on an open browser or Controller connection.
-Reuse native platform engines; Swarm schedules container tasks, without a second Nex task scheduler.
+- Core owns validation, placement decisions, policy enforcement, durable host operations, and pool state.
+- Prove retry, interruption, reconnect, and Controller-replacement behavior through the host API before treating the slice as complete.
+- UI and guide updates ship with the feature, but a working screen is not proof that Core behavior or recovery is correct.
+- Reuse native platform engines. Do not create a second scheduler or equivalent subsystem when the platform already provides the required capability.
+- Future roadmap items do not justify current scaffolding.
 
-Future product direction does not authorize implementation scaffolding or reorder delivery.
-Keep the current Core safety, authority and recovery gates ahead of dependent features; use the
-[platform direction](docs/plans/2026-09-08-nex-platform.md#core-first-product-direction) when
-assessing placement policies and application-catalogue proposals.
+## Before working
 
-## Read before working
-
-- Read `docs/plans/2026-09-08-nex-platform.md` for the product model, build order, and acceptance gates.
-- Read the relevant feature/UI research and current phase under `docs/plans/`; research is inspiration,
-  not authorization to expand the current milestone.
-- Inspect the actual code and working-tree changes before editing. Planned files and checks are not
-  evidence of implementation. Create additional documentation only when it has something useful to record.
-- Keep every project plan under `docs/plans/`. Record scope changes and decisions in the relevant plan.
-  Resolve material product changes with project owner; use judgment for routine implementation choices.
+- Read `docs/plans/2026-09-08-nex-platform.md` and the relevant current feature/phase plan.
+- Inspect the actual code and current working tree before editing. Plans are not evidence of implementation.
+- Keep plans under `docs/plans/`.
+- Record material scope/product decisions in the relevant plan.
+- Resolve product-level changes with the project owner; use judgment for routine implementation choices.
 
 ## Communication
 
-Keep replies concise by default, using at most these three short fields:
+Keep normal replies concise:
 
 - **Need from you:** `Nothing` or one exact action/decision.
-- **Done:** One or two sentences describing the outcome.
-- **Attention:** Genuine limitations, risks, or follow-up only; omit when none.
+- **Done:** one or two sentences describing the outcome.
+- **Attention:** only genuine limitations, risks, or follow-up.
 
-Requested reports, plans, and explanations may be detailed. Intermediate updates are one sentence
-when work starts, materially changes, blocks, or needs a progress update. Ask one direct question
-when blocked; do not repeatedly ask permission for already authorized work.
+Use detailed output when the task itself requires a report, plan, or explanation.
 
-Whenever asking the user a question, use the session's native interactive question tool
-when available and permitted in the current mode, rather than burying it in prose. This
-applies to clarifications, preferences, decisions, and necessary confirmations; respect
-tool restrictions and use dedicated approval controls where required. Prefer two or three
-clear choices with a recommended option and brief tradeoffs when useful; allow a custom
-answer where supported, and use free text when choices would be artificial.
-
-If no suitable interactive tool is available, put the question in a separate, clearly
-labeled **Need from you:** message with numbered choices when appropriate. Never hide a
-question in a progress update or outcome paragraph. Ask only when the answer matters;
-continue independent work while awaiting a reply, and never treat silence or a preselected
-option as approval. These instructions cannot enable a question UI the client lacks.
+Ask only when an answer materially affects the work. Use the session's interactive question tool when available. Do not repeatedly request approval for already-authorized work.
 
 ## Agent workflow
 
-- The primary owns intent, decomposition, coordination, user decisions, acceptance, and synthesis.
-  It may implement work itself and remains responsible for the final result.
-- Agents must never create commits, amend commits, push, tag, rebase, merge, or otherwise change Git
-  history. project owner alone handles all Git commits and remote operations; agents leave completed changes
-  unstaged unless explicitly told otherwise.
-- Use subagents proactively for independent, bounded work, especially research, exploration, review,
-  and test triage. Use useful concurrency; do not delegate trivial commands to inflate agent count.
-- Assign each worker an objective, scope, relevant sources, acceptance criteria, required checks,
-  and either a read-only lane or an exclusive write set. Give only the context its task needs.
-- One writer owns a file at a time. Partition concurrent edits; sequence dependent changes. Preserve
-  unrelated dirty work and report ownership conflicts before changing someone else's files.
-- Hand off outcome, changed paths, actual checks/results, evidence, and unresolved decisions concisely.
-- Have an independent reviewer check meaningful implementation/documentation batches against scope,
-  behavior, safety, and real evidence. Return findings to the owner, then verify the corrections.
-  If independent review is unavailable, disclose that limitation; do not claim self-review is independent.
+The primary agent owns **intent, architecture, design, decomposition, integration, user decisions, acceptance, simplification, and synthesis**. It remains responsible for the final shape of the codebase.
 
-## Product and architecture boundaries
+### Delegation
 
-- Nex Controller is the centralized management service/API and web UI; Nex Core is the Debian-based
-  host distribution with KVM/QEMU, libvirt, and a local agent. Do not implement a new hypervisor.
-- Use Go for controller/agent, React and TypeScript for the UI, and Debian packages/systemd plus
-  installer automation for delivery. Keep the Debian base intact; prefer existing platform capabilities.
-- Product hierarchy: **Sites → Pools (one master host + members) → Hosts → VMs**. Pool is the
-  management grouping. Administrators never create pools: each enrolling host becomes the pool master
-  of its own automatically created pool, named after its hostname; enrollment tokens bind to a site.
-  Joining a member, changing the master and ejecting are Phase 4 work. HA is a later capability, not
-  a prerequisite. Do not add a duplicate Cluster tier without an agreed requirement.
-- VMs belong to pools and have separate host assignments. Preserve identity across migration.
+- Use subagents when parallelism genuinely helps: research, exploration, review, test triage, isolated investigations, and genuinely independent implementation areas.
+- Prefer **one implementation owner for tightly coupled feature work**. Do not split one coherent implementation across several writers merely because it can be decomposed.
+- Subagents do not own architecture. They extend the design selected by the primary agent.
+- Before delegating implementation, the primary should identify the intended extension points, relevant existing code, expected scope, and architectural constraints.
+- Give workers only the context required for their task, with an objective, scope, acceptance criteria, required checks, and either a read-only lane or exclusive write set.
+- One writer owns a file at a time. Sequence dependent edits and preserve unrelated dirty work.
+- Agents never commit, amend, push, tag, rebase, merge, or otherwise change Git history unless explicitly authorized by the project owner.
+
+### Subagent implementation discipline
+
+Subagent output is provisional until the primary integrates and simplifies it.
+
+Subagents must:
+- reuse existing functions, types, services, handlers, components, data flows, and platform capabilities before creating new ones;
+- extend the existing architecture rather than building a parallel one;
+- prefer modifying an existing implementation over creating a sibling implementation;
+- touch the minimum practical number of files;
+- avoid broad cleanup or redesign outside the assigned task;
+- avoid duplicating functionality just to keep their task self-contained;
+- return architectural concerns to the primary instead of inventing a new pattern.
+
+Do **not** introduce an interface, wrapper, adapter, factory, generic helper, framework, abstraction layer, or other indirection for a single caller or speculative future use.
+
+Do not make new code "reusable" unless multiple concrete current callers need it. **Reuse existing code aggressively; do not build generic infrastructure merely in the name of reuse.**
+
+A small amount of obvious local duplication can be preferable to a new abstraction whose only purpose is eliminating incidental duplication.
+
+### Integration and anti-bloat review
+
+After subagent work is integrated, review the result as **one implementation**, not as a collection of individually acceptable patches.
+
+Check for:
+- duplicate helpers, validation, state, transformations, and abstractions;
+- parallel implementations of the same responsibility;
+- unnecessary files, types, DTOs, wrappers, adapters, or interfaces;
+- defensive checks already enforced elsewhere;
+- speculative extensibility;
+- integration scaffolding that can now be removed;
+- code that can be replaced by an existing canonical path.
+
+Unexpected code growth is a review signal, not a line-count quota. If a modest feature adds several times more code than comparable existing behavior, investigate why before accepting it.
+
+For substantial multi-agent work, have a read-only reviewer inspect specifically for unnecessary complexity and duplication. Correctness alone is not acceptance.
+
+Workers hand off:
+- outcome;
+- changed paths;
+- actual checks/results;
+- unresolved decisions;
+- net line change where useful.
+
+## Product boundaries
+
+- Nex Controller: centralized management API/service and React/TypeScript web UI.
+- Nex Core: Debian-based host distribution using KVM/QEMU, libvirt, and a local Go agent.
+- Do not implement a new hypervisor.
+- Use Go for Controller/agent, React + TypeScript for UI, Debian packages/systemd/installer automation for delivery.
+- Preserve the Debian base and prefer existing platform capabilities.
+
+Hierarchy:
+
+**Sites → Pools → Hosts → VMs**
+
+- Each enrolling host initially becomes the master of an automatically created pool named after its hostname.
+- Enrollment tokens bind to a site.
+- Pool membership/master-change/ejection follow their planned phase; do not introduce a duplicate Cluster tier.
+- VMs belong to pools and have separate host assignments. Preserve VM identity across migration.
 - Storage registrations, backup repositories/policies, and logical networks belong to pools.
-  Track actual access per host: pool-level registration never makes a local disk shared.
-- **Apply the [architecture invariant](#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks)
-  to every pool-scoped setting**: membership, networks, storage, media, VM definitions, VM identity
-  and policies persist on the pool master's Nex Core and are re-adopted, with their identities and
-  names, when a host (re-)enrolls with a new or rebuilt Controller. The web UI and API act on hosts,
-  not on a private Controller model. Agents/libvirt report observed state; show stale/unknown state
-  honestly and reconcile ambiguous outcomes before retrying. Decision: project owner, 2026-09-09.
-- Running VMs and local recovery access must survive a controller outage. Never interpret an unreachable
-  host as proof its VMs stopped. Never permit duplicate writable execution after a timeout or partition.
-- Snapshots, independent backups, verified restoration, and compatible shared-storage live migration
-  are required phased features. Start shared storage with external NFS; Ceph integration comes later.
-- A snapshot is not a backup. Protect complete disk/configuration recovery, backing chains, exclusive
-  ownership, and restore integrity. A completed backup job is not proof of a working restore.
-- Migration requires compatible CPU/runtime, networking, storage, and firmware, not just shared disks.
-  HA requires proven quorum, fencing, and failure recovery before automatic restart is enabled.
-- Follow established infrastructure-management conventions for operator workflows and navigation,
-  with the simplest working UI first. Never name another product as the source of a design in code,
-  documentation, commit messages, or the UI; never copy another product's branding, artwork, or
-  wording; and do not present documentation-only research as inspected visual behavior.
-- Container Services use Docker Swarm in Nex-managed node VMs, with the full lifecycle in Nex Controller;
-  not LXC or Docker directly on Nex Core. Keep this after the VM foundation and preserve the agreed
-  colorful application/service icons. Follow Phase 10 for storage ownership, recovery, and quorum rules.
+- Pool-level storage registration does not imply every host has access to that storage.
+- Membership, networks, storage, media, VM definitions/identity, and policies persist on the pool master's Core and must be recoverable by a rebuilt Controller.
+- Snapshots are not backups.
+- Backup design must protect complete recovery, backing chains, exclusive ownership, and restore integrity.
+- Migration requires compatible CPU/runtime, networking, storage, and firmware.
+- HA requires proven quorum, fencing, and recovery before automatic restart.
+- Start shared storage with external NFS; Ceph integration comes later.
+- Container Services use Docker Swarm inside Nex-managed node VMs, not LXC or Docker directly on Nex Core.
+
+Follow established infrastructure-management conventions, but do not copy another product's branding, artwork, wording, or claim documentation research as observed behavior.
 
 ## Public repository privacy
 
-- Treat every tracked file as public, including documentation, plans, change records, QA
-  evidence, logs, screenshots, fixtures, configuration, and contributor instructions.
-- Never include personal names, usernames, personal email addresses, home/workstation paths,
-  private hostnames/domains/IP addresses, account identifiers, real environment/resource IDs,
-  credentials, or other confidential information. Refer to people by role (for example,
-  “project owner” or “operator”), not by name, including when recording user decisions.
-- Use clearly fictional examples and reserved example domains/addresses. Supply deployment
-  accounts, endpoints, and credentials through configuration or CI secrets; never hard-code
-  an individual's account or private environment as a default.
-- Sanitize evidence before adding it. Preserve relationships with consistent anonymous aliases,
-  label sanitized historical evidence, and never imply redacted output is an untouched capture
-  or a newly executed check. Inspect images visually and review attached artifact metadata too.
-- Preserve legally required third-party attribution, public dependency identifiers, and approved
-  organizational signing identities. These are not permission to add private project identities.
-- Run `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` after changes.
-  Its known-pattern checks supplement manual review; a pass does not prove arbitrary data is safe.
-- Removing current-file content does not remove published Git history, releases, or cached copies.
-  Report those separately and follow the Git-history ownership rule; never claim they were cleaned
-  without actual evidence.
+Treat every tracked file as public.
+
+Do not include:
+- personal names/usernames/emails;
+- private hostnames/domains/IPs;
+- workstation/home paths;
+- account identifiers;
+- real environment/resource IDs;
+- credentials or secrets;
+- other confidential data.
+
+Use roles such as `project owner` and fictional/reserved examples.
+
+Sanitize evidence before tracking it, including image content and metadata. Preserve legally required third-party attribution and approved organizational signing identities.
+
+Run:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_repository_privacy.py'
+```
+
+A passing automated check does not prove all sensitive data is absent.
+
+Removing a secret from the current tree does not remove it from Git history, releases, or caches. Report history exposure separately and do not rewrite history without authorization.
 
 ## Licensing and redistribution
 
-- Read [docs/LICENSING.md](docs/LICENSING.md) before changing dependencies, packaging, or release delivery.
-  Original Nex code, build scripts, and configuration use AGPL-3.0-only; Debian and other third-party
-  components retain their own licenses and notices. The ISO as a whole is not relicensed as AGPL.
-- Separate Debian programs can ship alongside Nex. Review exact licenses before copying code, linking
-  libraries, or adding plugins; aggregation does not establish compatibility for a combined program.
-  Do not combine GPL-2.0-only code into AGPL Nex without appropriate additional permission.
-- Before external ISO distribution, including alphas, verify a complete component manifest, retained
-  matching corresponding source, preserved notices, and a tested source-delivery path. A Nex-only
-  source archive or generic Debian mirror link is insufficient. Include base ISO/installer components
-  and firmware in the review; resolve Nex artwork redistribution terms separately.
-- License compatibility is not release certification. Record missing evidence as outstanding;
-  future Nex network services must provide AGPL source access where required.
+Read `docs/LICENSING.md` before changing dependencies, packaging, or release delivery.
 
-## Implementation and safety
+- Original Nex code/build scripts/configuration use AGPL-3.0-only.
+- Debian and third-party components keep their own licenses/notices.
+- The ISO as a whole is not relicensed as AGPL.
+- Review exact licenses before copying code, linking libraries, or adding plugins.
+- Do not combine GPL-2.0-only code into AGPL Nex without appropriate permission.
+- Before external ISO distribution, verify the component manifest, matching source availability, notices, source-delivery path, base ISO/installer components, firmware, and artwork redistribution terms.
+- License compatibility is not release certification.
 
-- Basics first: finish the current phase's end-to-end acceptance gate before dependent work expands it.
-  The entire future roadmap does not need to be built to complete the current phase.
-- Trace the affected flow and callers before choosing a fix. Reuse existing code, stdlib, native
-  platform features, and installed dependencies before adding code or dependencies.
-- Keep every code change as minimal as possible: the smallest correct diff, in the fewest files,
-  reusing what exists before writing anything new. Cut code that is not required for the task.
-  Minimal must still read clearly: plain names and straightforward control flow, never
-  terseness or cleverness that makes the code harder for a person to follow. Write code the way
-  an experienced human developer on this project would: match the surrounding style, comment
-  only where the reason is not obvious, and avoid generated-looking boilerplate, restated
-  comments, or defensive code for cases that cannot happen. No speculative
-  abstractions, plugin frameworks, empty scaffolding, or parallel sources of truth. Never simplify away
-  validation, accessibility, security, or data safety.
-- Delete before you add. Do not fix code by layering more code on top of it: before writing a
-  guard, flag, wrapper, fallback, or special case, find the code that causes the problem and ask
-  whether removing or simplifying it fixes the root cause. Prefer the fix that leaves the codebase
-  smaller, and treat a bug fix that only adds lines as a prompt to look again. "Smallest diff"
-  measures what is left behind, not lines touched: a larger diff that deletes is better than a
-  small one that adds. In the same change, remove what your work makes dead or redundant — unused
-  functions, parameters, fields, branches, flags, tests of removed behavior, superseded
-  workarounds, compatibility paths with no remaining caller, and stale docs. Confirm code is
-  unused by tracing its callers rather than assuming, and never keep it "just in case": Git
-  history is the archive. Report unrelated dead code you find instead of widening the change,
-  and state the net line change in the hand-off.
-- Authenticate and authorize control operations and consoles at the API boundary. Validate host identity,
-  scope credentials narrowly, and keep secrets out of logs, source control, images, and diagnostic bundles.
-- Disk erase, overwrite restore, VM/disk deletion, and management-network changes need explicit target
-  selection and appropriate confirmation/recovery behavior in the product.
-- A code or planning request does not authorize installing onto real disks, changing live infrastructure,
-  rebooting hosts, or exercising destructive tests against production. Use explicitly selected disposable
-  lab resources; obtain missing authorization before operating on live infrastructure.
+## Implementation discipline
 
-## Required API impact check
+- Finish the current phase's end-to-end acceptance gate before expanding dependent work.
+- Trace affected flows and callers before choosing a fix.
+- Reuse existing code, standard library, native platform features, and installed dependencies before adding code or dependencies.
+- Prefer the **smallest maintainable implementation left behind**, not merely the smallest textual diff.
+- Delete or simplify before layering guards, flags, wrappers, fallbacks, or special cases over a root problem.
+- Remove code made dead or redundant by the change after confirming callers.
+- Do not retain compatibility paths, flags, helpers, or scaffolding "just in case"; Git history is the archive.
+- Match surrounding style. Prefer plain names and straightforward control flow.
+- Comment reasons that are not obvious; do not generate explanatory boilerplate that restates the code.
+- Avoid defensive code for states that cannot occur.
+- Do not create speculative abstractions, plugin frameworks, empty scaffolding, or parallel sources of truth.
+- Do not simplify away validation, accessibility, security, recovery, or data safety.
 
-- Every change, including UI, installer, configuration, documentation, and roadmap work, must assess
-  whether it needs a new or changed API between Nex Controller and Nex Core. Trace the affected caller,
-  controller operation, agent command, and observed-state/result flow; also assess the client-facing API.
-- Record `API impact: none | existing contract | changed contract | new contract` with a brief reason
-  in the change/PR summary and, for planned work, the relevant plan. Name affected operations/contracts.
-  `none` requires a reason; it does not require inventing an endpoint or running unrelated API tests.
-- Reuse an existing contract when it covers the behavior. When a contract must change, implement both
-  sides and define authentication, authorization, validation, errors, asynchronous results, safe retries,
-  outage/reconnect behavior, and Controller/Core version compatibility in the same slice.
-- Every new pool-scoped setting must name its durable host-side record on the pool master and the
-  inventory/adoption path a fresh Controller uses to recover it, in the change record's
-  `state.record` and in the plan. A setting that exists only in the Controller database is a broken
-  invariant, not a documentation gap: it leaves the slice open and needs a design fix.
-- Maintain [docs/API.md](docs/API.md), the living reference for all Nex API calls, functions/commands,
-  events, and streams. Update the applicable machine-readable contracts and generated reference in the
-  same change as API behavior; keep planned interfaces clearly separate from implemented ones.
-- API-affecting work needs focused runnable contract/integration checks covering the changed behavior
-  and relevant authorization, invalid input, and failure/retry paths. Check implementation/reference
-  coverage and compatibility. Record actual results; a successful HTTP response alone is insufficient.
-- Independent review and every phase acceptance gate must verify the API impact decision, required
-  implementation, reference updates, and check evidence. Missing required API work leaves the slice open.
+A bug fix that only layers more code over the existing path should trigger another look at the root cause.
 
-## Living user guide and documentation gate
+Report unrelated dead code rather than widening the current task.
 
-- Apply [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) to every change. Assess guide impact as
-  `updated` or `none` with a reason, alongside the required API impact decision. Internal refactors
-  do not need invented user instructions; changed user behavior does need guide updates.
-- Maintain the [user guide](docs/guide/README.md) in the same change as each implemented feature,
-  including GUI workflows, CLI/installer behavior, configuration, permissions, errors, and recovery.
-  Update or remove obsolete instructions when behavior changes or features are removed.
-- Walk through the documented steps against the actual implementation in a disposable environment.
-  Exercise applicable success, failure, and recovery paths; for GUI features use browser interaction
-  and inspect captures. Record version/environment, method, actual results, evidence, and untested
-  limits. Simulation must be labeled; it cannot establish real hardware or storage correctness.
-  Never mark an unexecuted workflow verified. Missing applicable verification leaves acceptance open.
-- Use portable Markdown under `docs/guide/`, stable descriptive filenames, relative links, and the
-  required page sections/navigation. This is the future website's source, not a second manual to
-  rewrite later. Do not expose contributor implementation details in operator workflows.
-- Add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
-  must name updated documentation and verification evidence; `none` requires a reviewable reason.
-  Every record also declares `state.owner` as `none`, `core`, or `controller` with a reason;
-  anything but `none` names the durable record and how a fresh Controller recovers it. Reviewers
-  reject a `controller` owner that is not one of the closed Controller-scoped exceptions.
-  Run `python3 scripts/check_docs.py --worktree` before committing: it applies the same gate CI
-  applies, to uncommitted and untracked work, so a missing assessment is caught locally instead of
-  as a red build. Then run the relevant behavior checks and follow the documented CI procedure.
-- Independent review and every phase gate check guide/API applicability, documentation accuracy,
-  and actual walkthrough evidence. Automated structural checks cannot judge semantic completeness
-  or prove that a walkthrough ran. No applicable documentation work is deferred to project end.
+## Security and destructive operations
+
+- Authenticate and authorize control operations and consoles at the API boundary.
+- Validate host identity.
+- Scope credentials narrowly.
+- Keep secrets out of logs, source, images, and diagnostic bundles.
+- Disk erase, overwrite restore, VM/disk deletion, and management-network changes require explicit target selection and suitable confirmation/recovery behavior.
+- A coding/planning task does not authorize installation onto real disks, live infrastructure changes, reboots, or destructive production testing.
+- Use explicitly selected disposable lab resources; obtain authorization before touching live infrastructure.
+
+## API impact gate
+
+Every change must assess API impact between Controller/Core and, where relevant, the client-facing API.
+
+Record:
+
+`API impact: none | existing contract | changed contract | new contract`
+
+with a brief reason and affected operations/contracts.
+
+- Reuse existing contracts when they already cover the behavior.
+- When a contract changes, implement both sides in the same slice and define auth, authorization, validation, errors, async result behavior, safe retry behavior, outage/reconnect behavior, and version compatibility as applicable.
+- New pool-scoped settings must name their durable host-side record and how a fresh Controller re-adopts them.
+- Maintain `docs/API.md` and applicable machine-readable/generated contracts alongside behavior changes.
+- API-affecting work requires focused runnable checks for changed behavior and relevant failure/authorization/retry paths.
+- Missing required API implementation or evidence leaves the slice open.
+
+## Documentation gate
+
+Apply `docs/DOCUMENTATION.md` to every change.
+
+Record guide impact as:
+
+`Guide impact: updated | none`
+
+with a reason.
+
+- Update `docs/guide/` in the same change when operator-visible behavior changes.
+- Do not invent user-guide work for internal refactors.
+- Keep docs aligned with actual implementation and remove obsolete instructions.
+- Walk through applicable documented workflows against the implementation in a disposable environment.
+- Record environment, method, actual result, evidence, and untested limits.
+- Never claim an unexecuted workflow was verified.
+- Simulation must be labeled as simulation.
+- Keep portable Markdown, stable filenames, relative links, and contributor details out of operator-facing workflows.
+
+Add a scoped `docs/changes/*.json` record covering changed paths and:
+- API impact;
+- guide impact;
+- `state.owner: none | core | controller`;
+- durable record/adoption path when state exists;
+- verification evidence where applicable.
+
+Controller-owned state is accepted only for the explicit Controller-scoped exceptions defined above.
+
+Before commit, run:
+
+```bash
+python3 scripts/check_docs.py --worktree
+```
+
+Then run checks appropriate to the change.
 
 ## Verification and bug memory
 
-- Nontrivial logic ships with a focused runnable check. Use the repository's existing test tools when
-  available. Test observable behavior and failure recovery; do not freeze known-bad prototype output.
-- For bugs, reproduce the failure and add a failing regression check before fixing the root cause where
-  practical. If the check cannot reproduce it, record the limitation and the alternative evidence.
-- Every bug fix must include a regression test and ensure forge CI runs it on pushes and pull
-  requests. The forge executes `.github/workflows/`; keep the `.gitea/workflows/` copies in step
-  with it. Hosted github.com minutes are paid for and the forge runs the full suite for free, so
-  every job in `.github/workflows/` is skipped on github.com except the single cheap job in
-  `.github/workflows/github.yml` (Go tests without `-race`, `generate_api.py --check`, the `tests/`
-  suite and the documentation gate, on main pushes and pull requests). Decision: project owner,
-  2026-09-21. Reuse an existing test suite when a workflow already runs it; otherwise update the
-  workflow in the same change. The test must detect the original bug, pass with the fix, and fail CI
-  if the bug returns. Record the test command and results in `docs/BUG_LEDGER.md`; missing runner
-  or disposable-lab prerequisites leave regression coverage outstanding, not silently skipped.
-- Check relevant `docs/BUG_LEDGER.md` entries before fixing a previously affected system, if the ledger
-  exists. Create it with the first bug fix; append ID, date, symptom, root cause, fix, regression evidence,
-  and the wrong approach to avoid. Coordinate append ownership and check IDs for duplicates.
-- Run checks appropriate to the change: backend tests, UI typecheck/build, browser behavior, or disposable
-  host integration as applicable. A docs-only change needs link/scope review, not invented application tests.
-- Green is not proof: inspect actual results/artifacts and confirm expected checks ran rather than skipped.
-  Never claim unrun tests, hardware coverage, restores, migrations, or CI success.
-- After an authorized push, inspect the actual CI run and required job results. Report failing, missing,
-  pending, or skipped required checks honestly; a workflow file alone establishes no coverage.
-- UI work needs real browser review: inspect captures and exercise relevant loading, empty, error,
-  stale-data, keyboard, and destructive-action states. Fix and recapture material defects.
-- A phase is complete only when its functionality, relevant safety/recovery checks, documentation,
-  and UI review pass. Record remaining work explicitly; do not mark partial work complete.
-- Update documentation in the same change as behavior. Keep changes coherent and commit messages
-  imperative with an appropriate scope such as `controller:`, `agent:`, `ui:`, `installer:`, or `docs:`.
+- Nontrivial logic needs a focused runnable check using the repository's existing test tools where possible.
+- Test observable behavior and relevant failure/recovery paths.
+- For bugs, reproduce the failure and add a failing regression check before the fix where practical.
+- Every bug fix requires a regression test and corresponding forge CI coverage. If prerequisites prevent this, record the limitation instead of pretending coverage exists.
+- Record bug ID/date, symptom, root cause, fix, regression evidence, and failed approach in `docs/BUG_LEDGER.md`.
+- Keep `.github/workflows/` and `.gitea/workflows/` copies in sync.
+- GitHub-hosted CI remains intentionally minimal; the forge runs the full suite. Preserve the existing project decision documented in the workflows/plan.
+- Run checks appropriate to the change: backend tests, UI typecheck/build, browser behavior, or disposable-host integration.
+- UI work requires real browser review of relevant loading, empty, error, stale-data, keyboard, and destructive-action states.
+- Green CI is not proof by itself: inspect actual executed jobs/results and never claim skipped or unrun coverage.
+- After an authorized push, inspect the actual CI run and report required failures, skips, missing jobs, or pending results honestly.
+- A phase is complete only when functionality, applicable safety/recovery checks, documentation, API requirements, and UI review pass.
+- Update documentation in the same change as behavior.

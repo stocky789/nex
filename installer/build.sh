@@ -211,7 +211,8 @@ MANIFEST
 stage_ovmf_generic() {
     # OVMF's 2023 Microsoft certificates are not available in trixie. Keep sid
     # isolated to this exact signed package and its matching edk2 source; it is
-    # never an APT candidate for the rest of the image.
+    # never an APT candidate for the rest of the image. Fetch it from an immutable
+    # snapshot: sid drops superseded versions, so a live mirror cannot serve this pin.
     local version=2026.05-2
     local binary=ovmf-generic_${version}_all.deb
     local binary_sha256=0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb
@@ -221,14 +222,15 @@ stage_ovmf_generic() {
     local fetch
     mkdir -p "$apt_root/lists/partial" "$apt_root/archives/partial"
     cat > "$apt_root/sources.list" <<'SOURCES'
-deb https://deb.debian.org/debian sid main
-deb-src https://deb.debian.org/debian sid main
+deb https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main
+deb-src https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main
 SOURCES
     local -a sid_apt=(
         -o "Dir::Etc::sourcelist=$apt_root/sources.list"
         -o Dir::Etc::sourceparts=-
         -o "Dir::State::lists=$apt_root/lists"
         -o "Dir::Cache::archives=$apt_root/archives"
+        -o Acquire::Check-Valid-Until=false
     )
     apt-get "${sid_apt[@]}" update
     fetch=$(mktemp -d "$apt_root/fetch.XXXXXX")

@@ -52,7 +52,9 @@ This orders the existing gates below; it does not expand scope or reopen accepte
 Phase 2 work. The immediate objective is **one exact current build, with delivery
 and Phase 3 installation evidence**, followed by native placement acceptance.
 
-1. **Local artifact verification signed off; finish hosted delivery acceptance.**
+1. **Signed off by project owner, 2026-09-23; no further hosted-delivery acceptance is
+   required for this item.** Historical record follows.
+   **Local artifact verification signed off; finish hosted delivery acceptance.**
    The [recorded 0.3.2 snapshot](../qa/2026-09-18-release-artifact-lab.md) passed real
    builders, artifact/source hash binding, both installed package services,
    Controller same-version reinstall and package-service crash/reboot recovery.
@@ -61,7 +63,15 @@ and Phase 3 installation evidence**, followed by native placement acceptance.
    after the project owner's push, obtain green required hosted jobs and a release
    run for that revision. Inspection found failed Gitea HEAD checks, no HEAD
    release run and unavailable GitHub evidence; this is not green CI sign-off.
-2. **Finish Phase 3 integration on the release candidate.** The bounded offline
+2. **Nearly closed for disposable virtual-lab scope, 2026-09-23.** The ISO-installed chain (offline
+   install under enforcing Secure Boot and under BIOS, one-of-two and mirrored disks, absent and
+   real management networking, interrupted install, eject/reboot, appliance bootstrap,
+   second-host enrollment, first managed VM, Controller-outage recovery access) passed in the
+   [2026-09-23 lab](../qa/2026-09-23-phase3-placement-lab.md); defects BUG-0533 and BUG-0534 were
+   fixed. **Still open:** interrupted appliance deployment and the BUG-0534 fresh-install check,
+   see the [lab handover](2026-09-23-lab-handover.md). Physical Intel/AMD hardware stays open.
+   Historical record follows.
+   **Finish Phase 3 integration on the release candidate.** The bounded offline
    BIOS installation, media-free first boot/reboot and service checks are complete
    for that snapshot. Still connect the exact installed host through local appliance
    bootstrap or external-Controller enrollment to its first managed VM. Exercise
@@ -71,7 +81,13 @@ and Phase 3 installation evidence**, followed by native placement acceptance.
    and separate-host export/restore already exist; verify the integrated chain
    rather than rebuilding them. See the
    [appliance acceptance record](2026-09-08-controller-appliance.md#acceptance-evidence).
-3. **Finish native placement fault/recovery acceptance.** Local master/member
+3. **Closed for disposable virtual-lab scope, 2026-09-23.** Lost replies, shared definition and
+   media changes, storage loss and identity change, membership races, interrupted create/update
+   and Controller replacement passed on ISO-installed hosts; BUG-0535 to BUG-0538 were found and
+   fixed (owner decisions, 2026-09-23: settle a create interrupted before allocation as failed;
+   the member journals a refused operation so the master can release its reservation). See the
+   [lab record](../qa/2026-09-23-phase3-placement-lab.md). Historical record follows.
+   **Finish native placement fault/recovery acceptance.** Local master/member
    create/update/start, NFS member placement, missing network/capacity rejection,
    exact retries and service-outage continuity now have bounded native evidence.
    Still cover shared definition/media changes, storage identity loss, lost replies,
