@@ -189,6 +189,35 @@ func TestPoolReplicaPushShortCircuitsOnPostAckOnly(t *testing.T) {
 	}
 }
 
+// A steady pool never re-POSTs, so the skipped push's GET must refresh the acknowledgement
+// or the master reports the replica stale a minute after every push (BUG-0542).
+func TestPoolReplicaSkippedPushKeepsTheMasterCheckFresh(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	var posts atomic.Int32
+	serveMemberPeerCountingPosts(t, master, member, &posts)
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	poolReplicaMu.Lock()
+	ack := poolReplicaAcks[master.dir][member.State.HostID]
+	ack.ReceivedAt = ack.ReceivedAt.Add(-2 * time.Minute)
+	poolReplicaAcks[master.dir][member.State.HostID] = ack
+	poolReplicaMu.Unlock()
+	if checks := PoolReplicaChecks(master, 10*time.Second); checks[0].Freshness != "stale" {
+		t.Fatalf("aged ack check = %#v", checks)
+	}
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err != nil {
+		t.Fatalf("steady push: %v", err)
+	}
+	if posts.Load() != 1 {
+		t.Fatalf("steady push POST count = %d, want 1", posts.Load())
+	}
+	if checks := PoolReplicaChecks(master, 10*time.Second); len(checks) != 1 || checks[0].Status != "healthy" {
+		t.Fatalf("steady master check = %#v", checks)
+	}
+}
+
 func TestPoolAuthorityReplicaRoundTrip(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	joinPeerMember(t, master, member)

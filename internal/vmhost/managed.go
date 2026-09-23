@@ -1062,19 +1062,22 @@ func (e *ManagedEngine) AdoptSharedMediaEjectCleanupReapply(ctx context.Context,
 	return e.adoptSharedMedia(ctx, media, &ejectCleanupReapply{RemovalOperationID: removal.Command.OperationID, MembershipGeneration: membershipGeneration})
 }
 
+// sharedISOPresent is how converge adopts a pool-shared ISO: the file is present at its
+// recorded size. Hashing it here cannot finish within one probe timeout for an ISO of a
+// few GiB on remote storage (BUG-0541); every attach verifies the digest instead.
+func sharedISOPresent(path string, size int64) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() == size
+}
+
 func (e *ManagedEngine) adoptSharedMedia(ctx context.Context, media protocol.Media, reapply *ejectCleanupReapply) error {
 	if media.ID == "" || media.StorageID == "" || media.SHA256 == "" || media.SizeBytes < 32774 {
 		return errors.New("invalid shared media adoption")
 	}
 	js, _ := e.readable()
 	if published, path, err := publishedMediaPath(js, media.ID); err == nil {
-		// Already adopted: prove the published file is still present at its recorded
-		// size rather than re-hashing every shared ISO on every converge pass. The
-		// digest is verified on first adoption and again whenever a VM attaches it.
-		if published.StorageID == media.StorageID && published.SHA256 == media.SHA256 && published.SizeBytes == media.SizeBytes {
-			if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() && info.Size() == media.SizeBytes {
-				return nil
-			}
+		if published.StorageID == media.StorageID && published.SHA256 == media.SHA256 && published.SizeBytes == media.SizeBytes && sharedISOPresent(path, media.SizeBytes) {
+			return nil
 		}
 		return verifyISOContext(ctx, path, media)
 	}
@@ -1086,8 +1089,8 @@ func (e *ManagedEngine) adoptSharedMedia(ctx context.Context, media protocol.Med
 		return errors.New("shared media storage path is unavailable")
 	}
 	path := filepath.Join(storage.Path, "nex-media", media.ID+".iso")
-	if err = verifyISOContext(ctx, path, media); err != nil {
-		return err
+	if !sharedISOPresent(path, media.SizeBytes) {
+		return errors.New("ISO size changed or is not a regular file")
 	}
 	op := sharedMediaAdoptionOperation(media.ID)
 	media.URL, media.OperationID, media.Status, media.Error, media.MemberAccess = "", op, "succeeded", "", nil

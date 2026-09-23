@@ -1395,7 +1395,9 @@ an input to the generation equality rule, and a member that has never acknowledg
 reported at `0`, honestly. Both sides also report a `pool-authority-replica` health check: on a
 member `unknown`/`unknown` while awaiting the first push, `failed` with the refusal text, and
 `unknown`/`stale` after two probe intervals (at least one minute) with no push and no master poll;
-on the master, one check covering its ready members, `unknown` until a member has acknowledged,
+on the master, one check covering its ready members, `unknown` until a member has acknowledged
+(a member's status read that matches the current generation and digest refreshes its
+acknowledgement, so a steady pool stays `healthy` without re-posting),
 `failed` with that member's refusal, and `unknown`/`stale` when an acknowledgement is old or behind
 the master's current generation.
 
@@ -2936,8 +2938,8 @@ status (uplink present, bridge name, generation, error). Only `kind=vlan` regist
 listed; host-local bridges and libvirt networks are not. Members materialize the bridge locally
 with the master's network ID, then report access. ISO library metadata for media whose
 `storage_id` is pool-shared is listed at `/api/v1/pool/media` with the same access-report shape;
-bytes ride the shared repository mount, and members journal an adopted `iso-import` after digest
-verification. Controller placement uses `member_access` the same way it does for shared storage.
+bytes ride the shared repository mount, and members journal an adopted `iso-import` once the
+file is present at the listed size; every attach verifies the digest. Controller placement uses `member_access` the same way it does for shared storage.
 
 The synchronous peer lock check uses `POST` and `DELETE` at
 `/api/v1/pool/storage/{repository_id}/lock`, with the current `generation` and a
@@ -3004,8 +3006,9 @@ Members report `pool-network-reconciliation` and `pool-media-reconciliation` in 
 master's guest VLANs and shared ISO entries; the master reports neither. API impact: existing
 contract — no route or field is added, and the process-local observation is not durable state.
 A member re-creates a journalled VLAN guest bridge it observes missing **while the master still
-lists that network**, and skips re-hashing an already adopted ISO whose published file still has
-the recorded size; every media attach still verifies the digest. Once the master has durably
+lists that network**, and adopts or keeps a shared ISO whose file has the recorded size without
+hashing it, since one probe timeout cannot hash a multi-GiB ISO (BUG-0541); every media attach
+verifies the digest. Once the master has durably
 removed the network, the member's journal holds a tombstone instead, so the bridge is torn down
 and never rebuilt. A member's own refusal to remove (a local VM still uses the resource) appears
 in these same two checks, appended to the outcome word from this member's own resource and VM

@@ -6,12 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.6` →
-> Debian `0.4.6`).
+> development software. Builds use the newest numbered changelog heading (`0.4.7` →
+> Debian `0.4.7`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.7] — 2026-09-23
+
+### Bug Fixes
+
+- Pool members now take on large shared ISOs, such as a Windows installer, instead of
+  reporting `pool-media-reconciliation deadline` forever (BUG-0541).
+- A pool master no longer reports its members' authority replica as stale a minute after
+  every successful push (BUG-0542).
 
 ## [0.4.6] — 2026-09-23
 

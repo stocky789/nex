@@ -7410,3 +7410,21 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `undefinedDeploy` recognises a deploy interrupted before `defining_vm` when a successful `virsh list` shows neither its UUID nor its name; `Deploy` then removes only that deploy's own disk directory and seed directory and runs again under the same UUID. Any observation failure, or a listed domain, still goes to `reconcile`, which never replays effects (`internal/vmhost/engine.go`).
 - Regression: `TestRetryRestartsDeployInterruptedBeforeDefine` (`internal/vmhost`) failed before the fix (partial disk kept, operation left `needs_attention`) and passes after; `TestInterruptedRetryNeverRecreates` still passes. Lab: with the fixed `nex-core-local` swapped in on the same stuck host, the restarted service resumed the deployment to `ready` under the same UUID, with one domain, the Controller answering and the host enrolled as its pool master.
 - Avoid: treating "not yet defined" as "ownership uncertain"; absence proven by a successful listing is evidence, an observation failure is not.
+
+## BUG-0541 — A member never adopts a large shared ISO
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found on a two-host test pool.
+- Symptom: The member reported `pool-media-reconciliation` `failed` with `pool-media-reconciliation deadline`, and the master listed a ~5 GiB Windows ISO for it as `awaiting member reconciliation` on every pass; a small ISO on the same storage was adopted.
+- Root cause: First adoption hashed the whole ISO inside the converge pass's per-item deadline, which is the agent probe timeout (`--probe-timeout 3s`). A multi-GiB file on remote storage cannot be read in 3 s, so every pass timed out and nothing was journalled.
+- Fix: `adoptSharedMedia` adopts when the file is a regular file at the recorded size (`sharedISOPresent`, also used for the already-adopted check); every attach still verifies the digest (`internal/vmhost/managed.go`).
+- Regression: `TestAdoptSharedMediaDoesNotHashOnFirstAdoption` (`internal/vmhost`) failed before the fix and passes after; it replaces `TestAdoptSharedMediaHonoursACancelledContext`, which asserted the removed hash.
+- Avoid: doing work proportional to file size inside a probe-timeout budget.
+
+## BUG-0542 — A steady pool master reports its members' authority replica as stale
+
+- Date: 2026-09-23. Status: fixed in the working tree; regression asserted; found on a two-host test pool.
+- Symptom: The master's `pool-authority-replica` check went `unknown`/stale ("a pool member's authority replica acknowledgement is stale") about a minute after each push, while the member reported the current generation as verified.
+- Root cause: Once a member had acknowledged a POST, later pushes skipped the POST after the status read but never refreshed the acknowledgement time that `PoolReplicaChecks` ages.
+- Fix: When the POST is skipped, a status read that reports the current generation and digest as verified is recorded as the acknowledgement (`internal/agent/pool_authority.go`).
+- Regression: `TestPoolReplicaSkippedPushKeepsTheMasterCheckFresh` (`internal/agent`) failed before the fix and passes after; `TestPoolReplicaPushShortCircuitsOnPostAckOnly` still passes.
+- Avoid: an idempotency short-circuit that skips the bookkeeping a freshness check depends on.
