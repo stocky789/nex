@@ -1,0 +1,51 @@
+{
+  "summary": "Apply automatic Core IOThreads and bounded VirtIO network multiqueue without frontend settings",
+  "paths": [
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-24-automatic-vm-io.md",
+    "docs/qa/2026-09-24-automatic-vm-io-trials.csv",
+    "docs/qa/2026-09-24-automatic-vm-io.md",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/firmware_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_update_test.go",
+    "tests/integration/vm_defaults_benchmark.py",
+    "tests/integration/vm_defaults_native.py",
+    "tests/integration/vm_defaults_native.sh",
+    "tests/test_api_contract.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Document automatic defaults and how existing VMs receive them during stopped saves, including guest queue activation limits.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing authenticated vm-create/vm-update commands and result/inventory contracts carry unchanged VM specifications; Core generates and verifies native device defaults. No endpoint or wire field added.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A bounded Core default improvement does not close any platform phase or performance acceptance gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Automatic defaults persist only with the existing Core-managed VM configuration.",
+    "record": "The pool master retains the VM specification and ownership in pool-vms. The assigned Core retains exact applied XML in managed journal Domain and libvirt persistent configuration. A fresh Controller adopts the VM through managed inventory without regenerating devices or re-entering tuning."
+  },
+  "verification": {
+    "method": "Full Go race suite, final vmhost race suite, API reference/contracts, privacy and syntax checks passed. Native nested KVM creation, hotplug, Controller replacement, stopped save and last-SCSI removal passed. A retained four-arm workload capture shows higher throughput with material receive retransmissions; the separate channel-limit diagnostic produced no samples, and production performance qualification remains open. Independent review verified code, documentation and all retained numeric evidence. Two unrelated pre-existing CI-string assertions fail in the broad Python suite. See scoped QA for exact evidence and limits.",
+    "evidence": [
+      "docs/qa/2026-09-24-automatic-vm-io.md"
+    ]
+  }
+}

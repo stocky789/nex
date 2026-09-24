@@ -3356,9 +3356,11 @@ type sanlockLeaseTarget struct {
 	Offset uint64 `xml:"offset,attr"`
 }
 type managedController struct {
-	Type  string `xml:"type,attr"`
-	Index *int   `xml:"index,attr,omitempty"`
-	Model string `xml:"model,attr,omitempty"`
+	XMLName xml.Name   `xml:"controller"`
+	Type    string     `xml:"type,attr"`
+	Index   *int       `xml:"index,attr,omitempty"`
+	Model   string     `xml:"model,attr,omitempty"`
+	Driver  *driverXML `xml:"driver,omitempty"`
 }
 type managedTopology struct {
 	Sockets int `xml:"sockets,attr"`
@@ -3417,9 +3419,14 @@ type managedNIC struct {
 	Model struct {
 		Type string `xml:"type,attr"`
 	} `xml:"model"`
+	Driver *managedNICDriver `xml:"driver,omitempty"`
 	// Only emitted for virtio: QEMU passes it to the guest through host_mtu, and libvirt sizes
 	// the host tap to match. The emulated models have no way to tell the guest.
 	MTU *mtuXML `xml:"mtu,omitempty"`
+}
+type managedNICDriver struct {
+	Name   string `xml:"name,attr,omitempty"`
+	Queues int    `xml:"queues,attr,omitempty"`
 }
 type mtuXML struct {
 	Size int `xml:"size,attr"`
@@ -3448,6 +3455,8 @@ type managedDomain struct {
 	CurrentMemory *memoryXML            `xml:"currentMemory,omitempty"`
 	MemoryBacking *managedMemoryBacking `xml:"memoryBacking,omitempty"`
 	VCPU          int                   `xml:"vcpu"`
+	IOThreads     int                   `xml:"iothreads,omitempty"`
+	IOThreadIDs   *managedIOThreadIDs   `xml:"iothreadids,omitempty"`
 	OS            managedOS             `xml:"os"`
 	Features      managedFeatures       `xml:"features"`
 	CPU           managedCPU            `xml:"cpu"`
@@ -3465,6 +3474,38 @@ type managedDomain struct {
 		TPM         *managedTPM         `xml:"tpm,omitempty"`
 		Memballoon  managedBalloon      `xml:"memballoon"`
 	} `xml:"devices"`
+}
+
+type managedIOThreadIDs struct {
+	Threads []struct {
+		ID int `xml:"id,attr"`
+	} `xml:"iothread"`
+}
+
+func hasIOThread(d managedDomain, id int) bool {
+	if id < 1 || d.IOThreads < 1 {
+		return false
+	}
+	explicit := map[int]bool{}
+	if d.IOThreadIDs != nil {
+		for _, thread := range d.IOThreadIDs.Threads {
+			explicit[thread.ID] = true
+			if thread.ID == id {
+				return true
+			}
+		}
+	}
+	// libvirt fills unnamed IDs with the lowest unused positive numbers.
+	remaining := d.IOThreads - len(explicit)
+	for candidate := 1; candidate <= id && remaining > 0; candidate++ {
+		if !explicit[candidate] {
+			if candidate == id {
+				return true
+			}
+			remaining--
+		}
+	}
+	return false
 }
 
 // consoleDevices are the guest devices behind the browser console features: the guest
@@ -3581,7 +3622,11 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	d.CPU.Features = specCPUFeatures(v.CPU.Features)
 	scsi := false
 	for i, disk := range v.Disks {
-		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: &sourceXML{File: disks[i]}, Target: targetXML{Dev: targets[i], Bus: disk.Bus}}
+		x := managedDisk{Type: "file", Device: "disk", Driver: driverXML{Name: "qemu", Type: "qcow2"}, Source: &sourceXML{File: disks[i]}, Target: targetXML{Dev: targets[i], Bus: disk.Bus}}
+		if disk.Bus == "virtio" {
+			x.Driver.IOThread = 1
+			d.IOThreads = 1
+		}
 		if disk.BootOrder > 0 {
 			x.Boot = &managedBootOrder{disk.BootOrder}
 		}
@@ -3589,7 +3634,8 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 		d.Devices.Disks = append(d.Devices.Disks, x)
 	}
 	if scsi {
-		d.Devices.Controllers = []managedController{{Type: "scsi", Model: "virtio-scsi"}}
+		d.IOThreads = 1
+		d.Devices.Controllers = []managedController{{Type: "scsi", Model: "virtio-scsi", Driver: &driverXML{IOThread: 1}}}
 	}
 	// Explicit PCIe root ports are consumed by the defined devices first, and libvirt adds no
 	// spare beside them (observed: "No more available PCI slots" on hot-plug with four listed
@@ -3611,7 +3657,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 			d.Devices.Controllers = append(d.Devices.Controllers, managedController{Type: "pci", Model: "pcie-root-port"})
 		}
 	}
-	cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: mediaTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromInstallAlias}}
+	cdrom := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{Name: "qemu", Type: "raw"}, Target: targetXML{Dev: mediaTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromInstallAlias}}
 	if iso != "" {
 		cdrom.Source = &sourceXML{File: iso}
 	}
@@ -3621,7 +3667,7 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	d.Devices.Disks = append(d.Devices.Disks, cdrom)
 	// The driver disc never takes a boot order: it holds storage and network drivers an
 	// installer loads from inside Setup, and giving it one would let the VM boot from it.
-	drivers := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: driversTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromDriversAlias}}
+	drivers := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{Name: "qemu", Type: "raw"}, Target: targetXML{Dev: driversTarget, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: cdromDriversAlias}}
 	if driversISO != "" {
 		drivers.Source = &sourceXML{File: driversISO}
 	}
@@ -3639,6 +3685,9 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 			nic.MAC.Address = protocol.DerivedMAC(v.ID, i)
 		}
 		nic.Model.Type = requested.Model
+		if requested.Model == "virtio" && v.CPU.Count > 1 {
+			nic.Driver = &managedNICDriver{Queues: min(v.CPU.Count, 4)}
+		}
 		if requested.MTU != 0 {
 			nic.MTU = &mtuXML{Size: requested.MTU}
 		}
@@ -3649,6 +3698,75 @@ func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistrati
 	g.Listen.Type = "socket"
 	d.Devices.Graphics = []graphicsXML{g}
 	return xml.MarshalIndent(d, "", "  ")
+}
+
+// A live edit cannot change the queue count or IOThread assignment of an attached device.
+// Keep its observed tuning in the journaled target; a stopped save recalculates defaults.
+func preserveLiveTuning(expected []byte, got managedDomain) ([]byte, error) {
+	var want managedDomain
+	if err := xml.Unmarshal(expected, &want); err != nil {
+		return nil, err
+	}
+	disks := map[string]managedDisk{}
+	for _, disk := range got.Devices.Disks {
+		disks[disk.Target.Dev] = disk
+	}
+	for i := range want.Devices.Disks {
+		disk := &want.Devices.Disks[i]
+		if disk.Device != "disk" {
+			continue
+		}
+		if current, ok := disks[disk.Target.Dev]; ok {
+			if diskFile(current) != diskFile(*disk) || current.Target.Bus != disk.Target.Bus || current.Device != disk.Device {
+				return nil, errors.New("existing VM disk differs from its managed assignment")
+			}
+			disk.Driver.IOThread = current.Driver.IOThread
+		}
+	}
+	for i := range want.Devices.Controllers {
+		controller := &want.Devices.Controllers[i]
+		if controller.Type != "scsi" || controller.Model != "virtio-scsi" {
+			continue
+		}
+		for _, current := range got.Devices.Controllers {
+			if current.Type == controller.Type && current.Model == controller.Model {
+				controller.Driver = current.Driver
+				break
+			}
+		}
+	}
+	nics := map[string]managedNIC{}
+	for _, nic := range got.Devices.Interfaces {
+		nics[nic.MAC.Address] = nic
+	}
+	for i := range want.Devices.Interfaces {
+		nic := &want.Devices.Interfaces[i]
+		if current, ok := nics[nic.MAC.Address]; ok {
+			if current.Type != nic.Type || !sameNICSource(current, *nic) || current.Model != nic.Model {
+				return nil, errors.New("existing VM network interface differs from its managed assignment")
+			}
+			nic.Driver = current.Driver
+		}
+	}
+	want.IOThreads = got.IOThreads
+	want.IOThreadIDs = got.IOThreadIDs
+	for _, disk := range want.Devices.Disks {
+		if disk.Driver.IOThread != 0 && !hasIOThread(got, disk.Driver.IOThread) {
+			if got.IOThreads != 0 {
+				return nil, errors.New("existing VM IOThread IDs conflict with automatic disk tuning")
+			}
+			want.IOThreads = 1
+		}
+	}
+	for _, controller := range want.Devices.Controllers {
+		if controller.Driver != nil && controller.Driver.IOThread != 0 && !hasIOThread(got, controller.Driver.IOThread) {
+			if got.IOThreads != 0 {
+				return nil, errors.New("existing VM IOThread IDs conflict with automatic SCSI tuning")
+			}
+			want.IOThreads = 1
+		}
+	}
+	return xml.MarshalIndent(want, "", "  ")
 }
 
 // managedMemoryFits applies the ceiling in both memory modes: a "maximum" VM reserves nothing
@@ -4282,6 +4400,67 @@ func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal,
 	if err != nil || strings.TrimSpace(string(observed)) != state {
 		return errors.New("VM state is not confirmed " + state + "; no effects replayed")
 	}
+	if state == "running" {
+		live, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID)
+		if err != nil {
+			return errors.New("cannot observe running VM devices")
+		}
+		if err := validateManagedLiveDevices(live, j.Domain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Extra live devices are allowed while a guest is still acknowledging a detach. Every
+// requested device must already be present and tuned before a live edit can succeed.
+func validateManagedLiveDevices(b, expected []byte) error {
+	var got, want managedDomain
+	if xml.Unmarshal(b, &got) != nil || xml.Unmarshal(expected, &want) != nil {
+		return errors.New("invalid running VM definition")
+	}
+	for _, disk := range want.Devices.Disks {
+		if disk.Device != "disk" {
+			continue
+		}
+		found := false
+		for _, current := range got.Devices.Disks {
+			if current.Target == disk.Target && diskFile(current) == diskFile(disk) && current.Driver.IOThread == disk.Driver.IOThread {
+				found = true
+				break
+			}
+		}
+		if !found || (disk.Driver.IOThread != 0 && !hasIOThread(got, disk.Driver.IOThread)) {
+			return errors.New("running VM disk IOThread or attachment differs from the requested definition")
+		}
+	}
+	for _, controller := range want.Devices.Controllers {
+		if controller.Type != "scsi" || controller.Model != "virtio-scsi" {
+			continue
+		}
+		found := false
+		for _, current := range got.Devices.Controllers {
+			if current.Type == controller.Type && current.Model == controller.Model && controllerIOThread(current) == controllerIOThread(controller) {
+				found = true
+				break
+			}
+		}
+		if !found || (controllerIOThread(controller) != 0 && !hasIOThread(got, controllerIOThread(controller))) {
+			return errors.New("running VM SCSI controller IOThread differs from the requested definition")
+		}
+	}
+	for _, nic := range want.Devices.Interfaces {
+		found := false
+		for _, current := range got.Devices.Interfaces {
+			if current.MAC == nic.MAC && current.Type == nic.Type && sameNICSource(current, nic) && current.Model == nic.Model && nicQueues(current) == nicQueues(nic) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("running VM network queues or attachment differ from the requested definition")
+		}
+	}
 	return nil
 }
 
@@ -4309,8 +4488,15 @@ func validateManagedDefinition(b, expected []byte) error {
 	if got.Memory.Unit == "KiB" || got.Memory.Unit == "k" {
 		memory /= 1024
 	}
-	if got.UUID != want.UUID || got.Name != want.Name || got.Type != "kvm" || got.VCPU != want.VCPU || memory != want.Memory.Value || len(got.Devices.Disks) != len(want.Devices.Disks) || len(got.Devices.Interfaces) != len(want.Devices.Interfaces) {
+	if got.UUID != want.UUID || got.Name != want.Name || got.Type != "kvm" || got.VCPU != want.VCPU || got.IOThreads != want.IOThreads || memory != want.Memory.Value || len(got.Devices.Disks) != len(want.Devices.Disks) || len(got.Devices.Interfaces) != len(want.Devices.Interfaces) {
 		return errors.New("VM definition differs from requested ownership or resources")
+	}
+	if want.IOThreadIDs != nil {
+		for _, thread := range want.IOThreadIDs.Threads {
+			if !hasIOThread(got, thread.ID) {
+				return errors.New("VM IOThread assignment changed")
+			}
+		}
 	}
 	// Devices are matched by identity (disk target, interface MAC), not position: libvirt
 	// orders hot-plugged devices itself, and a renamed target or address is a real change.
@@ -4323,8 +4509,29 @@ func validateManagedDefinition(b, expected []byte) error {
 	}
 	for _, expected := range want.Devices.Disks {
 		disk, ok := disks[expected.Target.Dev]
-		if !ok || disk.Type != expected.Type || disk.Device != expected.Device || diskFile(disk) != diskFile(expected) || disk.Driver.Type != expected.Driver.Type || (disk.Readonly != nil) != (expected.Readonly != nil) || disk.Shareable != nil || (disk.Source != nil && (disk.Source.Dev != "" || disk.Source.Protocol != "")) || disk.Target != expected.Target || bootOrder(disk.Boot) != bootOrder(expected.Boot) {
+		if !ok || disk.Type != expected.Type || disk.Device != expected.Device || diskFile(disk) != diskFile(expected) || disk.Driver.Type != expected.Driver.Type || disk.Driver.IOThread != expected.Driver.IOThread || (disk.Readonly != nil) != (expected.Readonly != nil) || disk.Shareable != nil || (disk.Source != nil && (disk.Source.Dev != "" || disk.Source.Protocol != "")) || disk.Target != expected.Target || bootOrder(disk.Boot) != bootOrder(expected.Boot) {
 			return errors.New("VM disk assignment or boot order differs from requested ownership")
+		}
+		if expected.Driver.IOThread != 0 && !hasIOThread(got, expected.Driver.IOThread) {
+			return errors.New("VM disk IOThread is missing")
+		}
+	}
+	for _, expected := range want.Devices.Controllers {
+		if expected.Type != "scsi" || expected.Model != "virtio-scsi" {
+			continue
+		}
+		found := false
+		for _, controller := range got.Devices.Controllers {
+			if controller.Type == expected.Type && controller.Model == expected.Model && controllerIOThread(controller) == controllerIOThread(expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("VM SCSI controller IOThread assignment changed")
+		}
+		if controllerIOThread(expected) != 0 && !hasIOThread(got, controllerIOThread(expected)) {
+			return errors.New("VM SCSI controller IOThread is missing")
 		}
 	}
 	// libvirt expands a machine alias such as q35 to its versioned form, and injects
@@ -4384,11 +4591,32 @@ func validateManagedDefinition(b, expected []byte) error {
 		// Compared field by field rather than as whole structs: MTU is a pointer, so struct
 		// equality would compare addresses and reject every adapter that carries one.
 		nic, ok := nics[w.MAC.Address]
-		if !ok || nic.Type != w.Type || nic.Source != w.Source || nic.Model != w.Model || !sameMTU(nic.MTU, w.MTU) {
+		if !ok || nic.Type != w.Type || !sameNICSource(nic, w) || nic.Model != w.Model || nicQueues(nic) != nicQueues(w) || !sameMTU(nic.MTU, w.MTU) {
 			return errors.New("VM network assignment changed")
 		}
 	}
 	return nil
+}
+
+func controllerIOThread(c managedController) int {
+	if c.Driver == nil {
+		return 0
+	}
+	return c.Driver.IOThread
+}
+
+func nicQueues(n managedNIC) int {
+	if n.Driver == nil || n.Driver.Queues == 0 {
+		return 1
+	}
+	return n.Driver.Queues
+}
+
+func sameNICSource(got, want managedNIC) bool {
+	if want.Type == "network" {
+		return got.Source.Network == want.Source.Network
+	}
+	return got.Source == want.Source
 }
 
 // sameCPUCheck tolerates libvirt injecting check="none" when the domain omitted the attribute.
@@ -5644,7 +5872,7 @@ func ensureCDROM(ctx context.Context, stateDir, id, drive string, running bool) 
 			return "", errors.New("no free SATA target for a CD drive")
 		}
 	}
-	tray := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Target: targetXML{Dev: dev, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: alias}}
+	tray := managedDisk{Type: "file", Device: "cdrom", Driver: driverXML{Name: "qemu", Type: "raw"}, Target: targetXML{Dev: dev, Bus: "sata"}, Readonly: &struct{}{}, Alias: &aliasXML{Name: alias}}
 	xmlBytes, err := xml.Marshal(tray)
 	if err != nil {
 		return "", err
@@ -5980,12 +6208,13 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return errors.New("stop the VM and save its settings to apply the dedicated memory reservation before live editing")
 		}
 	}
+	var persistent managedDomain
 	if running {
 		// A detach drops an interface from the persistent definition at once, but the live device
 		// stays until the guest acknowledges the unplug, and firmware or guests without hotplug
 		// never do. Attaching a new interface with that address would put one MAC on the bridge
 		// twice, so it is refused here, before allocating or attaching anything.
-		persistent, err := dumpManagedDomain(ctx, v.ID, false)
+		persistent, err = dumpManagedDomain(ctx, v.ID, false)
 		if err != nil {
 			return err
 		}
@@ -6081,6 +6310,11 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	j.MediaPath, j.DriversPath, j.Retained = mediaPath, driversPath, layout.Retained
 	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath, leases); err != nil {
 		return err
+	}
+	if running {
+		if j.Domain, err = preserveLiveTuning(j.Domain, persistent); err != nil {
+			return err
+		}
 	}
 	var current []byte
 	if cur.Command.VM.Boot.Firmware == "uefi" && v.Boot.Firmware == "uefi" {
@@ -6304,6 +6538,50 @@ func (e *ManagedEngine) applyLive(ctx context.Context, id string, expected []byt
 			return fmt.Errorf("libvirt refused to %s a device on the running VM (%v); the guest may need to release it, or stop the VM and edit again", strings.TrimSuffix(action, "-device"), err)
 		}
 		return nil
+	}
+	if want.IOThreads > 0 {
+		live, err := dumpManagedDomain(ctx, id, true)
+		if err != nil {
+			return errors.New("cannot read the running VM's IOThreads")
+		}
+		if (got.IOThreads > 0 && !hasIOThread(got, 1)) || (live.IOThreads > 0 && !hasIOThread(live, 1)) {
+			return errors.New("existing VM IOThread IDs conflict with automatic disk tuning")
+		}
+		if got.IOThreads < want.IOThreads || live.IOThreads < want.IOThreads {
+			args := []string{"iothreadadd", id, "1"}
+			if live.IOThreads < want.IOThreads {
+				args = append(args, "--live")
+			}
+			if got.IOThreads < want.IOThreads {
+				args = append(args, "--config")
+			}
+			_, addErr := managedVirsh(ctx, args...)
+			got, err = dumpManagedDomain(ctx, id, false)
+			if err != nil {
+				return errors.New("IOThread addition outcome uncertain; persistent definition cannot be observed")
+			}
+			live, err = dumpManagedDomain(ctx, id, true)
+			if err != nil || !hasIOThread(got, 1) || !hasIOThread(live, 1) {
+				return fmt.Errorf("IOThread addition outcome uncertain (%v); inspect the VM before retrying", addErr)
+			}
+		}
+	}
+	for _, controller := range want.Devices.Controllers {
+		if controller.Type != "scsi" || controller.Model != "virtio-scsi" {
+			continue
+		}
+		found := false
+		for _, current := range got.Devices.Controllers {
+			if current.Type == controller.Type && current.Model == controller.Model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err = op("attach-device", controller); err != nil {
+				return err
+			}
+		}
 	}
 	have := map[string]managedDisk{}
 	var cdrom *managedDisk

@@ -7754,3 +7754,51 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Fetch the pinned release directly from Debian's archive and retry checksum, signature and signing-key downloads. Keep signature verification and the pinned ISO digest check.
 - Regression: `test_pinned_debian_iso_metadata_uses_archive_with_retries` failed before the fix and passed after it. `python3 -m unittest tests.test_iso_payload_efficiency` passed (3 tests). A live fetch verified Debian's signature and the pinned ISO digest in `SHA256SUMS`. A local disposable `NEX_VERSION=0.4.11 bash installer/build.sh` build completed and produced the ISO, matching source bundle, compliance manifest and Core package using a temporary signing key; installation and forge rerun remain unverified.
 - Avoid: Using a current-release URL for immutable older media or leaving release metadata downloads without retries.
+
+## BUG-0568 — Running VM update could accept a persistent-only device change
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: A partial live device update could be reported complete when only the persistent
+  definition matched the requested devices.
+- Root cause: The observer checked inactive XML and running state without verifying requested
+  devices in live XML. This was identified during IOThread/multiqueue review, not reproduced
+  against an unmodified binary.
+- Fix: Verify requested live disks, SCSI controller assignments and NIC queues before accepting
+  completion; tolerate extra live devices whose asynchronous removal remains pending.
+- Regression: `go test ./internal/vmhost -run 'TestManaged(ObserveDefinitionRejectsConfigOnlyLiveHotplug|LiveObservationRejectsConfigOnlyHotplug)' -count=1`
+  passed. The first test invokes the actual observer with matching persistent configuration and
+  mismatching live queues; the second covers missing disk assignments and IOThread IDs. Existing
+  forge `.github/workflows/phase1.yml` and its `.gitea` copy run the Go suite on pushes and pull
+  requests; `.github/workflows/github.yml` runs the non-race suite on GitHub.
+- Avoid: Inferring active device configuration from inactive XML plus a running power state.
+
+## BUG-0569 — New SCSI controller hotplug serialized the Go type name
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: The disposable native KVM check rejected a live SCSI disk addition with
+  `unknown device type 'managedController'`.
+- Root cause: The controller had a containing-field XML tag but no element name when marshaled
+  alone for `virsh attach-device`. The fake command test checked ordering but not the XML root.
+- Fix: Give the controller an explicit `controller` XML element name.
+- Regression: `TestManagedApplyLiveReconcilesDevices` captures the actual attachment fragment
+  and requires a `controller` root and IOThread assignment before the disk.
+  `go test -race ./internal/vmhost -count=1` passed. The native nested Debian KVM rerun
+  successfully added the controller and disk. Existing forge Go jobs in
+  `.github/workflows/phase1.yml` and the `.gitea` copy run the regression on pushes and pull
+  requests; `.github/workflows/github.yml` also runs it without race instrumentation.
+- Avoid: Assuming a containing struct's XML field tag determines a standalone device fragment,
+  or checking command order without examining the exact fragment sent to libvirt.
+
+## BUG-0570 — CI workflow assertions missed provider-specific concurrency groups
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun outstanding.
+- Symptom: The Python CI suite failed two workflow tests even though the forge still used the
+  shared runner group.
+- Root cause: Both tests required a literal group in `.github` workflows after those files
+  selected a separate group on github.com and the shared group on the forge.
+- Fix: Check the provider-specific expression in `.github` and the literal shared group in
+  `.gitea`, preserving both concurrency requirements.
+- Regression: `python3 -m unittest tests.test_ci_security` passed (13 tests), and
+  `python3 -m unittest discover -s tests -p 'test_*.py'` passed (399 tests). The forge and
+  GitHub checks run the Python suite on pushes and pull requests; no remote rerun is claimed.
+- Avoid: Requiring identical workflow text when provider behavior intentionally differs.
