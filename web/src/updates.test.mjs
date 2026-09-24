@@ -20,6 +20,15 @@ assert.equal(failed.error, "apt failed");
 
 await assert.rejects(followUpdate(async () => { throw Object.assign(new Error("update check failed"), { status: 500 }); }, () => {}, sleep), /update check failed/, "an HTTP error still surfaces");
 
+const lostResponse = [Object.assign(new Error("gateway restarted"), { status: 502 }), { phase: "downloading" }, { phase: "done", message: "Update complete" }];
+assert.equal((await followUpdate(async () => { const next = lostResponse.shift(); if (next instanceof Error) throw next; return next; }, () => {}, sleep, true)).phase, "done", "an uncertain apply follows a temporary status error without resubmitting");
+const timedOutRead = [Object.assign(new Error("proxy timeout"), { status: 408 }), { phase: "downloading" }, { phase: "done" }];
+assert.equal((await followUpdate(async () => { const next = timedOutRead.shift(); if (next instanceof Error) throw next; return next; }, () => {}, sleep, true)).phase, "done", "an uncertain apply also tolerates a proxy timeout");
+assert.equal(await followUpdate(async () => ({ phase: "done" }), () => {}, sleep, true), undefined, "an old terminal status alone cannot prove the uncertain request completed");
+let idleReads = 0;
+assert.equal((await followUpdate(async () => { idleReads++; return { phase: "idle" }; }, () => {}, sleep, true)).phase, "idle", "an uncertain request with no reported work stops at an unknown outcome");
+assert.equal(idleReads, 5);
+
 assert.equal(await followUpdate(async () => ({ phase: "installing" }), () => {}, sleep), undefined, "gives up after the bound");
 
 assert.equal(versionLight("Nex Core 0.4.3", "0.4.3").level, "current");

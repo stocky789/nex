@@ -1,0 +1,33 @@
+{
+  "summary": "Reject unsupported pool promotion fence proof methods and correct the two-host lease and witness design",
+  "paths": [
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_fence_method_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The promotion verifier now rejects unsupported internal proof methods; the operator workflow is unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing Core promotion proof verifier now rejects unknown method values; no request or response shape changed. The two-host plan changes are not implemented API operations.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The two-host plan remains open; the design corrections make no implementation or acceptance claim.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The verifier change introduces no durable state, and the plan changes describe future Core-owned state only."
+  },
+  "verification": {
+    "method": "The regression test failed against the prior verifier via a temporary Go overlay and passed with the fix; focused protocol tests pass. No hardware fencing was exercised.",
+    "evidence": ["internal/protocol/pool_fence_method_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

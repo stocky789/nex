@@ -153,7 +153,7 @@ function App() {
   const [scope, setScopeState] = useState(readScope);
   const [theme, setTheme] = useState(() => readPreference(themeKey));
   const [eventsSeen, setEventsSeen] = useState(() => readPreference("nex.events-seen"));
-  const [powerConfirm, setPowerConfirm] = useState<{ vm: VM; item: typeof powerActions[number] } | null>(null);
+  const [powerSelection, setPowerConfirm] = useState<{ vmID: string; item: typeof powerActions[number] } | null>(null);
   const [powerConfirmError, setPowerConfirmError] = useState("");
   const [powerConfirmWorking, setPowerConfirmWorking] = useState(false);
   const [form, setForm] = useState<
@@ -209,6 +209,9 @@ function App() {
   const [routePath, search = ""] = route.split("?");
   const [kind = "", id, routeOperation] = routePath.split("/").filter(Boolean);
   const vm = data.vms.find(v => (kind === "vms" || kind === "console") && v.id === id);
+  const powerVM = data.vms.find(v => v.id === powerSelection?.vmID);
+  const powerConfirm = powerSelection && powerVM ? { vm: powerVM, item: powerSelection.item } : null;
+  useEffect(() => { if (powerSelection && !powerVM) setPowerConfirm(null); }, [powerSelection, powerVM]);
   const host = data.hosts.find((h) => (kind === "hosts" || kind === "host-console") && h.id === id);
   const site = data.sites.find(s => s.id === scope.site) || data.sites[0];
   const sitePools = data.pools.filter(p => p.site_id === site?.id);
@@ -383,7 +386,7 @@ function App() {
   async function startVM(target: VM) {
     // Start on a protected Controller appliance always goes through the confirmation dialog.
     const start = powerActions.find(item => item.action === "start")!;
-    if (powerConfirmText(start, target)) { setPowerConfirm({ vm: target, item: start }); return; }
+    if (powerConfirmText(start, target)) { setPowerConfirm({ vmID: target.id, item: start }); return; }
     setStarting(target.id);
     setStartError("");
     powerRequest.current[target.id] ??= crypto.randomUUID();
@@ -526,8 +529,15 @@ function App() {
     if (!session) return;
     setLoading(true);
     void reload();
-    const timer = setInterval(() => { if (document.visibilityState === "visible") void reload(); }, 10000);
-    return () => clearInterval(timer);
+    const refresh = () => { if (document.visibilityState === "visible") void reload(); };
+    const timer = setInterval(refresh, 10000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+    };
   }, [session]);
   // The update status feeds the Overview, Hosts, Members and Updates screens; it is read once per
   // session and again on Check, not on every route.
@@ -633,7 +643,7 @@ function App() {
       requestID.current ??= crypto.randomUUID();
       const op = await api<Operation>(`hosts/${host.id}/operations`, "POST", { kind: "refresh-inventory", request_id: requestID.current });
       requestID.current = null;
-      setNotice(`Inventory refresh ${statusLabel(op.status).toLowerCase()}. Follow its progress in Tasks.`);
+      setNotice(`Inventory refresh ${statusLabel(op.status).toLowerCase()}. Follow its progress in Tasks.`, op.id);
       await reload();
     });
   }
@@ -903,16 +913,23 @@ function App() {
                   setUpdateNote("");
                   setUpdatePhase("applying");
                   try {
-                    await api("updates/apply", "POST", {});
-                    const st = await followUpdate(api, setUpdate);
+                    let uncertain = false;
+                    try {
+                      await api("updates/apply", "POST", {});
+                    } catch (e) {
+                      const status = (e as { status?: number }).status;
+                      if (status && status < 500 && status !== 408) throw e;
+                      uncertain = true;
+                    }
+                    const st = await followUpdate(api, setUpdate, undefined, uncertain);
                     if (st?.phase === "done") {
                       setUpdateNote(st.message || "Update complete");
                       setUpdatePhase("done");
-                    } else if (st) {
+                    } else if (st?.phase === "failed") {
                       setUpdatePhase("error");
                       setActionError(st.error || st.message || "Update failed");
                     } else {
-                      setUpdateNote("Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
+                      setUpdateNote(uncertain ? "The update request outcome is unknown; this update could not be confirmed. Select Check before trying again." : "Still applying after 10 minutes; the result is unknown. Select Check to read the current state.");
                       setUpdatePhase("idle");
                     }
                   } catch (e) {

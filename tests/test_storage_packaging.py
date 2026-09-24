@@ -18,9 +18,184 @@ CLIENTS = {"nfs-common", "libnfs-utils", "cifs-utils", "smbclient", "open-iscsi"
 CLUSTERED_GFS2 = {"corosync", "dlm-controld", "gfs2-utils", "pacemaker", "pacemaker-cli-utils", "pcs",
                   "fence-agents-redfish", "fence-agents-ipmilan", "fence-agents-virsh"}
 MATCHED_DLM_VERSION = "4.3.0-3+nex1"
+OPTIONAL_FENCING = {"sanlock", "python3-sanlock", "libvirt-daemon-plugin-sanlock", "corosync-qdevice", "corosync-qnetd"}
 
 
 class StoragePackagingTests(unittest.TestCase):
+    def test_optional_fencing_packages_are_iso_staged_and_not_deb_dependencies(self):
+        installer = set((ROOT / "installer/packages.txt").read_text().split())
+        self.assertTrue(OPTIONAL_FENCING <= installer)
+        core = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        controller = (ROOT / "packaging/controller/build-inside.sh").read_text()
+        for package in OPTIONAL_FENCING:
+            self.assertNotRegex(core, rf"(?m)^(?:Depends|Recommends):.*\b{package}\b")
+            self.assertNotRegex(controller, rf"(?m)^(?:Depends|Recommends):.*\b{package}\b")
+        appliance = (ROOT / "appliance/build-inside.sh").read_text()
+        self.assertIn("package-service-policy install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd", appliance)
+        self.assertNotIn("rm -rf /etc/corosync/qnetd/nssdb", appliance)
+        self.assertNotIn("systemctl enable corosync-qnetd", appliance)
+        self.assertIn("qnetd-runtime-init:/usr/local/lib/nex/qnetd-runtime-init", appliance)
+        self.assertIn("corosync-qnetd-runtime.conf:/etc/systemd/system/corosync-qnetd.service.d/nex-runtime.conf", appliance)
+        policy = (ROOT / "appliance/package-service-policy.sh").read_text()
+        self.assertIn("corosync-qdevice.service", policy)
+        installer_build = (ROOT / "installer/build.sh").read_text()
+        self.assertIn("appliance/package-service-policy.sh", installer_build)
+        self.assertIn("libvirt-daemon-plugin-sanlock", (ROOT / "installer/packages.txt").read_text())
+        late_install = (ROOT / "installer/late-install.sh").read_text()
+        self.assertLess(late_install.index("package-service-policy.sh disable"), late_install.index("package-service-policy.sh runtime-qnetd"))
+
+    def test_qnetd_package_path_is_persistently_redirected_to_runtime_nssdb(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-qnetd-runtime-") as directory:
+            root = Path(directory)
+            package_db = root / "etc/corosync/qnetd/nssdb"
+            package_db.mkdir(parents=True)
+            (package_db / "old-private-ca.key").write_text("discarded package CA")
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root),
+                       NEX_QNETD_OWNER=str(os.getuid()), NEX_QNETD_GROUP=str(os.getgid()))
+            subprocess.run(["sh", str(helper), "runtime-qnetd"], env=env, check=True)
+            link = root / "etc/corosync/qnetd/nssdb"
+            runtime_db = root / "run/nex-witness/nssdb"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.readlink().as_posix(), "/run/nex-witness/nssdb")
+            self.assertTrue(runtime_db.is_dir())
+            self.assertFalse((runtime_db / "old-private-ca.key").exists())
+            self.assertEqual((root / "etc/tmpfiles.d/nex-qnetd.conf").read_text(),
+                             "d /run/nex-witness/nssdb 0770 root coroqnetd -\n")
+            subprocess.run(["sh", str(helper), "runtime-qnetd"], env=env, check=True)
+            self.assertEqual(link.readlink().as_posix(), "/run/nex-witness/nssdb")
+
+        runtime_init = (ROOT / "appliance/qnetd-runtime-init").read_text()
+        self.assertIn("/usr/bin/corosync-qnetd-certutil -i -G", runtime_init)
+        self.assertIn('certutil -L -d "sql:$db" -n \'QNet CA\'', runtime_init)
+        self.assertIn("chown root:coroqnetd", runtime_init)
+        self.assertIn("chmod 0660", runtime_init)
+        unit = (ROOT / "appliance/corosync-qnetd-runtime.conf").read_text()
+        self.assertIn("ExecStartPre=+/usr/local/lib/nex/qnetd-runtime-init", unit)
+        self.assertIn("-S nss_db_dir=/run/nex-witness/nssdb", unit)
+        self.assertIn("After=systemd-tmpfiles-setup.service", unit)
+
+    def test_package_service_policy_blocks_fencing_starts_and_restores_site_policy(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            policy = root / "usr/sbin/policy-rc.d"
+            policy.parent.mkdir(parents=True)
+            site_policy = root / "usr/local/sbin/site-policy"
+            site_policy.parent.mkdir(parents=True)
+            site_policy.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$POLICY_CALLS"\nexit 42\n')
+            site_policy.chmod(0o755)
+            policy.symlink_to("../local/sbin/site-policy")
+            original = policy.readlink()
+            calls = root / "calls"
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root), POLICY_CALLS=str(calls))
+            subprocess.run(["sh", str(helper), "guard"], env=env, check=True)
+            for service in ("sanlock", "wdmd", "corosync-qdevice", "corosync-qnetd",
+                            "sanlock.service", "corosync-qdevice.service"):
+                result = subprocess.run([str(policy), service, "start"], env=env)
+                self.assertEqual(result.returncode, 101, service)
+            delegated = subprocess.run([str(policy), "chrony", "restart"], env=env)
+            self.assertEqual(delegated.returncode, 42)
+            self.assertEqual(calls.read_text(), "chrony restart\n")
+            subprocess.run(["sh", str(helper), "restore"], env=env, check=True)
+            self.assertTrue(policy.is_symlink())
+            self.assertEqual(policy.readlink(), original)
+
+    def test_package_service_policy_defaults_to_denial_and_disables_boot_links(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root))
+            subprocess.run(["sh", str(helper), "guard"], env=env, check=True)
+            policy = root / "usr/sbin/policy-rc.d"
+            self.assertEqual(subprocess.run([str(policy), "sanlock", "start"]).returncode, 101)
+            self.assertEqual(subprocess.run([str(policy), "chrony", "start"]).returncode, 101)
+            subprocess.run(["sh", str(helper), "restore"], env=env, check=True)
+            self.assertFalse(policy.exists())
+
+            commands = root / "commands"
+            commands.mkdir()
+            log = root / "service-actions"
+            (commands / "deb-systemd-helper").write_text('#!/bin/sh\nprintf "helper %s\\n" "$*" >> "$ACTION_LOG"\n')
+            (commands / "systemctl").write_text(
+                '#!/bin/sh\nprintf "systemctl %s\\n" "$*" >> "$ACTION_LOG"\n'
+                'case $* in *" is-enabled "*) echo disabled; exit 1;; esac\n')
+            (commands / "update-rc.d").write_text(
+                '#!/bin/sh\nprintf "rc %s\\n" "$*" >> "$ACTION_LOG"\n'
+                'for link in "$NEX_PACKAGE_ROOT"/etc/rc[0-6S].d/S[0-9][0-9]"$1"; do rm -f "$link"; done\n')
+            for command in commands.iterdir():
+                command.chmod(0o755)
+            for service in ("sanlock", "wdmd", "corosync-qdevice", "corosync-qnetd"):
+                init = root / "etc/init.d" / service
+                init.parent.mkdir(parents=True, exist_ok=True)
+                init.touch()
+                rc = root / "etc/rc2.d" / f"S20{service}"
+                rc.parent.mkdir(parents=True, exist_ok=True)
+                rc.symlink_to(f"../init.d/{service}")
+            disable_env = dict(env, ACTION_LOG=str(log), PATH=f"{commands}:{os.environ['PATH']}")
+            subprocess.run(["sh", str(helper), "disable"], env=disable_env, check=True)
+            self.assertFalse(list((root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")))
+            subprocess.run(["sh", str(helper), "disable", "qnetd"], env=disable_env, check=True)
+            self.assertNotIn("start", log.read_text())
+            self.assertNotIn("stop", log.read_text())
+            self.assertFalse(list((root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")))
+
+    def test_package_install_failure_restores_existing_service_policy(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            policy = root / "usr/sbin/policy-rc.d"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("#!/bin/sh\nexit 42\n")
+            policy.chmod(0o755)
+            commands = root / "commands"
+            commands.mkdir()
+            apt = commands / "apt-get"
+            apt.write_text("#!/bin/sh\nexit 17\n")
+            apt.chmod(0o755)
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root), PATH=f"{commands}:{os.environ['PATH']}")
+            result = subprocess.run(["sh", str(helper), "install", "corosync-qnetd"], env=env)
+            self.assertEqual(result.returncode, 17)
+            self.assertEqual(policy.read_text(), "#!/bin/sh\nexit 42\n")
+            self.assertFalse((root / "usr/sbin/.policy-rc.d.nex-package-save").exists())
+
+    def test_package_install_refusal_preserves_policy_and_stale_marker(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            policy = root / "usr/sbin/policy-rc.d"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("#!/bin/sh\nexit 42\n")
+            marker = root / "run/.nex-package-no-policy"
+            marker.parent.mkdir()
+            marker.touch()
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root))
+            result = subprocess.run(["sh", str(helper), "install", "corosync-qnetd"], env=env,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale package service policy state exists", result.stderr)
+            self.assertEqual(policy.read_text(), "#!/bin/sh\nexit 42\n")
+            self.assertTrue(marker.exists())
+
+    def test_package_install_guard_failure_restores_policy(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            policy = root / "usr/sbin/policy-rc.d"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("#!/bin/sh\nexit 42\n")
+            commands = root / "commands"
+            commands.mkdir()
+            mv = commands / "mv"
+            mv.write_text('#!/bin/sh\ncase $2 in *.nex-[0-9]*) exit 17;; esac\nexec /bin/mv "$@"\n')
+            mv.chmod(0o755)
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root), PATH=f"{commands}:{os.environ['PATH']}")
+            result = subprocess.run(["sh", str(helper), "install", "corosync-qnetd"], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assertEqual(policy.read_text(), "#!/bin/sh\nexit 42\n")
+            self.assertFalse((root / "usr/sbin/.policy-rc.d.nex-package-save").exists())
+
     def test_clustered_iscsi_ocf_probe_is_packaged_and_read_only(self):
         wrapper = ROOT / "packaging/cluster-storage/cluster-iscsi-session"
         text = wrapper.read_text()
@@ -128,8 +303,10 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn('if [ ! -e "$root/etc/corosync/corosync.conf" ]; then', postinst)
         self.assertIn('deb-systemd-helper disable "$unit"', postinst)
         self.assertIn('deb-systemd-invoke stop "$unit" || true', postinst)
-        self.assertIn('exit 101', late_install)
-        self.assertLess(late_install.index('policy_rc_created='), late_install.index('apt_local install'))
+        package_policy = (ROOT / "appliance/package-service-policy.sh").read_text()
+        self.assertIn('exit 101', package_policy)
+        self.assertLess(late_install.index('package-service-policy.sh guard'), late_install.index('apt_local install'))
+        self.assertLess(late_install.index('apt_local install'), late_install.index('package-service-policy.sh disable'))
         self.assertIn('/usr/lib/nex/corosync-pristine', late_install)
         self.assertIn('packaging/core-local/corosync-pristine "$pkg/usr/lib/nex/"', package)
 

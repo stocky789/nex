@@ -1,0 +1,43 @@
+{
+  "summary": "Stage optional native fencing packages, including qnetd on Core and Controller images, with maintainer-start and first-boot guards",
+  "paths": [
+    "installer/packages.txt",
+    "installer/build.sh",
+    "installer/late-install.sh",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "docs/BUG_LEDGER.md",
+    "appliance/package-service-policy.sh",
+    "appliance/build-inside.sh",
+    "tests/test_storage_packaging.py",
+    "docs/LICENSING.md",
+    "docs/changes/2026-09-24-optional-fencing-package-staging.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The packages are installed as inactive prerequisites only; no operator-facing fencing configuration or behavior is implemented in this slice.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This only changes the ISO's package contents and install-time service policy. No Core operation, Controller request, or API contract is added.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Storage lease and witness remain unimplemented slices; staging these optional packages does not claim their acceptance gates are complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "This adds no runtime fencing state or configuration; packages are staged only and their services remain disabled until a later Core implementation configures them."
+  },
+  "verification": {
+    "method": "The new failed-APT regression first reproduced exit 126 from direct invocation of the non-executable helper, then passed after internal calls used sh. `python3 -m unittest tests.test_storage_packaging tests.test_build_source tests.test_appliance_build` passes; the repository privacy test, `bash installer/check.sh`, shell syntax checks, `git diff --check`, and `python3 scripts/check_docs.py --worktree` passed. Temporary-root tests exercise policy delegation/restoration and isolated systemd/SysV disable checks. Debian Trixie package records, copyright files and maintainer-script actions were inspected; a separate native qnetd spike confirmed the default durable CA location and runtime replacement behavior. New-image scripts remove the package-created default CA. No live hosts, actual dpkg package install, ISO build, or appliance image build was used; package postinst execution and first boot remain unverified.",
+    "evidence": [
+      "tests/test_storage_packaging.py",
+      "docs/LICENSING.md",
+      "appliance/package-service-policy.sh",
+      "docs/qa/2026-09-24-qnetd-runtime-ca.md"
+    ]
+  }
+}

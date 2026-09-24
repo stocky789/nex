@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+set -eu
+
+db=/run/nex-witness/nssdb
+package_db=/etc/corosync/qnetd/nssdb
+
+[ -L "$package_db" ] && [ "$(readlink "$package_db")" = "$db" ] || {
+    echo 'qnetd NSS database is not redirected to runtime storage' >&2
+    exit 1
+}
+[ -d "$db" ] || {
+    echo 'qnetd runtime NSS directory is missing' >&2
+    exit 1
+}
+
+if [ ! -s "$db/cert9.db" ] || [ ! -s "$db/key4.db" ] || [ ! -s "$db/qnetd-cacert.crt" ]; then
+    find "$db" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    printf 'y\n0\ny\n' | /usr/bin/corosync-qnetd-certutil -i -G
+fi
+
+/usr/bin/certutil -L -d "sql:$db" -n 'QNet CA' >/dev/null
+/usr/bin/certutil -L -d "sql:$db" -n 'QNetd Cert' >/dev/null
+chown root:coroqnetd "$db" "$db"/*
+chmod 0770 "$db"
+chmod 0660 "$db"/*

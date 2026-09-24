@@ -814,7 +814,9 @@ master change, member eject, manual promotion after permanent master loss
 recorded below as the owner stated them. **Implementation status, 2026-09-19: fence-verified manual
 promotion and safe rejoin are implemented in the working tree** — the per-item status lines under
 *Member replica*, *Transfer steps* and *Restricted hosts* say what is covered and by what evidence.
-Automatic succession remains planned and not implemented. The implementation-only evidence stated
+As of 2026-09-24, only the narrow two-host BMC automatic-promotion path is implemented with
+focused simulated checks; storage lease, witness, other succession cases, and full acceptance
+remain open. The implementation-only evidence stated
 below was superseded by scoped reviewed native results recorded in the
 [Phase 4 native acceptance record](../qa/2026-09-19-phase4-native-acceptance.md), including
 join/eject and promotion cases. Phase 4 and the initial manual-recovery gate are **closed for
@@ -932,8 +934,10 @@ planned/outstanding.
   promotion. *(Amended 2026-09-22, project owner: a two-host pool auto-elects its survivor when it
   holds a valid BMC, storage-lease or witness exclusion proof and passes the same replica-supremacy
   check; without such a proof nothing is automatic. See
-  [two-host pool fencing](2026-09-22-two-host-pool-fencing.md#automatic-takeover); planned, not
-  implemented.)* Succession does not restart VMs; automatic restart keeps the Phase 9 HA gates.
+  [two-host pool fencing](2026-09-22-two-host-pool-fencing.md#automatic-takeover). The narrow
+  BMC automatic-promotion path is implemented with focused simulated checks; lease, witness,
+  and full acceptance remain open.)* Succession does not restart VMs; automatic restart keeps
+  the Phase 9 HA gates.
 - **Health after promotion.** A new master re-collects fresh member access observations before
   reporting health (member access is memory-only, BUG-0158); the replica is never health evidence.
 - **Fence credentials travel sealed, and every ready member can open its own copy.** The host that

@@ -4,6 +4,7 @@ import type { API, Data, Pool } from "./types";
 import { powerActions, powerBlocker, sentence, stateText, vmStateLabel, type VM } from "./managed";
 import type { ConsoleMedia } from "./console";
 import { guestNames } from "./vm-create";
+import { GuestOS } from "./guest-os";
 import { VMPanel, TagList, stateBadge } from "./vm-panel";
 import { readPreference, writePreference } from "./dock";
 import { Badge, MiniBar, MissingPanel, Panel } from "./ui";
@@ -120,7 +121,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
     {show("Pool") && <td>{poolName(v.pool_id)}</td>}
     {show("Host") && <td><a href={`#/hosts/${encodeURIComponent(v.host_id)}`} onClick={e => e.stopPropagation()}>{hostName(v.host_id)}</a></td>}
     {show("IP address") && <td className="mono">{v.guest?.addresses?.[0]?.address || "—"}</td>}
-    {show("Guest OS") && <td>{v.guest?.os || (v.spec ? guestNames[v.spec.guest_os] || "Not recorded" : "—")}</td>}
+    {show("Guest OS") && <td><GuestOS vm={v} /></td>}
     {show("vCPU") && <td>{v.spec?.cpu.count ?? "—"}</td>}
     {show("Memory") && <td>{v.spec ? formatValue("bytes", v.spec.memory.size_mib * 1024 ** 2) : "—"}</td>}
     {show("CPU") && <td><MiniBar percent={fresh(v) ? v.usage?.cpu_percent : null} /></td>}
@@ -249,7 +250,7 @@ function BulkPower({ bulk, data, api, reload, onNotice, onDone }: { bulk: Bulk; 
     }));
     const total = sent.length + done.length;
     setSent([...sent, ...done]); setErrors(failed); setWorking(false);
-    if (total) onNotice(`${item.label} queued for ${total} VM${total === 1 ? "" : "s"}. Follow the progress in Tasks.`);
+    if (total) onNotice(`${item.label} request submitted for ${total} VM${total === 1 ? "" : "s"}. Follow each task in Tasks.`);
     await reload();
     if (!Object.keys(failed).length) dialog.current?.close();
   }

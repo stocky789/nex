@@ -2965,8 +2965,13 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			if newest, ok := currentDefinitions(js)[c.Power.VMID]; ok {
 				spec = &newest
 			}
-			if currentErr == nil && len(v.Disks) > 0 {
-				if err := ensureVMStorage(ctx, js, *v.Command.VM); err != nil {
+			if spec != nil {
+				if len(spec.Disks) > 0 {
+					if err := ensureVMStorage(ctx, js, *spec); err != nil {
+						return err
+					}
+				}
+				if err := ensureVMLeaseDefinition(ctx, js, *spec); err != nil {
 					return err
 				}
 			}
@@ -3341,6 +3346,15 @@ type managedDisk struct {
 	// Alias names a CD drive across definitions; only the two drive aliases are written.
 	Alias *aliasXML `xml:"alias,omitempty"`
 }
+type managedLease struct {
+	Lockspace string             `xml:"lockspace"`
+	Key       string             `xml:"key"`
+	Target    sanlockLeaseTarget `xml:"target"`
+}
+type sanlockLeaseTarget struct {
+	Path   string `xml:"path,attr"`
+	Offset uint64 `xml:"offset,attr"`
+}
 type managedController struct {
 	Type  string `xml:"type,attr"`
 	Index *int   `xml:"index,attr,omitempty"`
@@ -3439,6 +3453,7 @@ type managedDomain struct {
 	CPU           managedCPU            `xml:"cpu"`
 	Clock         *clockXML             `xml:"clock,omitempty"`
 	PM            managedPM             `xml:"pm"`
+	Leases        []managedLease        `xml:"lease,omitempty"`
 	Devices       struct {
 		Disks       []managedDisk       `xml:"disk"`
 		Controllers []managedController `xml:"controller"`
@@ -3525,12 +3540,18 @@ func q35Machine(machine string) bool {
 // or ejected later without hot-plugging a SATA device: the install drive at mediaTarget holding
 // iso, and the driver-disc drive at driversTarget holding driversISO. Either is empty when its
 // path is. Each carries the user alias that names it in a media request.
-func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks, targets []string, mediaTarget, iso, driversTarget, driversISO string) ([]byte, error) {
+func managedDomainXML(v protocol.VMCreateSpec, nets []protocol.NetworkRegistration, disks, targets []string, mediaTarget, iso, driversTarget, driversISO string, leases ...[]managedLease) ([]byte, error) {
 	if len(nets) != len(v.NICs) || len(disks) != len(v.Disks) || len(targets) != len(v.Disks) || mediaTarget == "" || driversTarget == "" || mediaTarget == driversTarget {
 		return nil, errors.New("domain devices do not match the requested VM")
 	}
 	d := managedDomain{Type: "kvm", Name: v.Name, UUID: v.ID, Memory: memoryXML{"MiB", v.Memory.SizeMiB}, VCPU: v.CPU.Count, OS: managedOS{Type: osTypeXML{"x86_64", managedMachine(v), "hvm"}}}
 	d.PM = managedPM{Mem: pmStateXML{"no"}, Disk: pmStateXML{"no"}}
+	if len(leases) > 1 {
+		return nil, errors.New("domain has multiple storage lease sets")
+	}
+	if len(leases) == 1 {
+		d.Leases = append([]managedLease(nil), leases[0]...)
+	}
 	applyFirmware(&d, v.Boot)
 	applyGuestOSDefaults(&d, v.GuestOS)
 	if v.Boot.TPMEnabled() {
@@ -3913,10 +3934,17 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	}
+	leases, err := managedSanlockVMLeases(ctx, js, v)
+	if err != nil {
+		return err
+	}
+	if err = ensureManagedSanlockVMResources(ctx, leases); err != nil {
+		return err
+	}
 	j.Disks = disks
 	j.Targets, j.MediaTarget, j.DriversTarget = managedTargets(v)
 	j.MediaPath, j.DriversPath = mediaPath, driversPath
-	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath)
+	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath, leases)
 	if err != nil {
 		return err
 	}
@@ -4002,6 +4030,9 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		if err = ensureVMStorage(ctx, js, *j.Command.VM); err != nil {
 			return err
 		}
+	}
+	if err = ensureVMLeaseDefinition(ctx, js, *j.Command.VM); err != nil {
+		return err
 	}
 	if err := e.save(*j); err != nil {
 		return err
@@ -6008,6 +6039,19 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	}
+	leases, err := managedSanlockVMLeases(ctx, js, v)
+	if err != nil {
+		return err
+	}
+	if running {
+		current, currentErr := dumpManagedDomain(ctx, v.ID, false)
+		if currentErr != nil || !reflect.DeepEqual(current.Leases, leases) {
+			return errors.New("stop the VM before changing its repository lease set")
+		}
+	}
+	if err = ensureManagedSanlockVMResources(ctx, leases); err != nil {
+		return err
+	}
 	mediaPath, driversPath := "", ""
 	for _, resolve := range []struct {
 		id   string
@@ -6035,7 +6079,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	}
 	j.Disks, j.Targets, j.MediaTarget, j.DriversTarget = layout.Disks, layout.Targets, layout.MediaTarget, layout.DriversTarget
 	j.MediaPath, j.DriversPath, j.Retained = mediaPath, driversPath, layout.Retained
-	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath); err != nil {
+	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath, leases); err != nil {
 		return err
 	}
 	var current []byte

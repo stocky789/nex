@@ -7545,3 +7545,185 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: The regression now compares any startup frame with the previous framebuffer and waits for a one-second idle interval, with a separate deadline for reading a full frame. The two GitHub workflow copies use separate concurrency groups on github.com while retaining the shared forge group.
 - Regression: `go test ./internal/vmhost -run '^TestHostConsoleIncrementalUpdateOnlyOnChange$' -count=5` and `go test ./...` passed locally. The test runs in `.github/workflows/github.yml` on GitHub and in `.github/workflows/phase1.yml` on the forge. GitHub rerun requires a project-owner push.
 - Avoid: Using a fixed short sleep to infer that a login shell is idle, or sharing a cancelling workflow group between jobs that should only skip.
+
+## BUG-0551 — Controller detail panels miss delayed action results
+
+- Date: 2026-09-24. Status: locally verified with simulated APIs; live-host acceptance remains open.
+- Symptom: An accepted action can leave pool, management-network or clustered-storage details
+  unchanged until manually refreshed; Refresh inventory does not update an open hardware panel.
+- Root cause: Those panels own separate report reads. Some read once after submission, while
+  others only poll after a report already indicates work in progress. The main inventory poll
+  cannot update these separate reports, and hidden-tab return did not trigger a catch-up read.
+- Fix: Keep visible detail panels polling, catch up on visibility/online events, reread hardware
+  after a successful inventory-refresh task, and reconcile ambiguous pool/network submissions.
+  Ignore superseded reads, preserve drafts/action errors, and keep uncertain fence outcomes
+  guarded across automatic polls. No operation is automatically resubmitted.
+- An uncertain Controller update submission now follows read-only status through temporary
+  service errors, reporting an unknown outcome when no work appears instead of repeating Apply.
+- Regression: `npm --prefix web test` and `npm --prefix web run typecheck` passed locally.
+  `tests/integration/controller_refresh_browser.py` exercises delayed host reports with a real
+  browser and simulated APIs; final results are recorded in
+  [refresh verification](qa/2026-09-24-controller-action-refresh.md). The forge runs the browser
+  script and UI tests on main pushes and pull requests in `.github/workflows/phase1.yml` and
+  its `.gitea/workflows/phase1.yml` copy. No remote CI run is claimed.
+- Avoid: Assuming an accepted request is the final host state, or making a poll conditional on
+  already knowing that a task is running; background reads must not clear a failed action or
+  an unresolved destructive outcome.
+
+## BUG-0552 — Promotion verifier accepted an unknown fence method
+
+- Date: 2026-09-24. Status: local fix; no physical fencing claim.
+- Symptom: A bound proof naming an unsupported `method` passed the promotion verifier when the
+  target had a valid fence profile.
+- Root cause: The verifier treated every method other than `watchdog` as a device fence.
+- Fix: Accept only the legacy empty method and `bmc` as device proofs; reject other methods.
+- Regression: `TestPoolPromotionFenceRejectsUnknownMethod` fails against the previous source
+  (`unknown fence method accepted`) using a Go test overlay and passes after the fix with
+  `go test ./internal/protocol -run '^TestPoolPromotionFenceRejectsUnknownMethod$' -count=1`.
+  The existing Go test jobs run this package on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Letting an unrecognized proof type inherit the validation rules of a known method.
+
+## BUG-0553 — Disposable cluster lab timed out and refused cleanup
+
+- Date: 2026-09-24. Status: local fixture fix; native fencing acceptance still open.
+- Symptom: The four-guest lab spent its readiness window installing the optional fence-agent
+  bundle, then cleanup refused an already terminated guest because its PID remained as a zombie.
+- Root cause: The seed installed an unused package bundle with a large dependency tree, and the
+  cleanup existence check treated an unreaped zombie as a live QEMU process.
+- Fix: Seed only the fixture's required packages and treat an empty `/proc/<pid>/cmdline` as gone.
+- Regression: Both new `ClusterHALabTests` failed before the fix and pass with
+  `python3 -m unittest tests.test_cluster_ha_lab.ClusterHALabTests.test_cleanup_treats_terminated_unreaped_guest_as_gone tests.test_cluster_ha_lab.ClusterHALabTests.test_seed_does_not_install_unused_fence_agent_bundle`.
+  The zombie test waits for `waitid(..., WNOWAIT)` so it cannot mistake a child still
+  starting for one that has exited.
+  The existing `tests/` suite runs on forge pushes and pull requests. No remote CI run is claimed.
+- Avoid: Installing optional native tooling in every lab seed or equating a PID entry with a
+  running process after SIGTERM.
+
+## BUG-0554 — Quorum-device row counted as a pool host
+
+- Date: 2026-09-24. Status: local parser fix; witness proof remains unimplemented.
+- Symptom: A native qdevice row made a one-host Corosync partition appear to contain a second
+  pool host, which could inflate the existing watchdog proof's host-count check.
+- Root cause: `LocalQuorum` accepted every numeric membership row; native qdevice uses node ID 0.
+- Fix: Include only positive Corosync node IDs in the pool-host list. Qdevice remains a separate
+  vote and is never a pool host.
+- Regression: `TestLocalQuorumDoesNotCountQdeviceAsPoolHost` failed against the old parser
+  (`Hosts` included `Qdevice`) and passes with
+  `go test ./internal/vmhost -run '^TestLocalQuorumDoesNotCountQdeviceAsPoolHost$' -count=1`.
+  The existing Go test jobs run this package on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Treating a quorum vote row as pool membership or as a generic watchdog exclusion proof.
+
+## BUG-0555 — Appliance package guard could not invoke its own subcommands
+
+- Date: 2026-09-24. Status: local fix before package staging acceptance.
+- Symptom: The appliance's package install guard exited with permission denied before installing
+  anything when its uploaded helper file was not executable.
+- Root cause: `install` invoked the helper path directly for `guard`, `disable` and `restore`,
+  though the image build invokes that file through `sh` and does not require executable mode.
+- Fix: Run each internal subcommand through `sh` as well.
+- Regression: `test_package_install_failure_restores_existing_service_policy` failed before the
+  fix with exit 126 and passes afterward with
+  `python3 -m unittest tests.test_storage_packaging.StoragePackagingTests.test_package_install_failure_restores_existing_service_policy`.
+  The existing Python test suite runs on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Calling a shell script directly after choosing a shell-invoked delivery path.
+
+## BUG-0556 — Pool Corosync node IDs exceeded knet's supported range
+
+- Date: 2026-09-24. Status: local fix; native two-host witness acceptance remains open.
+- Symptom: Debian 13 Corosync rejected a rendered pool configuration before it could parse
+  the quorum-device section because a derived node ID exceeded 65535.
+- Root cause: `PoolClusterNodeID` generated a 31-bit value, while the native knet transport
+  accepts only IDs from 1 through 65535.
+- Fix: Preserve IDs from the prior algorithm when already valid; map larger values into the
+  supported range, and keep the renderer's collision refusal.
+- Regression: `TestThePoolClusterIsEveryHostAndWaitsForThemAll` failed before the fix on
+  `host-a` (derived ID 365480421) and passes after it with
+  `go test ./internal/vmhost -run '^TestThePoolClusterIsEveryHostAndWaitsForThemAll$' -count=1`.
+  A temporary two-host candidate config with the corrected IDs also passed Debian 13
+  `corosync -t -c` in an ephemeral container; that witness renderer was removed pending its
+  connected Core path. Existing Go jobs run this package on forge pushes and pull requests.
+  No remote CI run or qdevice session is claimed.
+- Avoid: Assuming a nonzero integer is acceptable to the native cluster transport without
+  parsing a rendered configuration in a disposable environment.
+
+## BUG-0557 — Witness teardown reached the developer host during a Go test
+
+- Date: 2026-09-24. Status: local fix; broader witness acceptance remains open.
+- Symptom: An agent package test invoked `systemctl stop corosync-qdevice.service` on the
+  developer workstation and triggered an authentication prompt. The workstation had no such
+  service installed; the request did not stop a service.
+- Root cause: The no-witness reconcile branch called `DeactivatePoolWitness`, which attempted
+  the native stop before checking whether Nex had ever installed its qdevice drop-in. Existing
+  tests reached that branch without a native-command seam.
+- Fix: A missing Nex-owned drop-in makes deactivation a no-op before any systemd command.
+  A previously installed drop-in still follows the stop/remove/reload path. Pool-cluster
+  teardown now uses that same helper instead of unconditionally stopping qdevice.
+- Regression: `go test ./internal/vmhost -run '^TestDeactivatePoolWitnessWithoutOwnedServiceDoesNotCallSystemctl$' -count=1`
+  passed. The test supplies a missing drop-in path and fails if any native command runs. The
+  existing Go test jobs include this package on forge pushes and pull requests. The full agent
+  suite was not rerun during incident containment; no remote CI run is claimed.
+- Avoid: Calling a host service manager from an ordinary no-op reconcile path, especially one
+  exercised by tests, before proving Nex owns that service configuration.
+
+## BUG-0558 — Package guard refusal removed an existing service policy
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Retrying package installation with stale guard state removed the active `policy-rc.d` even though installation was refused.
+- Root cause: The restore trap was armed before the guard checked stale state.
+- Fix: Arm cleanup only after the guard succeeds.
+- Regression: `test_package_install_refusal_preserves_policy_and_stale_marker` and `test_package_install_guard_failure_restores_policy` failed before their fixes and passed afterward; `python3 -m unittest tests.test_storage_packaging` passed (22 tests). The existing forge Python suite runs on pushes and pull requests.
+- Avoid: Installing an exit cleanup before proving the invocation owns the state it will remove.
+
+## BUG-0559 — Ordinary VM starts required a storage lease XML read
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Local VM create, start, power and autostart tests failed with `cannot verify the persistent VM storage leases`.
+- Root cause: Lease verification called `virsh dumpxml` even without a storage-lease context.
+- Fix: Skip lease verification for unconfigured operations; configured shared-NFS operations still verify resources and persistent XML.
+- Regression: `TestEnsureVMLeaseDefinitionSkipsUnconfiguredVM` failed before the fix and passed afterward in focused vmhost tests. The forge Go suite includes this package; host-affecting broad tests remain suspended after BUG-0557.
+- Avoid: Making ordinary local VM operation depend on a lease check that applies only to configured shared storage.
+
+## BUG-0560 — Interrupted witness credential import could not retry
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: A failed member PKCS#12 import left an incomplete NSS directory that every authority-replica retry refused.
+- Root cause: The import treated any existing generation directory as final, even when native readiness verification failed.
+- Fix: Rebuild only an incomplete, inactive generation from the signed incoming bundle; preserve the generation referenced by Nex's active qdevice drop-in and verify the pinned CA and cluster certificate before accepting a retry.
+- Regression: A mocked `pk12util -i` failure test failed before the fix and passed afterward; a transient validation failure test preserves an active NSS sentinel. Focused vmhost witness tests passed. No native host-affecting test ran; the forge Go suite includes the package.
+- Avoid: Persisting a partial native credential import as an unrecoverable authority state.
+
+## BUG-0561 — Prepared storage lease was cleared on each selection pass
+
+- Date: 2026-09-24. Status: fixed in the working tree; activation remains gated by hardware reset proof.
+- Symptom: A prepared lease generation would be cleared on the next unchanged reconciliation.
+- Root cause: Selection comparison included `PreparedGeneration`, while each new candidate had zero.
+- Fix: Compare selection fields without the preparation generation, preserving it only when the selection is unchanged.
+- Regression: `TestPoolStorageLeaseSelectionKeepsPreparationOnlyForUnchangedSelection` failed before the fix and passed afterward with its isolated agent test. The forge Go suite includes the package; activation and physical watchdog checks were not run.
+- Avoid: Comparing derived readiness state as if it were a selection input.
+
+## BUG-0562 — Distinct pools could share a witness cluster name
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Two valid pool IDs produced one qnetd cluster name, allowing a later registration to address the first pool's native signer entry.
+- Root cause: The deterministic name used only 32 SHA-256 bits.
+- Fix: Use 128 digest bits and reject a registered pool-name collision before signing.
+- Regression: The known colliding UUID pair fails the old name test and passes the focused protocol test; the focused Controller conflict test passed. Forge Go tests include both packages. Existing provisioned names require compatibility review before a release upgrade.
+- Avoid: Using short hashes as durable cross-pool native identities without a collision check.
+
+## BUG-0563 — Guest OS icon style failed the token gate
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: `npm --prefix web test` failed because the Amazon icon background used a literal color outside `tokens.css`.
+- Root cause: The new CSS rule bypassed the console's color tokens.
+- Fix: Reuse the existing light `--rail-hi` token.
+- Regression: The existing `tokens.test.mjs` failed before the fix and the full UI test suite passed afterward; typecheck and build also passed. The forge UI checks include this suite.
+- Avoid: Adding a literal color when an existing theme token has the required appearance.
+
+## BUG-0564 — New safety read-back left two Core test expectations stale
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: The foreign watchdog-bound lab fixture treated a policy read-back refusal as a test failure, and the pending-witness test expected an obsolete reason string.
+- Root cause: The tests still assumed the prior policy and wording after the staged safety changes.
+- Fix: Assert that the master refuses the unreadable policy while other hosts remain safe; match the current withheld-fencing reason.
+- Regression: The updated tests retain the foreign-bound no-reset and pending-witness no-arm assertions. They compile in `go test ./internal/agent -run '^$'`; host-affecting broad execution remains suspended after BUG-0557.
+- Avoid: Weakening the policy read-back requirement to satisfy an outdated fixture.

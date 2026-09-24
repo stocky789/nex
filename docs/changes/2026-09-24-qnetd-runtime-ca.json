@@ -1,0 +1,36 @@
+{
+  "summary": "Keep qnetd's package NSS path redirected to runtime-only CA storage",
+  "paths": [
+    "appliance/build-inside.sh",
+    "appliance/package-service-policy.sh",
+    "installer/late-install.sh",
+    "tests/test_storage_packaging.py",
+    "appliance/qnetd-runtime-init",
+    "appliance/corosync-qnetd-runtime.conf",
+    "docs/qa/2026-09-24-qnetd-runtime-ca.md",
+    "docs/changes/2026-09-24-qnetd-runtime-ca.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is development feasibility evidence, not an operator workflow or available product feature.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Packaging redirects Debian's existing qnetd files to tmpfs and adds no Controller/Core route or API behavior; authenticated witness registration remains a separate slice.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The approved native qnetd CA design remains planned; this evidence does not change milestone status or acceptance gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "All certificates and NSS databases were disposable test data under the ephemeral container's /run; no product state was added."
+  },
+  "verification": {
+    "method": "Debian 13 corosync-qnetd 3.0.3-2 in ephemeral containers: direct native NSS runtime initialization/signing and qnetd loading were exercised; package lifecycle was exercised with dpkg-reconfigure, persistent /etc-to-/run symlink, systemd-tmpfiles recreation after simulated /run loss, stable CA fingerprint on configure, and changed fingerprint after runtime reset. The appliance runtime initializer and qnetd daemon command were exercised, NSS ownership/modes inspected. systemd-analyze verify reported `Command man corosync-qnetd failed`, so unit verification is incomplete. Focused packaging test, docs gate and repository privacy test passed. No reboot or actual systemd service startup was tested.",
+    "evidence": ["docs/qa/2026-09-24-qnetd-runtime-ca.md"]
+  }
+}

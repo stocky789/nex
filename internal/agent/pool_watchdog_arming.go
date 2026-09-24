@@ -173,6 +173,13 @@ func poolWatchdogArmingIntent(ctx context.Context, s *Store, membership protocol
 	if !wanted {
 		return false, poolWatchdogTeardownTurn(ctx, s, membership, nodes, armed), detail
 	}
+	if len(nodes) == 2 {
+		// Two-host qdevice loss has not been tested with one host already down. The current
+		// cluster policy therefore keeps the remaining host running on quorum loss, and
+		// Core withholds SBD arming and witness exclusion until that failure case and the
+		// product's no-VM-stop promise are reconciled.
+		return false, false, "two-host watchdog fencing is withheld pending native testing of witness loss with one host already down"
+	}
 	if !poolClusterContains(nodes, s.State.HostID) {
 		return false, poolWatchdogTeardownTurn(ctx, s, membership, nodes, armed),
 			"this host is leaving this pool's cluster"

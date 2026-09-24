@@ -358,7 +358,7 @@ is deployed from that UI or separately. Install only onto an explicitly selected
 disposable lab disk and retain recovery access.
 MEDIA
 cp installer/preseed.cfg "$stage/preseed.cfg"
-cp installer/late-install.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
+cp installer/late-install.sh appliance/package-service-policy.sh installer/root-account.sh installer/packages.txt "$stage/nex/"
 # Empty dpkg status is intentional: resolve the whole closure, including packages
 # already installed in this build container. Real installer base may differ.
 # Resolve the offline closure from the same immutable snapshots used for the

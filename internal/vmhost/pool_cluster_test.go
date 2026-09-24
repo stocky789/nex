@@ -35,6 +35,12 @@ func TestThePoolClusterIsEveryHostAndWaitsForThemAll(t *testing.T) {
 	if id := PoolClusterNodeID("host-a"); id == 0 || id != PoolClusterNodeID("host-a") {
 		t.Fatalf("a host's Corosync node identifier is not stable and non-zero: %d", id)
 	}
+	if id := PoolClusterNodeID("host-a"); id > 65535 {
+		t.Fatalf("node ID %d exceeds Corosync's supported 16-bit range", id)
+	}
+	if id := PoolClusterNodeID("legacy-24623"); id != 5615 {
+		t.Fatalf("previously valid node ID changed: %d", id)
+	}
 	if PoolClusterNodeID("host-a") == PoolClusterNodeID("host-b") {
 		t.Fatal("two hosts derive the same Corosync node identifier")
 	}
@@ -43,6 +49,24 @@ func TestThePoolClusterIsEveryHostAndWaitsForThemAll(t *testing.T) {
 	}
 	if _, err = RenderPoolCluster("pool-1", append(labNodes(), PoolClusterNode{HostID: "host-d"})); err == nil {
 		t.Fatal("a host with no address was accepted into the nodelist")
+	}
+}
+
+func TestTwoHostPoolClusterNeedsTlsQdevice(t *testing.T) {
+	if _, err := RenderPoolClusterWithWitness("pool-1", labNodes()[:2], "198.51.100.20:5403"); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := RenderPoolClusterWithWitness("pool-1", labNodes()[:2], "198.51.100.20:5403")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"model: net", "votes: 1", "host: 198.51.100.20", "port: 5403", "algorithm: ffsplit", "tie_breaker: lowest", "tls: required", "wait_for_all: 1"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("qdevice configuration lacks %q:\n%s", want, rendered)
+		}
+	}
+	if _, err := RenderPoolClusterWithWitness("pool-1", labNodes()[:2], "bad address"); err == nil {
+		t.Fatal("accepted malformed qnetd address")
 	}
 }
 

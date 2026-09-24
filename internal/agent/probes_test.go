@@ -377,6 +377,44 @@ func TestSnapshotAttachesGuestObservationsToRunningVMsOnly(t *testing.T) {
 	}
 }
 
+func TestGuestProbeCachePreservesOSID(t *testing.T) {
+	bin := t.TempDir()
+	script := `#!/bin/sh
+set -eu
+case " $* " in
+  *" list --uuid "*) echo 12345678-1234-4234-8234-123456789012 ;;
+  *" dumpxml "*) echo "<domain><devices><channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='connected'/></channel></devices></domain>" ;;
+  *" qemu-agent-command "*)
+    case "$*" in
+      *guest-get-osinfo*) echo '{"return":{"id":"debian","pretty-name":"Debian GNU/Linux 13 (trixie)"}}' ;;
+      *guest-get-host-name*) echo '{"return":{"host-name":"guest.example.invalid"}}' ;;
+      *guest-network-get-interfaces*) echo '{"return":[]}' ;;
+      *) exit 2 ;;
+    esac ;;
+  *) echo "unexpected virsh arguments: $*" >&2; exit 2 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	probe := guestProbe()
+	first, err := probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []any{first, second} {
+		observations := result.([]guestObservation)
+		if len(observations) != 1 || observations[0].Guest.OSID != "debian" {
+			t.Fatalf("cached guest observation = %+v", observations)
+		}
+	}
+}
+
 func TestCPUBaselineProbeDeadlineAndFailedObservation(t *testing.T) {
 	var calls atomic.Int32
 	m := NewMonitor(time.Millisecond, map[string]Probe{"cpu-baseline": func(ctx context.Context) (any, error) {

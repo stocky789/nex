@@ -85,7 +85,8 @@ func LocalQuorum(ctx context.Context) (PoolQuorum, error) {
 		if len(fields) < 3 || fields[0] == "Nodeid" {
 			continue
 		}
-		if _, err := strconv.Atoi(fields[0]); err != nil {
+		nodeID, err := strconv.Atoi(fields[0])
+		if err != nil || nodeID <= 0 {
 			continue
 		}
 		name := fields[len(fields)-1]

@@ -32,6 +32,11 @@ What exists today:
   prerequisites hold, and gives the pool a switch that governs it. **An armed host that loses this
   pool's quorum resets itself.**
   See [Host fencing, and the watchdog line](#host-fencing-and-the-watchdog-line).
+- **Controller-hosted qdevice witness registration and status** for an eligible two-host pool.
+  Core registers with the Controller's runtime qnetd service and reports whether the native
+  witness is forming or connected and voting. This supplies a quorum vote only; it does not arm
+  SBD or enable automatic takeover. See
+  [Read the two-host witness status](#read-the-two-host-witness-status).
 - **A fence-verified promotion of a surviving member when the pool master is gone**, which you
   start by hand and Nex Core proves by powering the old master off itself. It works where the pool
   has a **fence device** for the old master, recorded before it was lost, **or** where the old
@@ -50,19 +55,53 @@ member. Silence is never agreement; the rule is fail-closed.
 
 What does **not** exist:
 
-- **There is no automatic succession.** No failover, no election, no quorum, nothing that picks a
-  new pool master on its own. If the pool master stops answering, the pool keeps running the
-  virtual machines it has but has no master until *you* promote one, and a promotion needs a fence
-  device recorded before the master was lost, or the master's own armed watchdog and the waiting
-  period that goes with it. Do not plan around anything happening by itself.
+- **There is no general automatic succession.** Core can promote the surviving member of an eligible two-host pool after two qualifying BMC-only observations at least 15 seconds apart. That delay is not proof of continuous downtime; Core then runs the normal fence-and-recheck promotion stages. Host fencing must be enabled. The candidate needs a verified authority replica and a usable recorded BMC profile for the old master. No automatic watchdog, storage-lease or witness-based promotion path is implemented. Witness registration and qdevice status exist, but they do not provide a fence proof. Outside that narrow BMC case, loss of the master does not cause automatic succession: an operator can start the separate manual promotion when Core can establish its required fence proof. Running VMs are not automatically restarted.
 - **There is no force, no override and no "declare this host lost".** No button, no field and no
   waiting period substitutes for evidence, and none will be added. Where the product cannot prove
   something it says so and stops.
 - **A member never acts on its copy by itself.** It stores it and reports that it holds it. No
   membership, virtual machine, storage, network or ISO record on a member is read from or changed by
   the copy, and holding a copy grants a member no permission to run anything. Only a master change
-  or a promotion you asked for opens it.
+  or a promotion (manual or automatic) opens it.
 - The copy is not health evidence. A host holding a current copy is not thereby a healthy host.
+
+### Read the two-host witness status
+
+There is no witness setup form. With exactly two ready hosts, Host fencing enabled and no
+configured storage lease, Nex Core selects the Controller-hosted qnetd candidate and performs
+registration from its normal service loop. It stores the witness selection and CA pin in the pool
+master's durable membership, replicates that record with the pool authority, and keeps each host's
+native qdevice credential sealed to that host. The Controller stores no pool witness record. Its
+qnetd CA is runtime state under `/run`; if that runtime is lost, Core must register and configure
+against the new CA before the witness can be reported ready again.
+
+Storage-lease fencing is not an available operator workflow in this development build. A recorded
+lease configuration or native evidence shape does not enable sanlock setup or a two-host promotion
+proof.
+
+To inspect the result, open **Settings** → **Members** → **Pool status** and expand **About**.
+The master reports this through the existing pool cluster status:
+
+- **Forming** means the qdevice is not yet confirmed by Core. The detail names the current native
+  status or registration problem. It is not a vote and must not be treated as a fence check.
+- **Degraded** can report that qdevice is connected, TLS-authenticated against the pinned CA,
+  identifies the expected cluster and qnetd host, and is casting a vote. Core still reports zero
+  watchdog-armed hosts and explicitly says two-host watchdog fencing is withheld because witness
+  loss could remove quorum; survivor behavior after witness loss has not been tested.
+- **Not available** or a missing status means the current pool/Core does not report an applicable
+  witness cluster. Older Core versions may omit this status entirely.
+
+This status comes from Core's native Corosync/qdevice and certificate checks. The Controller only
+shows the master's report; it does not configure qdevice or infer readiness from a successful HTTP
+registration. The development implementation does not arm two-host SBD, produce a witness-loss
+exclusion proof, or automatically promote on witness loss. The nested native lab kept qnetd
+reachable during a peer-only partition: the losing member reset after quorum loss, and the
+survivor remained quorate. It did not test witness loss or physical hosts. Controller route tests
+and native signer checks are also not a complete browser,
+systemd-appliance, or physical failover acceptance. See the
+[witness lab record](../qa/2026-09-24-two-host-witness-lab.md),
+[Controller registration checks](../qa/2026-09-24-controller-witness-registration.md) and
+[runtime CA checks](../qa/2026-09-24-qnetd-runtime-ca.md).
 
 ### What every ready member of a fenced pool can do
 
@@ -393,7 +432,7 @@ armed and loses this pool's quorum **resets itself**. What each host is doing is
 | *only the kernel's software watchdog, which a hung kernel cannot run, so it does not count* | The host has `softdog` and no hardware timer. A software watchdog is a timer inside the kernel, and a kernel that has hung does not run it, so it is never proof of anything. **It is still a member of this pool's cluster and still reboots if it loses the pool's quorum** — Pacemaker reboots every host on the minority side, armed or not. What it cannot do is be *proved* excluded, so a promotion will not rest on it. | Turn the chipset watchdog on in the host's firmware, if it has one. Otherwise this host can only be *proved* shut out through its management controller — but it still reboots with the rest of a minority. |
 | *Nex Core does not recognise this host's watchdog driver `<driver>`* | There is a device, but Nex Core has not classified that driver, so it counts as nothing. | Nothing you can fix on the host. Report the driver name so it can be classified. |
 | *this host reports no watchdog device* | No watchdog is present or no driver is loaded. As above, the host is still one of this pool's cluster's votes and **still reboots if it ends up in the minority**; it simply cannot be proved excluded. | Check the host's firmware settings. |
-| *a watchdog needs three or more hosts to have a majority side* | This pool has one or two hosts. A watchdog works by a host noticing it has lost the pool's majority, and two hosts have no majority. | Nothing. This is not a gap: two-host pools are shut out through their management controllers. |
+| *a watchdog needs three or more hosts to have a majority side* | This pool has one or two hosts. A watchdog works by a host noticing it has lost the pool's majority, and two hosts have no majority. | Watchdog exclusion cannot be used. Eligible two-host automatic promotion uses a recorded BMC fence profile instead; Host fencing must be enabled. |
 | *this host armed its watchdog under an earlier record of this pool* | A host joined or left since this host last reported. The set of hosts that makes a majority has changed under it, so the old report is not evidence about the pool as it is now. | Nothing. It corrects itself within a reconcile pass. |
 | *Host fencing is turned off for this pool* | The **Host fencing** switch is off. | Nothing, unless you want it on. |
 | *this host does not report whether it has a watchdog; upgrade it* | That host's Nex Core is too old to look. | Upgrade the host. |
@@ -402,8 +441,7 @@ armed and loses this pool's quorum **resets itself**. What each host is doing is
 
 **The Host fencing switch** is under **About** on the pool status strip, and the strip's
 **Host fencing** check reads **On** or **Off**. It is **on** for every pool, unless you turn
-it off, and turning it on arms nothing by itself: Nex Core arms a host's watchdog only where every
-line of the checklist beside the switch holds. The checklist is the pool master's, not this page's:
+it off, which also disables automatic two-host promotion. A recorded BMC profile can still be used for manual promotion, so a returning master with that profile still restricts itself at boot until it confirms authority. Turning Host fencing on arms nothing by itself: Nex Core arms a host's watchdog only where every line of the checklist beside the switch holds. The checklist is the pool master's, not this page's:
 
 - **Hosts** — three or more, so that a split pool has a majority side.
 - **Hardware watchdogs** — one on every host. It names the hosts without one.
@@ -487,8 +525,7 @@ host establishes that the host's own timer must already have reset it. That take
 after 1m0s out of this pool's quorate partition; 34s of that remains*. Wait and confirm again. The
 clock restarts from zero if anything makes the answer uncertain: the host reappearing in the pool's
 quorum, this pool losing quorum, or the surviving host's own Nex Core restarting — because an agent
-that was not running cannot say what happened while it was not looking. A two-host pool never
-produces one of these proofs at all.
+that was not running cannot say what happened while it was not looking. A two-host pool never produces one of these watchdog proofs; its supported automatic path uses a BMC fence, not a watchdog.
 
 **Limits you should know about in this release.**
 
@@ -788,6 +825,14 @@ After a **master change**:
 - Losing or replacing Nex Controller during the change makes no difference. The two hosts finish it
   between themselves, and a fresh Controller shows the result once they report.
 
+After an **automatic two-host promotion**, the pool status shows the new master after Core completes
+the same fence, exclusion and authority checks used by the manual promotion stages. The candidate's
+reported promotion is marked **automatic**. This indicator comes from Core's report; Controller
+does not start the promotion. No VM is automatically restarted.
+If Host fencing is turned off while that promotion is pending, Core pauses it at its recorded
+stage and reports the reason. It does not activate from a prior fence result; the candidate needs
+a verified pool record with Host fencing on and a still-valid proof before it can resume.
+
 After an **eject**:
 
 - The host is gone from this pool's **Members** section and appears as its own single-host pool, in the
@@ -838,14 +883,14 @@ After a **promotion**:
 - **An SMB repository is registered in the pool.** The stored credentials are not part of the
   copy, by design. Keep the credentials for any SMB repository recorded outside the pool, because
   a copy alone would not restore access to them.
-- **If the pool master is lost.** There is still **no automatic succession**: nothing promotes a
-  member for you, and nothing ever will without you asking. What exists is
-  [Promote a surviving member](#promote-a-surviving-member), which you start by hand and which only
-  works if a fence device was recorded for the master **before** it was lost, or if the master had
-  **armed its own watchdog** before it was lost — in which case the promotion waits out that
-  watchdog's period instead of powering anything off. If neither was in place, the pool keeps
-  running the virtual machines it has and has no master until the master comes back. Do not attempt
-  to hand-edit a member into a master.
+- **If the pool master is lost.** In an eligible two-host pool with Host fencing enabled and a
+  recorded usable BMC profile, Core can start the automatic promotion path. It excludes the old
+  master through that BMC, observes it off and rechecks authority before activation. Automatic
+  promotion does not use watchdogs, storage leases or qdevice witness as an exclusion proof. If the pool does not meet those
+  conditions (including when Host fencing is off), nothing else promotes a member automatically.
+  Use [Promote a surviving member](#promote-a-surviving-member) when Core can establish the required
+  manual fence proof; that manual workflow can use a BMC or an armed watchdog in a pool of three or
+  more hosts. Running VMs are not automatically restarted. Do not hand-edit a member into a master.
 
 ### A master change or an eject is refused
 
@@ -1042,9 +1087,7 @@ captured on the earlier layout and still applies to the behaviour it describes.
   pool cluster's own states (forming, arming host N of M, degraded, teardown blocked). What runs
   behind those screens was proven only by Go and React tests and by **nested** virtual-machine labs
   with an *emulated* watchdog: **no physical management controller has been contacted, no host has
-  been powered off, and no physical watchdog has been read, armed or expired.** Every promotion and
-  every watchdog proof is test-only; no promotion and no proof ran in a lab, and the documented
-  steps on this page for the fencing workflows have not been walked through against a running pool.
+  been powered off, and no physical watchdog has been read, armed or expired.** The new automatic promotion path has focused Go simulation tests (see the [automatic BMC promotion QA record](../qa/2026-09-24-automatic-bmc-promotion.md)), but no automatic promotion or fence proof has run against physical hardware. The manual promotion and watchdog workflows have not been walked through against a running pool.
   Every timing quoted on this page comes from those nested runs.
 - Covered by Go `-race` unit tests on Nex Core: signing and verification against the pool
   certificate authority, per-member sealing including failure with another member's key and at

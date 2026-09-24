@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,6 +130,214 @@ var reconcilePoolStorage = reconcilePoolStorageWithKnownCluster
 var reconcileStorageClusters = ReconcileStorageClustersFromMaster
 var validatePoolStorageAccess = vmhost.ValidatePoolStorageAccess
 var probePoolStorageLock = crossCoreLockProbe
+
+// reconcilePoolStorageLeaseSelection records the exact NFS repositories all ready
+// members have proved accessible. The record is pool authority, never a client choice.
+func reconcilePoolStorageLeaseSelection(s *Store) error {
+	membership, err := Membership(s)
+	if err != nil || membership.MasterHostID != s.State.HostID {
+		return nil
+	}
+	ready := make([]protocol.PoolMember, 0, 2)
+	for _, member := range membership.Members {
+		if member.Status == "ready" {
+			ready = append(ready, member)
+		}
+	}
+	var selected *protocol.PoolStorageLeaseConfig
+	if len(ready) == 2 && !membership.HostFencingDisabled {
+		self, ok := poolMemberByID(membership, s.State.HostID)
+		if !ok || requirePoolStorageLeaseReset(context.Background(), self) != nil {
+			return setPoolStorageLeaseSelection(s, membership, nil)
+		}
+		registrations, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+		if managedVMChecksReady(checks) {
+			registrations = PoolStorageMemberAccess(s, registrations)
+			for _, registration := range registrations {
+				if protocol.IsClusteredISCSI(registration) {
+					return setPoolStorageLeaseSelection(s, membership, nil)
+				}
+			}
+			repositories := make([]protocol.PoolStorageLeaseRepository, 0)
+			watchdogBound := 60
+			for _, member := range ready {
+				if member.Watchdog == nil || member.Watchdog.Kind != protocol.PoolWatchdogHardware || member.Watchdog.TimeoutSeconds <= 0 {
+					repositories = nil
+					break
+				}
+				if bound := member.Watchdog.TimeoutSeconds * 2; bound > watchdogBound {
+					watchdogBound = bound
+				}
+			}
+			if repositories != nil {
+				for _, registration := range registrations {
+					if registration.Tombstone || !protocol.IsPoolSharedStorage(registration) || registration.Kind != protocol.StorageKindNFS ||
+						!poolNFSIdentity(registration.Identity) || !registration.Access.Readable || !registration.Access.Writable {
+						continue
+					}
+					allReady := true
+					for _, member := range ready {
+						if member.HostID == s.State.HostID {
+							continue
+						}
+						accessOK := false
+						for _, access := range registration.MemberAccess {
+							if access.HostID != member.HostID || access.RepositoryID != registration.ID || access.Generation != registration.Generation ||
+								!access.Readable || !access.Writable || !access.QEMUWritable || !access.Locking || access.Identity != registration.Identity.String() {
+								continue
+							}
+							accessOK = true
+							break
+						}
+						allReady = allReady && accessOK
+					}
+					if allReady {
+						repositories = append(repositories, protocol.PoolStorageLeaseRepository{
+							RepositoryID: registration.ID, RepositoryGeneration: registration.Generation,
+							RepositoryIdentity: registration.Identity,
+							Lockspace:          protocol.PoolStorageLeaseLockspaceName(membership.PoolID, registration.ID),
+						})
+					}
+				}
+			}
+			if len(repositories) != 0 {
+				slices.SortFunc(repositories, func(a, b protocol.PoolStorageLeaseRepository) int {
+					return strings.Compare(a.RepositoryID, b.RepositoryID)
+				})
+				selected = &protocol.PoolStorageLeaseConfig{
+					Repositories: repositories, AuthorityRepositoryID: repositories[0].RepositoryID,
+					IOTimeoutSeconds: 10, HostDeadSeconds: 60, FenceTimeoutSeconds: watchdogBound,
+				}
+			}
+		}
+	}
+	return setPoolStorageLeaseSelection(s, membership, selected)
+}
+
+func poolNFSIdentity(identity protocol.StorageIdentity) bool {
+	return identity.NFS != nil && identity.Local == nil && identity.ZFS == nil && identity.SMB == nil && identity.ISCSI == nil &&
+		identity.NFS.Server != "" && identity.NFS.Export != "" && identity.NFS.FilesystemID != ""
+}
+
+func requirePoolStorageLeaseReset(ctx context.Context, member protocol.PoolMember) error {
+	armed := member.WatchdogArmed
+	if member.Watchdog == nil || armed == nil || !armed.Armed || armed.Kind != protocol.PoolWatchdogHardware ||
+		armed.FencingGeneration != member.Generation || armed.Device != member.Watchdog.Device ||
+		armed.TimeoutSeconds != member.Watchdog.TimeoutSeconds {
+		return errors.New("pool storage-lease hardware watchdog is not armed at the current generation")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	status, err := vmhost.CheckSanlockWatchdogReady(checkCtx, *member.Watchdog)
+	if err != nil || !status.ResetVerified {
+		return errors.New("pool storage-lease hardware reset is not independently verified")
+	}
+	return nil
+}
+
+// preparePoolStorageLeaseHost joins every exact configured lockspace before this host
+// accepts a replica or uses a shared repository. Only the master initializes a missing
+// lockspace file; members never create a parallel one.
+func preparePoolStorageLeaseHost(ctx context.Context, s *Store, membership protocol.PoolMembership, initialize bool) (uint64, error) {
+	lease := membership.StorageLease
+	if lease == nil {
+		return 0, nil
+	}
+	if err := lease.Valid(membership.PoolID); err != nil {
+		return 0, errors.New("pool storage-lease configuration is invalid")
+	}
+	self, ok := poolMemberByID(membership, s.State.HostID)
+	if !ok || self.Status != "ready" || self.SanlockHostID == 0 || (initialize && membership.MasterHostID != s.State.HostID) {
+		return 0, errors.New("this host is not authorized to prepare the pool storage lease")
+	}
+	if err := requirePoolStorageLeaseReset(ctx, self); err != nil {
+		return 0, err
+	}
+	ids := make([]uint64, 0, len(membership.Members))
+	for _, member := range membership.Members {
+		if member.Status == "ready" {
+			if member.SanlockHostID == 0 {
+				return 0, errors.New("a ready pool member has no sanlock host ID")
+			}
+			ids = append(ids, member.SanlockHostID)
+		}
+	}
+	slices.Sort(ids)
+	registrations, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+	if !managedVMChecksReady(checks) {
+		return 0, errors.New("managed storage state is unavailable")
+	}
+	byID := make(map[string]protocol.StorageRegistration, len(registrations))
+	for _, storage := range registrations {
+		byID[storage.ID] = storage
+	}
+	var authorityGeneration uint64
+	for _, repository := range lease.Repositories {
+		storage, ok := byID[repository.RepositoryID]
+		if !ok || storage.Tombstone || storage.Generation != repository.RepositoryGeneration ||
+			storage.Identity.String() != repository.RepositoryIdentity.String() || !poolNFSIdentity(storage.Identity) || !protocol.IsPoolSharedStorage(storage) {
+			return 0, errors.New("a configured pool lease repository does not match this host's applied NFS registration")
+		}
+		storage, err := vmhost.ValidatePoolStorageAccess(ctx, storage)
+		if err != nil || storage.Identity.String() != repository.RepositoryIdentity.String() {
+			return 0, errors.New("a configured pool lease repository is not mounted with the recorded NFS identity")
+		}
+		path, err := vmhost.SanlockLockspacePath(storage.Path)
+		if err != nil {
+			return 0, errors.New("a configured pool lease repository has no safe lease path")
+		}
+		create := false
+		if initialize {
+			_, statErr := os.Lstat(path)
+			if os.IsNotExist(statErr) {
+				create = true
+			} else if statErr != nil {
+				return 0, errors.New("pool lease file state is unavailable")
+			}
+		}
+		status, err := vmhost.EnsureSanlockLockspace(ctx, vmhost.SanlockLockspaceConfig{
+			Lockspace: repository.Lockspace, LeasePath: path, LocalHostID: self.SanlockHostID,
+			HostIDs: ids, Initialize: create, IsMaster: membership.MasterHostID == s.State.HostID,
+			IOTimeout: uint32(lease.IOTimeoutSeconds),
+		})
+		if err != nil || status.HostID != self.SanlockHostID || status.HostState != "HOST_LIVE" {
+			return 0, errors.New("this host has not joined every configured sanlock lockspace")
+		}
+		if repository.RepositoryID == lease.AuthorityRepositoryID {
+			authorityGeneration = status.Generation
+		}
+	}
+	if authorityGeneration == 0 {
+		return 0, errors.New("authority sanlock host generation is unavailable")
+	}
+	return authorityGeneration, nil
+}
+
+func setPoolStorageLeaseSelection(s *Store, observed protocol.PoolMembership, selected *protocol.PoolStorageLeaseConfig) error {
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil || state.Membership.Generation != observed.Generation || state.Membership.MasterHostID != s.State.HostID {
+		return errors.New("pool membership changed while selecting the storage lease")
+	}
+	if state.Membership.StorageLease != nil && selected != nil {
+		unprepared := *state.Membership.StorageLease
+		unprepared.PreparedGeneration = 0
+		if reflect.DeepEqual(&unprepared, selected) {
+			return nil
+		}
+	} else if state.Membership.StorageLease == selected {
+		return nil
+	}
+	if err = poolAuthorityWritable(state); err != nil {
+		return err
+	}
+	if selected != nil {
+		selected.PreparedGeneration = 0
+	}
+	state.Membership.StorageLease = selected
+	return savePoolPeer(s, state)
+}
 
 // F_OFD_SETLK is the Linux open-file-description byte-range lock command.
 // QEMU uses OFD/POSIX image locks; unlike flock, OFD locks participate in the

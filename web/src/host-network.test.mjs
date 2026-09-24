@@ -10,6 +10,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const moduleURL = bundleTestModule(new URL("./host-network.tsx", import.meta.url), "host-network");
 const src = readFileSync(new URL("./host-network.tsx", import.meta.url), "utf8");
+const stepHandler = src.slice(src.indexOf("async function step("), src.indexOf("\n  return <HostNetworkPanel"));
+assert.match(stepHandler, /catch \(e\) \{\n      void refresh\(true\);/, "a failed or interrupted network command reconciles the host's reported state");
 const {
   HostNetworkPanel, ApplyDialog, windowError, diffRows, describeNIC,
   manageableNICs, countdownText, stagedWindowText, stageLabel, rowsFromHost, specFromRows, editSeed,
@@ -137,6 +139,13 @@ assert.match(form, /<label class="sr-only" for="address-nex0">/, "every input is
 assert.match(form, /host-network-nic"><b>nex0<\/b><small class="mono">/, "interface name and MAC are stacked as a labelled cell");
 assert.match(form, /class="section-heading"[\s\S]*Refresh/, "Refresh sits in the panel heading, not above Interfaces");
 assert.doesNotMatch(form, /fold-actions/, "the old Refresh strip under the heading is gone");
+const readFailed = panel({ view: emptyView, error: "host network report unavailable" });
+assert.match(readFailed, /This host could not be asked for its management network: host network report unavailable/);
+assert.match(readFailed, /placeholder="192\.0\.2\.10\/24"/, "a failed background read keeps the existing edit form mounted");
+assert.match(readFailed, /<button class="primary" disabled="">Stage this configuration/);
+assert.match(readFailed, /This is the last reported configuration/);
+const retryCancel = panel({ view: { ...view, state: "staged" }, error: "host network report unavailable", unavailable: true });
+assert.match(retryCancel, /<button type="button">Discard staged change<\/button>/, "safe rollback stays available during a read outage");
 
 // A Nex-managed host that has never staged a change still prefills from Current.
 const currentOnly = panel({ view: {
@@ -248,9 +257,13 @@ assert.match(src, /onStep\("apply", \{ confirmation \}/);
 assert.match(src, /onStep\("confirm", \{\}/);
 assert.match(src, /onStep\("cancel", \{\}/);
 assert.doesNotMatch(src, /request_id: crypto\.randomUUID\(\)/);
-// Polling runs only while a change is staged or applied.
-assert.match(src, /const watching = flow === "staged" \|\| flow === "applied";/);
-assert.match(src, /if \(!watching \|\| unavailable\) return;/);
+// Polling also catches delayed host reports and idle changes made elsewhere.
+assert.match(src, /const timer = window\.setInterval\(catchUp, 10_000\)/);
+assert.match(src, /document\.addEventListener\("visibilitychange", catchUp\)/);
+assert.match(src, /window\.addEventListener\("online", catchUp\)/);
+assert.match(src, /if \(reportPending\.current && !force\) return;/, "the timer does not supersede a slow host read");
+assert.match(src, /await refresh\(true\);/, "a network action starts a new read even if the timer read is still pending");
+assert.match(src, /if \(\(unavailable \|\| error\) && action !== "cancel"\) return;/, "only cancellation remains available against the last report");
 
 // One request identity per step: a retry replays it, a different step is a new request.
 let minted = 0;

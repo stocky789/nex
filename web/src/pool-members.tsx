@@ -4,7 +4,7 @@ import { heldRequestID } from "./managed";
 import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
 import {
   FenceProfileDialog, FencingDetail, fencingText, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
-  promotionInProgress, type BMCProbeView, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
+  type BMCProbeView, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
 import { Badge, Section, badgeTone, date, type Tone } from "./ui";
@@ -457,8 +457,8 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
   </>;
 }
 
-export function AddHostDialog({ candidates, loading, error, busy, submitError, onConfirm, onClose, onRetryCandidates, onEnrollHost }: {
-  candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string;
+export function AddHostDialog({ candidates, loading, error, busy, submitError, submitReady = true, onConfirm, onClose, onRetryCandidates, onEnrollHost }: {
+  candidates: Candidate[]; loading: boolean; error: string; busy: boolean; submitError: string; submitReady?: boolean;
   onConfirm: (hostID: string, peerOrigin: string) => void; onClose: () => void; onRetryCandidates: () => void; onEnrollHost?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -472,7 +472,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setShowOriginError(true);
-    if (!selected || !selected.eligible || peer.error) return;
+    if (!submitReady || !selected || !selected.eligible || peer.error) return;
     onConfirm(selected.host_id, peer.origin);
   }
   return <dialog ref={dialog} className="confirm-dialog pool-join-dialog" aria-labelledby="add-host-title"
@@ -522,7 +522,7 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
       </fieldset>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        {selected && <button className="primary" disabled={busy || !selected.eligible || !origin.trim()}>{busy ? "Submitting…" : "Add host to pool"}</button>}
+        {selected && <button className="primary" disabled={busy || !submitReady || !selected.eligible || !origin.trim()}>{busy ? "Submitting…" : "Add host to pool"}</button>}
       </div>
     </form>
   </dialog>;
@@ -530,8 +530,8 @@ export function AddHostDialog({ candidates, loading, error, busy, submitError, o
 
 // Maintenance has no typed confirmation in the contract (Core accepts none); what the operator
 // must see before agreeing is the guests that stay running and the plain limits of the flag.
-export function MaintenanceDialog({ member, busy, submitError, submitReady, onConfirm, onClose }: {
-  member: Member; busy: boolean; submitError: string; submitReady: boolean; onConfirm: () => void; onClose: () => void;
+export function MaintenanceDialog({ member, busy, submitError, submitReady, readError = "", onConfirm, onClose }: {
+  member: Member; busy: boolean; submitError: string; submitReady: boolean; readError?: string; onConfirm: () => void; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -550,6 +550,7 @@ export function MaintenanceDialog({ member, busy, submitError, submitReady, onCo
     <p className={guests && guests.known ? undefined : "warning"}>{guestsText(member)}</p>
     {guests && guests.known && (guests.names || []).length > 0 && <ul className="pool-guests">{(guests.names || []).map(guest => <li key={guest}>{guest}</li>)}</ul>}
     {submitError && <p className="alert" role="alert">{submitError}</p>}
+    {readError && <p className="alert" role="alert">The current pool report could not be read: {readError}. Retry the report before submitting.</p>}
     <div className="actions">
       <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
       <button type="button" className="primary" disabled={busy || !submitReady} onClick={onConfirm}>{busy ? "Submitting…" : entering ? "Enter maintenance" : "Exit maintenance"}</button>
@@ -569,6 +570,8 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
   const [submitError, setSubmitError] = useState("");
   const [notice, setNotice] = useState("");
   const held = useRef({ id: "", signature: "" });
+  const reportRequest = useRef(0);
+  const reportPending = useRef(0);
   const [drainTarget, setDrainTarget] = useState<Member | null>(null);
   const [drainBusy, setDrainBusy] = useState(false);
   const [drainError, setDrainError] = useState("");
@@ -598,11 +601,21 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
   const [hostFencingBusy, setHostFencingBusy] = useState(false);
   const heldHostFencing = useRef({ id: "", signature: "" });
   const [actionError, setActionError] = useState("");
-  async function refresh() {
-    setLoading(true); setError("");
-    try { setReport(await api<Report>(`pools/${encodeURIComponent(poolID)}/members`)); }
-    catch (e) { setError((e as Error).message); }
-    finally { setLoading(false); }
+  async function refresh(force = false) {
+    if (reportPending.current && !force) return;
+    const request = ++reportRequest.current;
+    reportPending.current = request;
+    setLoading(true);
+    try {
+      const next = await api<Report>(`pools/${encodeURIComponent(poolID)}/members`);
+      if (request === reportRequest.current) { setReport(next); setError(""); }
+    } catch (e) { if (request === reportRequest.current) setError((e as Error).message); }
+    finally {
+      if (request === reportRequest.current) {
+        reportPending.current = 0;
+        setLoading(false);
+      }
+    }
   }
   async function loadCandidates() {
     setCandidatesLoading(true); setCandidatesError("");
@@ -610,24 +623,26 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
     catch (e) { setCandidatesError((e as Error).message); }
     finally { setCandidatesLoading(false); }
   }
-  useEffect(() => { void refresh(); }, [poolID]);
-  // A join is a durable Core operation; this only re-reads the host-reported stage while one is
-  // running, and stops as soon as no member reports a join in progress.
-  const joining = (report?.members || []).some(member => member.join?.status === "pending" || maintenanceInFlight(member.last_maintenance));
-  // A transfer is a durable Core operation too: while one is running this re-reads what the
-  // participants report, and every action that would write pool authority is refused meanwhile.
+  useEffect(() => {
+    const catchUp = () => { if (document.visibilityState === "visible") void refresh(); };
+    catchUp();
+    const timer = window.setInterval(catchUp, 10_000);
+    document.addEventListener("visibilitychange", catchUp);
+    window.addEventListener("online", catchUp);
+    return () => {
+      ++reportRequest.current;
+      reportPending.current = 0;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", catchUp);
+      window.removeEventListener("online", catchUp);
+    };
+  }, [poolID]);
+  // While this panel is open, keep asking the master so idle settings, delayed Core results,
+  // and changes made elsewhere appear without an operator refresh.
   const transferring = transferInProgress(report?.transfer) || (report?.members || []).some(member => transferInProgress(member.transfer));
   const blockedReason = transferring
     ? "A master change or eject is running on this pool. The pool master refuses every other pool authority change until it completes; retry when it does."
     : "";
-  // A promotion is durable on the candidate too, and it is exactly the case where the master
-  // reports nothing, so the poll follows the candidate's own report instead.
-  const promoting = Boolean(report) && promotionInProgress(report!);
-  useEffect(() => {
-    if ((!joining && !transferring && !promoting) || unavailable) return;
-    const timer = window.setInterval(() => void refresh(), 10_000);
-    return () => window.clearInterval(timer);
-  }, [joining, transferring, promoting, unavailable, poolID]);
   async function confirm(hostID: string, peerOrigin: string) {
     setBusy(true); setSubmitError("");
     const request_id = heldRequestID(held.current, `${poolID}\n${hostID}\n${peerOrigin}`);
@@ -635,8 +650,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       await api(`pools/${encodeURIComponent(poolID)}/members`, "POST", { request_id, host_id: hostID, peer_origin: peerOrigin });
       setOpen(false);
       setNotice("Nex Core accepted the request. The joining host performs the join itself and reports its progress below; closing this page does not stop it.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       // The same request_id is kept, so pressing the button again replays this request instead of
       // asking for a second join.
       setSubmitError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second join.`);
@@ -654,8 +670,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       setNotice(enabled
         ? "Nex Core accepted the request. The pool master records maintenance; guests already running on the host are untouched."
         : "Nex Core accepted the request. The pool master will place and start virtual machines on this host again.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setDrainError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
     } finally { setDrainBusy(false); }
   }
@@ -668,8 +685,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       await api(`pools/${encodeURIComponent(poolID)}/master`, "POST", { request_id, host_id: member.host_id, expected_version: report?.generation || 0, confirmation });
       setPromoteTarget(null);
       setNotice("Nex Core accepted the request. The pool master runs the change itself and every host reports its own part; closing this page does not stop it.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setTransferError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second master change.`);
     } finally { setTransferBusy(false); }
   }
@@ -680,8 +698,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}`, "DELETE", { request_id, expected_version: report?.generation || 0, confirmation });
       setEjectTarget(null);
       setNotice("Nex Core accepted the request. The pool master decides whether the host can leave; if it still owns pool records or a storage reservation, Core's refusal appears under Pool master change.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setTransferError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second eject.`);
     } finally { setTransferBusy(false); }
   }
@@ -700,8 +719,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       setNotice(fenceTargetID
         ? "Nex Core accepted the request. It powers that host off and verifies it before it resumes this pool's authority; if the host answers first, Core cancels the master change with that answer instead."
         : "Nex Core accepted the cancel. If the new master has already taken the pool authority, Core refuses it and the change goes forward.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setCancelError(`${(e as Error).message} Submitting again repeats the same request.`);
     } finally { setCancelBusy(false); }
   }
@@ -730,8 +750,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       await api(`pools/${encodeURIComponent(poolID)}/master/promote`, "POST", { request_id, host_id: member.host_id, confirmation, fence_confirmed: true, fence_host_ids: fenceHostIDs });
       setPromotionTarget(null);
       setNotice("Nex Core accepted the request. The candidate runs the promotion itself and reports its own stage; closing this page does not stop it.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setPromotionError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second promotion.`);
     } finally { setPromotionBusy(false); }
   }
@@ -747,8 +768,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       setNotice(fence
         ? "Nex Core accepted the request. The pool master records the fence device and every member receives it with its copy of the pool records; if this host's Nex Core cannot verify that kind of device it refuses it and says so on this page."
         : "Nex Core accepted the request. The pool master is clearing the fence device for this host.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setFenceError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
     } finally { setFenceBusy(false); }
   }
@@ -770,8 +792,9 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       setNotice(enabled
         ? "Nex Core accepted the request. The pool master records host fencing as on; it arms a host's watchdog only where every prerequisite holds."
         : "Nex Core accepted the request. The pool master records host fencing as off, so no host is armed to reset itself.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setActionError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
     } finally { setHostFencingBusy(false); }
   }
@@ -784,16 +807,18 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
     try {
       await api(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}/bmc-provisioning`, "POST", { request_id });
       setNotice("Nex Core accepted the request. That host configures its management controller again on its next pass and reports what it finds.");
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setActionError(`${(e as Error).message} Submitting again repeats the same request; it never makes a second change.`);
     } finally { setBMCBusy(""); }
   }
   const authoritative = Boolean(report?.authoritative);
+  const writesDisabled = unavailable || Boolean(error);
   return <Section icon="host" title="Members" count={report?.members?.length} actions={<>
     {report ? !authoritative && <Badge value="stale" label="Not current" /> : <span className="muted">{loading ? "Loading…" : "Unavailable"}</span>}
-    <button type="button" className="sm primary" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={unavailable || !report || Boolean(blockedReason)} onClick={() => { setSubmitError(""); setNotice(""); setOpen(true); void loadCandidates(); }}>Add host to pool</button>
-    <button type="button" className="sm" disabled={loading || unavailable} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</button>
+    <button type="button" className="sm primary" aria-describedby={blockedReason ? "pool-actions-blocked" : undefined} disabled={writesDisabled || !report || Boolean(blockedReason)} onClick={() => { setSubmitError(""); setNotice(""); setOpen(true); void loadCandidates(); }}>Add host to pool</button>
+    <button type="button" className="sm" disabled={loading} onClick={() => void refresh(true)}>{loading ? "Refreshing…" : "Refresh"}</button>
   </>}>
     {blockedReason && <p className="warning" id="pool-actions-blocked" role="status">{blockedReason}</p>}
     {notice && <p className="notice" role="status">{notice}</p>}
@@ -806,30 +831,30 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
         <p>If the pool master is gone for good, a surviving member that holds a copy of the pool records it has verified can be promoted from its row.</p>
       </div>
         : null}
-    {report && <TransferStrip report={report} onCancel={() => void cancelTransfer()} cancelBusy={cancelBusy} cancelError={cancelError}
-      onResume={unavailable ? undefined : () => { setCancelError(""); setNotice(""); setResumeOpen(true); }} />}
+    {report && !writesDisabled && <TransferStrip report={report} onCancel={() => void cancelTransfer()} cancelBusy={cancelBusy} cancelError={cancelError}
+      onResume={() => { setCancelError(""); setNotice(""); setResumeOpen(true); }} />}
     {report && <PromotionStrip report={report} />}
     {report ? <MembersTable report={report} hosts={hosts} coreAvailable={coreAvailable} busyHost={drainTarget?.host_id} blockedReason={blockedReason}
-      onMaintenance={unavailable ? undefined : member => { setDrainError(""); setNotice(""); setDrainTarget(member); }}
-      onMasterChange={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
-      onEject={unavailable ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}
-      onPromote={unavailable ? undefined : member => { setPromotionError(""); setVerdictError(""); setVerdict(null); setNotice(""); setPromotionTarget(member); void preflight(member); }}
-      onFenceProfile={unavailable ? undefined : member => { setFenceError(""); setNotice(""); setFenceTarget(member); }}
-      onBMCProvisioning={unavailable ? undefined : member => void setBMCProvisioning(member)} bmcBusy={bmcBusy}
-      onHostFencing={unavailable ? undefined : enabled => void setHostFencing(enabled)} hostFencingBusy={hostFencingBusy} /> : loading ? <p className="empty" role="status">Asking the pool master for its membership…</p> : <p className="empty">The pool master has not reported a membership.</p>}
-    {drainTarget && <MaintenanceDialog member={drainTarget} busy={drainBusy} submitError={drainError} submitReady={membershipVersionReady(report)} onConfirm={() => void setMaintenance(drainTarget)} onClose={() => { if (!drainBusy) setDrainTarget(null); }} />}
-    {report && promoteTarget && <MasterChangeDialog report={report} member={promoteTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void changeMaster(promoteTarget, confirmation)} onClose={() => { if (!transferBusy) setPromoteTarget(null); }} />}
-    {report && ejectTarget && <EjectDialog report={report} member={ejectTarget} busy={transferBusy} submitError={transferError} submitReady={membershipVersionReady(report)} onConfirm={confirmation => void eject(ejectTarget, confirmation)} onClose={() => { if (!transferBusy) setEjectTarget(null); }} />}
-    {report && promotionTarget && <PromotionDialog report={report} member={promotionTarget} verdict={verdict} verdictBusy={verdictBusy} verdictError={verdictError}
+      onMaintenance={writesDisabled ? undefined : member => { setDrainError(""); setNotice(""); setDrainTarget(member); }}
+      onMasterChange={writesDisabled ? undefined : member => { setTransferError(""); setNotice(""); setPromoteTarget(member); }}
+      onEject={writesDisabled ? undefined : member => { setTransferError(""); setNotice(""); setEjectTarget(member); }}
+      onPromote={writesDisabled ? undefined : member => { setPromotionError(""); setVerdictError(""); setVerdict(null); setNotice(""); setPromotionTarget(member); void preflight(member); }}
+      onFenceProfile={writesDisabled ? undefined : member => { setFenceError(""); setNotice(""); setFenceTarget(member); }}
+      onBMCProvisioning={writesDisabled ? undefined : member => void setBMCProvisioning(member)} bmcBusy={bmcBusy}
+      onHostFencing={writesDisabled ? undefined : enabled => void setHostFencing(enabled)} hostFencingBusy={hostFencingBusy} /> : loading ? <p className="empty" role="status">Asking the pool master for its membership…</p> : <p className="empty">The pool master has not reported a membership.</p>}
+    {drainTarget && <MaintenanceDialog member={drainTarget} busy={drainBusy} submitError={drainError || (error ? `The current pool report could not be read: ${error}. Retry the report before submitting.` : "")} submitReady={membershipVersionReady(report) && !writesDisabled} onConfirm={() => { if (!writesDisabled) void setMaintenance(drainTarget); }} onClose={() => { if (!drainBusy) setDrainTarget(null); }} />}
+    {report && promoteTarget && <MasterChangeDialog report={report} member={promoteTarget} busy={transferBusy} submitError={transferError || (error ? `The current pool report could not be read: ${error}. Retry the report before submitting.` : "")} submitReady={membershipVersionReady(report) && !writesDisabled} onConfirm={confirmation => { if (!writesDisabled) void changeMaster(promoteTarget, confirmation); }} onClose={() => { if (!transferBusy) setPromoteTarget(null); }} />}
+    {report && ejectTarget && <EjectDialog report={report} member={ejectTarget} busy={transferBusy} submitError={transferError || (error ? `The current pool report could not be read: ${error}. Retry the report before submitting.` : "")} submitReady={membershipVersionReady(report) && !writesDisabled} onConfirm={confirmation => { if (!writesDisabled) void eject(ejectTarget, confirmation); }} onClose={() => { if (!transferBusy) setEjectTarget(null); }} />}
+    {report && promotionTarget && <PromotionDialog report={report} member={promotionTarget} verdict={verdict} verdictBusy={verdictBusy} verdictError={verdictError} readError={error}
       onPreflight={() => void preflight(promotionTarget)} busy={promotionBusy} submitError={promotionError}
       onConfirm={(confirmation, fenceHostIDs) => void promote(promotionTarget, confirmation, fenceHostIDs)} onClose={() => { if (!promotionBusy) { setPromotionTarget(null); setVerdict(null); } }} />}
-    {report && resumeOpen && transferResumePrompt(report) && <ResumeDialog report={report} prompt={transferResumePrompt(report)} busy={cancelBusy} submitError={cancelError} submitReady={membershipVersionReady(report)}
+    {report && resumeOpen && transferResumePrompt(report) && <ResumeDialog report={report} prompt={transferResumePrompt(report)} busy={cancelBusy} submitError={cancelError || (error ? `The current pool report could not be read: ${error}. Retry the report before submitting.` : "")} submitReady={membershipVersionReady(report) && !writesDisabled}
       onConfirm={targetHostID => void cancelTransfer(targetHostID)} onClose={() => { if (!cancelBusy) setResumeOpen(false); }} />}
-    {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError}
+    {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError} readError={error}
       onConfirm={(fence, credential) => void setFenceProfile(fenceTarget, fence, credential)}
       onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }}
       onDetect={(endpoint, username, secret) => detectBMC(fenceTarget, endpoint, username, secret)} />}
-    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()}
+    {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError || (error ? `The current pool report could not be read: ${error}. Retry the report before submitting.` : "")} submitReady={!writesDisabled} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()}
       onEnrollHost={onEnrollHost && (() => { setOpen(false); onEnrollHost(); })} />}
   </Section>;
 }

@@ -365,7 +365,7 @@ func guestProbe() Probe {
 			}
 			if ok && time.Since(c.at) < ttl {
 				if c.facts.Agent == "connected" {
-					g.Agent, g.OS, g.Hostname, g.Addresses = c.facts.Agent, c.facts.OS, c.facts.Hostname, c.facts.Addresses
+					g.Agent, g.OS, g.OSID, g.Hostname, g.Addresses = c.facts.Agent, c.facts.OS, c.facts.OSID, c.facts.Hostname, c.facts.Addresses
 				}
 				continue
 			}

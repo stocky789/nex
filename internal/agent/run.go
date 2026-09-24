@@ -800,6 +800,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			_ = RetryPoolPeerOrigin(work, s)
 			// Which machine this host is, recorded on the master beside where it listens.
 			_ = ReportPoolSystemUUID(work, s)
+			// And the native generation of its live host lease, pinned to the authority
+			// lockspace so a stale sanlock record cannot prove a later host's exclusion.
+			_ = ReportPoolSanlockHostGeneration(work, s)
 			// And whether that machine can reset itself: sysfs only, never opening
 			// the watchdog device, because opening it is what arms it.
 			_ = ReportPoolWatchdog(work, s)
@@ -871,6 +874,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			defer watchdogReconcileRunning.Store(false)
 			work, done := context.WithTimeout(probeCtx, time.Minute)
 			defer done()
+			_ = ReconcilePoolWitness(work, s)
 			_ = ReconcilePoolWatchdogArming(work, s)
 			_ = ReconcilePoolCluster(work, s)
 		}()
@@ -936,6 +940,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				ReconcilePoolRestriction(probeCtx, s, cfg.ProbeTimeout)
 				AdvancePoolAuthorityTransfer(probeCtx, s, cfg.ProbeTimeout)
 				if membership.MasterHostID != s.State.HostID {
+					ReconcileAutomaticPoolPromotion(probeCtx, s, cfg.ProbeTimeout)
 					ConvergePoolAuthority(probeCtx, s, cfg.ProbeTimeout)
 				}
 			}()

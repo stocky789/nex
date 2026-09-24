@@ -1,8 +1,20 @@
 # Two-host pool fencing
 
-Status: planned, not implemented. Decision: project owner, 2026-09-22. Follow-on to
+Status: partially implemented: automatic BMC promotion in Core has focused simulated checks;
+new-image delivery scripts stage native packages inactive (image build unverified). Controller
+qnetd registration and Core witness credential wiring have bounded checks, while storage-lease
+activation, two-host witness self-reset/proof, their UI, and full acceptance remain open.
+Decision: project owner,
+2026-09-22; native witness
+certificate flow approved by project owner, 2026-09-24. Follow-on to
 [automatic host fencing](2026-09-22-automatic-host-fencing.md), which this plan extends; it
 answers that plan's open decision 3 and does not restate its BMC or watchdog design.
+Native witness behavior was exercised separately in a [disposable nested lab](../qa/2026-09-24-two-host-witness-lab.md);
+its [runtime CA placement](../qa/2026-09-24-qnetd-runtime-ca.md) was exercised in a separate
+disposable container. Neither observation is Nex integration evidence. Native sanlock lease
+contention and emulated watchdog reset were exercised in a separate
+[disposable storage lab](../qa/2026-09-24-two-host-storage-lease-lab.md); Core lease integration
+and physical timing remain open.
 
 ## Problem
 
@@ -33,6 +45,12 @@ A valid proof from any of the three lets the survivor of a two-host pool **promo
 automatically**, with no operator click. Without a valid proof nothing is ever automatic: the pool
 falls back to the existing manual, fence-verified promotion.
 
+Turning **Host fencing** off disables automatic takeover, including the BMC path. BMC discovery
+and manual fence-verified promotion still work. This is the operator's opt-out from automatic
+takeover. A host with a recorded BMC profile still uses the returning-master boot restriction
+while manual promotion remains possible, even when Host fencing is off.
+Decision: project owner, 2026-09-24.
+
 Storage unreachable means nobody takes over. That is acceptable: the VMs on that storage could
 not run anywhere either. A software watchdog never counts, unchanged from the parent plan's
 decision 2. There is still no force, override or "declare host lost".
@@ -45,6 +63,12 @@ decision 2. There is still no force, override or "declare host lost".
   for leases on shared files including NFS. Nex writes a lockspace and per-VM resource leases on
   the pool's shared repository; it does not invent a lease protocol. `sanlock` is not in
   `installer/packages.txt` today and is added with a licensing review.
+- **Package activation.** Debian's sanlock and quorum-device packages can start services in their
+  maintainer scripts. Stage them for a fresh ISO only while its service-start policy blocks that,
+  then verify every unused unit is disabled before first boot. Do not make ordinary Core or
+  Controller package updates install them as dependencies. On an existing host, Core installs
+  and activates only the selected method after checking the current watchdog owner; a pool using
+  `sbd` cannot acquire `wdmd` through a package update.
 - **Held for what.** One lockspace per pool repository. The master holds an authority lease; each
   running VM's owner holds that VM's resource lease. Loss of renewal escalates through `sanlock`'s
   own path: kill the VM processes, and if that does not complete in time `wdmd` stops feeding the
@@ -62,9 +86,9 @@ decision 2. There is still no force, override or "declare host lost".
   - the target's **hardware** watchdog was reported armed by the target itself, with its timeout,
     and that report is in the master's durable record at the current fencing generation;
   - the proving host holds the pool lockspace on the same repository and `sanlock` reports the
-    target's host ID as free — that is, expired, not merely unseen — which `sanlock` grants only
-    after its own host-dead interval;
-  - that free state has held continuously, on a monotonic clock, for at least the configured
+    target's allocated host ID as `dead` at the pinned owner generation, after its own
+    host-dead interval; `free` means no host lease is allocated and is not exclusion proof;
+  - that dead state has held continuously, on a monotonic clock, for at least the configured
     lease fencing timeout, which is at least the lockspace's host-dead interval and at least twice
     the target's watchdog timeout; and
   - the proof is bound to this pool, this excluded host, this operation and this fencing
@@ -75,8 +99,13 @@ decision 2. There is still no force, override or "declare host lost".
 ### Nex Witness
 
 - **Engine.** Debian's Corosync quorum device: `corosync-qdevice` on each pool host and
-  `corosync-qnetd` on the witness, giving the pair a third vote. Nex Core wraps selection,
-  registration and reporting; there is no Nex consensus code. Neither package is installed today.
+  `corosync-qnetd` on the witness, giving the pair a third vote. New Core images stage both
+  packages because another pool master may be the witness; the Controller appliance stages
+  qnetd. All services remain inactive until selected and configured. Nex Core wraps selection,
+  registration and reporting; there is no Nex consensus code. No Nex witness service is active today.
+  Debian's qnetd post-install script creates a durable `/etc` CA database. Fresh-image delivery
+  removes that unused database after configuration; witness runtime creates and uses only a
+  `/run` CA database.
 - **Automatic selection, zero clicks.** The pool master picks its witness itself, in this fixed
   order, and records the choice:
   1. another pool's master in the same site, preferred because it keeps the tie-breaker entirely
@@ -85,9 +114,21 @@ decision 2. There is still no force, override or "declare host lost".
   2. the Nex Controller that the pool is enrolled with, which every pool has.
   There is no third step and no form. An operator-installed standalone witness package is a
   possible later addition; nothing in these slices needs it, because step 2 always exists.
-- **Registration.** The witnessed pool's master registers with the chosen witness exactly as host
-  enrollment works: a short-lived token, then mutual TLS under the pool CA. No operator credential
-  form and no witness-side configuration.
+  Core gets the same-site candidate list through an authenticated read-only Controller query;
+  the Controller owns site assignments but does not choose or retain the pool's witness. If the
+  Controller is unreachable when re-selection is needed, readiness stays degraded until it can
+  supply the candidate list again.
+- **Registration.** Core authenticates the request through the existing host identity and sends a
+  cluster certificate request whose name matches Core's rendered Corosync cluster name. Native
+  `corosync-qnetd` owns its own CA and signs the qdevice certificate; Core records the resulting
+  CA fingerprint, witness address and fencing generation
+  on the pool master and replicates them. No operator credential form or Controller-owned pool
+  record is added. Decision: project owner, 2026-09-24 — use qnetd's native CA rather than the
+  originally proposed pool-CA certificate flow, which native qnetd does not support.
+  The signed cluster PKCS#12 bundle includes a private key and must reach both qdevice members
+  through authenticated Core peer transport, sealed to each recipient. A replacement CA or
+  certificate invalidates the previous registration until Core rotates and redistributes that
+  bundle at a new fencing generation; a public certificate alone cannot register the second host.
 - **Re-selection.** If the chosen witness stops answering, or its pool is removed, or a
   higher-preference candidate appears, the master re-runs the same deterministic choice and
   re-registers at a new fencing generation. Readiness is **degraded** from the moment the witness
@@ -104,6 +145,14 @@ decision 2. There is still no force, override or "declare host lost".
   A witness that is unreachable from both hosts yields no quorum and therefore no proof: the pool
   falls back to manual, fence-verified promotion. A witness never votes on content, never holds
   authority and can never promote anything.
+  The losing host must stop feeding its hardware watchdog on quorum loss before the winner can
+  use this proof; a qdevice vote without a verified self-reset path is only quorum reporting.
+  Core must report qdevice vote and identity separately from host membership: native
+  `corosync-quorumtool` prints qdevice as node ID 0, which must never count as a third pool host
+  in the existing generic watchdog proof or teardown arithmetic.
+  Native SBD must trust qdevice quorum: its watchdog timeout exceeds qdevice's sync timeout,
+  and delayed SBD startup has a systemd start deadline long enough to become active. These values
+  are measured for the actual hardware rather than copied from the nested lab.
 
 ### The Controller as witness, without breaking the invariant
 
@@ -112,7 +161,9 @@ A Controller may be the witness. It survives the replacement test because it car
 - The witness relationship is **pool state on the pool master** — witness kind, address,
   certificate fingerprint and the generation it was recorded at — like any other pool record.
 - The witness side stores no durable pool data. `corosync-qnetd` keeps runtime membership only,
-  and it re-accepts a registration presented under the witnessed pool's CA.
+  and it re-accepts a Core-authenticated registration. Its qnetd CA and certificate database live
+  in runtime-only storage; a restart or replacement rotates that CA and leaves witness readiness
+  degraded until Core re-registers and records the new fingerprint at a new fencing generation.
 - A fresh Controller that adopts the pool is chosen again by the same deterministic rule and
   re-registered automatically, with no operator input and nothing to re-enter. During the gap the
   pool reports a degraded witness, which is the honest state.
@@ -123,6 +174,19 @@ A Controller may be the witness. It survives the replacement test because it car
   chosen witness; manual fence-verified promotion still works without it.
 - Two pools that witness each other create no durable dependency either, because neither stores
   the other's authority.
+
+**Implementation safety finding, 2026-09-24.** With one pool host already gone, losing the
+Controller witness removes the survivor's second vote. Pacemaker's `no-quorum-policy=suicide`
+can panic that survivor even without SBD; the native peer-partition lab already observed a
+Pacemaker direct-panic path. Core currently uses `freeze` for an actual two-host witness cluster
+and withholds two-host SBD arming and witness exclusion proof. That preserves the stated
+Controller-outage rule while leaving automatic witness takeover unavailable. The exact
+one-host-down plus qnetd-outage sequence was not run before the disposable lab was stopped;
+neither a safe timing bound nor a replacement witness design is established. The preferred
+other-pool-master candidate also lacks cross-pool certificate trust and registration, so only
+the Controller candidate is currently usable. A product-owner decision and fresh isolated
+acceptance evidence are required before enabling automatic witness takeover. The earlier five
+decisions above do not resolve this newly observed availability conflict.
 
 ### Automatic takeover
 
@@ -197,8 +261,9 @@ Controller recovers everything from master inventory and is re-selected as witne
 ## API impact
 
 **Planned: changed contract.** Host reports gain lease and quorum-device status and the watchdog
-owner; the pool gains lease and witness records, a witness registration operation and an automatic
-promotion result; proofs gain `storage-lease` and `witness` kinds; promotion verdicts name them.
+owner; the pool gains lease and witness records, a read-only same-site witness candidate query,
+a witness registration operation and an automatic promotion result; proofs gain `storage-lease`
+and `witness` kinds; promotion verdicts name them.
 The Controller gains a witness endpoint that runs `corosync-qnetd` for registered pools and holds
 no pool state. Each slice defines authorization, validation, errors, retries, outage behaviour and
 version compatibility, and updates [API.md](../API.md). **API impact of this planning change:
@@ -212,10 +277,11 @@ These follow the parent plan's slice 4.
    repository, VM resource leases required for start, lease-loss self-reset, the watchdog-owner
    rule, and the `storage-lease` proof kind.
 6. **Nex Witness.** `corosync-qdevice` on hosts and `corosync-qnetd` on the Controller appliance
-   and on pool masters, deterministic automatic selection and re-selection, registration under the
-   pool CA, the `witness` proof kind, and the Fencing column and pool summary entries.
-7. **Automatic takeover** for two-host pools, gated on a valid proof from slice 5 or 6 plus the
-   existing supremacy checks, with its outage, partition and returning-host cases.
+   and on pool masters, deterministic automatic selection and re-selection, native qnetd CA
+   registration authenticated by Core host identity, the `witness` proof kind, and the Fencing
+   column and pool summary entries.
+7. **Automatic takeover** for two-host pools, gated on a valid BMC, storage-lease or witness
+   proof plus the existing supremacy checks, with its outage, partition and returning-host cases.
 
 Each slice ships its guide update, API reference and checks, and follows core-first delivery.
 
@@ -239,6 +305,13 @@ Each slice ships its guide update, API reference and checks, and follows core-fi
   lease expiry under real storage latency need physical evidence naming the exact hardware, server
   and mount options; do not claim a failover time from a nested lab.
 
+Storage-lease activation remains blocked by more than reset verification. Core has no caller for
+the native authority-lease release operation on handoff, lease removal or shutdown; enabling
+acquisition before that lifecycle exists could strand authority on the old master. The recorded
+60-second host-dead bound also has no native readback or measured proof yet: lockspace setup passes
+the I/O timeout, not a host-dead setting. Resolve both before adding a storage exclusion proof or
+enabling lease-backed takeover.
+
 ## Decided
 
 All five questions raised with this plan are decided (project owner, 2026-09-22) and are written
@@ -247,6 +320,7 @@ defaults on; the Controller allowed as witness under the no-durable-state rules;
 witness selection with deterministic re-selection; automatic takeover on a valid proof; and no
 replication decision, because ZFS replication does not exist.
 
-No open decisions remain. Two values are deliberately left to lab measurement rather than choice:
+The original five decisions remain as recorded. The witness outage conflict above is a new open
+decision. Two values are deliberately left to lab measurement rather than choice:
 the lockspace host-dead interval and the witness fencing timeout, each bounded below by twice the
 target's watchdog timeout, measured and recorded in the implementing slices.

@@ -60,6 +60,17 @@ assert.equal(clusterSetupAvailable("configured"), true);
 assert.equal(clusterSetupAvailable("empty"), true);
 assert.equal(clusterSetupAvailable("checking"), false);
 assert.equal(clusterSetupAvailable("unavailable"), false);
+// Cluster setup continues in Core after submission. Its separate status endpoint must keep
+// refreshing while the page is visible so operators see convergence without clicking manually.
+assert.match(src, /setInterval\(refreshWhenReady, 10000\)/);
+assert.match(src, /if \(document\.visibilityState === "visible"\) void refresh\(true\)/);
+assert.match(src, /window\.addEventListener\("online", refreshWhenReady\)/);
+assert.match(src, /window\.removeEventListener\("online", refreshWhenReady\)/);
+assert.match(src, /setPollError\(\(e as Error\)\.message\)/);
+assert.match(src, /if \(!background\) \{ setUnknownFenceTargets\(\[\]\); setFenceOutcomeNotice\(""\); \}/);
+assert.match(src, /setResult\(next\);/);
+assert.match(src, /request === refreshRequest\.current/);
+assert.doesNotMatch(src, /(?:Storage update|Storage registration|Access recheck|Detach|ZFS provisioning) queued/);
 
 const ready = { id: "nfs-1", host_id: "host-1", status: "succeeded", access: { status: "healthy", readable: true, writable: true }, capabilities: { vm_disk: true }, source: { nfs: { server: "nfs.example.test", export: "/vms" } } };
 const hosts = [{ id: "host-1", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1"] }];
