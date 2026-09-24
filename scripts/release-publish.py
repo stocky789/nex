@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Install a built Nex Core ISO into the website download tree and prune old ones.
+"""Publish Nex Core installer artifacts together and prune old releases.
 
 Runs on the website host. Packages go to the APT archive through nex-apt-publish;
-this handles the ISO, which is only needed for fresh installs. Retention is bounded
+this handles fresh-install ISOs and their hash-pinned netinst payloads. Retention is bounded
 because each release is over a gigabyte and the archive already holds ~740 MB of
 packages per version.
 
@@ -28,6 +28,9 @@ from pathlib import Path
 VERSION_DIR = re.compile(r"^[0-9][A-Za-z0-9.+~]*$")
 ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64\.iso$")
 SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-source\.tar\.gz$")
+NETINST_ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64-netinst\.iso$")
+NETINST_MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-netinst-compliance-manifest\.json$")
+PAYLOAD_NAME = re.compile(r"^(?:nex-core-local|dlm-controld)-[0-9a-f]{64}\.deb$")
 MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-compliance-manifest\.json$")
 
 
@@ -67,8 +70,8 @@ def release_asset(path, pattern, label, version):
     return path
 
 
-def compliance_manifest(path, version):
-    path = release_asset(path, MANIFEST_NAME, "compliance manifest", version)
+def compliance_manifest(path, version, pattern=MANIFEST_NAME):
+    path = release_asset(path, pattern, "compliance manifest", version)
     try:
         manifest = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
@@ -122,7 +125,7 @@ def prune(root, keep):
     return removed
 
 
-def publish(root, iso, source, manifest, keep):
+def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifest=None, payloads=(), check=False):
     root = _real_dir(root, create=True)
     iso = Path(iso)
     if iso.is_symlink() or not iso.is_file():
@@ -130,13 +133,44 @@ def publish(root, iso, source, manifest, keep):
     version = iso_version(iso)
     source = release_asset(source, SOURCE_NAME, "source bundle", version)
     manifest, manifest_data = compliance_manifest(manifest, version)
-    assets = (iso, source, manifest)
+    assets = [iso, source, manifest]
+    bindings = [(manifest_data, "iso", iso), (manifest_data, "source_bundle", source)]
+    if netinst_iso or netinst_manifest or payloads:
+        if not netinst_iso or not netinst_manifest or not payloads:
+            raise ReleasePublishError("netinst requires ISO, compliance manifest and payloads together")
+        netinst_iso = release_asset(netinst_iso, NETINST_ISO_NAME, "netinst ISO", version)
+        netinst_manifest, netinst_data = compliance_manifest(
+            netinst_manifest, version, NETINST_MANIFEST_NAME)
+        assets.extend((netinst_iso, netinst_manifest))
+        bindings.extend(((netinst_data, "iso", netinst_iso),
+                         (netinst_data, "source_bundle", source)))
+        expected = netinst_data.get("netinst_payloads")
+        if not isinstance(expected, list) or not expected:
+            raise ReleasePublishError("netinst manifest requires netinst_payloads")
+        supplied = {}
+        for payload in map(Path, payloads):
+            if payload.is_symlink() or not payload.is_file() or not PAYLOAD_NAME.fullmatch(payload.name):
+                raise ReleasePublishError(f"invalid netinst payload: {payload}")
+            if payload.name in supplied:
+                raise ReleasePublishError(f"duplicate netinst payload: {payload.name}")
+            supplied[payload.name] = payload
+        if any(not isinstance(item, dict) for item in expected) or {item.get("file") for item in expected} != set(supplied):
+            raise ReleasePublishError("netinst payload set does not match manifest")
+        for item in expected:
+            payload = supplied[item["file"]]
+            digest = sha256(payload)
+            if item.get("sha256") != digest or not payload.name.endswith(f"-{digest}.deb"):
+                raise ReleasePublishError(f"netinst payload binding does not match {payload.name}")
+        assets.extend(supplied.values())
     digests = {asset.name: sha256(asset) for asset in assets}
-    for key, asset in (("iso", iso), ("source_bundle", source)):
-        binding = manifest_data.get(key)
+    for data, key, asset in bindings:
+        binding = data.get(key)
         if not isinstance(binding, dict) or binding.get("file") != asset.name or binding.get("sha256") != digests[asset.name]:
             raise ReleasePublishError(
                 f"compliance manifest {key} binding does not match {asset.name}")
+
+    if check:
+        return version, digests[iso.name], version, []
 
     # Stage beside the target so the move is atomic on the same filesystem, and a
     # failed upload never leaves a half-written ISO that looks installable.
@@ -183,15 +217,24 @@ def main(argv=None):
                         help="matching whole-release source bundle")
     parser.add_argument("--compliance-manifest", required=True,
                         help="matching release compliance manifest")
+    parser.add_argument("--netinst-iso", help="matching network installer ISO")
+    parser.add_argument("--netinst-manifest", help="network installer compliance manifest")
+    parser.add_argument("--netinst-payload", action="append", default=[],
+                        help="hash-pinned Nex download; repeat for each payload")
+    parser.add_argument("--check", action="store_true", help="verify bindings without publishing")
     parser.add_argument("--keep", type=int, default=3,
                         help="number of releases to retain (default 3)")
     args = parser.parse_args(argv)
     try:
         version, digest, newest, removed = publish(
-            args.root, args.iso, args.source, args.compliance_manifest, args.keep)
+            args.root, args.iso, args.source, args.compliance_manifest, args.keep,
+            args.netinst_iso, args.netinst_manifest, args.netinst_payload, args.check)
     except (ReleasePublishError, OSError) as error:
         print(f"release-publish: {error}", file=sys.stderr)
         return 1
+    if args.check:
+        print(f"verified {version} sha256={digest}")
+        return 0
     print(f"published {version} sha256={digest}")
     print(f"latest -> {newest}")
     if removed:

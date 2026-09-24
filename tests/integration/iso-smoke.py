@@ -55,7 +55,8 @@ def run_vm(args, label, extra, seconds=15, completion=False, accel='kvm'):
     serial = args.output / f'{label}.serial.log'
     command = ['qemu-system-x86_64', '-accel', accel, '-cpu', 'host' if accel == 'kvm' else 'max', '-m', '3072', '-smp', '2',
                '-display', 'none', '-monitor', 'none', '-serial', f'file:{serial}',
-               '-qmp', f'unix:{qmp_path},server=on,wait=off', '-nic', 'none', '-no-reboot', *extra]
+               '-qmp', f'unix:{qmp_path},server=on,wait=off',
+               '-nic', 'user,model=virtio-net-pci' if args.netinst else 'none', '-no-reboot', *extra]
     (args.output / f'{label}.command.json').write_text(json.dumps(command, indent=2))
     with (args.output / f'{label}.qemu.log').open('w') as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
@@ -105,7 +106,9 @@ test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd
 test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd
 # Transport compression must preserve the entire signed Windows driver media.
 echo '303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d  /usr/share/nex/media/virtio-win.iso' | sha256sum -c -
-echo '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d  /usr/share/doc/nex-core/third-party/virtio-win/source/virtio-win-0.1.302-1.src.rpm' | sha256sum -c -
+if ! test -f /usr/share/nex-core/netinst-available.tsv; then
+    echo '25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d  /usr/share/doc/nex-core/third-party/virtio-win/source/virtio-win-0.1.302-1.src.rpm' | sha256sum -c -
+fi
 test -s /usr/share/nex/core-local/nex-source.tar.gz
 cmp /usr/share/nex/core-local/nex-source.tar.gz /usr/share/nex/appliance/nex-source.tar.gz
 echo NEX_SMOKE_PACKAGING_PAYLOADS_PASS
@@ -179,7 +182,7 @@ echo NEX_NESTED_KVM_BOOT_PASS
 INIT
     chmod +x "$work/root/init"
     (cd "$work/root" && find . -print0 | cpio --null -o -H newc | gzip) >"$work/initrd.gz"
-    cp /boot/vmlinuz-* "$work/vmlinuz"
+    cp "/boot/vmlinuz-$(uname -r)" "$work/vmlinuz"
     cat >"$work/guest.xml" <<XML
 <domain type='kvm'>
   <name>nex-smoke</name><memory unit='MiB'>256</memory><vcpu>1</vcpu>
@@ -237,6 +240,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--kernel', type=Path)
     parser.add_argument('--initrd', type=Path)
+    parser.add_argument('--netinst', action='store_true', help='Enable disposable VM networking for a network installer ISO')
     parser.add_argument('--uefi-code', type=Path, help='OVMF CODE file; matching VARS file must be beside it')
     parser.add_argument('--uefi-accel', choices=['kvm', 'tcg'], default='kvm')
     args = parser.parse_args()
@@ -267,13 +271,20 @@ def main():
         service = '[Unit]\nAfter=libvirtd.service ssh.service chrony.service\nWants=libvirtd.service ssh.service chrony.service\n[Service]\nType=oneshot\nExecStart=/bin/sh /root/nex-smoke.sh\n[Install]\nWantedBy=multi-user.target\n'
         # Load shipping policy from the actual ISO after CD detection: its early
         # hook needs the media and anna, which are unavailable at initrd startup.
+        preseed = PRESEED
+        if args.netinst:
+            preseed = preseed.replace('netcfg/enable boolean false', 'netcfg/enable boolean true')
+            preseed = preseed.replace('cp /cdrom/nex/repo/base-files_*.deb /target/root/',
+                                      'cp /cdrom/pool/main/b/base-files/base-files_*.deb /target/root/')
+            preseed += 'd-i netcfg/choose_interface select auto\nd-i netcfg/disable_autoconfig boolean false\n'
         initrd.write_bytes(args.initrd.read_bytes() + archive({
-            'preseed.cfg': (PRESEED + 'd-i preseed/file string /nex-smoke-media.cfg\n').encode(),
+            'preseed.cfg': (preseed + 'd-i preseed/file string /nex-smoke-media.cfg\n').encode(),
             'nex-smoke-media.cfg': b'd-i preseed/include string /cdrom/preseed.cfg /nex-smoke.cfg\n',
-            'nex-smoke.cfg': PRESEED.encode(),
+            'nex-smoke.cfg': preseed.encode(),
             'nex-smoke.sh': CHECK.encode(), 'nex-smoke.service': service.encode()}))
-        run_vm(args, 'offline-install', [*drives, *iso, '-kernel', str(args.kernel.resolve()), '-initrd', str(initrd), '-append', 'auto=true priority=critical console=ttyS0,115200n8'], seconds=1800, completion=True)
-        if 'NEX_SMOKE_INSTALL_PASS' not in (args.output / 'offline-install.serial.log').read_text(errors='replace'):
+        install_label = 'network-install' if args.netinst else 'offline-install'
+        run_vm(args, install_label, [*drives, *iso, '-kernel', str(args.kernel.resolve()), '-initrd', str(initrd), '-append', 'auto=true priority=critical console=ttyS0,115200n8'], seconds=1800, completion=True)
+        if 'NEX_SMOKE_INSTALL_PASS' not in (args.output / f'{install_label}.serial.log').read_text(errors='replace'):
             raise RuntimeError('Installer did not report success')
         for label, marker in [('installed-first-boot', 'NEX_SMOKE_FIRST_BOOT_PASS'), ('installed-reboot', 'NEX_SMOKE_REBOOT_PASS')]:
             run_vm(args, label, drives, seconds=180, completion=True)

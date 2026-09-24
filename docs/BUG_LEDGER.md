@@ -7545,3 +7545,97 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: The regression now compares any startup frame with the previous framebuffer and waits for a one-second idle interval, with a separate deadline for reading a full frame. The two GitHub workflow copies use separate concurrency groups on github.com while retaining the shared forge group.
 - Regression: `go test ./internal/vmhost -run '^TestHostConsoleIncrementalUpdateOnlyOnChange$' -count=5` and `go test ./...` passed locally. The test runs in `.github/workflows/github.yml` on GitHub and in `.github/workflows/phase1.yml` on the forge. GitHub rerun requires a project-owner push.
 - Avoid: Using a fixed short sleep to infer that a login shell is idle, or sharing a cancelling workflow group between jobs that should only skip.
+
+## BUG-0551 — Native network installation could miss newly installed NIC drivers
+
+- Date: 2026-09-24. Status: fixed in the working tree; clean early-hook network discovery verified, full installation acceptance separate.
+- Symptom: A disposable serial net installation reported no network interfaces even though
+  the matching VirtIO network module had been installed from the media.
+- Root cause: udev retained its boot-time module index after anna installed additional
+  driver packages. Debian's hardware detection regenerated indexes and replayed device
+  events without reloading udev; the new driver's alias was not discovered.
+- Fix: The shared installer account/media hook regenerates module indexes with `depmod`,
+  reloads udev, then invokes native `update-dev`, after component loading. Both native serial installation and the Nex
+  graphical/text preparation use this hook; no adapter-specific module list is added.
+- Regression: In a fresh disposable QEMU failure, only loopback was present; running
+  `udevadm control --reload` followed by `update-dev` discovered the VirtIO interface
+  without manually loading its driver. The focused module-loading test in
+  `python3 -m unittest discover -s tests -p test_netinst.py` fails against the original hook and passes with the fix for
+  both initial and repeated preparation. All seven netinst tests passed in the Debian
+  builder container, including real APT selection (`docker run --rm --entrypoint python3
+  -v "$PWD:/work:ro" nex-iso-builder -m unittest discover -s tests -p test_netinst.py`).
+  The native account integration test
+  against `user-setup-udeb` 1.107 and `installer/check.sh` passed. The existing forge
+  Python suite runs the new regression on pushes and pull requests; clean unattended
+  installation of the corrected artifact remains a separate acceptance check. A fresh
+  serial QEMU boot with the exact corrected hook overlaid reached DHCP, HTTPS source
+  preflight and automatic partition/base installation without manual driver loading.
+- Avoid: Adding an adapter-specific `modprobe` workaround, or assuming that installing
+  module files and replaying udev events also refreshes udev's cached indexes.
+
+## BUG-0552 — CI concurrency checks rejected the GitHub runner split
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge execution pending.
+- Symptom: The Python suite failed two CI security checks despite the workflows retaining
+  the shared forge runner group.
+- Root cause: BUG-0550 made the GitHub copies select separate groups on github.com and
+  the shared group on the forge, but the checks still required an unconditional literal.
+- Fix: Both checks now require the complete GitHub conditional or the Gitea literal,
+  according to the workflow copy. Production concurrency configuration is unchanged.
+- Regression: `python3 -m unittest discover -s tests -p 'test_ci_security.py' -v`
+  failed the two concurrency assertions before correction and passes all 13 checks
+  afterward. Temporary copies with an incorrect shared group were rejected for both
+  workflows and both providers (four expected failures). The existing Python discovery
+  suite runs these checks in `.github/workflows/phase1.yml` and `github.yml` on pushes
+  and pull requests; their forge/GitHub gates remain unchanged.
+- Avoid: Weakening the assertion to merely search for a shared-group name somewhere in
+  the file, or changing production scheduling to satisfy a stale test.
+
+## BUG-0553 — Network installer lost APT's package download plan
+
+- Date: 2026-09-24. Status: fixed; final netinst passed clean unattended BIOS installation, first boot and reboot.
+- Symptom: A disposable native net installation created an empty download plan and fetched
+  only the driver ISO. APT's required-package URI lines appeared in syslog instead of the
+  redirected plan file, so the later local-only install could not find its packages.
+- Root cause: Debian Installer's `in-target` wrapper routes command stdout to its logger
+  by default. The new plan capture treated it as a plain command wrapper.
+- Fix: Request native `in-target --pass-stdout` for the APT URI-plan command. Preserve
+  native target setup and logging for the actual package installation. An empty plan
+  remains valid when a retry finds all requested packages already installed.
+- Regression: `python3 -m unittest discover -s tests -p test_netinst.py` passed all eight
+  tests in the Debian builder. The new check executes the actual plan-capture shell block
+  with the native wrapper's stdout behavior: the corrected call selects the required
+  package, while removing `--pass-stdout` reproduces an empty plan. The real APT fixture
+  separately verifies package selection, URI filename encoding and already-installed
+  package exclusion. `installer/check.sh` passed. The forge Python suite runs these tests
+  on pushes and pull requests; the complete corrected VM installation is tracked separately.
+- Avoid: Replacing `in-target` with raw `chroot`, inventing an empty-plan failure for valid
+  retries, or treating an APT plan visible in syslog as evidence that redirected output exists.
+
+## BUG-0554 — VM creation leaves the result page blank until refresh
+
+- Date: 2026-09-24. Status: fixed in the working tree.
+- Symptom: accepting a VM creation navigates to its result route but leaves the page empty.
+- Cause: the wizard cleared its local form while the shell kept `creating=true`, hiding the VM list.
+- Fix: call the existing shell close callback on accepted creation before navigating.
+- Regression: the accepted-create fixture in `tests/integration/phase1_browser.py` now checks
+  visible task and VM details without refresh. The isolated browser block failed before the fix
+  and passed afterward; UI tests, typecheck and build passed. Both forge Phase 1 workflow copies
+  already execute this browser suite on pushes and pull requests; hosted CI was not run here.
+  See [browser evidence and limits](qa/2026-09-24-vm-create-navigation.md).
+- Avoid: forcing a full-page reload or clearing wizard drafts during Storage/Networks side trips.
+
+## BUG-0555 — ISO smoke guest test failed with multiple installed kernels
+
+- Date: 2026-09-24. Status: fixed in the working tree.
+- Symptom: Network-installed Core passed initial boot checks but its nested-guest smoke
+  test failed when copying the kernel.
+- Root cause: The fixture expanded `/boot/vmlinuz-*` into multiple source files while
+  its destination was a single file. Network installation can retain the base kernel
+  alongside the newer pinned kernel.
+- Fix: Copy the currently running kernel using `uname -r`.
+- Regression: `python3 -m unittest discover -s tests -p test_iso_smoke.py` passes its
+  shell execution with two kernel files; restoring the wildcard reproduces the failure.
+  Existing forge Python discovery runs it on pushes and pull requests. Final native
+  nested-guest checks are recorded in the network-installer QA report.
+- Avoid: Deleting valid installed kernels to accommodate a test fixture's assumption.

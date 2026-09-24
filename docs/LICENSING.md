@@ -112,8 +112,10 @@ The builder produces `nex-core-<version>-source.tar.gz` from the media inventory
 and retained inputs. Its compliance manifest is written only after mastering and
 records the exact final ISO and source-bundle filename and SHA-256. The download
 publisher verifies both bindings before atomically publishing the ISO, source
-bundle, manifest, and their SHA-256 sidecars. The forge release carries those six
-files plus the Core and Controller Debian packages, for eight assets total.
+bundle, manifest, and their SHA-256 sidecars. For the historical full-ISO release, the forge carried those six files plus the
+Core and Controller Debian packages. The network-installer variant adds its own
+ISO/checksum and compliance manifest/checksum, together with the release download
+assets it references; inspect the current workflow for the complete asset set.
 
 The artwork prerequisite is no longer open: branded artwork covered by this
 repository is identified and licensed in [ARTWORK-LICENSE.md](../ARTWORK-LICENSE.md).
@@ -170,10 +172,13 @@ The public Core installer stages Fedora's virtio-win `0.1.302` ISO
 `303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`, 877373440 bytes)
 together with the matching Fedora source RPM
 (`virtio-win-0.1.302-1.src.rpm`, SHA-256
-`25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d`). The installation
+`25561bba120e67bfae842429d5e25764c38e74b92f78d9ef90c20ec41d2ad75d`). The full installation
 media carries the complete driver ISO as gzip-compressed transport. Late-install
 restores and verifies the original bytes at `/usr/share/nex/media/virtio-win.iso`
-before making them available. It copies the notices and intact source RPM under
+before making them available. The network-installer variant downloads the same
+unmodified ISO directly from Fedora and verifies its release-pinned SHA-256; Nex
+does not need to mirror that download. Retained source and notices remain required
+for copies Nex redistributes, including the full ISO and release source bundle. The full ISO copies the notices and intact source RPM under
 `/usr/share/doc/nex-core/third-party/virtio-win/`; redundant extracted RPM contents
 are kept outside the installation-media tree. The separately distributed release
 source bundle retains the complete extracted source inputs as well as the RPM.

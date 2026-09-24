@@ -6,6 +6,7 @@ import os
 import subprocess
 import textwrap
 import threading
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,11 @@ class ReleaseReachabilityTests(unittest.TestCase):
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        temporary = tempfile.TemporaryDirectory()
+        payloads = Path(temporary.name) / 'dist/netinst'
+        payloads.mkdir(parents=True)
+        payload = payloads / ('nex-core-local-' + 'a' * 64 + '.deb')
+        payload.write_bytes(b'fixture')
         try:
             for provider in ('.github', '.gitea'):
                 workflow = (ROOT / provider / 'workflows/release.yml').read_text()
@@ -58,7 +64,7 @@ class ReleaseReachabilityTests(unittest.TestCase):
                         result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                             env={**os.environ, 'NEX_VERSION': '0.3.4',
                                  'NEX_PUBLIC_URL': f'http://127.0.0.1:{server.server_port}'},
-                            text=True, capture_output=True, timeout=30)
+                            text=True, capture_output=True, timeout=30, cwd=temporary.name)
                         if unauthorized:
                             self.assertNotEqual(result.returncode, 0)
                             self.assertIn('returned 401', result.stderr)
@@ -70,7 +76,9 @@ class ReleaseReachabilityTests(unittest.TestCase):
                             self.assertTrue(any(method == 'HEAD' and path.endswith('.tar.gz') for method, path in requests))
                             self.assertFalse(any(method == 'GET' and path.endswith('.tar.gz') for method, path in requests))
                             self.assertIn(('GET', '/apt/dists/nex/main/binary-amd64/Packages'), requests)
+                            self.assertIn(('HEAD', '/downloads/0.3.4/' + payload.name), requests)
         finally:
+            temporary.cleanup()
             server.shutdown()
             server.server_close()
             thread.join()

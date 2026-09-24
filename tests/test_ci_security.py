@@ -69,7 +69,9 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
-                self.assertIn('group: nex-shared-runner', workflow)
+                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
+                         if provider == '.github' else 'nex-shared-runner')
+                self.assertIn(f'  group: {group}\n', workflow)
                 # Browser lane must be first and must not wait on Go.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')
@@ -95,19 +97,23 @@ class BrowserArtifactTests(unittest.TestCase):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 release = (ROOT / provider / 'workflows/release.yml').read_text()
-                self.assertIn('group: nex-shared-runner', release)
+                group = ("${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}"
+                         if provider == '.github' else 'nex-shared-runner')
+                self.assertIn(f'  group: {group}\n', release)
                 self.assertIn('cancel-in-progress: true', release)
 
-    def test_forge_release_does_not_attach_standalone_debs(self):
-        # Operators install Core from the ISO; bare .deb downloads are not a
-        # supported release channel. Packages still build for the ISO and APT.
+    def test_forge_release_only_attaches_netinst_payload_debs(self):
+        # Bare Core/Controller packages remain in APT; netinst needs its exact
+        # hash-named packages available even on forge-only releases.
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 text = (ROOT / provider / 'workflows/release.yml').read_text()
                 create = text.split('- name: Create or replace the release\n', 1)[1]
                 step = create.split('\n      - name:', 1)[0]
                 self.assertIn('scripts/gitea-release.py', step)
-                self.assertNotIn('.deb', step)
+                self.assertIn('dist/netinst/*.deb', step)
+                self.assertNotIn('dist/core-local/', step)
+                self.assertNotIn('dist/controller/', step)
                 self.assertIn('nex-core-${NEX_VERSION}-amd64.iso', step)
                 self.assertIn('nex-core-${NEX_VERSION}-source.tar.gz', step)
                 self.assertIn('nex-core-${NEX_VERSION}-compliance-manifest.json', step)

@@ -92,6 +92,9 @@ def main():
             'anna': 'test "$*" = "cdrom-retriever default"\ntouch "$NEX_TEST_DIR/anna-ready"',
             'anna-install': 'test "$*" = user-setup-udeb\ntest -f "$NEX_TEST_DIR/anna-ready"\n'
                             'cp "$NEX_TEST_DIR/package-user-setup-ask" "$NEX_TEST_DIR/user-setup-ask"',
+            'depmod': 'test \"$*\" = -a',
+            'udevadm': 'test \"$*\" = \"control --reload\"',
+            'update-dev': ':',
             'debconf-loadtemplate': ':',
         }
         for command, body in stubs.items():

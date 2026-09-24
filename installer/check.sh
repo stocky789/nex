@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 bash -n installer/build.sh
 bash -n installer/build-gui.sh
 sh -n installer/late-install.sh
+sh -n installer/netinst-fetch.sh
+python3 -m py_compile installer/netinst-manifest.py
 sh -n installer/gui/wizard-text.sh
 sh -n installer/root-account.sh
 python3 - <<'PY'

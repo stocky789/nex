@@ -294,6 +294,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                            'operation_id': '', 'status': 'succeeded', 'kind': 'bridge', 'source': 'br0'}
         warning_operation = [{'id': 'warning-create', 'host_id': host_id, 'kind': 'vm-create', 'request_id': 'warning-create',
                               'status': 'queued', 'actor': 'operator', 'created_at': '2026-09-20T00:00:00Z', 'updated_at': '2026-09-20T00:00:00Z'}]
+        warning_vms = []
         page.route('**/api/v1/pools/*/members', lambda route: route.fulfill(json={
             'authoritative': True, 'members': [{'host_id': host_id, 'maintenance': False}],
         }))
@@ -302,7 +303,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/operations', lambda route: route.fulfill(json=warning_operation))
         page.route('**/api/v1/vms', lambda route: route.fulfill(status=202, json={
             'vm_id': 'warning-vm', 'operation': {'id': 'warning-create'}, 'warnings': ['Placement warning from Core fixture'],
-        }) if route.request.method == 'POST' else route.continue_())
+        }) if route.request.method == 'POST' else route.fulfill(json=warning_vms))
         refresh_route('vms')
         page.get_by_role('button', name='Create VM', exact=True).click()
         page.get_by_label('VM name').fill('Warning fixture')
@@ -318,9 +319,17 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         warning = page.get_by_text('Placement warning from Core fixture', exact=False)
         expect(warning).to_be_visible()
         assert page.evaluate('location.hash') == '#/vms/warning-vm/warning-create', 'accepted create must navigate to its task route'
+        # The result route must render without a browser refresh after the wizard closes.
+        expect(page.get_by_role('region', name='Create VM', exact=True)).not_to_be_visible()
+        expect(page.get_by_role('region', name='Creation task', exact=True)).to_be_visible()
+        capture('create-result-without-refresh')
         warning_operation[0]['status'] = 'succeeded'
+        warning_vms.append({'id': 'warning-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning fixture',
+                            'status': 'succeeded', 'state': 'shut off', 'freshness': 'fresh', 'operation_id': 'warning-create'})
         # The next automatic inventory poll (every 10 s) sees the terminal task.
         expect(warning).not_to_be_visible(timeout=15000)
+        expect(panel.get_by_role('heading', name=re.compile('^Warning fixture'))).to_be_visible()
+        capture('created-vm-without-refresh')
         page.unroute('**/api/v1/vms')
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/networks')

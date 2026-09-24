@@ -9,6 +9,11 @@ if [ ! -f "$ask" ]; then
     anna cdrom-retriever default
     anna-install user-setup-udeb
 fi
+# anna adds drivers after udev has cached the boot-time module index.
+# Rebuild and reload that index before replaying events so the new drivers bind.
+depmod -a
+udevadm control --reload
+update-dev
 if ! grep -q 'NEX_ROOT_PASSWORD_REQUIRED' "$ask"; then
     # Fail on an upstream change instead of silently allowing ordinary accounts.
     test "$(grep -c '^[[:space:]]*db_set passwd/root-login false$' "$ask")" = 1

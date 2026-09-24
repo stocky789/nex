@@ -272,6 +272,7 @@ if [[ ${1:-} != --inside ]]; then
         -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
         -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
         -e "NEX_ISO_VERSION=$version" \
+        -e "NEX_NETINST_BASE_URL=${NEX_NETINST_BASE_URL:-}" \
         nex-iso-builder
 fi
 [[ $(dpkg --print-architecture) == amd64 ]]
@@ -390,7 +391,7 @@ apt_closure=(-y --download-only --no-install-recommends "${apt_snapshot[@]}" -o 
 resolve=$(mktemp -d "$cache/resolve.XXXXXX")
 mkdir -p "$resolve/partial" "$downloads/debs"
 apt-get "${apt_closure[@]}" --print-uris -o Dir::Cache::archives="$resolve" install "${packages[@]}" \
-    | sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" | sort > "$cache/debs.list"
+    | tee "$cache/debs.uris" | sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" | sort > "$cache/debs.list"
 rm -rf "$resolve"
 [[ -s $cache/debs.list ]] || { echo 'APT did not resolve the requested offline package closure' >&2; exit 1; }
 apt-get "${apt_closure[@]}" -o Dir::Cache::archives="$downloads/debs" install "${packages[@]}"
@@ -587,3 +588,76 @@ python3 /work/scripts/build-source-bundle.py \
 cp "$stage/nex/BUILD.txt" /work/dist/BUILD.txt
 (cd /work/dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 printf '\nBuilt %s\n' "$output"
+
+# Reuse the exact tested closure and boot files; only payload transport changes.
+if [[ -n ${NEX_NETINST_BASE_URL:-} ]]; then
+    netstage=$cache/netinst-stage
+    rm -rf "$netstage" /work/dist/netinst
+    cp -al "$stage" "$netstage"
+    python3 installer/netinst-manifest.py "$netstage" "$cache/debs.uris" "$NEX_NETINST_BASE_URL" /work/dist/netinst
+    install -m755 installer/netinst-fetch.sh "$netstage/nex/netinst-fetch.sh"
+    rm -f "$netstage/nex/repo/"*.deb "$netstage/nex/media/virtio-win.iso.gz"
+    # The shared source bundle retains these redundant payloads and exact notices.
+    rm -rf "$netstage/nex/third-party/virtio-win/source"
+    rm -rf "$netstage/nex/third-party/dlm-pacemaker-abi"
+    mkdir -p "$netstage/nex/third-party/dlm-pacemaker-abi"
+    cp -a "$stage/nex/third-party/dlm-pacemaker-abi/notices" "$netstage/nex/third-party/dlm-pacemaker-abi/"
+    # Replace transport descriptions without modifying hardlinked offline metadata.
+    python3 - "$netstage" <<'PYNOTICE'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]) / 'nex'
+notice = root / 'third-party/virtio-win/NOTICE'
+text = notice.read_text().replace('Unmodified Fedora public build redistributed with Nex Core.',
+                                  'Unmodified Fedora public build downloaded directly during installation.').replace(
+    'under this directory and in the release source bundle.', 'in the shared release source bundle.')
+notice.unlink()
+notice.write_text(text)
+checksums = notice.with_name('checksums.sha256')
+checksums.unlink()
+build = root / 'BUILD.txt'
+text = build.read_text().replace('Bundled media: Fedora virtio-win 0.1.302 with matching Fedora corresponding-source RPM',
+    'Downloaded media: Fedora virtio-win 0.1.302; matching source RPM retained in the shared release source bundle')
+text += 'Network installation: exact download URLs and SHA256 values are in nex/netinst.tsv.\n'
+build.unlink()
+build.write_text(text)
+PYNOTICE
+    (cd "$netstage/nex/third-party/virtio-win" && sha256sum NOTICE manifest.tsv > checksums.sha256)
+    # Native serial installation needs the same pre-partition availability gate.
+    serial_overlay=$(mktemp -d)
+    mkdir -p "$serial_overlay/usr/lib/partman/init.d"
+    install -m755 installer/gui/recheck.sh "$serial_overlay/usr/lib/partman/init.d/00nex-recheck"
+    # Break the hardlink before appending so the offline initrd stays byte-identical.
+    cp "$netstage/install.amd/initrd.gz" "$netstage/install.amd/initrd.gz.new"
+    mv "$netstage/install.amd/initrd.gz.new" "$netstage/install.amd/initrd.gz"
+    (cd "$serial_overlay" && find . -print0 | cpio --null -o -H newc --quiet | gzip -n) >> "$netstage/install.amd/initrd.gz"
+    rm -rf "$serial_overlay"
+    netoutput=/work/dist/nex-core-${version}-amd64-netinst.iso
+    rm -f "$netstage/.disk/info" "$netstage/md5sum.txt"
+    printf '%s\n' "Nex Core $version amd64 net installer — internet required" > "$netstage/.disk/info"
+    (cd "$netstage" && find . -type f ! -name md5sum.txt ! -path './isolinux/boot.cat' ! -path './isolinux/isolinux.bin' -print0 | sort -z | xargs -0 md5sum > md5sum.txt)
+    rm -f "$netoutput"
+    xorriso -indev "$downloads/$iso" -outdev "$netoutput" \
+        -boot_image any replay -update_r "$netstage" / -volid NEX_NETINST -commit -end
+    python3 /work/scripts/build-source-bundle.py \
+        --version "$version" --iso "$netoutput" --tree "$netstage" --repository "$netstage/nex/repo" \
+        --source-bundle "/work/dist/nex-core-${version}-source.tar.gz" \
+        --compliance-manifest "/work/dist/nex-core-${version}-netinst-compliance-manifest.json"
+    python3 - "/work/dist/nex-core-${version}-netinst-compliance-manifest.json" /work/dist/netinst "$netstage/nex/netinst.tsv" <<'PYMANIFEST'
+import hashlib, json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data['netinst_downloads'] = [dict(zip(('sha256', 'destination', 'url'), line.split('\t')))
+                             for line in Path(sys.argv[3]).read_text().splitlines()]
+data['netinst_payloads'] = []
+for payload in sorted(Path(sys.argv[2]).glob('*.deb')):
+    with payload.open('rb') as stream:
+        checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
+    data['netinst_payloads'].append({'file': payload.name, 'sha256': checksum})
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+PYMANIFEST
+    (cd /work/dist && sha256sum "$(basename "$netoutput")" > "$(basename "$netoutput").sha256" && \
+        sha256sum "nex-core-${version}-netinst-compliance-manifest.json" > "nex-core-${version}-netinst-compliance-manifest.json.sha256")
+    printf '\nBuilt %s\n' "$netoutput"
+fi

@@ -66,10 +66,51 @@ against the selected dated `trixie` snapshot and build timestamps change. Retain
 manifest and cache for each tested build. The dated snapshot is already pinned;
 a complete package lock and source bundle remain release requirements.
 
-The current working version is `0.4.11`; it is not a release merely because the build
+The current working version is `0.4.12`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).
+
+## Network installer
+
+Set `NEX_NETINST_BASE_URL` to the HTTPS directory where this release's Nex payloads
+will be published, then run the same builder:
+
+```sh
+NEX_NETINST_BASE_URL=https://downloads.example.org/releases/0.4.12 ./installer/build.sh
+```
+
+The build creates both the existing full ISO and
+`dist/nex-core-<version>-amd64-netinst.iso`, with its checksum and separate
+`nex-core-<version>-netinst-compliance-manifest.json`. Publish the two
+content-addressed `.deb` files under `dist/netinst/` directly beneath the configured
+URL. They contain Nex Core (including its Controller appliance) and the Nex rebuild
+of DLM. No Debian mirror is needed. The shared full source bundle remains required
+for redistribution; keep it alongside both installation variants.
+
+The network ISO keeps Debian's boot, installer, firmware and base installation
+packages. It removes the added host package payloads, bundled appliance package,
+VirtIO ISO and redundant retained third-party source payloads. It downloads Debian
+host packages directly from the same dated `snapshot.debian.org` archives used by
+the offline build, and Windows driver media directly from Fedora. Build-time APT
+signature verification and SHA256 values baked into the ISO pin every download.
+The snapshot is intentional: installing today's moving package versions would not
+reproduce the tested release or its retained corresponding source.
+
+Both Nex frontends apply the selected management network during net installation;
+serial installation uses Debian's network setup. Before partitioning, installation
+checks both Nex payloads and representative upstream URLs. This checks availability
+at that moment, not uninterrupted access for the whole installation. A missing
+network or unpublished payload stops the installation before partitioning. Later
+download failures stop installation with an error; each download gets three attempts
+and only verified bytes are installed. APT selects only packages missing or outdated
+in the installed base. The available download manifest and actual selected package
+list are retained under `/usr/share/nex-core/`.
+
+Published assets must remain available for the lifetime of their ISO. The current
+release retention policy can remove old releases; use the current matching ISO if
+an older release's payloads disappear. Local generation does not publish payloads
+or establish an installed-host acceptance result.
 
 ## Install in a disposable VM first
 

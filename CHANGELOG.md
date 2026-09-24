@@ -6,12 +6,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.11` →
-> Debian `0.4.11`).
+> development software. Builds use the newest numbered changelog heading (`0.4.12` →
+> Debian `0.4.12`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.12] — 2026-09-24
+
+### Minor Feature
+
+- Add a smaller network installer alongside the full offline ISO. It downloads Debian
+  packages directly from Debian and Windows driver media from Fedora; Nex hosting supplies
+  the Nex Core package, its Controller appliance and the custom DLM package.
+- Network installation checks source availability before disk preparation, verifies every
+  downloaded payload and resumes interrupted transfers.
+
+### Miscellaneous
+
+- Forge release builds produce both installer variants, their checksums and matching
+  source/compliance records, plus the packages needed by the network installer.
 
 ## [0.4.11] — 2026-09-24
 

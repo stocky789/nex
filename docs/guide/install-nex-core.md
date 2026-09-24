@@ -13,18 +13,32 @@ Nex Core is a distribution, not a package set added to Debian: `nex-core-local` 
 install on a system the installer did not create (recorded as `/etc/nex/core-release`).
 Later updates come from the signed Nex APT archive; see [software updates](software-updates.md).
 
-The installer includes the complete Windows guest-driver media in compressed form
-and restores it locally during installation. No extra download or operator step is
-required, and the installed driver ISO is unchanged.
+The full ISO includes packages and the complete Windows guest-driver media for offline
+installation. The development network variant, `nex-core-<version>-amd64-netinst.iso`,
+keeps the bootable installer and basic Debian installation media but downloads the
+additional packages and driver media. It needs internet access throughout installation;
+its completed installation provides the same Core software and driver ISO.
+
+Unmodified Debian packages come directly from Debian's pinned snapshot service, and
+Windows VirtIO media comes directly from Fedora. Only the Nex Core package (including
+its Controller appliance) and Nex's rebuilt DLM package come from the Nex release host.
+APT selects only packages missing or outdated in the installed base, and the installer
+verifies the downloaded bytes against checksums pinned in the ISO.
+A Nex-hosted Debian mirror is not needed. Installation uses prebuilt packages; the
+existing ZFS DKMS package still builds its kernel module locally.
 
 ## Prerequisites
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.11` tree is not a released artifact.
+  The current working `0.4.12` tree is not a released artifact.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.
+- For netinst: a working management NIC, gateway and DNS with HTTPS access to the
+  configured Nex release host, `snapshot.debian.org` and `fedorapeople.org`, including
+  their download redirects. Use a current matching ISO while its release payloads remain
+  available; older netinst ISOs can stop working when hosted payloads are pruned.
 - VM console access. BIOS mode matches the tested installation path; UEFI menu display alone
   does not establish a tested UEFI installation.
 
@@ -36,7 +50,8 @@ required, and the installed driver ISO is unchanged.
    sha256sum -c nex-core-<version>-amd64.iso.sha256
    ```
 
-   Replace `<version>` with the version in the built file name.
+   Replace `<version>` with the version in the built file name. For netinst, use
+   `sha256sum -c nex-core-<version>-amd64-netinst.iso.sha256` instead.
 
    Continue only if the matching ISO reports `OK`. A checksum detects a mismatched file;
    obtain the image and checksum from a trusted build.
@@ -98,8 +113,11 @@ required, and the installed driver ISO is unchanged.
    DHCP, the DHCP server supplies the gateway and, if this field is empty, DNS; explicit
    DNS addresses override DHCP DNS. Other DHCP adapters receive addresses without
    replacing the management default route or DNS. **Offline (no management network)** is
-   available; leave every adapter disabled for a fully offline host. These choices take
-   effect on the installed host's first boot, not while the installer runs.
+   available for the full ISO; leave every adapter disabled for a fully offline host.
+   For netinst, select an enabled management NIC: offline settings are rejected before
+   disk preparation. The network variant applies management networking during installer
+   preparation so it can check and fetch downloads. The installed host still uses the
+   saved settings on first boot; its DHCP lease may differ.
 6. On **Choose the installation disks**, explicitly select the **blank disposable disk**, or
    two or more of them for a mirrored system disk.
    The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
@@ -137,6 +155,9 @@ required, and the installed driver ISO is unchanged.
    **Erase disk(s) and install Nex Core** only when the targets are certain. The checkbox starts
    unchecked and resets whenever you return to Review. This is the
    destructive confirmation; do not expect another routine erase question.
+   Netinst then activates the selected management network and checks download sources
+   before erasing disks. If preparation fails, correct the connection/settings and retry;
+   a successful preflight does not guarantee the network will stay available.
 8. Let installation finish. A single Nex progress panel stays in place during and between backend steps.
    The step list on the left keeps the wizard's own steps — **Welcome**, **Host**,
    **Network**, **Disk**, **Review**, then **Install** — so the position does not restart when
@@ -151,7 +172,10 @@ required, and the installed driver ISO is unchanged.
    shows that work is continuing. Scroll the log up to pause following new lines; leave it at
    the bottom to keep following.
    Error and recovery prompts appear when your input is needed.
-   Packages are bundled; a mirror or working network is not required.
+   With the full ISO, packages are bundled and a working network is not required.
+   With netinst, keep networking available while packages and driver media download.
+   Verified completed downloads can be reused on a retry within the current installation;
+   a failed or corrupt download does not become an installed package.
    The installation engine can still show error or recovery questions; do not accept an
    installation error as a completed host. On a reported failure, **View log** opens
    the latest entries from the same three logs
@@ -172,10 +196,11 @@ required, and the installed driver ISO is unchanged.
    appears and the layout question is asked again, so the root password is never typed on a
    layout that was not applied. **VLAN ID** is prefilled with `0`, so pressing Enter leaves
    that adapter untagged. The management adapter list names each detected adapter with its MAC
-   address and link state and ends with **Offline (no management network)**, the same choice
-   the graphical wizard offers; choosing it installs without a management network, lets every
+   address and link state. On the full ISO, the list ends with **Offline (no management network)**,
+   the same choice the graphical wizard offers; choosing it installs without a management network, lets every
    adapter be left unconfigured and asks no gateway question. A machine with no detected adapter shows
-   **No network adapter was detected**, skips the management question and installs offline.
+   **No network adapter was detected**, skips the management question and installs offline
+   on the full ISO. Netinst omits the text Offline choice and stops if no adapter is detected.
    When more adapters are configured, each leftover adapter offers **Disabled**, **dhcp** or
    **static**; Disabled leaves that adapter unconfigured. The last screen reviews every setting, including an **Adapters:** line giving each adapter's
    mode, address, gateway and VLAN, names the disk and asks whether to erase it; it defaults to
@@ -186,6 +211,8 @@ required, and the installed driver ISO is unchanged.
    are rejected, the reason is shown, nothing is erased, and the questions return with every
    answer still filled in, so you correct the named setting and confirm the erase again. There
    are no separate partitioning or GRUB questions; accepted settings start the installation.
+   Netinst requires an enabled management adapter and successful download preflight;
+   the full ISO alone supports offline installation.
    The disk question is a tick list: press Space on each disk of the mirror, then Enter. Each
    choice names the device, capacity, type, model, serial and whether the disk already has partitions, in
    the same order as the graphical list, and the review names every selected disk with its
@@ -227,7 +254,7 @@ Boot, disk-detach and leftover-array checks for the mirrored install remain outs
 Verification.
 
 Root SSH login is disabled, so a fresh root-only installation has no SSH login account.
-Use the local console. Installation can work offline; later package updates require access
+Use the local console. Full-ISO installation can work offline; later package updates require access
 to configured Debian repositories. The installed Nex package configures its default Nex APT
 source; it may have no candidate until a compatible release is actually published.
 
@@ -235,7 +262,8 @@ source; it may have no candidate until a compatible release is actually publishe
 
 - **Windows driver media fails decompression or its checksum:** installation stops
   rather than exposing a partial driver ISO. Verify the installation ISO's checksum
-  and retry using intact media; no network download is required to restore it.
+  and retry using intact media. The full ISO restores it locally; netinst downloads
+  the checksum-pinned ISO directly from Fedora.
 
 - **GUI is blank or unusable:** reboot and select **Minimal install - Nex Core (text)**.
   If disk writing has already begun, do not assume reboot undoes it; inspect the target
@@ -254,9 +282,11 @@ source; it may have no candidate until a compatible release is actually publishe
 - **Invalid NIC settings:** check for duplicate addresses, valid IPv4 prefixes, VLAN range,
   and a gateway only on the enabled management adapter. Return to each NIC and correct it.
 - **No adapters detected, No link or Link unknown:** verify the VM NIC attachment or physical driver support.
-  Install offline if appropriate, then recover from the local console. Both modes offer
-  **Offline (no management network)**, and minimal installation reports a machine with no
-  adapter at all and continues offline rather than stopping. A displayed link state
+  Use the full ISO to install offline if appropriate, then recover from the local console.
+  Its graphical and text modes offer **Offline (no management network)**, and minimal
+  installation reports a machine with no
+  adapter at all and continues offline rather than stopping on the full ISO.
+  Netinst requires an enabled management adapter. A displayed link state
   or saved address is not proof that the gateway or VLAN is reachable. Link unknown does
   not establish that the cable is unplugged; check the driver or virtual NIC attachment.
 - **No root file system:** partitioning did not create the installation layout. Open
@@ -272,9 +302,19 @@ source; it may have no candidate until a compatible release is actually publishe
 - **Installed network is unreachable:** use the local console to inspect `ip -br address`,
   `ip route` and `/etc/network/interfaces`. Match `nexN` names to their MAC addresses and
   check switch VLAN configuration. Correct the installed settings locally; the installer
-  does not offer remote rollback or prove connectivity before first boot.
+  does not offer remote rollback. Netinst download access does not prove the installed
+  management bridge will be reachable after reboot.
 - **No bootable media:** check the attached ISO and VM boot order. BIOS and UEFI menu boots
   passed on the final disposable ISO; physical hardware remains unverified.
+- **Netinst download unavailable or verification fails:** check gateway, DNS, VLAN,
+  HTTPS access and the installer log. Preparation checks download availability before
+  disk preparation, but an upstream outage can still occur later. Downloads retry up
+  to three times, resuming interrupted transfers when the source supports it; a complete
+  download that fails its checksum is discarded. Use the current matching ISO
+  if its release payloads were removed or replaced. Do not bypass checksum checks.
+  Correct the connection and use the installer's available retry controls, or restart
+  on a disposable target. A restart after disk writing is not a rollback. Use the full
+  ISO when internet access or release-payload availability cannot be guaranteed.
 - **Installation/package setup fails:** retain the installer error and logs with the image
   checksum for diagnosis. Do not treat the base Debian installation alone as a successful
   Nex installation. Retry on a new disposable disk after resolving the error.
@@ -283,6 +323,10 @@ source; it may have no candidate until a compatible release is actually publishe
   There is no Nex undo for an accepted disk overwrite.
 
 ## Verification
+
+Netinst implementation checks and outstanding final-artifact, BIOS/UEFI, network-failure
+and forge checks are recorded in [network-installer verification](../qa/iso/2026-09-24-net-installer.md).
+Historical offline results below do not establish netinst acceptance.
 
 The packaging efficiency checks and disposable offline-installation results are
 tracked in [packaging verification](../qa/2026-09-18-iso-packaging-efficiency.md).

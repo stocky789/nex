@@ -10,17 +10,17 @@ and hosted publication checks have been inspected and recorded. Do not treat a s
 build as that evidence.
 
 Once those gates are recorded as complete, every push to `main` on the configured Git forge
-builds the ISO and both Debian packages at the newest `CHANGELOG.md` version and publishes the
-ISO, matching source bundle and compliance manifest as the repository release for tag
-`vX.Y.Z[-preN]`, replacing that version's previous release. Standalone `.deb` files are not
-release downloads: Core is installed from the ISO, and Controller is not offered as a bare
-package install. Packages are still built so the ISO can install Core and so enrolled hosts can
-update from APT. One version identifies a release: the changelog heading, the tag and the
+builds the full and network installer ISOs and both Debian packages at the newest `CHANGELOG.md` version and publishes the
+ISOs, shared matching source bundle, separate compliance manifests and hash-named netinst
+payloads as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous
+release. The two `.deb` payloads supply Nex Core (including its Controller appliance) and the
+custom DLM build to netinst. Core is installed through the installer; Controller is not offered
+as a bare package install. Enrolled hosts continue to update through APT. One version identifies a release: the changelog heading, the tag and the
 Debian package version are the same number. No tag is pushed by hand; the workflow creates or
 moves it.
 
 If the website deploy secrets are set, the same Release run publishes the packages to the signed
-APT archive, the ISO and source to the download tree, and the static website pages. A separate
+APT archive, both ISOs, source and netinst payloads to the download tree, and the static website pages. A separate
 Website workflow still exists for website-only pushes that skip the ISO build; see
 [operate the website](operate-website.md).
 [Return to the guide](README.md).
@@ -30,9 +30,10 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.4.11`, may publish to the private forge for internal labs.
-  CI no longer blocks public publication, so leave the deploy secrets unset until that
-  evidence is recorded for this exact version: the `debian/copyright` and matching source for
+  The current working version is `0.4.12`. With deploy secrets unset, netinst downloads
+  its Nex payloads from the forge release, which must allow anonymous HTTPS access; a
+  private forge requiring login cannot serve a working netinst release. Leaving website
+  secrets unset does not waive distribution requirements. Record evidence for this exact version: the `debian/copyright` and matching source for
   `ipmitool` and `sbd` are still marked outstanding in
   [Nex licensing](../LICENSING.md#release-evidence), which records exact-artifact evidence for
   `0.2.9` only.
@@ -86,25 +87,28 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
    (`0.2.9 0.2.9`); a prerelease converts the tag suffix to Debian ordering
    (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
-   appliance, both packages and the ISO, checks each artifact declares the released version,
+   appliance, both packages and both ISOs, checks artifact versions and source/payload bindings,
    builds the static website when deploy secrets are set, then creates the release and
-   publishes packages to APT, the ISO to the download tree and those pages. A failing website
+   publishes packages to APT, both ISOs and netinst payloads to the download tree and those pages. A failing website
    build or a half-set deploy secret stops the run before the tag moves. A second push at the
    same version runs again and replaces the release; a newer push cancels a release build
    still in progress.
    The artifact verification step prints each output's byte size so packaging growth
-   is visible before publication. Transfer compression of bundled Windows media
-   changes neither the restored driver ISO nor the release's six-asset layout.
+   is visible before publication. The netinst ISO embeds the actual publishing destination:
+   the configured website when deployment is enabled, otherwise the forge release URL.
 
 ## Expected result
 
 The repository's **Releases** page shows `Nex Core X.Y.Z` at tag `vX.Y.Z` for a final release, or
 the Debian-form `Nex Core X.Y.Z~preN` at tag `vX.Y.Z-preN` for a prerelease. A `-preN` version is
-marked prerelease. The changelog section supplies the notes and the release has six assets:
+marked prerelease. The changelog section supplies the notes. The release includes:
 
 - `nex-core-<Debian-version>-amd64.iso` and its `.sha256` sidecar
+- `nex-core-<Debian-version>-amd64-netinst.iso` and its `.sha256` sidecar
 - `nex-core-<Debian-version>-source.tar.gz` and its `.sha256` sidecar
 - `nex-core-<Debian-version>-compliance-manifest.json` and its `.sha256` sidecar
+- `nex-core-<Debian-version>-netinst-compliance-manifest.json` and its `.sha256` sidecar
+- `nex-core-local-<SHA256>.deb` and `dlm-controld-<SHA256>.deb`, pinned by the netinst ISO
 
 Standalone `nex-core-local_*.deb` and `nex-controller_*.deb` files are not attached.
 
@@ -118,14 +122,15 @@ release has already been removed, so rerun publication to restore that version.
 
 With deploy secrets set, `https://<site>/apt/` also serves the new packages in the signed
 `Release`/`Packages` index, so enrolled hosts see the update under **Updates**. The publisher
-copies the ISO, matching source bundle, and matching compliance manifest into
+copies both ISOs, their shared source bundle, separate manifests and netinst payloads into
 `https://<site>/downloads/<Debian-version>/`, writes a SHA-256 sidecar for each, and moves
 `latest` to the newest retained release; releases beyond the newest three download directories
-are pruned. The publisher rejects a manifest unless its recorded ISO and source-bundle filename
-and SHA-256 match the files being installed. The compliance manifest inventories ISO
+are pruned. An older netinst ISO stops working if its payloads are pruned or replaced by a
+same-version rebuild; use the current matching ISO. The publisher rejects mismatched ISO,
+source-bundle or netinst payload bindings. The compliance manifest inventories ISO
 components for licensing; it does not enable or block publication by package name. The workflow
 then fetches the published APT indexes,
-ISO checksum, source bundle, and compliance manifest over HTTPS and fails if any are missing or
+ISO checksums, source bundle, manifests and netinst payload availability over HTTPS and fails if any are missing or
 the package index does not list the released version.
 
 ## Troubleshooting
@@ -178,14 +183,14 @@ the package index does not list the released version.
   bypass a fixed size limit.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
-- **Deploy secrets are not set** — the workflow says so and publishes to Gitea only. Add the
-  secrets and re-run, or publish the ISO and source from the release assets and the packages
-  through `nex-apt-publish` on the website host.
+- **Deploy secrets are not set** — the workflow publishes to the forge only and verifies
+  anonymous payload access. A 401 or HTML login page fails this check. To use a website
+  instead, configure the deploy secrets and rebuild so the netinst ISO embeds that destination.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
 - **Disk pressure on the website host** — the APT archive keeps every package version and each
   `nex-core-local` embeds the Controller appliance image; the packaging check records its actual size. Only
-  ISOs are pruned. Check `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
+  download release directories (including their netinst payloads) are pruned. Check `du -sh /srv/nex-apt /srv/nex-downloads` before large release runs.
 
 ## Verification
 
@@ -208,3 +213,5 @@ For 0.3.1, see the [exact-artifact release report](../qa/2026-09-17-nex-core-0.3
 for rebuilt packages, matching sources/notices, BIOS installation and reboot, both firmware
 boot menus, signed APT and public delivery checks. This was direct website/APT publication;
 no Git-forge release or hosted CI completion is implied.
+
+For the development 0.4.12 netinst changes, see [network-installer verification](../qa/iso/2026-09-24-net-installer.md). Local publication fixtures do not establish a hosted release run.

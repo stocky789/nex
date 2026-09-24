@@ -16,7 +16,7 @@ static GtkWidget *window, *book, *back, *next, *error_label, *heading, *steps;
 static GtkWidget *step_labels[5];
 static GtkWidget *host, *network_hostname, *password, *repeat, *zone_entry, *keymap, *show_password, *timezone_area;
 static gchar **timezones;
-static GtkWidget *nic_list, *nic_details, *mode, *address, *gateway, *vlan, *management, *dns;
+static GtkWidget *network_intro, *nic_list, *nic_details, *mode, *address, *gateway, *vlan, *management, *dns;
 static GtkWidget *disk_list, *disk_summary, *review, *confirmation, *dhcp_retry;
 static gboolean loading_nic;
 static guint dhcp_debounce, dhcp_children;
@@ -524,7 +524,12 @@ static void discover(void)
             gtk_list_store_set(GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(disk_list))), &iter, DISK_SELECTED, TRUE, -1);
     }
     disks_changed();
-    if (!nics->len) gtk_label_set_text(GTK_LABEL(nic_details), "No physical network adapters detected.\nYou can install offline and configure networking locally later.");
+    gtk_label_set_text(GTK_LABEL(network_intro), g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)
+        ? "Choose an adapter to configure it. The net installer uses the management adapter to download software."
+        : "Choose an adapter to configure it. Settings apply after installation.");
+    if (!nics->len) gtk_label_set_text(GTK_LABEL(nic_details), g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)
+        ? "No physical network adapters detected.\nThe net installer requires networking; use the offline ISO."
+        : "No physical network adapters detected.\nYou can install offline and configure networking locally later.");
     else { GtkTreePath *first = gtk_tree_path_new_first(); gtk_tree_selection_select_path(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), first); gtk_tree_path_free(first); }
     gtk_widget_set_sensitive(mode, nics->len > 0);
     gtk_widget_set_sensitive(vlan, FALSE);
@@ -627,6 +632,9 @@ static gboolean collect(void)
     index = gtk_combo_box_get_active(GTK_COMBO_BOX(management));
     g_key_file_set_string(config, "Network", "management", index > 0 ? g_ptr_array_index(nics, index - 1) : "");
     g_key_file_set_string(config, "Network", "dns", value(dns));
+    if (page >= 2 && index <= 0 && g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)) {
+        message("The net installer requires a management adapter and internet access. Select an adapter or use the offline ISO."); return FALSE;
+    }
     if (page >= 2 && !nex_network_validate(config, &error)) { message(error ? error->message : "Check the network settings."); g_clear_error(&error); return FALSE; }
     if (page < 3) return TRUE;
     if (!selected_disks) { message("Select the disk to erase and install Nex Core onto, or two or more disks for a mirror."); return FALSE; }
@@ -821,7 +829,7 @@ int main(int argc, char **argv)
     gtk_widget_set_tooltip_text(zone_entry, "Choose an area, then select your timezone from the list. UTC is universal time.");
     gtk_widget_set_tooltip_text(password, "At least 8 characters. Root provides local recovery access.");
     gtk_widget_set_tooltip_text(keymap, "Applied immediately. Changing layout clears both password fields.");
-    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Choose an adapter to configure it. Settings apply after installation."), FALSE, FALSE, 0);
+    box = page_box(); network_intro = label("Choose an adapter to configure it. Settings apply after installation."); gtk_box_pack_start(GTK_BOX(box), network_intro, FALSE, FALSE, 0);
     network_hostname = gtk_entry_new_with_buffer(gtk_entry_get_buffer(GTK_ENTRY(host))); field(box, "_Hostname", network_hostname);
     row = gtk_hbox_new(FALSE, 16); gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
     nic_list = list_widget(); gtk_widget_set_size_request(nic_list, 120, 170); scroll = gtk_scrolled_window_new(NULL, NULL); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC); gtk_container_add(GTK_CONTAINER(scroll), nic_list); gtk_box_pack_start(GTK_BOX(row), scroll, FALSE, FALSE, 0);

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only
  * Validate the local wizard handoff and prepare existing Debian installer inputs.
- * Never partitions disks or changes the running machine's network.
+ * Never partitions disks. Netinst activates the selected installer network.
  */
 #define _GNU_SOURCE
 #include <glib.h>
@@ -102,6 +102,11 @@ static void validate(GKeyFile *config, gboolean password_required)
     if (password_required && (g_utf8_strlen(password,-1) < 8 || strlen(password) > 512 || strchr(password,'\n') || strchr(password,'\r')))
         fail("Enter a root password of at least 8 characters, at most 512 bytes, without line breaks.");
     if (!nex_network_validate(config, &error)) fail(error ? error->message : "Network settings are invalid.");
+    if (g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)) {
+        char *management = g_key_file_get_string(config, "Network", "management", NULL);
+        if (!management || !*management) fail("The net installer requires a management network. Select an adapter or use the offline ISO.");
+        g_free(management);
+    }
     char **nic_groups=g_key_file_get_groups(config,NULL);
     for (int i=0;nic_groups[i];i++) {
         if (!g_str_has_prefix(nic_groups[i],"NIC:")) continue;
@@ -150,6 +155,28 @@ int main(int argc,char **argv)
     validate(config,!recheck);
     if (!apply) return 0;
     if (strcmp(path,"/run/nex-installer/config.ini")) fail("Refusing an unexpected installation handoff path.");
+    if (g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)) {
+        char *management = g_key_file_get_string(config, "Network", "management", NULL);
+        char *group = g_strdup_printf("NIC:%s", management);
+        char *args[] = { "/usr/lib/nex-installer/netinst-network", management,
+            g_key_file_get_string(config, group, "mode", NULL),
+            g_key_file_get_string(config, group, "vlan", NULL),
+            g_key_file_get_string(config, group, "address", NULL),
+            g_key_file_get_string(config, group, "gateway", NULL),
+            g_key_file_get_string(config, "Network", "dns", NULL), NULL };
+        for (int i = 2; i < 7; i++) if (!args[i]) args[i] = g_strdup("");
+        int status = 0;
+        /* No shell interpolation; neither command receives the root password. */
+        if (!g_spawn_sync(NULL, args, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                          NULL, NULL, NULL, NULL, &status, NULL) || !g_spawn_check_wait_status(status, NULL))
+            fail("Could not activate the installer network. Check the selected adapter, DHCP or static settings, and VLAN, then retry.");
+        for (int i = 1; i < 7; i++) g_free(args[i]);
+        g_free(group);
+        char *check[] = { "/bin/sh", "/cdrom/nex/netinst-fetch.sh", "--check", NULL };
+        if (!g_spawn_sync(NULL, check, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                          NULL, NULL, NULL, NULL, &status, NULL) || !g_spawn_check_wait_status(status, NULL))
+            fail("Net installer sources are unavailable. Check internet access, DNS and system time, then retry. No disk has been erased.");
+    }
     char *password=value(config,"password");
     unsigned char entropy[24];
     if (getrandom(entropy,sizeof entropy,0)!=sizeof entropy) fail("Unable to obtain secure randomness.");

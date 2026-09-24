@@ -1,0 +1,51 @@
+{
+  "summary": "Bump the changelog-derived working version to 0.4.12 for the network installer and forge release build support.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Current development version labels identify 0.4.12; installation behavior is documented in the network-installer assessment.",
+    "pages": [
+      "docs/guide/change-management-network.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/navigate-the-controller-console.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release version labels and notes change no Controller/Core command or client-facing contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A version bump does not close any milestone or verification gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release labels introduce no durable pool setting or Controller-owned state."
+  },
+  "verification": {
+    "method": "Verify changelog-derived version and release-version tests; actual build and installation evidence is recorded in the network-installer QA report.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "docs/qa/iso/2026-09-24-net-installer.md"
+    ]
+  }
+}

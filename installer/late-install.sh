@@ -14,25 +14,49 @@ if [ -d /cdrom/nex/third-party/virtio-win ]; then
     mkdir -p /target/usr/share/doc/nex-core/third-party
     cp -a /cdrom/nex/third-party/virtio-win /target/usr/share/doc/nex-core/third-party/
 fi
-[ -f /cdrom/nex/media/virtio-win.iso.gz ] && [ -f /cdrom/nex/media/virtio-win.iso.sha256 ] || {
-    echo 'compressed virtio-win media or checksum missing from installation media' >&2
-    exit 1
-}
-install -d -m755 /target/usr/share/nex/media
-virtio_iso=/target/usr/share/nex/media/virtio-win.iso
-trap 'rm -f "$virtio_iso"' 0 1 2 15
-gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"
-(cd /target/usr/share/nex/media && sha256sum -c /cdrom/nex/media/virtio-win.iso.sha256)
-trap - 0 1 2 15
 mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/
 cp /cdrom/nex/package-manifest.tsv /target/var/cache/nex-install/
-# Packages were authenticated by APT during the ISO build. Use ONLY this local
-# repository here: a missing dependency must fail rather than require internet.
+# Offline bytes were authenticated during build; netinst verifies the same pinned
+# bytes before installation. Neither variant permits APT to substitute live versions.
 cat > /target/var/cache/nex-install/offline.list <<'LIST'
 deb [trusted=yes] file:/var/cache/nex-install/repo ./
 LIST
+install -d -m755 /target/usr/share/nex/media
+virtio_iso=/target/usr/share/nex/media/virtio-win.iso
+if [ -f /cdrom/nex/netinst.tsv ]; then
+    in-target apt-get -o Dir::Etc::sourcelist=/var/cache/nex-install/offline.list \
+        -o Dir::Etc::sourceparts=- update
+    # Only fetch APT's actual plan, rather than downloading the installed base twice.
+    in-target --pass-stdout apt-get -o Dir::Etc::sourcelist=/var/cache/nex-install/offline.list \
+        -o Dir::Etc::sourceparts=- --print-uris --yes --no-install-recommends \
+        install $(cat /cdrom/nex/packages.txt) > /run/nex-netinst-plan
+    sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" /run/nex-netinst-plan > /run/nex-netinst-packages
+    if [ -f "$virtio_iso" ]; then
+        mkdir -p /target/var/cache/nex-install/media
+        rm -f /target/var/cache/nex-install/media/virtio-win.iso
+        ln "$virtio_iso" /target/var/cache/nex-install/media/virtio-win.iso
+    fi
+    /bin/sh /cdrom/nex/netinst-fetch.sh /target/var/cache/nex-install /run/nex-netinst-packages
+    rm -f "$virtio_iso"
+    mv /target/var/cache/nex-install/media/virtio-win.iso "$virtio_iso"
+    mkdir -p /target/usr/share/nex-core
+    cp /cdrom/nex/netinst.tsv /target/usr/share/nex-core/netinst-available.tsv
+    downloaded=/target/usr/share/nex-core/netinst-downloaded-packages.txt
+    touch "$downloaded"
+    sort -u "$downloaded" /run/nex-netinst-packages > "$downloaded.new"
+    mv "$downloaded.new" "$downloaded"
+else
+    [ -f /cdrom/nex/media/virtio-win.iso.gz ] && [ -f /cdrom/nex/media/virtio-win.iso.sha256 ] || {
+        echo 'compressed virtio-win media or checksum missing from installation media' >&2
+        exit 1
+    }
+    trap 'rm -f "$virtio_iso"' 0 1 2 15
+    gunzip -c /cdrom/nex/media/virtio-win.iso.gz > "$virtio_iso"
+    (cd /target/usr/share/nex/media && sha256sum -c /cdrom/nex/media/virtio-win.iso.sha256)
+    trap - 0 1 2 15
+fi
 cat > /target/var/cache/nex-install/configure.sh <<'TARGET'
 #!/bin/sh
 set -eu
