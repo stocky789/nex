@@ -1,0 +1,33 @@
+{
+  "summary": "Repair Phase 1 browser assertions for the activity menu and host status banner.",
+  "paths": [
+    "tests/integration/phase1_browser.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only test selectors change; the documented operator workflow is unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The browser test observes the existing activity menu and host report display. No client API, Controller operation, Core command or observed-state contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The test correction changes no milestone or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test assertions add no durable product state."
+  },
+  "verification": {
+    "method": "Inspected failed forge run 4437; the full local Phase 1 browser suite passed all 22 reported checks after the test correction. Hosted rerun remains pending.",
+    "evidence": [
+      "tests/integration/phase1_browser.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

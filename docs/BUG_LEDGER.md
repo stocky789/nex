@@ -7657,3 +7657,21 @@ Append resolved defects with their evidence and the approach to avoid.
   no workflow change is needed. Independent review found no outstanding issues.
 - Avoid: Accepting arbitrary filesystem probes in the stub or removing production
   network validation to accommodate a stale test.
+
+## BUG-0557 — Phase 1 browser gate waited for removed UI elements
+
+- Date: 2026-09-24. Status: fixed locally; forge rerun pending.
+- Symptom: PR #8 run 4437 failed in `controller-browser` while waiting for `a.activity`;
+  the `phase1` gate then failed and dependent jobs were skipped.
+- Root cause: the browser suite still targeted the former activity link and warning
+  class after those controls became an activity disclosure and status banner.
+- Fix: open the activity disclosure and its Tasks link, and assert the host notices
+  through their status role. Keep the queued-task count assertion on the disclosure.
+- Regression: the forge log establishes the original timeout at the removed link.
+  A local Phase 1 browser run reached the next stale warning assertion after the
+  first correction. After both corrections, the full
+  `.cache/vm-create-venv/bin/python tests/integration/phase1.py --browser` run passed
+  all 22 reported checks, including the accepted VM creation route. Both forge
+  Phase 1 workflows already run this suite on pull requests. No forge rerun is claimed.
+- Avoid: reviewing a changed browser fixture as passing based on focused unit tests
+  while its required end-to-end gate is red.

@@ -266,8 +266,9 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert no_page_scroll(), 'desktop page overflow'
         capture('desktop-shell')
         lab.passed('browser global search ("/", case-insensitive, no-match, Escape, settings jump), scope label, host list selection, slide-over Escape, keyboard panel tabs Overview/Networking/Storage/Activity and desktop console layout')
-        # The activity pill opens Tasks; browser history moves between hash routes.
-        page.locator('a.activity').click()
+        # The activity menu opens Tasks; browser history moves between hash routes.
+        page.locator('details.activity > summary').click()
+        page.get_by_role('link', name='Open Tasks', exact=True).click()
         expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
         expect(rail.get_by_role('link', name='Tasks', exact=True)).to_have_attribute('aria-current', 'page')
         page.go_back()
@@ -447,7 +448,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         power.get_by_role('button', name='Start', exact=True).click()
         expect(page.locator('.notice')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in Tasks.')
         expect(dialog).not_to_be_visible()
-        expect(page.locator('a.activity')).to_have_text('2 tasks running')  # the pill counts every unfinished task, queued included
+        expect(page.locator('details.activity > summary')).to_have_text('2 tasks running')  # the pill counts every unfinished task, queued included
         rail.get_by_role('link', name='Tasks', exact=True).click()
         expect(tasks_row('fixture-queued-start')).to_contain_text('Waiting to be sent')
         expect(tasks_row('fixture-edit')).to_contain_text('Awaiting agent result')
@@ -521,7 +522,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('health-summary-revoked')
         # Revoked and stale both read "not reporting" in the summary; the host panel tells
         # them apart, and only a revoked host is told to re-enroll.
-        revoked_notice = page.locator('.warning', has_text='Access revoked. Re-enroll this host to resume reporting.')
+        revoked_notice = panel.get_by_role('status').filter(has_text='Access revoked. Re-enroll this host to resume reporting.')
         refresh_route(f'hosts/{host_id}')
         expect(revoked_notice).to_be_visible()
         summary_host['revoked'] = False
@@ -530,7 +531,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(host_row).to_contain_text(host['hostname'] + ' not reporting')
         expect(host_row.locator('.ov-icon')).to_have_class(re.compile(r'\bwarn\b'))
         refresh_route(f'hosts/{host_id}')
-        expect(page.locator('.warning', has_text='VMs on this host are shown as Unknown, not stopped.')).to_be_visible()
+        expect(panel.get_by_role('status').filter(has_text='VMs on this host are shown as Unknown, not stopped.')).to_be_visible()
         expect(revoked_notice).to_have_count(0)
         summary_host['connection'] = 'fresh'
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'fresh',
