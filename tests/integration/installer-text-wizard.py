@@ -653,7 +653,7 @@ def scenario_erase_summary(shell, root):
     assert session.subst('nex-installer/erase', 'disk') == '/dev/sda'
     assert session.subst('nex-installer/erase', 'disksize') == '32 GiB (34359738368 bytes)'
     assert session.subst('nex-installer/erase', 'serial') == 'TESTSERIAL1'
-    assert session.subst('nex-installer/erase', 'layout') == 'one ext4 filesystem, no redundancy'
+    assert session.subst('nex-installer/erase', 'layout') == 'one system disk, no redundancy'
     assert session.subst('nex-installer/erase', 'hostname') == 'nexcore.example.test'
     assert session.subst('nex-installer/erase', 'timezone') == 'UTC'
     assert session.subst('nex-installer/erase', 'keymap') == 'us'

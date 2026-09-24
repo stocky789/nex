@@ -1,0 +1,31 @@
+{
+  "summary": "Repair two stale installer regression assertions that stop the forge's installer job.",
+  "paths": [
+    "tests/integration/installer-shell.py",
+    "tests/integration/installer-text-wizard.py",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-24-installer-shell-ci-regression.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only regression expectations change to match the existing log reader signature and text-wizard wording; installer behavior and operator steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The harness calls a local installer C function and does not affect any Controller, Core or client API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The CI harness fix does not change a milestone's capability or acceptance status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The regression harness persists no product state."
+  },
+  "verification": {
+    "method": "Forge installer job 5582 on run 4412 failed to compile the generated C; python3 tests/integration/installer-shell.py reproduced that failure locally before correction and passed afterward. The next installer-text-wizard.py scenario failed locally at erase_summary before its expectation was corrected, then passed all sh scenarios. Installer source checks and other available regressions were run locally; the GTK2 disk check and ash scenarios could not run because those dependencies are absent locally. No forge rerun has occurred.",
+    "evidence": ["tests/integration/installer-shell.py", "tests/integration/installer-text-wizard.py", "docs/BUG_LEDGER.md"]
+  }
+}

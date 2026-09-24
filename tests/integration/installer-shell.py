@@ -17,16 +17,17 @@ static void assert_stage(const char *tag, const char *name) {
 }
 
 int main(int argc, char **argv) {
+    const long limit = 128 * 1024;
     gchar *text, *data;
     assert(argc == 2);
-    text = nex_log_tail(argv[1]);
+    text = nex_log_tail(argv[1], limit);
     assert(strstr(text, "unavailable")); g_free(text);
     assert(g_file_set_contents(argv[1], "", 0, NULL));
-    text = nex_log_tail(argv[1]); assert(!*text); g_free(text);
+    text = nex_log_tail(argv[1], limit); assert(!*text); g_free(text);
     data = g_malloc0(200001); memset(data, 'x', 200000);
     memcpy(data, "OLD ENTRY", 9); data[199999] = (char)0xff;
     assert(g_file_set_contents(argv[1], data, 200000, NULL)); g_free(data);
-    text = nex_log_tail(argv[1]);
+    text = nex_log_tail(argv[1], limit);
     assert(!strstr(text, "OLD ENTRY")); assert(g_utf8_validate(text, -1, NULL));
     assert(strlen(text) == 128 * 1024 + 2); g_free(text);
 

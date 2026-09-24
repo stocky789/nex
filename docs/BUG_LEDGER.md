@@ -7509,3 +7509,30 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Treating deletion of a materialized credential as deletion of every persisted copy,
   using a permanent credential scope for a one-shot operation, or trusting a script path without
   validating the handoff's signed purpose and target.
+
+## BUG-0548 — Installer regression harness failed to compile after log-tail signature change
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge run 4412, installer job 5582 stopped in `installer-shell.py` before the later
+  installer regressions ran; its generated C called `nex_log_tail` with one argument.
+- Root cause: The production log reader gained a required byte limit, but the source-extracting
+  regression harness still used the old call shape.
+- Fix: Pass the existing 128 KiB log limit in each harness call, preserving the test's bounded-tail
+  and UTF-8 assertions. No installed behavior changes.
+- Regression: `python3 tests/integration/installer-shell.py` reproduced the compiler error before
+  the fix and passed afterward. The same script runs in the installer job on forge pushes and pull
+  requests through `.github/workflows/installer.yml`; the `.gitea` copy is unchanged and in sync.
+- Avoid: Changing a C helper signature without running source-extracting tests that compile it.
+
+## BUG-0549 — Text installer confirmation regression expected obsolete layout wording
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: After the compile failure in forge run 4412 is corrected, the installer job's
+  `erase_summary` scenario fails locally at its layout assertion.
+- Root cause: The text wizard now describes a single installation target as “one system disk,
+  no redundancy,” but the regression still expected the older ext4-specific sentence.
+- Fix: Match the actual confirmation wording without changing disk selection or erase behavior.
+- Regression: `python3 tests/integration/installer-text-wizard.py` failed at `erase_summary` before
+  correction and passed all `sh` scenarios afterward. The forge installer job runs this script
+  on pushes and pull requests through `.github/workflows/installer.yml`.
+- Avoid: Preserving a stale wording assertion after changing the operator-facing confirmation.
