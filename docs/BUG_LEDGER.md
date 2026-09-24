@@ -7639,3 +7639,21 @@ Append resolved defects with their evidence and the approach to avoid.
   Existing forge Python discovery runs it on pushes and pull requests. Final native
   nested-guest checks are recorded in the network-installer QA report.
 - Avoid: Deleting valid installed kernels to accommodate a test fixture's assumption.
+
+## BUG-0556 — Disk validator fixture rejected the netinst media probe
+
+- Date: 2026-09-24. Status: fixed locally; hosted rerun pending.
+- Symptom: The installer workflow aborted on its first valid disk scenario with a
+  filesystem-stub assertion after the netinst change.
+- Root cause: The actual validator now checks the netinst media marker before disk
+  validation, but the fixture only recognized partition-file existence checks.
+- Fix: Model the exact netinst marker path and retain strict partition-path assertions.
+  Add a netinst scenario proving that missing management networking is rejected.
+- Regression: `python3 tests/integration/installer-disk.py` reproduced the original
+  assertion in the Debian builder, then passed with the fix, including simulated disk
+  safety scenarios and real GTK column dragging under Xvfb. The container needed
+  `xvfb`, `xauth` and `xdotool` in addition to its existing build dependencies.
+  Both installer workflow copies already run this script on pushes and pull requests;
+  no workflow change is needed. Independent review found no outstanding issues.
+- Avoid: Accepting arbitrary filesystem probes in the stub or removing production
+  network validation to accommodate a stale test.

@@ -1,0 +1,32 @@
+{
+  "summary": "Fix the installer disk fixture for the netinst media marker probe",
+  "paths": [
+    "tests/integration/installer-disk.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only the integration fixture changes; operator installation behavior and instructions are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The test invokes the existing local validator; no Controller operation, Core command, result flow or client-facing API changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Regression fixture correction does not change product scope or acceptance gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test-only filesystem simulation adds no durable product state."
+  },
+  "verification": {
+    "method": "Reproduced the original assertion and passed the corrected integration script in the Debian builder with GTK/Xvfb dependencies; independent review passed. Both installer workflows already run it on pushes and pull requests. Hosted rerun pending.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
