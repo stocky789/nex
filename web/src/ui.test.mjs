@@ -55,4 +55,14 @@ const boundary = new ScreenBoundary({ children: "fine" });
 assert.equal(boundary.render(), "fine");
 boundary.state = ScreenBoundary.getDerivedStateFromError(new TypeError("x.match is not a function"));
 assert.match(renderToStaticMarkup(boundary.render()), /This screen could not be shown.*x\.match is not a function/);
+
+// Containers rail sub-item: active fill must cover the label. A 38 px / side-indented box clipped
+// "Containers"; keep full rail width and enough height for the 9 px label.
+import { readFileSync } from "node:fs";
+const style = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+assert.match(style, /\.rail a\.rail-sub \{[^}]*min-height: 44px/);
+assert.doesNotMatch(style, /\.rail a\.rail-sub \{[^}]*margin: -2px 6px 0/);
+assert.match(main, /size=\{path === "containers" \? 16 : 20\}/);
+
 console.log("ui ok");

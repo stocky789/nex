@@ -762,7 +762,7 @@ function App() {
   const scopeTone = error || !scopedHosts.length ? "" : scopedHosts.every(h => h.connection === "fresh") ? "ok" : "warn";
   const railLink = ([path, label, icon]: [string, string, IconKind]) => {
     const current = path === kind || (path === "" && (kind === "sites" || kind === "pools"));
-    return <a key={path} href={`#/${path}`} className={path === "containers" ? "rail-sub" : undefined} aria-current={current ? "page" : undefined}><Icon kind={icon} size={20} />{label}{path === "events" && unseenEvents && <span className="dot warn" role="img" aria-label="New events" />}</a>;
+    return <a key={path} href={`#/${path}`} className={path === "containers" ? "rail-sub" : undefined} aria-current={current ? "page" : undefined}><Icon kind={icon} size={path === "containers" ? 16 : 20} />{label}{path === "events" && unseenEvents && <span className="dot warn" role="img" aria-label="New events" />}</a>;
   };
   const closeForm = () => {
     setForm(null);

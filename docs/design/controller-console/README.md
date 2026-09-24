@@ -106,7 +106,8 @@ Each item lists where the reference shows it. Build new screens from these befor
   Storage, Networks, Backups, then pinned to the bottom: Tasks, Events, Settings. **Containers is a
   sub-item of VMs** (container services run in Nex-managed VMs): it sits directly under VMs,
   centred like every rail item, and is marked as a sub-item only by being smaller (16 px icon,
-  9 px label, 38 px tall), never by an indent, a connector line or a stripe. Global search also
+  9 px label, enough height for the label — about 44 px), never by an indent, a connector line or
+  a stripe. Global search also
   finds rail pages by name.
 - **Top bar**. Left: site status dot + site name, `/`, pool name + host-count badge + chevron (the
   scope switcher menu, which also holds Create site and Add host). Centre: global search (max

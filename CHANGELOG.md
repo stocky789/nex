@@ -26,6 +26,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Containers rail item active/hover fill covers the full label (and matches other rail items'
+  width).
 - A fresh pool whose management NIC used a VLAN tag now shows that management bridge as
   **nex0 untagged** (or the matching uplink) on **Networks** and in the create-VM network list,
   instead of staying empty.

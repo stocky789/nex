@@ -1,0 +1,38 @@
+{
+  "summary": "Fix the Containers rail sub-item so its active/hover fill covers the full label at full rail width. API impact: none.",
+  "paths": [
+    "web/src/style.css",
+    "web/src/main.tsx",
+    "web/src/ui.test.mjs",
+    "docs/design/controller-console/README.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-rail-containers-active-fill.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Visual rail chrome only; operator workflows and guide steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller presentation only; no host or Controller API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CSS and icon size for ephemeral rail chrome; no durable state."
+  },
+  "verification": {
+    "method": "node web/src/ui.test.mjs; npm --prefix web run typecheck. Live browser hover/active not re-captured in this change.",
+    "evidence": [
+      "web/src/ui.test.mjs",
+      "web/src/style.css",
+      "web/src/main.tsx"
+    ]
+  }
+}
