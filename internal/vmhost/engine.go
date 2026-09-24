@@ -1033,8 +1033,9 @@ type diskXML struct {
 	Backing   *struct{} `xml:"backingStore,omitempty"`
 }
 type driverXML struct {
-	Name string `xml:"name,attr"`
-	Type string `xml:"type,attr"`
+	Name     string `xml:"name,attr,omitempty"`
+	Type     string `xml:"type,attr,omitempty"`
+	IOThread int    `xml:"iothread,attr,omitempty"`
 }
 type sourceXML struct {
 	File     string `xml:"file,attr,omitempty"`
@@ -1097,7 +1098,7 @@ type graphicsXML struct {
 
 func makeDomain(j journal, s DeploySpec) domainXML {
 	d := domainXML{Type: "kvm", Name: j.Name, UUID: j.VMID, Memory: memoryXML{"MiB", s.MemoryMiB}, VCPU: s.CPUs, CPU: cpuXML{Mode: "host-passthrough", Check: "none"}, OS: osXML{osTypeXML{"x86_64", "q35", "hvm"}}}
-	d.Devices.Disks = []diskXML{{Type: "file", Device: "disk", Driver: driverXML{"qemu", "qcow2"}, Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vda", Bus: "virtio"}}, {Type: "file", Device: "cdrom", Driver: driverXML{"qemu", "raw"}, Source: sourceXML{File: filepath.Join(filepath.Dir(j.Disk), "seed.iso")}, Target: targetXML{Dev: "sda", Bus: "sata"}, Readonly: &struct{}{}}}
+	d.Devices.Disks = []diskXML{{Type: "file", Device: "disk", Driver: driverXML{Name: "qemu", Type: "qcow2"}, Source: sourceXML{File: j.Disk}, Target: targetXML{Dev: "vda", Bus: "virtio"}}, {Type: "file", Device: "cdrom", Driver: driverXML{Name: "qemu", Type: "raw"}, Source: sourceXML{File: filepath.Join(filepath.Dir(j.Disk), "seed.iso")}, Target: targetXML{Dev: "sda", Bus: "sata"}, Readonly: &struct{}{}}}
 	nic := interfaceXML{Type: "bridge", Source: sourceXML{Bridge: j.Bridge}}
 	nic.MAC.Address = mac(j.VMID)
 	nic.Model.Type = "virtio"

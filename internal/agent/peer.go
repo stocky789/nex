@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -46,7 +47,7 @@ func initPoolMaster(s *Store, state *poolPeerState) error {
 	if err != nil {
 		return err
 	}
-	state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: s.State.HostID, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
+	state.Membership = protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1, NextSanlockHostID: 2, Members: []protocol.PoolMember{{HostID: s.State.HostID, SanlockHostID: 1, CertificateSHA256: hash, Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
 	return nil
 }
 
@@ -176,11 +177,12 @@ func PoolPeerHandler(s *Store) http.Handler {
 			// member that reports none of the later ones still advertises its origin
 			// exactly as before.
 			var v struct {
-				Origin        string                      `json:"origin,omitempty"`
-				SystemUUID    string                      `json:"system_uuid,omitempty"`
-				BMC           *protocol.PoolHostBMC       `json:"bmc,omitempty"`
-				Watchdog      *protocol.PoolHostWatchdog  `json:"watchdog,omitempty"`
-				WatchdogArmed *protocol.PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
+				Origin                string                      `json:"origin,omitempty"`
+				SystemUUID            string                      `json:"system_uuid,omitempty"`
+				BMC                   *protocol.PoolHostBMC       `json:"bmc,omitempty"`
+				Watchdog              *protocol.PoolHostWatchdog  `json:"watchdog,omitempty"`
+				WatchdogArmed         *protocol.PoolWatchdogArmed `json:"watchdog_armed,omitempty"`
+				SanlockHostGeneration uint64                      `json:"sanlock_host_generation,omitempty"`
 			}
 			if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&v) != nil {
 				http.Error(w, "invalid peer origin", 400)
@@ -188,7 +190,7 @@ func PoolPeerHandler(s *Store) http.Handler {
 			}
 			origin, err := peerOrigin(v.Origin)
 			uuid := vmhost.NormalizedSystemUUID(v.SystemUUID)
-			if err != nil && (v.Origin != "" || uuid == "" && v.BMC == nil && v.Watchdog == nil && v.WatchdogArmed == nil) {
+			if err != nil && (v.Origin != "" || uuid == "" && v.BMC == nil && v.Watchdog == nil && v.WatchdogArmed == nil && v.SanlockHostGeneration == 0) {
 				http.Error(w, "invalid peer origin", 400)
 				return
 			}
@@ -256,6 +258,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 						// that it should arm, and this is the host reporting that it
 						// did. Saved by the same rule, on change only.
 						e = applyPoolWatchdogArmedReport(s, &state, member.HostID, *v.WatchdogArmed)
+					}
+					if v.SanlockHostGeneration != 0 && e == nil {
+						lease := state.Membership.StorageLease
+						if record.SanlockHostID == 0 || lease == nil || lease.PreparedGeneration == 0 || v.SanlockHostGeneration < record.SanlockHostGeneration {
+							e = errors.New("invalid sanlock host generation report")
+						} else if record.SanlockHostGeneration != v.SanlockHostGeneration {
+							record.SanlockHostGeneration, changed = v.SanlockHostGeneration, true
+						}
 					}
 					if changed && e == nil {
 						e = savePoolPeer(s, state)
@@ -355,6 +365,65 @@ func PoolPeerHandler(s *Store) http.Handler {
 	})
 }
 
+// ReportPoolSanlockHostGeneration reports this host's exact live generation in the
+// configured authority lockspace. A query of any other ID/state is not evidence.
+func ReportPoolSanlockHostGeneration(ctx context.Context, s *Store) error {
+	membership, err := Membership(s)
+	if err != nil || membership.StorageLease == nil || membership.StorageLease.PreparedGeneration == 0 {
+		return nil
+	}
+	member, ok := poolMemberByID(membership, s.State.HostID)
+	if !ok || member.Status != "ready" || member.SanlockHostID == 0 {
+		return errors.New("this host has no prepared storage-lease membership")
+	}
+	var authority protocol.PoolStorageLeaseRepository
+	found := false
+	for _, repository := range membership.StorageLease.Repositories {
+		if repository.RepositoryID == membership.StorageLease.AuthorityRepositoryID {
+			authority, found = repository, true
+			break
+		}
+	}
+	if !found {
+		return errors.New("the authority lease repository is unavailable")
+	}
+	registrations, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+	if !managedVMChecksReady(checks) {
+		return errors.New("managed storage state is unavailable")
+	}
+	for _, storage := range registrations {
+		if storage.ID != authority.RepositoryID {
+			continue
+		}
+		if storage.Tombstone || storage.Generation != authority.RepositoryGeneration || storage.Identity.String() != authority.RepositoryIdentity.String() || !poolNFSIdentity(storage.Identity) {
+			return errors.New("authority lease repository identity changed")
+		}
+		status, queryErr := vmhost.ReadSanlockHostStatus(ctx, authority.Lockspace, member.SanlockHostID)
+		if queryErr != nil || status.HostState != "HOST_LIVE" || status.Generation == 0 {
+			return errors.New("authority sanlock host lease is not live")
+		}
+		if membership.MasterHostID == s.State.HostID {
+			poolPeerMu.Lock()
+			state, stateErr := loadPoolPeer(s)
+			if stateErr == nil {
+				for i := range state.Membership.Members {
+					if state.Membership.Members[i].HostID == s.State.HostID && state.Membership.Members[i].SanlockHostGeneration != status.Generation {
+						if stateErr = poolAuthorityWritable(state); stateErr == nil {
+							state.Membership.Members[i].SanlockHostGeneration = status.Generation
+							stateErr = savePoolPeer(s, state)
+						}
+						break
+					}
+				}
+			}
+			poolPeerMu.Unlock()
+			return stateErr
+		}
+		return postPoolAdvertise(ctx, s, map[string]any{"sanlock_host_generation": status.Generation})
+	}
+	return errors.New("authority lease repository is not applied on this host")
+}
+
 func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error) {
 	if request.HostID == "" || len(request.HostID) > 128 || len(request.Offer) > 4096 {
 		return peerJoinResponse{}, errors.New("invalid join identity")
@@ -432,11 +501,21 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 			replace = i
 		}
 	}
+	if err = ensurePoolSanlockHostIDs(&state.Membership); err != nil {
+		return peerJoinResponse{}, err
+	}
 	state.Membership.Generation++
+	if state.Membership.StorageLease != nil {
+		state.Membership.StorageLease.PreparedGeneration = 0
+	}
 	for i := range state.Membership.Members {
 		state.Membership.Members[i].Generation = state.Membership.Generation
 	}
-	member := protocol.PoolMember{HostID: request.HostID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
+	hostLeaseID, idErr := nextPoolSanlockHostID(&state.Membership)
+	if idErr != nil {
+		return peerJoinResponse{}, idErr
+	}
+	member := protocol.PoolMember{HostID: request.HostID, SanlockHostID: hostLeaseID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
 	if replace >= 0 {
 		state.Membership.Members[replace] = member
 	} else {
@@ -451,6 +530,65 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 		return peerJoinResponse{}, err
 	}
 	return peerJoinResponse{CertificatePEM: cert, Membership: state.Membership}, nil
+}
+
+func nextPoolSanlockHostID(membership *protocol.PoolMembership) (uint64, error) {
+	used := make(map[uint64]bool, len(membership.Members))
+	for _, member := range membership.Members {
+		if member.SanlockHostID != 0 {
+			used[member.SanlockHostID] = true
+		}
+	}
+	id := membership.NextSanlockHostID
+	if id == 0 {
+		id = 1
+		for used[id] && id <= protocol.PoolSanlockMaxHostID {
+			id++
+		}
+	}
+	for ; id <= protocol.PoolSanlockMaxHostID; id++ {
+		if !used[id] {
+			membership.NextSanlockHostID = id + 1
+			return id, nil
+		}
+	}
+	return 0, errors.New("this pool has no available sanlock host IDs")
+}
+
+func ensurePoolSanlockHostIDs(membership *protocol.PoolMembership) error {
+	used := map[uint64]bool{}
+	for i := range membership.Members {
+		id := membership.Members[i].SanlockHostID
+		if id == 0 {
+			continue
+		}
+		if id > protocol.PoolSanlockMaxHostID || used[id] {
+			return errors.New("pool membership has a duplicate or out-of-range sanlock host ID")
+		}
+		used[id] = true
+	}
+	if membership.NextSanlockHostID == 0 {
+		membership.NextSanlockHostID = 1
+		for used[membership.NextSanlockHostID] && membership.NextSanlockHostID <= protocol.PoolSanlockMaxHostID {
+			membership.NextSanlockHostID++
+		}
+	}
+	for i := range membership.Members {
+		if membership.Members[i].SanlockHostID != 0 {
+			continue
+		}
+		id := membership.NextSanlockHostID
+		for used[id] && id <= protocol.PoolSanlockMaxHostID {
+			id++
+		}
+		if id > protocol.PoolSanlockMaxHostID {
+			return errors.New("this pool has no available sanlock host IDs")
+		}
+		membership.Members[i].SanlockHostID = id
+		used[id] = true
+		membership.NextSanlockHostID = id + 1
+	}
+	return nil
 }
 
 // JoinPoolPeer joins the master named by the offer. masterURL and poolCAPEM are supplied

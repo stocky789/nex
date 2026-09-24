@@ -10,6 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class IsoPayloadEfficiencyTests(unittest.TestCase):
+    def test_pinned_debian_iso_metadata_uses_archive_with_retries(self):
+        build = (ROOT / 'installer/build.sh').read_text()
+        fetch = build.split('iso=debian-13.6.0-amd64-netinst.iso', 1)[1].split('gpgv --keyring', 1)[0]
+        self.assertIn('base=https://cdimage.debian.org/cdimage/archive/13.6.0/amd64/iso-cd', fetch)
+        for name in ('SHA256SUMS', 'SHA256SUMS.sign'):
+            self.assertIn(f'curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$base/{name}"', fetch)
+
     def test_late_install_restores_only_verified_virtio_media(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

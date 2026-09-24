@@ -5,7 +5,7 @@ import { GuestTools, InstallMedia, VMDetails, VMPower, VMUsage, staleNote, state
 import type { ConsoleMedia } from "./console";
 import { Stats, formatValue } from "./stats";
 import { TagEditor } from "./vm-edit";
-import { guestNames } from "./vm-create";
+import { GuestOS } from "./guest-os";
 import { Activity, Badge, Panel } from "./ui";
 import { Icon } from "./icons";
 import "./vms.css";
@@ -63,7 +63,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
       </div>
       <section className="tile" aria-label="Properties">
         <dl className="details">
-          <dt>Guest OS</dt><dd>{vm.guest?.os || (spec ? guestNames[spec.guest_os] || "Not recorded" : "—")}</dd>
+          <dt>Guest OS</dt><dd><GuestOS vm={vm} /></dd>
           <dt>IP address</dt><dd>{addresses.length ? <ul className="plain">{addresses.map(a => <li key={a.interface + a.address} className="mono">{a.address}</li>)}</ul> : "Not reported"}</dd>
           {spec && <>
             <dt>vCPU / Memory</dt><dd>{spec.cpu.count} / {formatValue("bytes", spec.memory.size_mib * 1024 ** 2)}</dd>

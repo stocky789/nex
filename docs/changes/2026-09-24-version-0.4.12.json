@@ -1,8 +1,7 @@
 {
-  "summary": "Bump the changelog-derived working version to 0.4.12 for the network installer and forge release build support.",
+  "summary": "Record version 0.4.12 for the network installer and automatic VM I/O defaults.",
   "paths": [
     "CHANGELOG.md",
-    "installer/README.md",
     "docs/guide/change-management-network.md",
     "docs/guide/host-maintenance-mode.md",
     "docs/guide/install-nex-core.md",
@@ -10,11 +9,13 @@
     "docs/guide/navigate-the-controller-console.md",
     "docs/guide/pool-authority-and-recovery.md",
     "docs/guide/publish-a-release.md",
-    "docs/guide/software-updates.md"
+    "docs/guide/software-updates.md",
+    "docs/qa/2026-09-24-automatic-vm-io-trials.csv",
+    "installer/README.md"
   ],
   "guide": {
     "impact": "updated",
-    "reason": "Current development version labels identify 0.4.12; installation behavior is documented in the network-installer assessment.",
+    "reason": "Version labels and operator guidance cover both the network installer and VM I/O defaults; their detailed behavior is assessed in companion change records.",
     "pages": [
       "docs/guide/change-management-network.md",
       "docs/guide/host-maintenance-mode.md",
@@ -28,24 +29,25 @@
   },
   "api": {
     "impact": "none",
-    "reason": "Release version labels and notes change no Controller/Core command or client-facing contract.",
+    "reason": "Release labels and notes change no client endpoint, Controller-to-Core command or observed-result contract; the companion VM I/O change uses its existing contract.",
     "pages": []
   },
   "roadmap": {
     "impact": "none",
-    "reason": "A version bump does not close any milestone or verification gate.",
-    "pages": []
+    "reason": "Version numbering does not close a platform or performance acceptance gate."
   },
   "state": {
     "owner": "none",
-    "reason": "Release labels introduce no durable pool setting or Controller-owned state."
+    "reason": "Release notes and version labels create no product resource or durable pool setting."
   },
   "verification": {
-    "method": "Verify changelog-derived version and release-version tests; actual build and installation evidence is recorded in the network-installer QA report.",
+    "method": "Both parent branches checked changelog-derived version 0.4.12 and release-version tests. Their installation and VM I/O evidence is recorded separately; the merged release and forge checks still require execution.",
     "evidence": [
+      "CHANGELOG.md",
+      "docs/qa/2026-09-24-automatic-vm-io.md",
+      "docs/qa/iso/2026-09-24-net-installer.md",
       "scripts/release-version.py",
-      "tests/test_release_version.py",
-      "docs/qa/iso/2026-09-24-net-installer.md"
+      "tests/test_release_version.py"
     ]
   }
 }

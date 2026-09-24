@@ -1,0 +1,31 @@
+{
+  "summary": "Keep the disposable cluster lab seed bounded and clean up terminated guests",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "tests/integration/cluster_ha_lab.py",
+    "tests/test_cluster_ha_lab.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes only a contributor-owned disposable lab fixture, not an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller, Core, or client API path is changed; the fixture seeds test guests and cleans up its own processes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The fixture fix does not establish any fencing acceptance gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Nex pool or Controller state changes; lab overlays remain disposable test artifacts."
+  },
+  "verification": {
+    "method": "Two focused lab-fixture tests failed before the fix and passed after it; the first disposable lab run exposed the timeout and cleanup failure. A replacement private four-guest fixture reached ready.json with the optional bundle omitted and a longer local readiness window. No fencing conclusion follows from fixture readiness.",
+    "evidence": ["tests/test_cluster_ha_lab.py", "docs/BUG_LEDGER.md"]
+  }
+}

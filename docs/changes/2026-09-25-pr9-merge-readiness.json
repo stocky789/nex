@@ -1,0 +1,33 @@
+{
+  "summary": "Prepare PR 9 for main by reconciling bug ledger entries and correcting stale CI workflow assertions",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-24-automatic-vm-io.md",
+    "tests/test_ci_security.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Bug IDs and CI assertions do not change an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No client endpoint, Controller operation, Core command or observed-result contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The merge preparation does not change a milestone or its acceptance status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Documentation and test assertions add no product state."
+  },
+  "verification": {
+    "method": "Merged current main into tweaks and resolved the ledger append conflict while retaining both branches' entries. Full Python discovery passed (411 tests), focused VM tests and Go package compilation passed, and API generation, documentation and privacy checks passed. Remote CI remains unverified.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "tests/test_ci_security.py"
+    ]
+  }
+}

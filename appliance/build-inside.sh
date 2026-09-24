@@ -15,8 +15,12 @@ qemu-img resize /output/controller.qcow2 32G
 export LIBGUESTFS_MEMSIZE=2048
 printf 'repo_url=https://nexvirtualization.com/apt\n' > /build/updates.conf
 printf 'Types: deb\nURIs: https://nexvirtualization.com/apt\nSuites: nex\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/nex-archive-keyring.gpg\n' > /build/nex.sources
-virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent,python3,ca-certificates \
- --mkdir /usr/local/lib/nex --mkdir /usr/local/share/nex --mkdir /usr/share/keyrings --mkdir /etc/nex-controller --mkdir /etc/nex \
+virt-customize -a /output/controller.qcow2 \
+ --mkdir /usr/local/lib/nex --mkdir /usr/local/share/nex --mkdir /usr/share/keyrings --mkdir /etc/nex-controller --mkdir /etc/nex --mkdir /etc/systemd/system/corosync-qnetd.service.d \
+ --upload /build/appliance/package-service-policy.sh:/usr/local/lib/nex/package-service-policy \
+ --upload /build/appliance/qnetd-runtime-init:/usr/local/lib/nex/qnetd-runtime-init \
+ --upload /build/appliance/corosync-qnetd-runtime.conf:/etc/systemd/system/corosync-qnetd.service.d/nex-runtime.conf \
+ --run-command '/usr/bin/sh /usr/local/lib/nex/package-service-policy install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd' \
  --upload /build/nex-controller:/usr/local/lib/nex/nex-controller \
  --upload /usr/local/go/LICENSE:/usr/local/share/nex/go-LICENSE \
  --copy-in /build/web/dist:/usr/local/share/nex \
@@ -34,7 +38,7 @@ virt-customize -a /output/controller.qcow2 --install cloud-init,qemu-guest-agent
  --upload /build/packaging/controller/nex-controller-update.path:/etc/systemd/system/nex-controller-update.path \
  --upload /build/packaging/controller/nex-controller-update.service:/etc/systemd/system/nex-controller-update.service \
  --upload /build/appliance/recovery.py:/usr/local/lib/nex/controller-recovery \
- --run-command 'chmod 755 /usr/local/lib/nex/*; chmod -R a+rX /usr/local/share/nex; chmod 700 /etc/nex-controller; chmod 644 /etc/nex/updates.conf; useradd --system --home /var/lib/nex-controller nex-controller; systemctl enable qemu-guest-agent nex-appliance-init nex-controller nex-controller-update.path; passwd -l root; rm -f /etc/ssh/ssh_host_*; truncate -s 0 /etc/machine-id; rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed; cloud-init clean --logs' \
+ --run-command 'chmod 755 /usr/local/lib/nex/*; chmod -R a+rX /usr/local/share/nex; chmod 700 /etc/nex-controller; chmod 644 /etc/nex/updates.conf; useradd --system --home /var/lib/nex-controller nex-controller; systemctl daemon-reload; systemctl enable qemu-guest-agent nex-appliance-init nex-controller nex-controller-update.path corosync-qnetd; passwd -l root; rm -f /etc/ssh/ssh_host_*; truncate -s 0 /etc/machine-id; rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed; cloud-init clean --logs' \
  --run-command 'dpkg-query -W -f="\${Package}\t\${Version}\t\${Architecture}\t\${source:Package}\t\${source:Version}\n" > /usr/local/share/nex/components.tsv' \
  --selinux-relabel
 virt-cat -a /output/controller.qcow2 /usr/local/share/nex/components.tsv > /output/components.tsv

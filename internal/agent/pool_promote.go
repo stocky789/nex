@@ -35,6 +35,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -42,6 +44,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -553,7 +556,7 @@ func PoolPromotionReport(s *Store) *protocol.PoolPromotionStatus {
 	status := poolTransferStatus(record)
 	return &protocol.PoolPromotionStatus{
 		OperationID: record.OperationID, Stage: record.Stage, Status: status.Status,
-		Error: record.LastError, Cancellable: status.Cancellable, ObservedAt: status.ObservedAt,
+		Error: record.LastError, Cancellable: status.Cancellable, Automatic: record.Automatic, ObservedAt: status.ObservedAt,
 	}
 }
 
@@ -612,6 +615,196 @@ func poolPromotionBlocked(verdict *protocol.PoolPromotionVerdict, name, status, 
 	if status != "passed" {
 		verdict.Blocking = append(verdict.Blocking, reason)
 	}
+}
+
+// ReconcileAutomaticPoolPromotion starts the supported two-host automatic path. Core owns
+// selection and the durable operation; the normal promotion stage machine still performs
+// the destructive fence and rechecks the proof before activation.
+func ReconcileAutomaticPoolPromotion(ctx context.Context, s *Store, timeout time.Duration) bool {
+	keepAutomaticPromotionHold := false
+	defer func() {
+		if !keepAutomaticPromotionHold {
+			resetAutomaticPoolPromotionHold(s.State.HostID)
+		}
+	}()
+	if !poolTransferMu.TryLock() {
+		return false
+	}
+	defer poolTransferMu.Unlock()
+
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil || state.Membership.Valid() != nil || state.CAPEM == "" || state.Restricted != nil {
+		return false
+	}
+	if record, loadErr := loadPoolTransfer(s); loadErr != nil || record != nil && !poolTransferTerminal(record.Stage) {
+		return false
+	}
+	stored, err := loadPoolReplica(s)
+	if err != nil || stored == nil || !stored.Verified {
+		return false
+	}
+	membership := stored.Replica.Membership
+	// The automatic path must honor the pool-wide opt-out as well: when fencing is
+	// disabled, boot restriction is not an authorization to take over automatically.
+	if membership.Valid() != nil || membership.HostFencingDisabled || membership.MasterHostID != stored.Replica.MasterHostID || membership.MasterHostID == s.State.HostID {
+		return false
+	}
+	ready := make([]protocol.PoolMember, 0, 2)
+	for _, member := range membership.Members {
+		if member.Status == "ready" {
+			ready = append(ready, member)
+		}
+	}
+	if len(ready) != 2 {
+		return false
+	}
+	candidate, candidateOK := poolMemberByID(membership, s.State.HostID)
+	oldMaster, oldMasterOK := poolMemberByID(membership, membership.MasterHostID)
+	if !candidateOK || !oldMasterOK || candidate.Status != "ready" || oldMaster.Status != "ready" || candidate.HostID == oldMaster.HostID {
+		return false
+	}
+	for _, member := range ready {
+		if member.HostID != candidate.HostID && member.HostID != oldMaster.HostID {
+			return false
+		}
+	}
+	if stored.Replica.MasterHostID != oldMaster.HostID || stored.Replica.MemberHostID != candidate.HostID {
+		return false
+	}
+	operationID := automaticPoolPromotionOperationID(membership.PoolID, candidate.HostID, stored.Replica.Generation)
+	verdict := evaluatePoolPromotion(ctx, s, operationID, nil, timeout)
+	if !automaticPoolPromotionPreflight(s.dir, verdict, oldMaster) {
+		return false
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	satisfied := automaticPoolPromotionHoldSatisfied(membership.PoolID, candidate.HostID, oldMaster.HostID, stored.Replica.Generation)
+	if ctx.Err() != nil {
+		return false
+	}
+	keepAutomaticPromotionHold = true
+	if !satisfied {
+		return false
+	}
+	record := &poolTransferRecord{
+		OperationID: operationID, Action: "promote", Role: "candidate", TargetHostID: candidate.HostID,
+		Stage: "preflight", Status: "pending", FenceAgreed: []string{oldMaster.HostID}, Automatic: true,
+	}
+	if savePoolTransfer(s, record) != nil {
+		return false
+	}
+	advancePoolTransfer(ctx, s, record, timeout)
+	return true
+}
+
+// Automatic fencing requires two qualifying observations at least this far apart. It
+// delays action through a transient failed probe; it does not prove continuous downtime.
+const automaticPoolPromotionHold = 15 * time.Second
+
+var automaticPoolPromotionClock = time.Now
+
+var automaticPoolPromotionHoldMu sync.Mutex
+var automaticPoolPromotionHolds = map[string]automaticPoolPromotionHoldObservation{}
+
+type automaticPoolPromotionHoldObservation struct {
+	poolID, masterHostID string
+	generation           uint64
+	firstObserved        time.Time
+}
+
+func automaticPoolPromotionHoldSatisfied(poolID, candidateHostID, masterHostID string, generation uint64) bool {
+	now := automaticPoolPromotionClock()
+	automaticPoolPromotionHoldMu.Lock()
+	defer automaticPoolPromotionHoldMu.Unlock()
+	previous, ok := automaticPoolPromotionHolds[candidateHostID]
+	if !ok || previous.poolID != poolID || previous.masterHostID != masterHostID || previous.generation != generation {
+		automaticPoolPromotionHolds[candidateHostID] = automaticPoolPromotionHoldObservation{
+			poolID: poolID, masterHostID: masterHostID, generation: generation, firstObserved: now,
+		}
+		return false
+	}
+	return now.Sub(previous.firstObserved) >= automaticPoolPromotionHold
+}
+
+func resetAutomaticPoolPromotionHold(candidateHostID string) {
+	automaticPoolPromotionHoldMu.Lock()
+	delete(automaticPoolPromotionHolds, candidateHostID)
+	automaticPoolPromotionHoldMu.Unlock()
+}
+
+func automaticPoolPromotionPreflight(dir string, verdict protocol.PoolPromotionVerdict, oldMaster protocol.PoolMember) bool {
+	if !verdict.ReadyToFence || len(verdict.FenceHostIDs) != 1 || verdict.FenceHostIDs[0] != oldMaster.HostID || !verdict.FenceRecorded || !verdict.FenceUsable {
+		return false
+	}
+	for _, check := range verdict.Checks {
+		if check.Name == "old-master-exclusion" {
+			if check.Status != "unknown" {
+				return false
+			}
+			continue
+		}
+		if check.Status != "passed" {
+			return false
+		}
+	}
+	oldMasterObservedUnreachable, oldMasterFenceKind := false, ""
+	for _, host := range verdict.Hosts {
+		if host.HostID == oldMaster.HostID {
+			oldMasterObservedUnreachable, oldMasterFenceKind = !host.Reachable && host.Blocks, host.FenceKind
+			break
+		}
+	}
+	if !oldMasterObservedUnreachable {
+		return false
+	}
+	if oldMaster.Fence == nil || oldMaster.Fence.Kind != protocol.FenceRedfish && oldMaster.Fence.Kind != protocol.FenceIPMI {
+		return false
+	}
+	if oldMasterFenceKind != protocol.FenceRedfish && oldMasterFenceKind != protocol.FenceIPMI {
+		return false
+	}
+	if !poolAutomaticBMCCheckFresh(dir, verdict.CandidateHostID, oldMaster) {
+		return false
+	}
+	return true
+}
+
+func poolAutomaticBMCCheckFresh(dir, checker string, target protocol.PoolMember) bool {
+	poolFenceCheckMu.Lock()
+	check, ok := poolFenceChecks[dir][checker][target.HostID]
+	poolFenceCheckMu.Unlock()
+	return ok && check.Result == protocol.PoolFenceCheckOK && check.Profile == protocol.PoolFenceProfileStamp(target) && !check.ObservedAt.IsZero() && !check.ObservedAt.After(time.Now().Add(time.Minute)) && time.Since(check.ObservedAt) <= poolFenceCheckStaleAfter()
+}
+
+func automaticPoolPromotionOperationID(poolID, candidateHostID string, generation uint64) string {
+	sum := sha256.Sum256([]byte("nex automatic pool promotion v1\x00" + poolID + "\x00" + candidateHostID + "\x00" + strconv.FormatUint(generation, 10)))
+	return "auto-promotion-" + hex.EncodeToString(sum[:])
+}
+
+func automaticPoolPromotionFenceEnabled(s *Store, record *poolTransferRecord) error {
+	if !record.Automatic {
+		return nil
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil || state.Membership.Valid() != nil {
+		return errors.New("automatic pool promotion cannot confirm the Host fencing setting")
+	}
+	if state.Membership.HostFencingDisabled {
+		return errors.New("automatic pool promotion is paused because Host fencing is off")
+	}
+	replica, err := loadPoolReplica(s)
+	if err != nil || replica == nil || !replica.Verified {
+		return errors.New("automatic pool promotion cannot confirm the Host fencing setting")
+	}
+	if replica.Replica.Membership.HostFencingDisabled {
+		return errors.New("automatic pool promotion is paused because Host fencing is off")
+	}
+	return nil
 }
 
 // evaluatePoolPromotion runs the whole proof against live evidence. It is deliberately
@@ -1275,6 +1468,9 @@ func poolFenceRefusal(proof protocol.StorageClusterFenceStatus, err error) strin
 // this step a member could have come back holding a newer authority, and promoting over it
 // would be the second writer everything here exists to prevent.
 func activatePromotedPoolAuthority(ctx context.Context, s *Store, record *poolTransferRecord, timeout time.Duration) error {
+	if err := automaticPoolPromotionFenceEnabled(s, record); err != nil {
+		return err
+	}
 	verdict := evaluatePoolPromotion(ctx, s, record.OperationID, record.Fences, timeout)
 	if !verdict.CanPromote {
 		// A fence observation expires by design: it proves the old master was off then,
@@ -1294,6 +1490,9 @@ func activatePromotedPoolAuthority(ctx context.Context, s *Store, record *poolTr
 	stored, err := loadPoolReplica(s)
 	if err != nil || stored == nil {
 		return errors.New("this host holds no pool authority replica; it cannot be promoted")
+	}
+	if err = automaticPoolPromotionFenceEnabled(s, record); err != nil {
+		return err
 	}
 	_, err = adoptPoolAuthorityFromReplica(s, stored.Replica, record)
 	return err

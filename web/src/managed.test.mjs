@@ -304,9 +304,10 @@ assert.match(managedSource, /key=\{m\.id \|\| `op:\$\{m\.operation_id\}`\}/);
 // fails still has a route that names the task instead of an unknown VM.
 assert.match(managedSource, /location\.hash = `\/vms\/\$\{result\.vm_id\}\/\$\{result\.operation\.id\}`/);
 
-// GM-10: the delete notice is set after the navigation's hashchange handler (which clears notices)
-// has run, so the host page keeps "Delete queued for …".
-assert.match(managedSource, /await reload\(\);\s*\n\s*onNotice\(`Delete queued for/);
+// GM-10: the delete notice is set after navigation clears the old notice and carries the task ID
+// so the shell clears it when the host reports the operation's final status.
+assert.match(managedSource, /await reload\(\);\s*\n\s*onNotice\(`Delete queued for[^;]+, result\.operation\.id\);/);
+assert.doesNotMatch(managedSource, /Registration \$\{result\.status\}/);
 
 // Gate3 2c: the Guest tools badge names the agent's own state. "stale" means report age only,
 // so a fresh VM whose agent is disconnected must not read "stale".

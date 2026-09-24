@@ -324,8 +324,9 @@ assert.match(readyDialog, /<button class="primary danger" disabled="">Promote to
 assert.match(dialog({ verdict: ready, busy: true }), /disabled=""[^>]*>Submitting…</);
 assert.match(dialog({ verdict: ready, submitError: "promoting this host powers the old pool master off; confirm that before the promotion can run" }),
   /role="alert"[^>]*>promoting this host powers the old pool master off; confirm that before the promotion can run/);
+assert.match(dialog({ verdict: ready, readError: "pool report unavailable" }), /current pool report could not be read: pool report unavailable/);
 // Both gates are genuinely required, not decoration.
-assert.match(src, /const ready = runnable && fenceIDs\.length > 0 && confirmMatches\(typed, report\.pool_name\) && acknowledged;/);
+assert.match(src, /const ready = !readError && runnable && fenceIDs\.length > 0 && confirmMatches\(typed, report\.pool_name\) && acknowledged;/);
 assert.match(src, /if \(!ready\) return;/);
 assert.match(src, /import \{ confirmMatches \} from "\.\/managed"/);
 // The dialog cannot be dismissed while the request is in flight.
@@ -437,6 +438,8 @@ assert.equal(promotionStageText({ host_id: "host-b", stage: "invented" }), "inve
 assert.equal(promotionInProgress({ ...report, promotion: { host_id: "host-b", status: "pending" } }), true);
 assert.equal(promotionInProgress(report), false);
 const running = renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", operation_id: "op-1", stage: "fence", status: "pending", observed_at: "2026-09-19T10:05:02Z" } } }));
+assert.match(renderToStaticMarkup(createElement(PromotionStrip, { report: { ...report, promotion: { host_id: "host-b", stage: "fence", status: "pending", automatic: true } } })), /status <strong>pending<\/strong> · automatic/);
+assert.doesNotMatch(running, /automatic/);
 assert.match(running, /Candidate <strong>core-b<\/strong>/);
 assert.match(running, /stage <strong>powering the old pool master off and verifying it<\/strong>/);
 assert.match(running, /status <strong>pending<\/strong>/);
@@ -550,6 +553,10 @@ assert.doesNotMatch(fenceDialog, /Clear fence device…/);
 const configured = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, member: { ...fenceProps.member, fence: { kind: "redfish", endpoint: "bmc.example.test", username: "nex-fence", tls_fingerprint: "ab".repeat(32), configured: true, credential_version: 2 } } }));
 assert.match(configured, /Fence device: redfish · bmc\.example\.test · nex-fence · configured · credential recorded · certificate abab/);
 assert.match(configured, /<button type="button" class="danger">Clear fence device…<\/button>/);
+const fenceReadFailed = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, readError: "pool report unavailable", member: { ...fenceProps.member, fence: { kind: "redfish", endpoint: "bmc.example.test", username: "nex-fence", tls_fingerprint: "ab".repeat(32), configured: true, credential_version: 2 } } }));
+assert.match(fenceReadFailed, /current pool report could not be read: pool report unavailable/);
+assert.match(src, /disabled=\{busy \|\| Boolean\(readError\)\} onClick=\{onClear\}/);
+assert.match(src, /if \(!complete \|\| busy \|\| readError\) return;/);
 
 // The two bodies are exactly the contract's: the profile as sent, the credential in its own
 // field, and `fence: null` to clear. The credential is never part of the request identity.

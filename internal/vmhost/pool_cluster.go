@@ -25,13 +25,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/xml"
 	"errors"
+	"net"
 	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"nex.local/nex/internal/protocol"
 )
 
 // poolClusterMarker identifies a corosync.conf this Core wrote for a pool's own watchdog
@@ -50,24 +52,40 @@ type PoolClusterNode struct {
 // simply never in a nodelist again rather than being handed to somebody else.
 func PoolClusterNodeID(hostID string) uint32 {
 	digest := sha256.Sum256([]byte("nex-pool-cluster-node\x00" + hostID))
-	// Corosync rejects node ID 0 and treats the high bit as reserved on some transports.
-	return binary.BigEndian.Uint32(digest[:4])&0x7fffffff | 1
+	// Keep IDs produced by the previous scheme when they were already in Corosync's
+	// 16-bit range. Knet rejects larger IDs, so fold the rest into its supported range;
+	// RenderPoolCluster still refuses any collision within one pool.
+	legacy := binary.BigEndian.Uint32(digest[:4])&0x7fffffff | 1
+	if legacy <= 65535 {
+		return legacy
+	}
+	return binary.BigEndian.Uint32(digest[:4])%65535 + 1
 }
 
 // PoolClusterName is the Corosync cluster name for a pool. Corosync accepts a short token, and
 // a pool ID is an opaque durable identifier, so this is a stable digest of it rather than the
 // identifier itself.
 func PoolClusterName(poolID string) string {
-	digest := sha256.Sum256([]byte("nex-pool-cluster\x00" + poolID))
-	return "nexpool" + hex.EncodeToString(digest[:4])
+	return protocol.PoolWitnessClusterName(poolID)
 }
 
 // RenderPoolCluster is the pool's corosync.conf. Every ready host is in it: a host left out of
 // the nodelist is a host the rest of the pool makes quorum decisions without, which is the one
 // arithmetic no host may be armed against.
 func RenderPoolCluster(poolID string, nodes []PoolClusterNode) (string, error) {
+	return RenderPoolClusterWithWitness(poolID, nodes, "")
+}
+
+func RenderPoolClusterWithWitness(poolID string, nodes []PoolClusterNode, witnessAddress string) (string, error) {
 	if len(nodes) < 3 {
-		return "", errors.New("a pool watchdog cluster needs three or more hosts to have a majority side")
+		if len(nodes) != 2 || witnessAddress == "" {
+			return "", errors.New("a pool watchdog cluster needs three hosts or a registered qdevice witness")
+		}
+	}
+	if witnessAddress != "" {
+		if _, _, err := net.SplitHostPort(witnessAddress); err != nil {
+			return "", errors.New("pool witness address is invalid")
+		}
 	}
 	entries := make([]corosyncNode, 0, len(nodes))
 	seen := map[uint32]string{}
@@ -83,7 +101,7 @@ func RenderPoolCluster(poolID string, nodes []PoolClusterNode) (string, error) {
 		entries = append(entries, corosyncNode{address: node.Address, name: node.HostID, id: id})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
-	return renderCorosyncConfig(poolClusterMarker, PoolClusterName(poolID), entries, true), nil
+	return renderCorosyncConfig(poolClusterMarker, PoolClusterName(poolID), entries, true, witnessAddress), nil
 }
 
 // PoolClusterOwnsCorosync is whether the configuration on this host is the pool's own cluster.
@@ -101,7 +119,11 @@ func PoolClusterOwnsCorosync() bool {
 // restarting a peer that is feeding a watchdog. Only arming needs a restart, and only the one
 // host whose turn it is takes one.
 func ApplyPoolCluster(ctx context.Context, stateDir, poolID string, nodes []PoolClusterNode) (bool, error) {
-	rendered, err := RenderPoolCluster(poolID, nodes)
+	return ApplyPoolClusterWithWitness(ctx, stateDir, poolID, nodes, "")
+}
+
+func ApplyPoolClusterWithWitness(ctx context.Context, stateDir, poolID string, nodes []PoolClusterNode, witnessAddress string) (bool, error) {
+	rendered, err := RenderPoolClusterWithWitness(poolID, nodes, witnessAddress)
 	if err != nil {
 		return false, err
 	}
@@ -179,6 +201,9 @@ func LeavePoolCluster(ctx context.Context) error {
 	if !PoolClusterOwnsCorosync() {
 		return nil
 	}
+	if err := DeactivatePoolWitness(ctx); err != nil {
+		return err
+	}
 	running, err := unitActive(ctx, "corosync.service")
 	if err != nil {
 		return err
@@ -245,11 +270,22 @@ func poolClusterHasNoResources(ctx context.Context) error {
 // no-quorum-policy would keep an inquorate host alive, which is the difference between a
 // watchdog that resets a lost host and one that never expires.
 func ApplyPoolClusterProperties(ctx context.Context) error {
+	return applyPoolClusterProperties(ctx, poolClusterProperties())
+}
+
+// ApplyPoolWitnessClusterProperties keeps the two-host witness cluster running in a
+// partition. Automatic watchdog fencing remains disabled until the witness-loss case is
+// accepted; `suicide` here could reset a surviving host when qnetd disappears.
+func ApplyPoolWitnessClusterProperties(ctx context.Context) error {
+	return applyPoolClusterProperties(ctx, poolWitnessClusterProperties())
+}
+
+func applyPoolClusterProperties(ctx context.Context, properties []string) error {
 	current, err := clusterRun(ctx, "cibadmin", "--query")
 	if err != nil {
 		return err
 	}
-	for _, property := range poolClusterProperties() {
+	for _, property := range properties {
 		if _, err := clusterRun(ctx, "pcs", "property", "set", property); err != nil {
 			return err
 		}
@@ -297,6 +333,10 @@ func poolClusterProperties() []string {
 	return []string{"no-quorum-policy=suicide", "stonith-enabled=true"}
 }
 
+func poolWitnessClusterProperties() []string {
+	return []string{"no-quorum-policy=freeze", "stonith-enabled=true"}
+}
+
 // PoolClusterBoundSet is whether the quorate side's bound is on this cluster right now, read from
 // the CIB and not from anybody's record. It is the precondition on a teardown restart: starting a
 // cluster with the bound set and no sbd on that node is the one thing Pacemaker answers by shutting
@@ -313,11 +353,20 @@ func PoolClusterBoundSet(ctx context.Context) bool {
 // PoolClusterPropertiesReady is whether the pool's cluster already says all of it, read back
 // from the CIB rather than remembered from having written it.
 func PoolClusterPropertiesReady(ctx context.Context) (bool, error) {
+	return poolClusterPropertiesReady(ctx, poolClusterProperties())
+}
+
+// PoolWitnessClusterPropertiesReady reads back the safe two-host policy from the CIB.
+func PoolWitnessClusterPropertiesReady(ctx context.Context) (bool, error) {
+	return poolClusterPropertiesReady(ctx, poolWitnessClusterProperties())
+}
+
+func poolClusterPropertiesReady(ctx context.Context, properties []string) (bool, error) {
 	current, err := clusterRun(ctx, "cibadmin", "--query")
 	if err != nil {
 		return false, err
 	}
-	for _, property := range poolClusterProperties() {
+	for _, property := range properties {
 		name, value, _ := strings.Cut(property, "=")
 		if !cibHasProperty(current, name, value) {
 			return false, nil

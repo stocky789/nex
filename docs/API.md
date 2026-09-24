@@ -118,6 +118,51 @@ call returns an uncertain error and reports the state that is now visible; Contr
 reconcile the host's observed identity and inventory before retrying rather than treating that
 error as proof that replacement failed.
 
+### Controller qnetd witness registration (`GET|POST /api/v1/agent/witness/...`)
+
+API impact: **new contract**, implemented for automatic Core registration and status. This is a
+Controller-hosted Corosync qnetd endpoint and certificate signer; it does not make Controller the
+owner of pool membership or a fencing decision. Controller keeps only its own runtime qnetd CA in
+`/run`; that CA is recreated after runtime loss. Core's pool master owns the selected witness and
+CA pin in `PoolMembership.witness`, replicates that authority through `PoolAuthorityReplica`, and
+keeps each host's qdevice credential sealed to that host. A replacement Controller obtains pool
+state from Core, but a fresh Controller runtime CA requires Core to re-enroll/reconfigure the
+witness.
+
+Both routes use the authenticated host's existing outbound mTLS identity (`HostCertificate`). The
+host must be a fresh current pool master. `GET /api/v1/agent/witness/candidates` returns
+`PoolWitnessCandidates{candidates}`. The Controller candidate carries its runtime CA PEM and
+lowercase SHA-256 of the CA certificate DER; its address is empty so Core derives the qnetd target
+from the pinned Controller URL. Same-site pool-master candidates are listed without a CA or pin and
+are not usable by current Core. `POST /api/v1/agent/witness/register` accepts
+`PoolWitnessRegistrationRequest{pool_id, cluster_name, fencing_generation, csr_pem}` and returns
+`PoolWitnessRegistration{address, certificate_pem, ca_pem, ca_sha256}`; the Controller address is
+empty for the same reason. Registration also requires the reported membership to match the
+request's pool, master and fencing generation, plus the `pool-witness-v1` capability. The cluster
+name is `nexpool` followed by the first 128 bits of SHA-256 over `nex-pool-cluster\0` and the pool ID;
+the PEM CSR must have a valid signature and matching common name. Registration refuses a name
+already mapped to another enrolled pool. Repeating registration is safe: the native signer may replace that cluster's
+certificate and the response contains a valid certificate under the current runtime CA.
+
+Failures are `400` for malformed or invalid input, `409` for stale authority, generation, capability
+or cluster-name conflict, `503` when the runtime qnetd CA, service or signing operation is unavailable,
+and `500` for storage or unexpected operation failure. Core persists a pending witness selection
+before signing and retries registration/reconciliation from its own service loop; the Controller
+does not schedule or remember that work. Core checks the returned CA pin, native qdevice status and
+the exact expected cluster and qnetd identity before it reports a witness ready. The Controller
+projects the master's `PoolFenceSummary.cluster` in the existing pool-members response; it does not
+turn qdevice quorum into a fence proof.
+
+**Safety boundary.** The integrated two-host path can register qdevice credentials and report
+`forming` or `degraded` status. It does not arm SBD or produce witness-loss exclusion proof: a
+witness outage could remove quorum, so two-host watchdog fencing and automatic witness
+promotion remain withheld. The separate native nested lab tested peer isolation while qnetd stayed
+reachable; it did not test witness loss or establish how the survivor behaves after it. It was not a
+physical-host or end-to-end promotion test. See the [two-host witness lab](qa/2026-09-24-two-host-witness-lab.md),
+[Controller registration QA](qa/2026-09-24-controller-witness-registration.md) and
+[runtime CA QA](qa/2026-09-24-qnetd-runtime-ca.md). These are development/lab results, not hardware
+acceptance.
+
 Compatibility: agents from before host-owned identity present no IDs; the Controller mints
 a 64-hex host ID and pool ID and names the pool after the hostname, exactly as before, and
 the response reports them for the agent to keep, so such a host presents them from then on
@@ -1358,22 +1403,32 @@ an unsigned or partial copy.
   call is also how the master learns the member's certified peer public key for the wrap, from the
   pinned TLS leaf, so no public key is ever put on the wire or into the membership record.
 - `POST /api/v1/pool/replica`, body ≤ 1 MiB (`protocol.PoolReplicaLimit`) with no trailing JSON →
-  `200 PoolReplicaAck{host_id, generation, digest, verified}`; `409` with the same shape plus a
+  `200 PoolReplicaAck{host_id, generation, digest, verified, sanlock_host_generation?}`; `409` with the same shape plus a
   bounded `error` on refusal; `400 invalid pool authority replica`; `401 replica peer rejected`;
   `405` with `Allow: GET, POST`. Idempotent: the same generation with the same content returns the
-  same acknowledgement.
+  same acknowledgement. `sanlock_host_generation` is present only after the member joins the
+  configured authority lockspace; an absent or zero value cannot acknowledge lease preparation.
 
 **Payload.** `protocol.PoolAuthorityReplica{pool_id, master_host_id, generation, member_host_id,
 created_at, membership, vms, storage, networks, media, storage_clusters, ca_key_wrapped?,
-sections[], signature}`. `sections[]` is exactly `membership, vms, storage, networks, media,
-storage_clusters`, in that order, each with the SHA-256 of its canonical JSON, so a truncated or
-reordered copy is refused rather than used. The signature is ECDSA P-256/SHA-256 with the **pool CA
-key** over the whole replica minus `signature`; a member verifies it against the pool CA it pinned
+fence_credentials?, witness_credentials?, sections[], signature}`. `sections[]` is exactly
+`membership, vms, storage, networks, media, storage_clusters`, in that order, each with the SHA-256
+of its canonical JSON, so a truncated or reordered copy is refused rather than used. The signature
+is ECDSA P-256/SHA-256 with the **pool CA key** over the whole replica minus `signature`; a member
+verifies it against the pool CA it pinned
 at join, which keeps verification working offline and after the signing master is permanently gone.
 `member_host_id`, `created_at`, `generation` and the wrap are inside the signature, so a replica
 cannot be re-addressed, renumbered or re-wrapped in transit. `ContentDigest` deliberately excludes
 those, so it identifies the authority itself: every member of one generation reports the same
 digest, and a re-push is recognizable as identical rather than as a conflicting second copy.
+
+`witness_credentials[]` contains `PoolWrappedWitnessCredential{host_id, fencing_generation,
+wrapped}`: the native qdevice PKCS#12 bundle sealed separately for each member and signed with
+the replica. Controller clients never receive it. Optional `membership.storage_lease` holds the
+exact NFS repositories, authority repository, timeout bounds and `prepared_generation`;
+`membership.next_sanlock_host_id` prevents lease ID reuse. Each `PoolMember` carries
+`sanlock_host_id` and `sanlock_host_generation` to bind later native lease observations to the
+same member. These preparation records do not enable storage-lease takeover.
 
 **Sealed CA key.** `ca_key_wrapped` is the pool CA private key wrapped for exactly one member:
 ECDH between a fresh ephemeral P-256 key and that member's certified peer public key,
@@ -1478,10 +1533,12 @@ transfer from the participants' next reports.
 **What it is for.** Moving the pool authority from the current pool master to a ready member of the
 same pool, and removing a member from a pool. Both keep the pool, its networks, its storage
 registrations, its ISO library, its virtual machines and their identities and names: nothing is
-recreated and nothing has to be entered again. There is **no automatic succession, no election and
-no failover** here — this is an operator action against a *cooperating* master. Promotion with an
-unreachable master is the separate [fence-verified manual promotion workflow](#fence-verified-manual-promotion-and-safe-rejoin-post-apiv1poolsidmasterpromote-post-apiv1poolsidmembershost_idfence-profile),
-not automatic succession.
+recreated and nothing has to be entered again. There is **no automatic succession for a planned master change**: this route is an operator action against a *cooperating* master. Core separately supports automatic promotion in eligible two-host pools through a recorded BMC fence profile; that path is not a request to this route. Promotion with an
+unreachable master is otherwise the separate [fence-verified manual promotion workflow](#fence-verified-manual-promotion-and-safe-rejoin-post-apiv1poolsidmasterpromote-post-apiv1poolsidmembershost_idfence-profile). Automatic promotion is limited to the surviving member with a verified replica in a two-ready-host pool, after two qualifying observations at least 15 seconds apart, with Host fencing enabled and a recorded usable BMC profile for the old master. Storage-lease and witness-based promotion remain unavailable; the qdevice witness described below supplies no fence proof.
+An in-progress automatic promotion checks the setting again on resume and before authority adoption.
+If the candidate's membership or verified replica says Host fencing is off, it retains its durable
+stage and proof, reports a refusal and does not activate; it can resume only after a verified on
+record arrives and the normal fence proof still passes.
 
 **Capability.** `pool-authority-transfer-v1`, v2 list only. Required on the pool master, on the
 selected host and on every ready member, because a member that cannot re-point would keep following
@@ -1751,8 +1808,7 @@ reports.
 master is **gone**. It is not a tidier master change: Core probes the old master over the pool
 network and refuses the promotion outright when it answers and still holds this pool's authority,
 naming the [planned master change](#planned-master-change-and-member-eject-post-apiv1poolsidmaster-delete-apiv1poolsidmembershost_id)
-instead. There is **no automatic succession, no election and no quorum**: every promotion is one
-operator, one candidate, one typed pool name and one explicit power-off acknowledgement.
+instead. This endpoint is a **manual** promotion: one operator, one candidate, one typed pool name and one explicit power-off acknowledgement. Core also has a separate automatic path limited to eligible two-host pools with Host fencing enabled and a recorded BMC fence profile. It does not use watchdog, storage lease or qdevice witness, and it does not send a Controller command.
 
 **Owner decision OD-5, and the absence of an escape.** An opted-in pool whose master restarts while
 one other ready member is permanently dead **stays restricted**. No route, field, parameter, enum
@@ -2170,7 +2226,7 @@ this pool's CA issued) always answers `restricted`, and with `?vms=1` additional
 host could not read its own record". No new peer endpoint.
 
 **Reported state.** `inventory.managed.promotion` = `PoolPromotionStatus{operation_id, stage,
-status, error, verdict?, cancellable, observed_at}`, reported by the candidate; and
+status, error, verdict?, cancellable, automatic?, observed_at}`, reported by the candidate; and
 `inventory.managed.restricted` = `PoolRestrictedStatus{kind, reason, since, conflicts, observed_at}`,
 reported by whichever host holds it. Health checks: `pool-restricted` — `failed` with Core's own
 sentence while restricted; when Core can read a clear durable restriction, an explicit fresh
@@ -2372,6 +2428,8 @@ cluster at all, which is honest rather than a fault. The **fence-device** line i
 fence-device method specifically and never from "any method is ready", so an armed watchdog can never
 satisfy the prerequisite for arming watchdogs. The checklist is computed on the master from the
 membership it owns and runs nothing.
+Native qdevice's node ID 0 is a quorum vote, not a pool host; `LocalQuorum.hosts` excludes it,
+so it cannot satisfy host-count or target-exclusion checks for the existing watchdog proof.
 
 **Arming: the engine, and what it needs.** Nex Core does not feed a watchdog itself. It writes
 `/etc/default/sbd` — `SBD_WATCHDOG_DEV=/dev/<sysfs name>`, `SBD_WATCHDOG_TIMEOUT=5`,
@@ -2489,6 +2547,14 @@ verdict's `old-master-exclusion` check carries the same wait per host. Proofs st
 host, operation and generation exactly as a fence-device proof is, and there is still no force and no
 "declare host lost". A two-host pool can never produce one.
 
+**Storage-lease preparation fields (inactive).** `StorageClusterFenceStatus` also has optional
+`method: "storage-lease"` and `storage_lease` (`PoolStorageLeaseExclusion`) for typed native sanlock
+evidence. The latter records `repositories[]` (repository ID/generation, identity digest,
+lockspace, host generation/state, host-dead and held seconds), `host_lease_id`, `bound_seconds`,
+watchdog kind/timeout and armed generation. Validation requires `HOST_DEAD` for every repository;
+`HOST_FREE` and `HOST_FAIL` are not exclusion evidence. The Core hardware reset gate currently
+withholds lease activation and proof production, so no promotion uses this method yet.
+
 **Method choice in a promotion.** `poolPromotionFenceReadiness` answers for both methods in the
 plan's order: the fence device where this candidate could use it — a usable profile and a credential
 it can open — otherwise the target's own watchdog. `PoolPromotionHost.fence_kind` names the method
@@ -2498,19 +2564,28 @@ per host, so the UI shows what is about to happen rather than only that somethin
 a watchdog proof and never readiness; a Core too old to accept the field ignores it, and the member
 keeps reporting. An older master reports no `hosts` on a prerequisite, and the client shows the
 sentence as written. `method` is absent on every proof an older Core produced, which is exactly the
-fence-device meaning, so no proof changes meaning across an upgrade.
+fence-device meaning, so no proof changes meaning across an upgrade. Core accepts only an
+absent method, `bmc`, or `watchdog` for implemented promotion proofs; it rejects unknown
+methods instead of interpreting them as a fence-device proof.
 
 ### The pool's own cluster, and the arming rollout
 
 API impact: **changed contract**, implemented. `PoolFenceSummary.cluster` (`PoolFenceCluster`),
-`PoolWatchdogArmed.armed_at`, and the `pool-watchdog-cluster-v1` capability. Nothing else moved: the
-nodelist is **derived** from the membership the master already owns, so there is no cluster record,
-no registration and nothing for a Controller to keep or recover. A fresh Controller learns the whole
-of it by asking the master for its membership, exactly as it learns everything else.
+`PoolWatchdogArmed.armed_at`, `PoolMembership.witness` (`PoolWitnessRecord`), per-member sealed
+`PoolAuthorityReplica.witness_credentials` and the `pool-watchdog-cluster-v1` and
+`pool-witness-v1` capabilities. The nodelist remains **derived** from membership; for an eligible
+two-host pool Core also durably records the qdevice witness and replicates each member's sealed
+credential. Controller stores no pool witness state. A fresh Controller obtains the membership and
+status from the master report.
 
-**When Nex Core forms one.** A pool of three or more ready hosts, at most
-`PoolWatchdogClusterHosts` (5) of them, with Host fencing on and **no clustered-storage
-repository**. Every ready host that is not in maintenance is in it; the ring address is the host
+**When Nex Core forms one.** The supported watchdog cluster is a pool of three or more ready hosts,
+at most `PoolWatchdogClusterHosts` (5) of them, with Host fencing on and **no clustered-storage
+repository**. A two-ready-host pool with Host fencing on and no storage lease can separately
+register Controller-hosted qnetd and configure native Corosync qdevice. That quorum vote is status
+only for safety-proof purposes: `PoolFenceCluster` reports `forming` until qdevice is verified and
+`degraded` after it is connected and voting, while two-host SBD arming and witness-loss exclusion
+proof remain withheld. In the supported watchdog cluster every ready host that is not in maintenance
+is included; the ring address is the host
 part of the `peer_origin` the pool already records, the Corosync node name is the durable host ID
 (which is what `corosync-quorumtool` reads back and what `pcmk_host_*` already matches), and the
 node ID is a stable digest of that host ID, never reused for another host. A host the pool counts as
@@ -3681,6 +3756,26 @@ The existing VM list still includes adopted Controller appliances with
 `status` and optional `error`, with `role: guest`. Creation status never substitutes for
 fresh libvirt execution state.
 
+**Automatic I/O defaults (existing contract, 2026-09-24):** `vm-create` and stopped
+`vm-update` definitions use one shared IOThread (ID 1) for VirtIO disks and the VirtIO SCSI
+controller; SATA disks and CD drives remain unthreaded. VirtIO NICs offer `min(cpu.count, 4)`
+queues, omitting the override for one queue and leaving libvirt's backend selection intact.
+There are no new request or inventory fields. The assigned Core records the exact expected
+XML in its managed journal `Domain`, applies it through libvirt and verifies the observed
+thread assignments and queue counts. The pool master's existing VM specification and adoption
+path remain unchanged; Controller replacement does not regenerate the VM's devices.
+
+Running updates preserve existing disk, SCSI controller and NIC tuning. New VirtIO disks and
+new SCSI controllers receive the IOThread default; a new SCSI disk on an existing controller
+inherits that controller's configuration. Core observes both live and persistent thread state
+before attaching a device that references it. New NICs receive the queue default. Interrupted
+operations retain the existing observation-before-retry semantics and do not count partially
+applied changes as success. A stopped save applies the full defaults to an older definition;
+agent upgrade, autostart and guest reboot alone do not. Older Core retains its prior defaults.
+Authentication, authorization, idempotency and wire schemas are unchanged. Queue exposure does
+not establish guest driver activation or improved workload performance; see
+[validation evidence](qa/2026-09-24-automatic-vm-io.md).
+
 API impact: **existing contract** — a terminal Core `vm-create` failure before a definition is
 created remains task, audit and idempotent-replay data under an internal failed-create identity,
 so it cannot collide with a Core VM identity. It is excluded from Controller VM-list, ownership,
@@ -4356,8 +4451,8 @@ model. When the agent channel is attached, Core asks the agent (`guest-get-osinf
 and caches the answers per VM for one minute, retrying every ten seconds while the channel is
 attached but unanswered. Agents are asked after every VM was observed, oldest cache first, and
 only while the probe deadline leaves room for a question. Loopback and link-local addresses
-are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes and `hostname`
-and interface names to 200; Controller refuses a report beyond those limits or with an
+are dropped, at most 32 addresses are reported, `os` is bounded to 4096 bytes, `os_id` to 200,
+and `hostname` and interface names to 200; Controller refuses a report beyond those limits or with an
 unknown `agent`, `clipboard`, `media` or `drivers_media` value (an absent `media` is an older
 Core). `agent` is `connected`, `unresponsive`, `disconnected` or
 `no-channel`; `clipboard` is `ready`, `waiting` or `no-channel`. `clipboard` is `ready` only
@@ -4378,11 +4473,17 @@ not observe it. A guest owns its tray while it runs — a Debian installer eject
 booted — so this is the only report of what the VM currently sees. It never changes the durable
 `media_id`, which only a media request changes, and the console uses the difference to offer
 the recorded ISO again. The probe is separate from the libvirt state probe, so a slow guest never
-delays VM power states, and facts are dropped when the VM leaves the running list. This is
-observation, not health: a connected agent proves nothing about guest applications.
+delays VM power states, and facts are dropped when the VM leaves the running list. `os_id` is
+the QEMU guest agent's `guest-get-osinfo` `id`: on POSIX guests it is the identifier from
+`/etc/os-release` (such as `debian` or `ubuntu`), while Windows reports `mswindows`. It is
+optional and guest-reported; the display name remains in `os`. Nex uses the ID for known distro
+artwork and uses a generic monitor icon when it is missing or has no bundled icon. The icon
+lookup has no name-based heuristics. This is observation, not health: a connected agent proves
+nothing about guest applications.
 
-Compatibility: shared upgrade rule; an older Core never sends the member and the UI shows guest
-tools as unknown. No pool-scoped setting is introduced.
+Compatibility: shared upgrade rule; an older Core omits the guest observation, so the VM retains
+its configured OS label and Linux/Windows family icon (otherwise a generic monitor).
+A reported OS with a missing/unknown ID uses the generic monitor. No pool-scoped setting is introduced.
 Evidence: [console features QA report](qa/console-features/checks.md).
 
 ## VM usage observation

@@ -38,12 +38,15 @@ import (
 // The host-side cluster actions, as package variables so a test stands in for Corosync the way
 // armLocalWatchdog stands in for sbd.
 var (
-	applyPoolCluster           = vmhost.ApplyPoolCluster
-	leavePoolCluster           = vmhost.LeavePoolCluster
-	restartPoolCluster         = vmhost.RestartPoolClusterForArming
-	applyPoolClusterProperties = vmhost.ApplyPoolClusterProperties
-	poolClusterPropertiesReady = vmhost.PoolClusterPropertiesReady
-	poolClusterBoundSet        = vmhost.PoolClusterBoundSet
+	applyPoolCluster            = vmhost.ApplyPoolCluster
+	applyPoolClusterWithWitness = vmhost.ApplyPoolClusterWithWitness
+	leavePoolCluster            = vmhost.LeavePoolCluster
+	restartPoolCluster          = vmhost.RestartPoolClusterForArming
+	applyPoolClusterProperties  = vmhost.ApplyPoolClusterProperties
+	poolClusterPropertiesReady  = vmhost.PoolClusterPropertiesReady
+	applyPoolWitnessProperties  = vmhost.ApplyPoolWitnessClusterProperties
+	poolWitnessPropertiesReady  = vmhost.PoolWitnessClusterPropertiesReady
+	poolClusterBoundSet         = vmhost.PoolClusterBoundSet
 )
 
 // poolClusteredStorageDetail is the one sentence a clustered-storage pool gets, everywhere.
@@ -87,7 +90,27 @@ func ReconcilePoolCluster(ctx context.Context, s *Store) error {
 		// cluster rather than after.
 		return poolClusterPolicy(ctx, s)
 	}
-	if _, err = applyPoolCluster(ctx, s.dir, state.Membership.PoolID, nodes); err != nil {
+	witnessAddress := ""
+	if state.Membership.Witness != nil && len(nodes) == 2 {
+		witnessAddress = state.Membership.Witness.Address
+	}
+	if witnessAddress == "" {
+		_, err = applyPoolCluster(ctx, s.dir, state.Membership.PoolID, nodes)
+	} else {
+		_, err = applyPoolClusterWithWitness(ctx, s.dir, state.Membership.PoolID, nodes, witnessAddress)
+	}
+	if err != nil {
+		return err
+	}
+	if witnessAddress != "" && vmhost.PoolWitnessCredentialsReady(ctx, s.dir, state.Membership.PoolID, *state.Membership.Witness) {
+		if err = vmhost.ActivatePoolWitness(ctx, s.dir, state.Membership.PoolID, *state.Membership.Witness); err != nil {
+			return err
+		}
+	} else if witnessAddress != "" {
+		if err = vmhost.DeactivatePoolWitness(ctx); err != nil {
+			return err
+		}
+	} else if err = vmhost.DeactivatePoolWitness(ctx); err != nil {
 		return err
 	}
 	return poolClusterPolicy(ctx, s)
@@ -103,11 +126,43 @@ func poolClusterPolicy(ctx context.Context, s *Store) error {
 	if err != nil || membership.MasterHostID != s.State.HostID {
 		return err
 	}
+	nodes, _, _ := poolClusterIntent(s, membership)
+	if poolWitnessPolicyApplies(nodes, membership) {
+		current, err := poolWitnessPropertiesReady(ctx)
+		if err != nil || current {
+			return err
+		}
+		if err = applyPoolWitnessProperties(ctx); err != nil {
+			return err
+		}
+		current, err = poolWitnessPropertiesReady(ctx)
+		if err != nil {
+			return err
+		}
+		if !current {
+			return errors.New("two-host witness cluster policy did not read back as freeze")
+		}
+		return nil
+	}
 	current, err := poolClusterPropertiesReady(ctx)
 	if err != nil || current {
 		return err
 	}
-	return applyPoolClusterProperties(ctx)
+	if err = applyPoolClusterProperties(ctx); err != nil {
+		return err
+	}
+	current, err = poolClusterPropertiesReady(ctx)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return errors.New("pool cluster policy did not read back after apply")
+	}
+	return nil
+}
+
+func poolWitnessPolicyApplies(nodes []vmhost.PoolClusterNode, membership protocol.PoolMembership) bool {
+	return len(nodes) == 2 && membership.Witness != nil && membership.Witness.Valid(membership.PoolID) == nil
 }
 
 // poolClusterMayLeave is whether this host can stop its cluster now. Two things stop it, and both
@@ -198,9 +253,11 @@ func poolClusterIntent(s *Store, membership protocol.PoolMembership) ([]vmhost.P
 		// Never form a cluster without a host the pool counts as ready: the others would
 		// make quorum decisions with an expected vote count that host never agreed to.
 		return nodes, false, "Nex Core does not know a cluster address for " + missing[0] + " yet"
-	case usable < 3:
+	case usable < 2:
 		return nodes, false, "this pool has " + strconv.Itoa(usable) +
-			" hosts available to it, and a watchdog needs three or more to have a majority side"
+			" hosts available to it, and a watchdog needs two hosts and a registered qdevice witness to have a majority side"
+	case usable == 2 && (membership.Witness == nil || membership.Witness.Valid(membership.PoolID) != nil):
+		return nodes, false, "this pool needs three or more hosts, or two hosts with a registered qdevice witness"
 	case len(nodes) > protocol.PoolWatchdogClusterHosts:
 		return nodes, false, "this pool has " + strconv.Itoa(len(nodes)) + " hosts, more than the " +
 			strconv.Itoa(protocol.PoolWatchdogClusterHosts) +
@@ -349,6 +406,17 @@ func PoolFenceClusterFor(s *Store, membership protocol.PoolMembership, q vmhost.
 		}
 	}
 	state.ArmingHostID = poolWatchdogArmingTurn(nodes, membership)
+	if len(nodes) == 2 && membership.Witness != nil {
+		witness := vmhost.ReadPoolWitnessStatus(context.Background(), s.dir, membership.PoolID, *membership.Witness)
+		if !membership.Witness.CredentialsReady || !witness.Observed {
+			state.State, state.ArmingHostID = protocol.PoolClusterForming, ""
+			state.Detail = "this pool's qdevice witness is not ready: " + witness.Error
+			return state
+		}
+		state.State, state.ArmingHostID = protocol.PoolClusterDegraded, ""
+		state.Detail = "the qdevice witness is connected and voting; two-host watchdog fencing remains withheld pending native testing of witness loss with one host already down"
+		return state
+	}
 	switch {
 	case !q.Observed || !q.Quorate:
 		state.State, state.Detail = protocol.PoolClusterForming,

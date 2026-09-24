@@ -7546,7 +7546,264 @@ Append resolved defects with their evidence and the approach to avoid.
 - Regression: `go test ./internal/vmhost -run '^TestHostConsoleIncrementalUpdateOnlyOnChange$' -count=5` and `go test ./...` passed locally. The test runs in `.github/workflows/github.yml` on GitHub and in `.github/workflows/phase1.yml` on the forge. GitHub rerun requires a project-owner push.
 - Avoid: Using a fixed short sleep to infer that a login shell is idle, or sharing a cancelling workflow group between jobs that should only skip.
 
-## BUG-0551 — Native network installation could miss newly installed NIC drivers
+## BUG-0551 — Controller detail panels miss delayed action results
+
+- Date: 2026-09-24. Status: locally verified with simulated APIs; live-host acceptance remains open.
+- Symptom: An accepted action can leave pool, management-network or clustered-storage details
+  unchanged until manually refreshed; Refresh inventory does not update an open hardware panel.
+- Root cause: Those panels own separate report reads. Some read once after submission, while
+  others only poll after a report already indicates work in progress. The main inventory poll
+  cannot update these separate reports, and hidden-tab return did not trigger a catch-up read.
+- Fix: Keep visible detail panels polling, catch up on visibility/online events, reread hardware
+  after a successful inventory-refresh task, and reconcile ambiguous pool/network submissions.
+  Ignore superseded reads, preserve drafts/action errors, and keep uncertain fence outcomes
+  guarded across automatic polls. No operation is automatically resubmitted.
+- An uncertain Controller update submission now follows read-only status through temporary
+  service errors, reporting an unknown outcome when no work appears instead of repeating Apply.
+- Regression: `npm --prefix web test` and `npm --prefix web run typecheck` passed locally.
+  `tests/integration/controller_refresh_browser.py` exercises delayed host reports with a real
+  browser and simulated APIs; final results are recorded in
+  [refresh verification](qa/2026-09-24-controller-action-refresh.md). The forge runs the browser
+  script and UI tests on main pushes and pull requests in `.github/workflows/phase1.yml` and
+  its `.gitea/workflows/phase1.yml` copy. No remote CI run is claimed.
+- Avoid: Assuming an accepted request is the final host state, or making a poll conditional on
+  already knowing that a task is running; background reads must not clear a failed action or
+  an unresolved destructive outcome.
+
+## BUG-0552 — Promotion verifier accepted an unknown fence method
+
+- Date: 2026-09-24. Status: local fix; no physical fencing claim.
+- Symptom: A bound proof naming an unsupported `method` passed the promotion verifier when the
+  target had a valid fence profile.
+- Root cause: The verifier treated every method other than `watchdog` as a device fence.
+- Fix: Accept only the legacy empty method and `bmc` as device proofs; reject other methods.
+- Regression: `TestPoolPromotionFenceRejectsUnknownMethod` fails against the previous source
+  (`unknown fence method accepted`) using a Go test overlay and passes after the fix with
+  `go test ./internal/protocol -run '^TestPoolPromotionFenceRejectsUnknownMethod$' -count=1`.
+  The existing Go test jobs run this package on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Letting an unrecognized proof type inherit the validation rules of a known method.
+
+## BUG-0553 — Disposable cluster lab timed out and refused cleanup
+
+- Date: 2026-09-24. Status: local fixture fix; native fencing acceptance still open.
+- Symptom: The four-guest lab spent its readiness window installing the optional fence-agent
+  bundle, then cleanup refused an already terminated guest because its PID remained as a zombie.
+- Root cause: The seed installed an unused package bundle with a large dependency tree, and the
+  cleanup existence check treated an unreaped zombie as a live QEMU process.
+- Fix: Seed only the fixture's required packages and treat an empty `/proc/<pid>/cmdline` as gone.
+- Regression: Both new `ClusterHALabTests` failed before the fix and pass with
+  `python3 -m unittest tests.test_cluster_ha_lab.ClusterHALabTests.test_cleanup_treats_terminated_unreaped_guest_as_gone tests.test_cluster_ha_lab.ClusterHALabTests.test_seed_does_not_install_unused_fence_agent_bundle`.
+  The zombie test waits for `waitid(..., WNOWAIT)` so it cannot mistake a child still
+  starting for one that has exited.
+  The existing `tests/` suite runs on forge pushes and pull requests. No remote CI run is claimed.
+- Avoid: Installing optional native tooling in every lab seed or equating a PID entry with a
+  running process after SIGTERM.
+
+## BUG-0554 — Quorum-device row counted as a pool host
+
+- Date: 2026-09-24. Status: local parser fix; witness proof remains unimplemented.
+- Symptom: A native qdevice row made a one-host Corosync partition appear to contain a second
+  pool host, which could inflate the existing watchdog proof's host-count check.
+- Root cause: `LocalQuorum` accepted every numeric membership row; native qdevice uses node ID 0.
+- Fix: Include only positive Corosync node IDs in the pool-host list. Qdevice remains a separate
+  vote and is never a pool host.
+- Regression: `TestLocalQuorumDoesNotCountQdeviceAsPoolHost` failed against the old parser
+  (`Hosts` included `Qdevice`) and passes with
+  `go test ./internal/vmhost -run '^TestLocalQuorumDoesNotCountQdeviceAsPoolHost$' -count=1`.
+  The existing Go test jobs run this package on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Treating a quorum vote row as pool membership or as a generic watchdog exclusion proof.
+
+## BUG-0555 — Appliance package guard could not invoke its own subcommands
+
+- Date: 2026-09-24. Status: local fix before package staging acceptance.
+- Symptom: The appliance's package install guard exited with permission denied before installing
+  anything when its uploaded helper file was not executable.
+- Root cause: `install` invoked the helper path directly for `guard`, `disable` and `restore`,
+  though the image build invokes that file through `sh` and does not require executable mode.
+- Fix: Run each internal subcommand through `sh` as well.
+- Regression: `test_package_install_failure_restores_existing_service_policy` failed before the
+  fix with exit 126 and passes afterward with
+  `python3 -m unittest tests.test_storage_packaging.StoragePackagingTests.test_package_install_failure_restores_existing_service_policy`.
+  The existing Python test suite runs on forge pushes and pull requests. No CI run is claimed.
+- Avoid: Calling a shell script directly after choosing a shell-invoked delivery path.
+
+## BUG-0556 — Pool Corosync node IDs exceeded knet's supported range
+
+- Date: 2026-09-24. Status: local fix; native two-host witness acceptance remains open.
+- Symptom: Debian 13 Corosync rejected a rendered pool configuration before it could parse
+  the quorum-device section because a derived node ID exceeded 65535.
+- Root cause: `PoolClusterNodeID` generated a 31-bit value, while the native knet transport
+  accepts only IDs from 1 through 65535.
+- Fix: Preserve IDs from the prior algorithm when already valid; map larger values into the
+  supported range, and keep the renderer's collision refusal.
+- Regression: `TestThePoolClusterIsEveryHostAndWaitsForThemAll` failed before the fix on
+  `host-a` (derived ID 365480421) and passes after it with
+  `go test ./internal/vmhost -run '^TestThePoolClusterIsEveryHostAndWaitsForThemAll$' -count=1`.
+  A temporary two-host candidate config with the corrected IDs also passed Debian 13
+  `corosync -t -c` in an ephemeral container; that witness renderer was removed pending its
+  connected Core path. Existing Go jobs run this package on forge pushes and pull requests.
+  No remote CI run or qdevice session is claimed.
+- Avoid: Assuming a nonzero integer is acceptable to the native cluster transport without
+  parsing a rendered configuration in a disposable environment.
+
+## BUG-0557 — Witness teardown reached the developer host during a Go test
+
+- Date: 2026-09-24. Status: local fix; broader witness acceptance remains open.
+- Symptom: An agent package test invoked `systemctl stop corosync-qdevice.service` on the
+  developer workstation and triggered an authentication prompt. The workstation had no such
+  service installed; the request did not stop a service.
+- Root cause: The no-witness reconcile branch called `DeactivatePoolWitness`, which attempted
+  the native stop before checking whether Nex had ever installed its qdevice drop-in. Existing
+  tests reached that branch without a native-command seam.
+- Fix: A missing Nex-owned drop-in makes deactivation a no-op before any systemd command.
+  A previously installed drop-in still follows the stop/remove/reload path. Pool-cluster
+  teardown now uses that same helper instead of unconditionally stopping qdevice.
+- Regression: `go test ./internal/vmhost -run '^TestDeactivatePoolWitnessWithoutOwnedServiceDoesNotCallSystemctl$' -count=1`
+  passed. The test supplies a missing drop-in path and fails if any native command runs. The
+  existing Go test jobs include this package on forge pushes and pull requests. The full agent
+  suite was not rerun during incident containment; no remote CI run is claimed.
+- Avoid: Calling a host service manager from an ordinary no-op reconcile path, especially one
+  exercised by tests, before proving Nex owns that service configuration.
+
+## BUG-0558 — Package guard refusal removed an existing service policy
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Retrying package installation with stale guard state removed the active `policy-rc.d` even though installation was refused.
+- Root cause: The restore trap was armed before the guard checked stale state.
+- Fix: Arm cleanup only after the guard succeeds.
+- Regression: `test_package_install_refusal_preserves_policy_and_stale_marker` and `test_package_install_guard_failure_restores_policy` failed before their fixes and passed afterward; `python3 -m unittest tests.test_storage_packaging` passed (22 tests). The existing forge Python suite runs on pushes and pull requests.
+- Avoid: Installing an exit cleanup before proving the invocation owns the state it will remove.
+
+## BUG-0559 — Ordinary VM starts required a storage lease XML read
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Local VM create, start, power and autostart tests failed with `cannot verify the persistent VM storage leases`.
+- Root cause: Lease verification called `virsh dumpxml` even without a storage-lease context.
+- Fix: Skip lease verification for unconfigured operations; configured shared-NFS operations still verify resources and persistent XML.
+- Regression: `TestEnsureVMLeaseDefinitionSkipsUnconfiguredVM` failed before the fix and passed afterward in focused vmhost tests. The forge Go suite includes this package; host-affecting broad tests remain suspended after BUG-0557.
+- Avoid: Making ordinary local VM operation depend on a lease check that applies only to configured shared storage.
+
+## BUG-0560 — Interrupted witness credential import could not retry
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: A failed member PKCS#12 import left an incomplete NSS directory that every authority-replica retry refused.
+- Root cause: The import treated any existing generation directory as final, even when native readiness verification failed.
+- Fix: Rebuild only an incomplete, inactive generation from the signed incoming bundle; preserve the generation referenced by Nex's active qdevice drop-in and verify the pinned CA and cluster certificate before accepting a retry.
+- Regression: A mocked `pk12util -i` failure test failed before the fix and passed afterward; a transient validation failure test preserves an active NSS sentinel. Focused vmhost witness tests passed. No native host-affecting test ran; the forge Go suite includes the package.
+- Avoid: Persisting a partial native credential import as an unrecoverable authority state.
+
+## BUG-0561 — Prepared storage lease was cleared on each selection pass
+
+- Date: 2026-09-24. Status: fixed in the working tree; activation remains gated by hardware reset proof.
+- Symptom: A prepared lease generation would be cleared on the next unchanged reconciliation.
+- Root cause: Selection comparison included `PreparedGeneration`, while each new candidate had zero.
+- Fix: Compare selection fields without the preparation generation, preserving it only when the selection is unchanged.
+- Regression: `TestPoolStorageLeaseSelectionKeepsPreparationOnlyForUnchangedSelection` failed before the fix and passed afterward with its isolated agent test. The forge Go suite includes the package; activation and physical watchdog checks were not run.
+- Avoid: Comparing derived readiness state as if it were a selection input.
+
+## BUG-0562 — Distinct pools could share a witness cluster name
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: Two valid pool IDs produced one qnetd cluster name, allowing a later registration to address the first pool's native signer entry.
+- Root cause: The deterministic name used only 32 SHA-256 bits.
+- Fix: Use 128 digest bits and reject a registered pool-name collision before signing.
+- Regression: The known colliding UUID pair fails the old name test and passes the focused protocol test; the focused Controller conflict test passed. Forge Go tests include both packages. Existing provisioned names require compatibility review before a release upgrade.
+- Avoid: Using short hashes as durable cross-pool native identities without a collision check.
+
+## BUG-0563 — Guest OS icon style failed the token gate
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: `npm --prefix web test` failed because the Amazon icon background used a literal color outside `tokens.css`.
+- Root cause: The new CSS rule bypassed the console's color tokens.
+- Fix: Reuse the existing light `--rail-hi` token.
+- Regression: The existing `tokens.test.mjs` failed before the fix and the full UI test suite passed afterward; typecheck and build also passed. The forge UI checks include this suite.
+- Avoid: Adding a literal color when an existing theme token has the required appearance.
+
+## BUG-0564 — New safety read-back left two Core test expectations stale
+
+- Date: 2026-09-24. Status: fixed in the working tree; CI not run.
+- Symptom: The foreign watchdog-bound lab fixture treated a policy read-back refusal as a test failure, and the pending-witness test expected an obsolete reason string.
+- Root cause: The tests still assumed the prior policy and wording after the staged safety changes.
+- Fix: Assert that the master refuses the unreadable policy while other hosts remain safe; match the current withheld-fencing reason.
+- Regression: The updated tests retain the foreign-bound no-reset and pending-witness no-arm assertions. They compile in `go test ./internal/agent -run '^$'`; host-affecting broad execution remains suspended after BUG-0557.
+- Avoid: Weakening the policy read-back requirement to satisfy an outdated fixture.
+
+## BUG-0565 — Release source archive omitted appliance inputs and guest OS assets
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4454 failed while customizing the Controller appliance because `/build/appliance/qnetd-runtime-init` was missing. The same archive also omitted the qnetd service drop-in and 34 guest OS image, catalogue, and license files.
+- Root cause: `scripts/build-source.py` selects files by an explicit list and suffix allowlists; neither the extensionless helper nor `.conf`, `.png`, `.ico`, `.md`, `.txt`, and extensionless guest OS notices were included.
+- Fix: Retain the two appliance runtime inputs explicitly and the guest OS catalogue's missing file types in the source archive.
+- Regression: `test_appliance_and_guest_os_inputs_are_retained` failed before the fix with the missing qnetd helper, then passed. `python3 -m unittest tests.test_build_source` passed (9 tests), `python3 -m unittest tests.test_appliance_build` passed (12 tests), and a fresh source archive contained the missing inputs and sampled image/license files. The forge Python discovery job includes this regression; no full appliance image build or forge rerun is claimed.
+- Avoid: Adding a file consumed by the image build without checking its presence in the release's staged source archive.
+
+## BUG-0566 — Appliance build called a dpkg-only helper after package installation
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4459 installed `corosync-qnetd` but failed during `package-service-policy install` immediately after `/bin/deb-systemd-helper was not called from dpkg. Exiting.`
+- Root cause: The `disable` step invoked `deb-systemd-helper` from the appliance's shell wrapper, outside a dpkg maintainer script. Debian's helper exits 1 without `DPKG_MAINTSCRIPT_PACKAGE`.
+- Fix: Use the existing offline `systemctl --root` disable and `is-enabled` readback. This removes the boot link without calling the dpkg-only helper; a later package upgrade sees the unit's missing link as disabled.
+- Regression: `test_package_disable_does_not_call_dpkg_maintainer_helper` failed before the fix with exit 17 from a refusing helper, then passed using real `systemctl --root` against a temporary service tree. `python3 -m unittest tests.test_storage_packaging` passed (23 tests). A disposable appliance image build from the pinned Debian base completed through package installation and image finalization using a temporary signing key; boot and forge rerun remain unverified. The forge Python discovery job includes the regression.
+- Avoid: Calling maintainer-script helpers from ordinary build or installer shell steps.
+
+## BUG-0567 — Release ISO build relied on a retired Debian mirror path
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4464 completed the appliance and Core package builds, then failed fetching Debian 13.6.0 ISO checksums: the current-release path returned 404 and a transient connection reset stopped the archive fallback.
+- Root cause: The pinned Debian release had moved to the archive, but checksum and signature downloads had no retry policy.
+- Fix: Fetch the pinned release directly from Debian's archive and retry checksum, signature and signing-key downloads. Keep signature verification and the pinned ISO digest check.
+- Regression: `test_pinned_debian_iso_metadata_uses_archive_with_retries` failed before the fix and passed after it. `python3 -m unittest tests.test_iso_payload_efficiency` passed (3 tests). A live fetch verified Debian's signature and the pinned ISO digest in `SHA256SUMS`. A local disposable `NEX_VERSION=0.4.11 bash installer/build.sh` build completed and produced the ISO, matching source bundle, compliance manifest and Core package using a temporary signing key; installation and forge rerun remain unverified.
+- Avoid: Using a current-release URL for immutable older media or leaving release metadata downloads without retries.
+
+## BUG-0568 — Running VM update could accept a persistent-only device change
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: A partial live device update could be reported complete when only the persistent
+  definition matched the requested devices.
+- Root cause: The observer checked inactive XML and running state without verifying requested
+  devices in live XML. This was identified during IOThread/multiqueue review, not reproduced
+  against an unmodified binary.
+- Fix: Verify requested live disks, SCSI controller assignments and NIC queues before accepting
+  completion; tolerate extra live devices whose asynchronous removal remains pending.
+- Regression: `go test ./internal/vmhost -run 'TestManaged(ObserveDefinitionRejectsConfigOnlyLiveHotplug|LiveObservationRejectsConfigOnlyHotplug)' -count=1`
+  passed. The first test invokes the actual observer with matching persistent configuration and
+  mismatching live queues; the second covers missing disk assignments and IOThread IDs. Existing
+  forge `.github/workflows/phase1.yml` and its `.gitea` copy run the Go suite on pushes and pull
+  requests; `.github/workflows/github.yml` runs the non-race suite on GitHub.
+- Avoid: Inferring active device configuration from inactive XML plus a running power state.
+
+## BUG-0569 — New SCSI controller hotplug serialized the Go type name
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: The disposable native KVM check rejected a live SCSI disk addition with
+  `unknown device type 'managedController'`.
+- Root cause: The controller had a containing-field XML tag but no element name when marshaled
+  alone for `virsh attach-device`. The fake command test checked ordering but not the XML root.
+- Fix: Give the controller an explicit `controller` XML element name.
+- Regression: `TestManagedApplyLiveReconcilesDevices` captures the actual attachment fragment
+  and requires a `controller` root and IOThread assignment before the disk.
+  `go test -race ./internal/vmhost -count=1` passed. The native nested Debian KVM rerun
+  successfully added the controller and disk. Existing forge Go jobs in
+  `.github/workflows/phase1.yml` and the `.gitea` copy run the regression on pushes and pull
+  requests; `.github/workflows/github.yml` also runs it without race instrumentation.
+- Avoid: Assuming a containing struct's XML field tag determines a standalone device fragment,
+  or checking command order without examining the exact fragment sent to libvirt.
+
+## BUG-0570 — CI workflow assertions missed provider-specific concurrency groups
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun outstanding.
+- Symptom: The Python CI suite failed two workflow tests even though the forge still used the
+  shared runner group.
+- Root cause: Both tests required a literal group in `.github` workflows after those files
+  selected a separate group on github.com and the shared group on the forge.
+- Fix: Check the provider-specific expression in `.github` and the literal shared group in
+  `.gitea`, preserving both concurrency requirements.
+- Regression: `python3 -m unittest tests.test_ci_security` passed (13 tests), and
+  `python3 -m unittest discover -s tests -p 'test_*.py'` passed (399 tests). The forge and
+  GitHub checks run the Python suite on pushes and pull requests; no remote rerun is claimed.
+- Avoid: Requiring identical workflow text when provider behavior intentionally differs.
+
+## BUG-0571 — Native network installation could miss newly installed NIC drivers
 
 - Date: 2026-09-24. Status: fixed in the working tree; clean early-hook network discovery verified, full installation acceptance separate.
 - Symptom: A disposable serial net installation reported no network interfaces even though
@@ -7573,7 +7830,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Adding an adapter-specific `modprobe` workaround, or assuming that installing
   module files and replaying udev events also refreshes udev's cached indexes.
 
-## BUG-0552 — CI concurrency checks rejected the GitHub runner split
+## BUG-0572 — CI concurrency checks rejected the GitHub runner split
 
 - Date: 2026-09-24. Status: fixed in the working tree; forge execution pending.
 - Symptom: The Python suite failed two CI security checks despite the workflows retaining
@@ -7591,7 +7848,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Weakening the assertion to merely search for a shared-group name somewhere in
   the file, or changing production scheduling to satisfy a stale test.
 
-## BUG-0553 — Network installer lost APT's package download plan
+## BUG-0573 — Network installer lost APT's package download plan
 
 - Date: 2026-09-24. Status: fixed; final netinst passed clean unattended BIOS installation, first boot and reboot.
 - Symptom: A disposable native net installation created an empty download plan and fetched
@@ -7612,7 +7869,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Replacing `in-target` with raw `chroot`, inventing an empty-plan failure for valid
   retries, or treating an APT plan visible in syslog as evidence that redirected output exists.
 
-## BUG-0554 — VM creation leaves the result page blank until refresh
+## BUG-0574 — VM creation leaves the result page blank until refresh
 
 - Date: 2026-09-24. Status: fixed in the working tree.
 - Symptom: accepting a VM creation navigates to its result route but leaves the page empty.
@@ -7625,7 +7882,7 @@ Append resolved defects with their evidence and the approach to avoid.
   See [browser evidence and limits](qa/2026-09-24-vm-create-navigation.md).
 - Avoid: forcing a full-page reload or clearing wizard drafts during Storage/Networks side trips.
 
-## BUG-0555 — ISO smoke guest test failed with multiple installed kernels
+## BUG-0575 — ISO smoke guest test failed with multiple installed kernels
 
 - Date: 2026-09-24. Status: fixed in the working tree.
 - Symptom: Network-installed Core passed initial boot checks but its nested-guest smoke
@@ -7640,7 +7897,7 @@ Append resolved defects with their evidence and the approach to avoid.
   nested-guest checks are recorded in the network-installer QA report.
 - Avoid: Deleting valid installed kernels to accommodate a test fixture's assumption.
 
-## BUG-0556 — Disk validator fixture rejected the netinst media probe
+## BUG-0576 — Disk validator fixture rejected the netinst media probe
 
 - Date: 2026-09-24. Status: fixed locally; hosted rerun pending.
 - Symptom: The installer workflow aborted on its first valid disk scenario with a
@@ -7658,9 +7915,9 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: Accepting arbitrary filesystem probes in the stub or removing production
   network validation to accommodate a stale test.
 
-## BUG-0557 — Phase 1 browser gate waited for removed UI elements
+## BUG-0577 — Phase 1 browser gate waited for removed UI elements
 
-- Date: 2026-09-24. Status: fixed locally; forge rerun pending.
+- Date: 2026-09-24. Status: fixed; Phase 1 browser step passed in forge run 4449.
 - Symptom: PR #8 run 4437 failed in `controller-browser` while waiting for `a.activity`;
   the `phase1` gate then failed and dependent jobs were skipped.
 - Root cause: the browser suite still targeted the former activity link and warning
@@ -7671,7 +7928,38 @@ Append resolved defects with their evidence and the approach to avoid.
   A local Phase 1 browser run reached the next stale warning assertion after the
   first correction. After both corrections, the full
   `.cache/vm-create-venv/bin/python tests/integration/phase1.py --browser` run passed
-  all 22 reported checks, including the accepted VM creation route. Both forge
-  Phase 1 workflows already run this suite on pull requests. No forge rerun is claimed.
+  all 22 reported checks, including the accepted VM creation route. Forge run 4449
+  passed that step; the overall browser lane then failed in the separate managed VM suite.
 - Avoid: reviewing a changed browser fixture as passing based on focused unit tests
   while its required end-to-end gate is red.
+
+## BUG-0578 — Managed VM browser gate waited for the former activity link
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun pending.
+- Symptom: PR #8 run 4449 failed in `controller-browser` while waiting for a
+  `1 task running` link during a simulated ISO upload.
+- Root cause: the activity control is now a disclosure with an `Open Tasks` link,
+  while this separate browser suite still targeted the former direct link.
+- Fix: assert the running count on the disclosure, open it, then follow `Open Tasks`.
+- Regression: the forge log shows the missing link and the activity group in the
+  accessibility snapshot. The full local simulated managed VM browser suite passed
+  19 reported checks after the correction. Both forge Phase 1 workflows already
+  execute this suite on pull requests; no new forge run is claimed.
+- Avoid: updating one browser suite's selectors while leaving sibling flows on the
+  removed control.
+
+## BUG-0579 — Chart pixel assertion rejected correct antialiased fill
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun pending.
+- Symptom: after clearing the activity-link check, the local managed VM browser
+  suite failed its stacked chart assertion with 83 single-fill pixels and five
+  apparent double-fill pixels. The captured chart showed separate fill bands.
+- Root cause: the fixed cutoff of fewer than five pixels treated a few
+  antialiased edge pixels as an overlapping stack.
+- Fix: bound apparent overlap to less than one tenth of the measured single-fill
+  coverage, retaining the check that hiding the middle vCPU leaves the same fill.
+- Regression: the full local simulated managed VM browser suite passed all 19
+  reported checks, including the chart result (83 single-fill pixels before and
+  after hiding, two apparent overlap pixels afterward). The forge Phase 1 workflows
+  already run this suite on pull requests; no new forge run is claimed.
+- Avoid: treating a tiny fixed number of edge pixels as proof of overlapping fills.

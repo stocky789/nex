@@ -145,7 +145,9 @@ func TestManagedCurrentAndAppliedFollowRevisions(t *testing.T) {
 // have, swaps media on the CD drive, and never touches devices already in place.
 func TestManagedApplyLiveReconcilesDevices(t *testing.T) {
 	calls := filepath.Join(t.TempDir(), "calls")
+	fragments := filepath.Join(t.TempDir(), "fragments")
 	t.Setenv("MANAGED_CALLS", calls)
+	t.Setenv("MANAGED_FRAGMENTS", fragments)
 	cur := managedTestVM()
 	cur.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}, {NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"}}
 	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "bridge", Source: "br0"}}
@@ -159,6 +161,7 @@ func TestManagedApplyLiveReconcilesDevices(t *testing.T) {
 case "$*" in
 *dumpxml*--inactive*) cat "`+actualPath+`";;
 *dumpxml*) cat "${MANAGED_LIVE_XML:-`+actualPath+`}";;
+*attach-device*) cat "$5" >> "$MANAGED_FRAGMENTS"; echo >> "$MANAGED_FRAGMENTS";;
 esac`)
 	next := cur
 	next.Disks = append(next.Disks, protocol.VMDisk{StorageID: "s", Name: "data", SizeGiB: 5, Bus: "scsi"})
@@ -176,7 +179,7 @@ esac`)
 	}
 	b, _ := os.ReadFile(calls)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	want := []string{"dumpxml", "attach-device", "attach-device", "detach-device", "dumpxml", "change-media"}
+	want := []string{"dumpxml", "dumpxml", "attach-device", "attach-device", "attach-device", "detach-device", "dumpxml", "change-media"}
 	if len(lines) != len(want) {
 		t.Fatalf("calls:\n%s", b)
 	}
@@ -185,11 +188,15 @@ esac`)
 			t.Fatalf("call %d %q, want %s", i, line, want[i])
 		}
 	}
-	if !strings.Contains(lines[5], "sda --force --live --config --eject") {
-		t.Fatalf("media eject argv: %s", lines[5])
+	if !strings.Contains(lines[7], "sda --force --live --config --eject") {
+		t.Fatalf("media eject argv: %s", lines[7])
 	}
-	if !strings.HasSuffix(lines[1], "--persistent") || !strings.HasSuffix(lines[3], "--persistent") {
+	if !strings.HasSuffix(lines[2], "--persistent") || !strings.HasSuffix(lines[5], "--persistent") {
 		t.Fatalf("device operations must persist: %s", b)
+	}
+	attached, _ := os.ReadFile(fragments)
+	if first := strings.SplitN(string(attached), "\n", 2)[0]; !strings.HasPrefix(first, "<controller ") || !strings.Contains(first, `iothread="1"`) {
+		t.Fatalf("first hotplug must attach a real libvirt SCSI controller: %q", first)
 	}
 	// The guest can empty its own tray: the live drive is then already in the wanted state
 	// and virsh refuses an eject on it, so only the persistent definition is changed.
@@ -218,6 +225,266 @@ esac`)
 	xml.Unmarshal(expected, &got)
 	if got.Devices.Disks[1].Target.Dev != "sdc" || got.Devices.Disks[2].Device != "cdrom" || got.Devices.Disks[2].Source != nil {
 		t.Fatalf("expected definition %+v", got.Devices.Disks)
+	}
+}
+
+func TestManagedAutomaticIOTuning(t *testing.T) {
+	v := managedTestVM()
+	v.NICs = append(v.NICs, protocol.VMNIC{NetworkID: "n", Model: "e1000e", MAC: "52:54:00:aa:bb:cc"})
+	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "scsi", SizeGiB: 1, Bus: "scsi"}, protocol.VMDisk{StorageID: "s", Name: "sata", SizeGiB: 1, Bus: "sata"})
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "bridge", Source: "br0"}}
+	for _, count := range []int{1, 2, 4, 8} {
+		v.CPU.Count = count
+		b, err := testDomainXML(v, nets, []string{"/virtio", "/scsi", "/sata"}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d managedDomain
+		if err := xml.Unmarshal(b, &d); err != nil {
+			t.Fatal(err)
+		}
+		queues := min(count, 4)
+		if d.IOThreads != 1 || d.Devices.Disks[0].Driver.IOThread != 1 || d.Devices.Disks[1].Driver.IOThread != 0 || d.Devices.Disks[2].Driver.IOThread != 0 || controllerIOThread(d.Devices.Controllers[0]) != 1 || nicQueues(d.Devices.Interfaces[0]) != queues || d.Devices.Interfaces[1].Driver != nil {
+			t.Fatalf("%d vCPUs: generated device tuning differs: %s", count, b)
+		}
+		if count == 1 && d.Devices.Interfaces[0].Driver != nil {
+			t.Fatalf("one-vCPU interface must use libvirt's single queue: %s", b)
+		}
+	}
+	v.Disks = v.Disks[2:]
+	b, err := testDomainXML(v, nets, []string{"/sata"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d managedDomain
+	xml.Unmarshal(b, &d)
+	if d.IOThreads != 0 {
+		t.Fatalf("SATA-only VM should not allocate IOThreads: %s", b)
+	}
+}
+
+func TestManagedLiveEditPreservesExistingTuning(t *testing.T) {
+	v := managedTestVM()
+	v.CPU.Count = 4
+	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "new", SizeGiB: 1, Bus: "virtio"})
+	v.NICs = append(v.NICs, protocol.VMNIC{NetworkID: "n", Model: "virtio", MAC: "52:54:00:aa:bb:cc"})
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}, {Kind: "bridge", Source: "br0"}}
+	expected, err := testDomainXML(v, nets, []string{"/old", "/new"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := v
+	old.Disks, old.NICs = old.Disks[:1], old.NICs[:1]
+	current, err := testDomainXML(old, nets[:1], []string{"/old"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got managedDomain
+	xml.Unmarshal(current, &got)
+	got.IOThreads = 0
+	got.Devices.Disks[0].Driver.IOThread = 0
+	got.Devices.Interfaces[0].Driver = nil
+	updated, err := preserveLiveTuning(expected, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want managedDomain
+	xml.Unmarshal(updated, &want)
+	if want.IOThreads != 1 || want.Devices.Disks[0].Driver.IOThread != 0 || want.Devices.Disks[1].Driver.IOThread != 1 || want.Devices.Interfaces[0].Driver != nil || nicQueues(want.Devices.Interfaces[1]) != 4 {
+		t.Fatalf("existing devices changed or new defaults missing: %s", updated)
+	}
+	got.Devices.Disks[0].Source.File = "/different"
+	if _, err := preserveLiveTuning(expected, got); err == nil {
+		t.Fatal("changed existing disk source accepted")
+	}
+
+	v.Disks[0].Bus = "scsi"
+	v.Disks[1].Bus = "scsi"
+	scsi, err := managedDomainXML(v, nets, []string{"/old", "/new"}, []string{"sda", "sdd"}, "sdb", "", "sdc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Disks[0].Bus = "scsi"
+	current, err = testDomainXML(old, nets[:1], []string{"/old"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = managedDomain{}
+	xml.Unmarshal(current, &got)
+	got.IOThreads = 0
+	got.Devices.Controllers[0].Driver = nil
+	updated, err = preserveLiveTuning(scsi, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = managedDomain{}
+	xml.Unmarshal(updated, &want)
+	if want.IOThreads != 0 || controllerIOThread(want.Devices.Controllers[0]) != 0 {
+		t.Fatalf("legacy SCSI controller changed while running: %s", updated)
+	}
+}
+
+func TestManagedLiveObservationRejectsConfigOnlyHotplug(t *testing.T) {
+	var d managedDomain
+	d.IOThreads = 2
+	d.IOThreadIDs = &managedIOThreadIDs{Threads: []struct {
+		ID int `xml:"id,attr"`
+	}{{ID: 2}}}
+	if !hasIOThread(d, 1) || !hasIOThread(d, 2) || hasIOThread(d, 3) {
+		t.Fatal("implicit IOThread IDs were not normalized")
+	}
+	d.IOThreads = 1
+	if hasIOThread(d, 1) || !hasIOThread(d, 2) {
+		t.Fatal("explicit non-default IOThread ID mistaken for ID 1")
+	}
+	v := managedTestVM()
+	v.CPU.Count = 4
+	b, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual managedDomain
+	xml.Unmarshal(b, &actual)
+	if err := validateManagedDefinition(b, b); err != nil {
+		t.Fatalf("persistent definition should match before a partial live attach: %v", err)
+	}
+	actual.Devices.Interfaces[0].Driver.Queues = 1
+	live, _ := xml.Marshal(actual)
+	if err := validateManagedLiveDevices(live, b); err == nil {
+		t.Fatal("inactive-only NIC queue change accepted as a complete live edit")
+	}
+	actual.Devices.Interfaces[0].Driver.Queues = 4
+	actual.Devices.Disks[0].Driver.IOThread = 0
+	live, _ = xml.Marshal(actual)
+	if err := validateManagedLiveDevices(live, b); err == nil {
+		t.Fatal("inactive-only disk IOThread change accepted as a complete live edit")
+	}
+	actual.Devices.Disks[0].Driver.IOThread = 1
+	actual.IOThreadIDs = &managedIOThreadIDs{Threads: []struct {
+		ID int `xml:"id,attr"`
+	}{{ID: 2}}}
+	live, _ = xml.Marshal(actual)
+	if err := validateManagedLiveDevices(live, b); err == nil {
+		t.Fatal("thread count without ID 1 accepted")
+	}
+	actual.IOThreadIDs = nil
+	actual.Devices.Interfaces = append(actual.Devices.Interfaces, managedNIC{}) // an unplug still pending
+	live, _ = xml.Marshal(actual)
+	if err := validateManagedLiveDevices(live, b); err != nil {
+		t.Fatalf("pending extra live device should be harmless: %v", err)
+	}
+}
+
+func TestManagedObserveDefinitionRejectsConfigOnlyLiveHotplug(t *testing.T) {
+	dir := t.TempDir()
+	v := managedTestVM()
+	v.Disks = nil // No storage fixtures are needed to exercise the observer's live-device check.
+	v.CPU.Count = 4
+	expected, err := managedDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, nil, nil, "sda", "", "sdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual managedDomain
+	xml.Unmarshal(expected, &actual)
+	actual.Devices.Interfaces[0].Driver.Queues = 1
+	live, _ := xml.Marshal(actual)
+	for name, body := range map[string][]byte{"persistent.xml": expected, "live.xml": live} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("MANAGED_DIR", dir)
+	fakeCommand(t, "virsh", `case "$3" in
+dominfo) echo 'Autostart: disable';;
+domstate) echo running;;
+dumpxml) case "$*" in *--inactive*) cat "$MANAGED_DIR/persistent.xml";; *) cat "$MANAGED_DIR/live.xml";; esac;;
+esac`)
+	e := NewManaged(filepath.Join(dir, "state"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j := managedJournal{Command: protocol.Command{Kind: "vm-update", VM: &v}, Domain: expected}
+	if err := e.observeDefinition(context.Background(), j, "running"); err == nil || !strings.Contains(err.Error(), "running VM network queues") {
+		t.Fatalf("observer accepted an inactive-only queue change: %v", err)
+	}
+}
+
+func TestManagedLibvirtNetworkSourceNormalization(t *testing.T) {
+	v := managedTestVM()
+	expected, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "network", Source: "default"}}, []string{"/disk"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolved managedDomain
+	xml.Unmarshal(expected, &resolved)
+	resolved.Devices.Interfaces[0].Source.Bridge = "virbr0" // libvirt resolves the network's current bridge in live XML.
+	b, _ := xml.Marshal(resolved)
+	if err := validateManagedLiveDevices(b, expected); err != nil {
+		t.Fatalf("resolved bridge changed a managed network NIC: %v", err)
+	}
+	if err := validateManagedDefinition(b, expected); err != nil {
+		t.Fatalf("resolved bridge changed persistent ownership: %v", err)
+	}
+	if _, err := preserveLiveTuning(expected, resolved); err != nil {
+		t.Fatalf("resolved bridge blocked a live edit: %v", err)
+	}
+	resolved.Devices.Interfaces[0].Source.Network = "other"
+	b, _ = xml.Marshal(resolved)
+	if err := validateManagedLiveDevices(b, expected); err == nil {
+		t.Fatal("different managed network accepted")
+	}
+}
+
+func TestManagedApplyLiveRetriesPartialIOThreadAdd(t *testing.T) {
+	dir := t.TempDir()
+	v := managedTestVM()
+	v.Disks = []protocol.VMDisk{{StorageID: "s", Name: "old", SizeGiB: 1, Bus: "sata"}}
+	nets := []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}
+	initial, err := managedDomainXML(v, nets, []string{"/old"}, []string{"sda"}, "sdb", "", "sdc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var threaded managedDomain
+	xml.Unmarshal(initial, &threaded)
+	threaded.IOThreads = 1
+	withThread, _ := xml.Marshal(threaded)
+	v.Disks = append(v.Disks, protocol.VMDisk{StorageID: "s", Name: "new", SizeGiB: 1, Bus: "virtio"})
+	expected, err := managedDomainXML(v, nets, []string{"/old", "/new"}, []string{"sda", "vda"}, "sdb", "", "sdc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{"initial.xml": initial, "threaded.xml": withThread} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("MANAGED_DIR", dir)
+	fakeCommand(t, "virsh", `echo "$@" >> "$MANAGED_DIR/calls"
+case "$*" in
+*dumpxml*--inactive*) if [ -e "$MANAGED_DIR/config" ]; then cat "$MANAGED_DIR/threaded.xml"; else cat "$MANAGED_DIR/initial.xml"; fi;;
+*dumpxml*) if [ -e "$MANAGED_DIR/live" ]; then cat "$MANAGED_DIR/threaded.xml"; else cat "$MANAGED_DIR/initial.xml"; fi;;
+*iothreadadd*)
+  case "$*" in *--config*) touch "$MANAGED_DIR/config";; esac
+  case "$*" in *--live*)
+    if [ ! -e "$MANAGED_DIR/failed" ]; then touch "$MANAGED_DIR/failed"; exit 1; fi
+    touch "$MANAGED_DIR/live";;
+  esac;;
+esac`)
+	e := NewManaged(filepath.Join(dir, "state"))
+	os.MkdirAll(e.stateDir, 0700)
+	if err := e.applyLive(context.Background(), v.ID, expected, "", ""); err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("partial IOThread add must remain uncertain: %v", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	if strings.Contains(string(calls), "attach-device") {
+		t.Fatalf("disk attached before IOThread existed on both sides: %s", calls)
+	}
+	if err := e.applyLive(context.Background(), v.ID, expected, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ = os.ReadFile(filepath.Join(dir, "calls"))
+	if strings.Count(string(calls), "iothreadadd") != 2 || strings.Count(string(calls), "attach-device") != 1 || !strings.Contains(string(calls), "iothreadadd "+v.ID+" 1 --live\n") {
+		t.Fatalf("retry did not complete only the missing live side before attach: %s", calls)
 	}
 }
 

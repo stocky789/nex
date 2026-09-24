@@ -1,0 +1,47 @@
+{
+  "summary": "Persist Core witness registration and report qdevice status without enabling two-host fencing proof",
+  "paths": [
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_cluster.go",
+    "internal/agent/pool_watchdog_arming.go",
+    "internal/agent/pool_witness.go",
+    "internal/agent/pool_witness_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_witness_test.go",
+    "internal/vmhost/pool_witness.go",
+    "internal/vmhost/pool_witness_test.go",
+    "internal/vmhost/pool_cluster.go",
+    "internal/vmhost/pool_cluster_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide describes Core-owned witness registration, current status, runtime CA rotation and the unavailable automatic witness fence path.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "PoolMembership.Witness, the member-addressed sealed qdevice credential in authority replicas, and Core's reported cluster status extend existing report and peer contracts. Controller's new candidate/register routes have their own assessment. Older Core omits these fields; no witness readiness is inferred from omission.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/peer-openapi.json", "docs/api/index.html", "docs/api/peer.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The two-host plan remains partial; neither witness proof nor automatic takeover is accepted.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The pool master owns selected witness kind, address, native CA pin, generation and credential readiness; member-specific PKCS#12 bundles are sealed in Core authority replicas. The Controller keeps only runtime qnetd CA material.",
+    "record": "Core pool-peer.json PoolMembership.Witness on the master and signed per-member pool authority replicas; a fresh Controller reconstructs the pool witness record from the master's authenticated managed membership report and Core re-registers after Controller CA rotation."
+  },
+  "verification": {
+    "method": "Focused protocol and agent witness tests passed before the workstation test escape; subsequent work used static review, the 74-case API contract suite, generated-reference check, privacy check and compile-only Go checks. An independent reviewer checked two-host freeze topology and withheld SBD/proof. No Core-to-Controller deployment, one-host-down qnetd outage, hardware reset or browser acceptance is claimed; host-affecting tests are suspended.",
+    "evidence": ["internal/agent/pool_witness_test.go", "internal/vmhost/pool_witness_test.go", "docs/qa/2026-09-24-two-host-witness-lab.md", "docs/plans/2026-09-22-two-host-pool-fencing.md"]
+  }
+}

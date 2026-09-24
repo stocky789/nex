@@ -162,6 +162,17 @@ development build 0.4.8 console layout; see
    fails between refreshes is also announced in the notice bar, naming the task. The console
    reloads Controller's records every ten seconds; **Refresh inventory** sends the existing
    read-only request to the selected host. Neither changes VM power.
+   You do not need to reload the browser after an action. An accepted request can still be
+   running on Core; watch its reported task outcome. While visible, **Members**, host
+   **Networking**, and clustered storage status also check for changes every ten seconds,
+   including when the previous report showed no work in progress. Returning to the browser
+   tab or reconnecting the browser triggers a fresh read of these views and the inventory.
+   Open host hardware details refresh every minute and after a successful **Refresh inventory**
+   task. Background reads preserve form entries and action errors; a failed read does not
+   establish that a host operation failed or that retrying a destructive action is safe.
+   If the Controller update request loses its response, the Updates page checks its status
+   without sending the request again. If no completed result appears, select **Check** before
+   deciding whether to try again.
    A fresh heartbeat alone does not prove every capability is healthy. By default the agent
    reports every ten seconds, and Controller marks a connection stale after thirty seconds.
    Read **Health checks** together with the connection and observation timestamps.

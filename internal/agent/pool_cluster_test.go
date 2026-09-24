@@ -820,7 +820,17 @@ func TestNoHostRestartsItsClusterWhileAForeignWatchdogBoundIsSet(t *testing.T) {
 	syncPoolMembershipForTest(t, lab)
 	for i := 0; i < 4; i++ {
 		pool.settle()
-		pool.round()
+		for _, host := range lab.hosts {
+			err := pool.pass(host)
+			if host == master {
+				if err == nil || !strings.Contains(err.Error(), "policy did not read back") {
+					t.Fatalf("master accepted a foreign watchdog bound: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("%s could not reconcile: %v", host.State.HostID, err)
+			}
+		}
+		syncPoolMembershipForTest(t, lab)
 	}
 	if len(pool.armedHosts()) != 3 {
 		t.Fatalf("a host restarted its cluster while a foreign bound was set: %v", pool.armedHosts())

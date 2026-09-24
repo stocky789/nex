@@ -1,0 +1,35 @@
+{
+  "summary": "Keep generated pool Corosync node IDs within knet's supported range",
+  "paths": [
+    "internal/vmhost/pool_cluster.go",
+    "internal/vmhost/pool_cluster_test.go",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This corrects native cluster configuration generation without changing an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The host's internal Corosync node-ID derivation changes; no Controller/Core or client API field or operation changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The bug fix leaves the witness and hardware acceptance gates open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The Core pool membership remains the source of host IDs; Core derives and writes its local Corosync configuration. Controller does not retain node IDs.",
+    "record": "Core pool membership host IDs and Core-rendered /etc/corosync/corosync.conf; a fresh Controller reads the same pool identity from Core inventory."
+  },
+  "verification": {
+    "method": "A focused vmhost regression failed before the fix for a derived 31-bit node ID and passed afterward. A native Debian 13 parser rejected the old output; a temporary candidate two-host output with corrected IDs passed corosync -t -c in an ephemeral container. The witness renderer was removed pending a connected Core path. No qdevice session or cluster recovery was exercised.",
+    "evidence": [
+      "internal/vmhost/pool_cluster_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

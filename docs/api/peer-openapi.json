@@ -3,7 +3,7 @@
   "info": {
     "title": "Nex Core pool peer API",
     "version": "0.1.0",
-    "description": "Internal Core-to-Core pool peer contract; not a client or Controller API. Nex Controller never calls it and holds none of its state: membership, the pool CA, repository reservations, pool VM execution records and clustered-storage operations are durable on the pool master Core (peer probe leases and access observations are process-local). Served on the dedicated peer HTTPS listener (--pool-peer-listen, default :9444, on nex-core-local and nex-core-agent), TLS 1.3 only, with server limits of 5 s header, 15 s read, 30 s write and 16 KiB headers. The listener requests a client certificate and verifies it against the pool CA when presented; every route except join then admits only the peer named by its security requirement. Clients pin the pool CA and expected host ID (and, master to member, the membership certificate SHA-256), refuse redirects and time out after 15 s. Errors are short text/plain bodies. Development protocol: deploy matching Core versions in a pool; additive acknowledgements (probe mode echo, update_accepted, spec_match) let newer peers fail closed against older ones."
+    "description": "Internal Core-to-Core pool peer contract; not a client or Controller API. Nex Controller never calls it and holds none of its state: membership, the pool CA, repository reservations, pool VM execution records and clustered-storage operations are durable on the pool master Core (peer probe leases and access observations are process-local). Served on the dedicated peer HTTPS listener (--pool-peer-listen, default :9444, on nex-core-local and nex-core-agent), TLS 1.3 only, with server limits of 5 s header, 15 s read, 30 s write and 16 KiB headers. The listener requests a client certificate and verifies it against the pool CA when presented; every route except join then admits only the peer named by its security requirement. Clients pin the pool CA and expected host ID (and, master to member, the membership certificate SHA-256), refuse redirects and time out after 15 s. Errors are short text/plain bodies. Development protocol: deploy matching Core versions in a pool; additive acknowledgements (probe mode echo, update_accepted, spec_match) let newer peers fail closed against older ones. Controller-hosted qnetd witness candidate and certificate-registration routes are implemented for Core; two-host SBD arming and witness-loss promotion proof remain withheld."
   },
   "servers": [
     {
@@ -324,7 +324,7 @@
             }
           },
           "409": {
-            "description": "Refused and not stored; whatever this host already held is unchanged. The bounded reason is one of \"pool authority replica names another pool\", \"pool authority replica is not from the current pool master\", \"pool authority replica is addressed to another host\", \"pool authority replica is not signed by this pool's CA\", \"pool authority replica does not declare every section\", \"pool authority replica section digest does not match\", \"pool authority replica generation is older than the stored replica\", \"pool authority replica generation was already stored with different contents\", \"pool authority replica VM ownership record is invalid\", \"pool authority replica could not be stored\", \"pool membership is unavailable\", \"pool peer state is unavailable\", \"stored pool authority replica is unavailable\", or a PoolAuthorityReplica.Valid() text.",
+            "description": "Refused and not stored; whatever this host already held is unchanged. The bounded reason is one of \"pool authority replica names another pool\", \"pool authority replica is not from the current pool master\", \"pool authority replica is addressed to another host\", \"pool authority replica is not signed by this pool's CA\", \"pool authority replica does not declare every section\", \"pool authority replica section digest does not match\", \"pool authority replica generation is older than the stored replica\", \"pool authority replica generation was already stored with different contents\", \"pool authority replica VM ownership record is invalid\", \"pool authority replica omitted the qdevice credential addressed to this member\", \"pool authority replica could not be stored\", \"pool membership is unavailable\", \"pool peer state is unavailable\", \"stored pool authority replica is unavailable\", or a PoolAuthorityReplica.Valid() text.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2023,7 +2023,7 @@
       "post": {
         "operationId": "peerPoolTransferStep",
         "summary": "Perform one step of a pool master change or eject on this host",
-        "description": "Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host's current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet \u2014 which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host's.",
+        "description": "Pool peer to pool peer over pinned mutual TLS, bounded to 256 KiB (protocol.PoolTransferLimit) with no trailing JSON. activate, abort and leave are accepted only from this host's current pinned pool master; repoint is accepted from any current ready member, because the host issuing it has just become the master and this host does not know that yet \u2014 which is exactly what the pool-CA signature on the notice proves. Every action is idempotent by operation_id: the same request repeated after a lost reply returns the same answer and performs the step at most once. An activation is taken only against a replica this host already holds and has verified at exactly the generation the outgoing master froze and signed away; nothing here recomputes or invents authority. A re-point is adopted only from a signed notice whose membership generation is strictly higher than this host's. Automatic BMC-only promotion is reported through the same optional automatic status field; older Core versions omit it.",
         "security": [
           {
             "PoolPeerCertificate": []
@@ -2636,10 +2636,15 @@
               }
             ],
             "description": "This member's own report that it has armed the watchdog above, recorded in the calling member's own row. It is the first of the three conditions of a watchdog exclusion proof, so unlike the capability beside it the master keeps it durably and replicates it: the host that has to read it is a promotion candidate whose master has gone. Refused with 400 if the kind is not one a watchdog exclusion could rest on, or the strings are unbounded. A report that does not differ from the one already recorded is not written at all, so a settled pool's signed authority does not move because a reconcile pass ran. A member too old to send one leaves the field absent, which never counts."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "This member's own observed generation in its configured sanlock lockspace. The master records it in the member row for future proof checks; it is not proof by itself."
           }
         },
         "required": [],
-        "description": "What a member advertises about itself: where it listens, which machine it is, what its own Core found on its management controller, and the watchdog that machine has. Each field is recorded on its own and any of them may be omitted."
+        "description": "What a member advertises about itself: where it listens, which machine it is, what its own Core found on its management controller, the watchdog that machine has, and its observed sanlock generation. Each field is recorded on its own and any of them may be omitted."
       },
       "PeerJoinRequest": {
         "type": "object",
@@ -2798,7 +2803,7 @@
           "replica_error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\"."
+            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\"."
           },
           "replica_observed_at": {
             "type": "string",
@@ -2872,6 +2877,16 @@
               }
             ],
             "description": "That host's own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof."
+          },
+          "sanlock_host_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pool-master-assigned stable sanlock host ID. Zero or absent means this legacy member cannot participate in a storage lease."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Last native sanlock generation this host itself observed while its configured lease ID was live; not a proof by itself."
           }
         },
         "required": [
@@ -2921,6 +2936,33 @@
               }
             ],
             "description": "The pool's fencing count, setting and prerequisite checklist, computed by the master over this membership when it reports it. Like the readiness on each member row it is a memory-only observation overlaid on the reported copy and never part of the durable record."
+          },
+          "witness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWitnessRecord"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The master's durable qdevice witness selection and CA pin. Runtime readiness is re-established from the native cluster after restart."
+          },
+          "next_sanlock_host_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Monotonic host-ID allocator watermark; prevents reuse after a member is ejected."
+          },
+          "storage_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolStorageLeaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reserved durable storage-lease configuration. The current product does not expose an accepted operator setup or automatic promotion workflow for it."
           }
         },
         "required": [
@@ -3662,6 +3704,17 @@
               }
             ],
             "description": "The evidence of a watchdog exclusion, present only when method says so."
+          },
+          "storage_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolStorageLeaseExclusion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Native exclusion evidence shape; not currently enabled as an accepted promotion proof path."
           }
         },
         "required": [
@@ -5355,6 +5408,16 @@
           "signature": {
             "type": "string",
             "description": "Base64 ASN.1 ECDSA P-256/SHA-256 signature by the pool CA key over the whole replica with signature empty."
+          },
+          "witness_credentials": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolWrappedWitnessCredential"
+            },
+            "description": "Per-member sealed native qdevice credentials. The shared qdevice key is wrapped separately to each member and bound to the fencing generation."
           }
         },
         "required": [
@@ -5392,6 +5455,11 @@
           "verified": {
             "type": "boolean",
             "description": "True only when the replica was verified against the pool CA, its sections recomputed, and the file durably written."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Native host generation in the configured authority lockspace after this member joined it; absent or zero means no sanlock preparation acknowledgement."
           },
           "error": {
             "type": "string",
@@ -5506,6 +5574,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When this host wrote this report."
+          },
+          "automatic": {
+            "type": "boolean",
+            "description": "True only when Core initiated this promotion automatically through the supported two-host BMC path. Omitted for manual promotions and by older Core versions. This is reported metadata, not a fence proof. Automatic promotion requires Host fencing enabled; storage-lease and witness-based promotion paths are not implemented; qdevice registration and status do not produce fence proof."
           }
         },
         "required": [
@@ -6254,6 +6326,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When this host wrote this report."
+          },
+          "automatic": {
+            "type": "boolean",
+            "description": "True only when Core initiated this promotion automatically through the supported two-host BMC path. Omitted for manual promotions and by older Core versions. This is reported metadata, not a fence proof. Automatic promotion requires Host fencing enabled; storage-lease and witness-based promotion paths are not implemented; qdevice registration and status do not produce fence proof."
           }
         },
         "required": [
@@ -6475,7 +6551,7 @@
                 "type": "null"
               }
             ],
-            "description": "What this pool's own watchdog cluster is doing. Absent from a master too old to form one, which a client shows as no cluster line rather than as a cluster that is off."
+            "description": "The master's current cluster or qdevice status. This is a memory-only observation. A two-host qdevice may report forming or degraded while SBD arming and witness-loss proof remain withheld. Absent on older masters, which a client shows as no cluster line rather than as a cluster that is off."
           }
         },
         "required": [
@@ -6817,7 +6893,7 @@
       },
       "PoolFenceCluster": {
         "type": "object",
-        "description": "The pool's own Corosync/Pacemaker cluster, which carries no resources and exists only so that a diskless sbd has a quorum to lose. Nex Core forms one for a pool of three or more ready hosts with Host fencing on and no clustered-storage repository; a pool that has clustered storage keeps the cluster clustered storage already owns and is not armed at all in this release. Like the counts beside it, this is the master's memory-only observation over the membership it owns, derived on every report and never stored: the durable facts are the membership and each host's own armed report.",
+        "description": "The master's memory-only pool cluster observation. Pools of three to five ready hosts can form the watchdog cluster when Host fencing is on and no clustered-storage repository is configured. An eligible two-host pool instead can register Controller-hosted qnetd and configure Corosync qdevice; the reported forming/degraded status reflects qdevice state, but no two-host SBD arming or witness-loss exclusion proof is enabled. Durable witness selection and CA pin are in PoolMembership.witness; native readiness is rechecked after restart.",
         "properties": {
           "state": {
             "type": "string",
@@ -6829,7 +6905,7 @@
               "armed",
               "degraded"
             ],
-            "description": "off is the pool's own Host fencing setting. not_available is this pool: clustered storage, fewer than three hosts, more hosts than Nex Core has exercised, or no usable watchdog. forming is a cluster Nex Core has started and is waiting to see quorate. arming is the one-host-at-a-time rollout. degraded is a cluster whose hosts are not all armed."
+            "description": "off is the pool's Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice is not verified and degraded can mean it is connected and voting; two-host watchdog arming remains withheld in either state."
           },
           "detail": {
             "type": "string",
@@ -6856,6 +6932,334 @@
           "total"
         ],
         "x-go-type": "protocol.PoolFenceCluster"
+      },
+      "PoolWitnessCandidate": {
+        "type": "object",
+        "description": "A qnetd candidate advertised by the Controller. Current Core uses only the controller candidate: same-site pool-master candidates have no CA or pin and are not usable.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pool-master",
+              "controller"
+            ]
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "ca_pem": {
+            "type": "string",
+            "maxLength": 1048576,
+            "description": "PEM CA certificate; empty for an unusable pool-master candidate."
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase SHA-256 of the CA certificate DER; empty for an unusable pool-master candidate."
+          }
+        },
+        "required": [
+          "kind",
+          "ca_pem",
+          "ca_sha256"
+        ],
+        "x-go-type": "protocol.PoolWitnessCandidate"
+      },
+      "PoolWitnessCandidates": {
+        "type": "object",
+        "properties": {
+          "candidates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolWitnessCandidate"
+            }
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "x-go-type": "protocol.PoolWitnessCandidates"
+      },
+      "PoolWitnessRegistrationRequest": {
+        "type": "object",
+        "description": "Core registration request. cluster_name is the deterministic name for pool_id; fencing_generation binds credentials to the current pool fencing configuration.",
+        "properties": {
+          "pool_id": {
+            "type": "string"
+          },
+          "cluster_name": {
+            "type": "string"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "csr_pem": {
+            "type": "string",
+            "maxLength": 1048576
+          }
+        },
+        "required": [
+          "pool_id",
+          "cluster_name",
+          "fencing_generation",
+          "csr_pem"
+        ],
+        "x-go-type": "protocol.PoolWitnessRegistrationRequest"
+      },
+      "PoolWitnessRegistration": {
+        "type": "object",
+        "description": "Controller-signed qdevice credentials. address is empty for the Controller candidate; Core derives the qnetd address from its pinned Controller URL.",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "certificate_pem": {
+            "type": "string"
+          },
+          "ca_pem": {
+            "type": "string"
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "address",
+          "certificate_pem",
+          "ca_pem",
+          "ca_sha256"
+        ],
+        "x-go-type": "protocol.PoolWitnessRegistration"
+      },
+      "PoolWitnessRecord": {
+        "type": "object",
+        "description": "The pool master's durable Controller qnetd selection and CA pin. Native readiness is re-established from Corosync and qdevice after restart; this record is replicated with pool authority.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "controller"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "ca_pem": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cluster_name": {
+            "type": "string"
+          },
+          "credentials_ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "address",
+          "ca_pem",
+          "ca_sha256",
+          "fencing_generation",
+          "cluster_name"
+        ],
+        "x-go-type": "protocol.PoolWitnessRecord"
+      },
+      "PoolWrappedWitnessCredential": {
+        "type": "object",
+        "description": "One host's native qdevice PKCS#12 credential, sealed to that host in its authority replica. It contains a shared qdevice key and is bound to the fencing generation.",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wrapped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWrappedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "host_id",
+          "fencing_generation",
+          "wrapped"
+        ],
+        "x-go-type": "protocol.PoolWrappedWitnessCredential"
+      },
+      "PoolStorageLeaseRepository": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "repository_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "repository_identity": {
+            "$ref": "#/components/schemas/StorageIdentity"
+          },
+          "lockspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_id",
+          "repository_generation",
+          "repository_identity",
+          "lockspace"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseRepository"
+      },
+      "PoolStorageLeaseConfig": {
+        "type": "object",
+        "description": "Durable selection of the exact shared NFS repository used by the native sanlock storage-lease design. The feature is not available as an operator workflow and does not currently authorize automatic promotion.",
+        "properties": {
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolStorageLeaseRepository"
+            }
+          },
+          "authority_repository_id": {
+            "type": "string"
+          },
+          "host_dead_seconds": {
+            "type": "integer"
+          },
+          "fence_timeout_seconds": {
+            "type": "integer"
+          },
+          "prepared_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "io_timeout_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repositories",
+          "authority_repository_id",
+          "host_dead_seconds",
+          "fence_timeout_seconds",
+          "io_timeout_seconds"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseConfig"
+      },
+      "PoolStorageLeaseLockspaceProof": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "repository_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "repository_identity_digest": {
+            "type": "string"
+          },
+          "lockspace": {
+            "type": "string"
+          },
+          "host_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "host_state": {
+            "type": "string"
+          },
+          "host_dead_seconds": {
+            "type": "integer"
+          },
+          "held_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository_id",
+          "repository_generation",
+          "repository_identity_digest",
+          "lockspace",
+          "host_generation",
+          "host_state",
+          "host_dead_seconds",
+          "held_seconds"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseLockspaceProof"
+      },
+      "PoolStorageLeaseExclusion": {
+        "type": "object",
+        "description": "Native sanlock exclusion evidence shape. The corresponding two-host storage-lease proof path remains unavailable pending acceptance.",
+        "properties": {
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolStorageLeaseLockspaceProof"
+            }
+          },
+          "host_lease_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bound_seconds": {
+            "type": "integer"
+          },
+          "watchdog_kind": {
+            "type": "string"
+          },
+          "watchdog_timeout_seconds": {
+            "type": "integer"
+          },
+          "armed_generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "repositories",
+          "host_lease_id",
+          "bound_seconds",
+          "watchdog_kind",
+          "watchdog_timeout_seconds",
+          "armed_generation"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseExclusion"
       }
     }
   }

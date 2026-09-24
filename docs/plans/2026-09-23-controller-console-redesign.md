@@ -265,3 +265,22 @@ checks are in the [QA report](../qa/controller-console-redesign/checks.md#feedba
 - VM tags survive a Controller replacement in the lab (delete the Controller database, re-adopt the
   pool master, tags return).
 - Guide pages updated and walked through in the browser; captures inspected; results recorded.
+
+## Action refresh audit — 2026-09-24
+
+The project owner requested a Controller-wide audit after observing actions whose results
+needed a browser refresh. Keep existing action callbacks and inventory polling; repair the
+independently fetched pool, management-network, clustered-storage and hardware views.
+Read-only polling must follow late Core outcomes even when the first response is idle,
+catch up after browser visibility/reconnection, preserve drafts and errors, and never
+resubmit an operation or infer completion from acceptance. Host hardware also rereads after
+the selected host's inventory-refresh task succeeds.
+
+API impact: **none** — only browser read scheduling and presentation change; existing
+inventory, operations, pool membership, management-network, hardware and clustered-storage
+requests and mutation contracts are unchanged.
+Controller continues to display Core reports; no command, authorization or result schema
+changes. State owner: **none** — no new durable state. Guide impact: **updated** in
+[Controller management](../guide/manage-controller.md).
+The scoped audit, regression results and simulated-browser limits are recorded in
+[refresh verification](../qa/2026-09-24-controller-action-refresh.md); no phase gate changes.

@@ -1,0 +1,45 @@
+{
+  "summary": "Expose authenticated Controller qnetd candidate and certificate registration routes",
+  "paths": [
+    "internal/controller/controller.go",
+    "internal/controller/witness.go",
+    "internal/controller/witness_test.go",
+    "appliance/nex-controller.service",
+    "appliance/build-inside.sh",
+    "docs/qa/2026-09-24-controller-witness-registration.md",
+    "docs/changes/2026-09-24-controller-witness-registration.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The operator guide documents activation and runtime CA rotation for the Controller-hosted witness.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds authenticated agent routes for same-site witness candidates and CSR registration; request, response, authorization, failure and retry behavior are documented in the API reference.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Implements the approved Controller-hosted runtime qnetd candidate for the connected witness slice; Core-host witness selection remains a separate gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Controller keeps no durable pool witness state. Core owns the durable witness record and member credentials in the pool master's reported membership/host configuration and reconstructs them through its existing pool authority inventory path.",
+    "record": "protocol.PoolMembership.Witness and Core pool witness configuration",
+    "recovery": "A fresh Controller obtains the witness state from the enrolling pool master's authenticated managed membership report; Controller's qnetd CA and NSS database are ephemeral under /run."
+  },
+  "verification": {
+    "method": "Ran focused Controller route tests, the full Controller Go test suite, and the repository privacy check. In a privileged Debian 13 systemd 257.13 container with the host cgroup namespace and corosync-qnetd 3.0.3-2, enabled and started the appliance qnetd unit/drop-in and confirmed its runtime initializer, listener and client-cert TLS status. Started the installed nex-controller unit with a disposable test runner replacing the production executable; the unit identity and filesystem sandbox ran the authenticated candidate and duplicate registration integration test. A normal qnetd restart preserved CA DER; simulated /run loss rotated it, after which the Controller test runner registered twice under the new CA. OpenSSL verified the resulting native certificate, readable by coroqnetd. The container exposed the host cgroup control surface and a desktop compositor crashed soon after launch; causation is unproven and this fixture method is suspended. A real qdevice handshake, Corosync cluster and production Controller executable were not exercised.",
+    "evidence": [
+      "docs/qa/2026-09-24-controller-witness-registration.md"
+    ]
+  }
+}

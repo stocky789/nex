@@ -122,7 +122,9 @@ and there is still no force or "declare host lost".
 - **Pool setting:** **Host fencing** on/off, with Core's prerequisite checklist (hosts, quorum,
   hardware watchdogs, BMC readiness) and the partition-reboot consequence. It defaults to on where
   the prerequisites hold. BMC discovery and provisioning run regardless of this switch; arming
-  watchdogs and opting into the restarted-master restriction follow it.
+  watchdogs and automatic takeover follow it. A returning master with a recorded usable BMC
+  profile remains boot-restricted even when Host fencing is off, because manual fence-verified
+  promotion remains available. Decision: project owner, 2026-09-24.
 - Promotion shows which method will fence each blocking host.
 
 ## State ownership

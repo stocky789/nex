@@ -116,24 +116,58 @@ export function HostPanel({ data, host, history, api, busy, unavailable, coreAva
   const status = hostStatus(host, unavailable);
   const ip = addresses(host)[0];
   const hardwareSupported = !!host.capabilities?.includes(HARDWARE_CAPABILITY);
+  const inventoryRefresh = data.operations.filter(o => o.host_id === host.id && o.kind === "refresh-inventory" && o.status === "succeeded").map(o => o.id).join(",");
 
   // Membership refreshes while the panel is open; callers also key this panel by host.id.
   useEffect(() => {
-    let stopped = false;
+    let stopped = false, inFlight = false;
     if (!host.pool_id) { setReport(null); return; }
-    const load = () => api<Report>(`pools/${encodeURIComponent(host.pool_id)}/members`).then(r => { if (!stopped) setReport(r); }, () => {});
-    load();
-    const timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60_000);
-    return () => { stopped = true; clearInterval(timer); };
+    const load = async () => {
+      if (inFlight || stopped) return;
+      inFlight = true;
+      try {
+        const next = await api<Report>(`pools/${encodeURIComponent(host.pool_id)}/members`);
+        if (!stopped) setReport(next);
+      } catch { if (!stopped) setReport(null); }
+      finally { inFlight = false; }
+    };
+    const refresh = () => { if (document.visibilityState === "visible") void load(); };
+    void load();
+    const timer = setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+    };
   }, [host.pool_id]);
   useEffect(() => {
     if (!hardwareSupported) return;
-    let stopped = false;
+    let stopped = false, inFlight = false;
     // A failed reread keeps the last report on screen, marked as such.
-    api<HostHardware>(`hosts/${encodeURIComponent(host.id)}/hardware`)
-      .then(hw => { if (!stopped) { setHardware(hw); setHardwareFailure(null); } }, e => { if (!stopped) setHardwareFailure(statsFailure(e)); });
-    return () => { stopped = true; };
-  }, [host.id, hardwareSupported, attempt]);
+    const load = async () => {
+      if (inFlight || stopped) return;
+      inFlight = true;
+      try {
+        const hw = await api<HostHardware>(`hosts/${encodeURIComponent(host.id)}/hardware`);
+        if (!stopped) { setHardware(hw); setHardwareFailure(null); }
+      } catch (e) { if (!stopped) setHardwareFailure(statsFailure(e)); }
+      finally { inFlight = false; }
+    };
+    const refresh = () => { if (document.visibilityState === "visible") void load(); };
+    void load();
+    const timer = setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [host.id, hardwareSupported, attempt, inventoryRefresh]);
 
   // Stable, so the system-disk panel's rebuild polling survives the list's usage refresh.
   const reread = useCallback(() => setAttempt(a => a + 1), []);
@@ -215,6 +249,7 @@ function Overview({ data, host, master, poolName, history, hardware, hardwareNot
   const vms = data.vms.filter(v => v.host_id === host.id);
   return <>
     {host.pool_id && <HostRestrictedBanner key={host.id} poolID={host.pool_id} hostID={host.id} api={api} report={report as never} />}
+    {host.pool_id && !report && <p className="muted" role="status">Pool membership has not been read. Fencing and maintenance status are unknown.</p>}
     <section className="host-card host-model">
       <span className="host-glyph"><Icon kind="host" size={22} /></span>
       <div><b>{model || "Model not reported"}</b><span className="muted">{model ? `${master ? "Master" : "Member"} of ${poolName || "an unknown pool"}` : hardwareNote || "The host reported no system model."}</span></div>

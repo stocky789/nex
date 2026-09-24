@@ -87,6 +87,18 @@ class SourceArchiveTests(unittest.TestCase):
             for name in ('test_cluster_storage_workloads.py', 'test_cluster_ha_lab.py'):
                 self.assertTrue((target / 'tests' / name).is_file())
 
+    def test_appliance_and_guest_os_inputs_are_retained(self):
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'source'
+            source.copy_sources(root, target)
+            for name in ('appliance/qnetd-runtime-init', 'appliance/corosync-qnetd-runtime.conf'):
+                self.assertEqual((target / name).read_bytes(), (root / name).read_bytes())
+            for path in (root / 'web/public/guest-os').iterdir():
+                if path.is_file():
+                    name = path.relative_to(root)
+                    self.assertEqual((target / name).read_bytes(), path.read_bytes())
+
     def test_go_license_falls_back_when_goroot_lacks_one(self):
         with tempfile.TemporaryDirectory() as directory:
             goroot = Path(directory) / 'goroot'

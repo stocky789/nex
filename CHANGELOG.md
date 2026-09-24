@@ -22,11 +22,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Nex Core package, its Controller appliance and the custom DLM package.
 - Network installation checks source availability before disk preparation, verifies every
   downloaded payload and resumes interrupted transfers.
+- Nex Core automatically assigns a shared disk I/O thread to VirtIO and SCSI disks and
+  offers VirtIO network adapters up to four queues, limited by the VM's CPU count.
+  These defaults apply to new VMs and stopped saves, without additional frontend settings.
+- Live edits preserve existing devices' tuning while new devices receive supported defaults;
+  running VMs retain their identity and settings when connected to a replacement Controller.
+
+### Bug Fixes
+
+- Running VM edits verify the active devices as well as the saved definition, so a partially
+  applied disk or network attachment is not incorrectly reported as complete.
+- Live SCSI disk additions attach the required controller before the disk, and VM network
+  checks accept libvirt's resolved bridge without losing the configured network identity.
 
 ### Miscellaneous
 
 - Forge release builds produce both installer variants, their checksums and matching
   source/compliance records, plus the packages needed by the network installer.
+- Native VM lifecycle and nested-lab workload checks are recorded in the
+  [validation report](docs/qa/2026-09-24-automatic-vm-io.md). Four network queues increased
+  receive-side TCP retransmissions under saturation; production performance qualification
+  remains open, and faster performance is not guaranteed for every workload.
 
 ## [0.4.11] — 2026-09-24
 

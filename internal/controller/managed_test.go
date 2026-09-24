@@ -242,7 +242,7 @@ func TestManagedWorkflowScopeRetryAndMedia(t *testing.T) {
 	// A running VM's guest observation is passed through from the fresh host report. The live
 	// CD drive travels with it: a guest can empty its own tray while the VM keeps the media
 	// Nex recorded, and only the host can report that difference.
-	guest := &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}}, Clipboard: "ready", Resize: true, Media: protocol.MediaEmpty}
+	guest := &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", OSID: "debian", Hostname: "guest1", Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}}, Clipboard: "ready", Resize: true, Media: protocol.MediaEmpty}
 	inventory := func(g *protocol.GuestInfo) *protocol.Inventory {
 		return &protocol.Inventory{Hostname: "core", CPUCount: 8, MemoryBytes: 16 << 30, Checks: []protocol.Check{{Name: "libvirt", Status: "healthy", ObservedAt: time.Now().UTC()}}, VMs: []protocol.VM{{ID: created.VMID, Name: "guest1", State: "running", Guest: g}}}
 	}

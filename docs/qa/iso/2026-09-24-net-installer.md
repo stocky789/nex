@@ -20,7 +20,7 @@ untracked evidence; this report records their scope and observed results.
   APT check. The corresponding real APT checks passed separately inside the Debian builder.
 - The CI/publisher checks passed 32 tests, covering artifact bindings, payload publication,
   anonymous release reachability and workflow configuration. All 13 `test_ci_security.py`
-  tests passed after BUG-0552 corrected two stale assertions to check the actual conditional
+  tests passed after BUG-0572 corrected two stale assertions to check the actual conditional
   GitHub/forge concurrency expressions. No hosted CI run is implied.
 - The primary reran `docker run --rm --entrypoint python3 -v "$PWD:/work:ro"
   nex-iso-builder -m unittest discover -s tests -p 'test_netinst*.py'`: all 16 tests
@@ -117,11 +117,11 @@ The release workflow builds the configured publication URL into its own artifact
 
 The serial integration run found and reproduced two defects:
 
-- BUG-0551: newly installed NIC modules were absent from udev's cached indexes. The shared
+- BUG-0571: newly installed NIC modules were absent from udev's cached indexes. The shared
   early hook now regenerates indexes, reloads udev and replays device events. A fresh serial
   run with the corrected hook passed discovery, DHCP and HTTPS preflight and entered
   partition/base installation without manual commands.
-- BUG-0553: Debian's `in-target` wrapper sent the APT download plan to syslog, leaving the
+- BUG-0573: Debian's `in-target` wrapper sent the APT download plan to syslog, leaving the
   redirected plan empty. The command now uses native `--pass-stdout`; regression coverage
   reproduces the original failure. The corrected late-install retry downloaded and verified
   383 packages, skipped 122 already satisfied by the base, reused the verified driver ISO
@@ -148,7 +148,7 @@ artifact hashes and the full ISO's absent NIC.
 
 The smoke harness now copies the original media's base-files package without changing
 target APT indexes, and selects the running kernel when multiple kernels are installed.
-BUG-0555 has a runnable shell regression with two kernel files; restoring the wildcard
+BUG-0575 has a runnable shell regression with two kernel files; restoring the wildcard
 reproduces its failure. `python3 -m unittest discover -s tests -p test_iso_smoke.py`
 passed. These fixture changes do not alter the product images.
 

@@ -30,10 +30,13 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version is `0.4.12`. With deploy secrets unset, netinst downloads
-  its Nex payloads from the forge release, which must allow anonymous HTTPS access; a
-  private forge requiring login cannot serve a working netinst release. Leaving website
-  secrets unset does not waive distribution requirements. Record evidence for this exact version: the `debian/copyright` and matching source for
+  The current working version, `0.4.12`, may publish its full offline ISO to the private
+  forge for internal labs. With deploy secrets unset, netinst downloads its Nex payloads
+  from the forge release,
+  which must allow anonymous HTTPS access; a private forge requiring login cannot serve
+  a working netinst release. CI no longer blocks public publication, so leave the deploy
+  secrets unset until evidence is recorded for this exact version: the `debian/copyright`
+  and matching source for
   `ipmitool` and `sbd` are still marked outstanding in
   [Nex licensing](../LICENSING.md#release-evidence), which records exact-artifact evidence for
   `0.2.9` only.

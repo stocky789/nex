@@ -1,0 +1,32 @@
+{
+  "summary": "Record native two-host qdevice quorum and nested watchdog partition observations",
+  "paths": [
+    "docs/changes/2026-09-24-two-host-witness-lab.json",
+    "docs/qa/2026-09-24-two-host-witness-lab.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records a contributor-run disposable nested lab and does not add an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This native lab changed no Core, Controller, or client API contract; Nex witness registration and status were implemented separately after the lab.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The report records a lab observation and explicitly leaves the two-host witness slice open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable guest state was created; no Nex pool or Controller record was changed."
+  },
+  "verification": {
+    "method": "Ran native Debian Corosync qdevice/qnetd and Pacemaker/SBD inside the guarded disposable cluster fixture; verified TLS, baseline quorum, peer-only private-ring partition, resulting quorum split, reboot observation, recovery, and fixture cleanup. No Nex Core agent or API was exercised.",
+    "evidence": [
+      "docs/qa/2026-09-24-two-host-witness-lab.md"
+    ]
+  }
+}

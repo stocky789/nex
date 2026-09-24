@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -99,10 +100,64 @@ type StorageClusterFenceStatus struct {
 	// Watchdog is the whole evidence of a watchdog exclusion, so that a proof can be read
 	// back later and judged rather than believed.  It is present only when Method says so.
 	Watchdog *PoolWatchdogExclusion `json:"watchdog,omitempty"`
+	// StorageLease is the exact native sanlock observation used for a storage-lease proof.
+	StorageLease *PoolStorageLeaseExclusion `json:"storage_lease,omitempty"`
 }
 
 // PoolFenceMethodWatchdog is the Method value of a watchdog exclusion proof.
 const PoolFenceMethodWatchdogProof = "watchdog"
+
+// PoolFenceMethodStorageLeaseProof is the Method value of a sanlock exclusion proof.
+const PoolFenceMethodStorageLeaseProof = "storage-lease"
+
+// PoolStorageLeaseExclusion records the sanlock host status and continuous observation
+// interval used to exclude one host. RepositoryIdentityDigest is derived from Core's
+// observed StorageIdentity; matching a configured mount path alone is not repository
+// identity. HOST_FREE and HOST_FAIL are not exclusion proof.
+type PoolStorageLeaseExclusion struct {
+	Repositories           []PoolStorageLeaseLockspaceProof `json:"repositories"`
+	HostLeaseID            uint64                           `json:"host_lease_id"`
+	BoundSeconds           int                              `json:"bound_seconds"`
+	WatchdogKind           string                           `json:"watchdog_kind"`
+	WatchdogTimeoutSeconds int                              `json:"watchdog_timeout_seconds"`
+	ArmedGeneration        uint64                           `json:"armed_generation"`
+}
+
+type PoolStorageLeaseLockspaceProof struct {
+	RepositoryID             string `json:"repository_id"`
+	RepositoryGeneration     uint64 `json:"repository_generation"`
+	RepositoryIdentityDigest string `json:"repository_identity_digest"`
+	Lockspace                string `json:"lockspace"`
+	HostGeneration           uint64 `json:"host_generation"`
+	HostState                string `json:"host_state"`
+	HostDeadSeconds          int    `json:"host_dead_seconds"`
+	HeldSeconds              int    `json:"held_seconds"`
+}
+
+const PoolStorageLeaseHostDead = "HOST_DEAD"
+
+// Valid rejects incomplete native evidence. Pool/member and operation binding are checked
+// by the promotion verifier, which has the durable records needed to make those checks.
+func (e PoolStorageLeaseExclusion) Valid() error {
+	if len(e.Repositories) == 0 || len(e.Repositories) > 64 || e.HostLeaseID == 0 || e.HostLeaseID > PoolSanlockMaxHostID || e.BoundSeconds <= 0 ||
+		e.WatchdogKind != PoolWatchdogHardware || e.WatchdogTimeoutSeconds <= 0 || e.WatchdogTimeoutSeconds > 43200 ||
+		e.BoundSeconds < e.WatchdogTimeoutSeconds*2 ||
+		e.ArmedGeneration == 0 {
+		return errors.New("storage-lease exclusion evidence is incomplete or unsafe")
+	}
+	previous := ""
+	for _, repository := range e.Repositories {
+		if repository.RepositoryID == "" || repository.RepositoryGeneration == 0 || !validSHA256(repository.RepositoryIdentityDigest) ||
+			repository.Lockspace == "" || len(repository.Lockspace) > 48 || strings.ContainsAny(repository.Lockspace, "\x00\r\n") ||
+			repository.HostGeneration == 0 || repository.HostState != PoolStorageLeaseHostDead ||
+			repository.HostDeadSeconds <= 0 || e.BoundSeconds < repository.HostDeadSeconds || repository.HeldSeconds < e.BoundSeconds ||
+			previous != "" && previous >= repository.RepositoryID {
+			return errors.New("storage-lease lockspace evidence is incomplete or unsafe")
+		}
+		previous = repository.RepositoryID
+	}
+	return nil
+}
 
 // PoolWatchdogExclusion is what a proving host observed, one field per condition of the rule
 // change, so nothing about a proof has to be reconstructed from the code that made it.

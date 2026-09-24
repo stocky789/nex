@@ -18,6 +18,7 @@ mkdir -p /target/var/cache/nex-install
 cp -a /cdrom/nex/repo /target/var/cache/nex-install/
 cp /cdrom/nex/packages.txt /target/var/cache/nex-install/
 cp /cdrom/nex/package-manifest.tsv /target/var/cache/nex-install/
+cp /cdrom/nex/package-service-policy.sh /target/var/cache/nex-install/
 # Offline bytes were authenticated during build; netinst verifies the same pinned
 # bytes before installation. Neither variant permits APT to substitute live versions.
 cat > /target/var/cache/nex-install/offline.list <<'LIST'
@@ -70,24 +71,26 @@ apt_local() {
 # system into something that resembles a Nex Core host.
 mkdir -p /etc/nex
 printf 'NEX_CORE=1\nINSTALLED_BY=nex-core-iso\n' > /etc/nex/core-release
-# Debian Installer normally supplies policy-rc.d for in-target package work.
-# Preserve it when present; otherwise suppress all maintainer-script starts while
-# the native cluster packages and Core package are configured.
-policy_rc_created=
-if [ ! -e /usr/sbin/policy-rc.d ]; then
-    install -d -m755 /usr/sbin
-    printf '%s\n' '#!/bin/sh' 'exit 101' > /usr/sbin/policy-rc.d
-    chmod 755 /usr/sbin/policy-rc.d
-    policy_rc_created=/usr/sbin/policy-rc.d
-    trap 'if [ -n "${policy_rc_created:-}" ]; then rm -f "$policy_rc_created"; fi' EXIT
-fi
+policy_guard_active=1
+/bin/sh /var/cache/nex-install/package-service-policy.sh guard
+restore_package_policy() {
+    if [ "$policy_guard_active" -eq 1 ]; then
+        /bin/sh /var/cache/nex-install/package-service-policy.sh restore
+        policy_guard_active=0
+    fi
+}
+trap restore_package_policy EXIT
+trap 'exit 1' HUP INT TERM
 apt_local update
 apt_local install -y --no-install-recommends $(cat /var/cache/nex-install/packages.txt)
-if [ -n "$policy_rc_created" ]; then
-    rm -f "$policy_rc_created"
-    policy_rc_created=
-    trap - EXIT
-fi
+# The package postinsts honor policy-rc.d for starts. Also remove any enablement
+# links they created so these optional fencing services remain off at first boot.
+/bin/sh /var/cache/nex-install/package-service-policy.sh disable
+# Keep Debian's fixed qnetd NSS path pointed at tmpfs. Its postinst can then recreate
+# the CA after /run is rebuilt without leaving a durable private CA behind.
+/bin/sh /var/cache/nex-install/package-service-policy.sh runtime-qnetd
+restore_package_policy
+trap - EXIT HUP INT TERM
 # Debian ships a sample Corosync conffile. Only its exact dpkg-recorded checksum
 # is safe to mark as replaceable by the first explicit Nex clustered-storage setup.
 # Any modified or active configuration remains untouched and unmarked.

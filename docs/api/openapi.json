@@ -3,7 +3,7 @@
   "info": {
     "title": "Nex Controller and Core API",
     "version": "0.1.0",
-    "description": "Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop, force-reboot) are durable host operations."
+    "description": "Implemented development API for administrator inventory, enrollment, durable operations, appliance adoption and managed-VM creation. Capability-gated storage/network registration, bounded ISO transfer and stopped-VM provisioning use outbound authenticated Core reports. Browser VM consoles use single-use tickets, an outbound host tunnel and a same-origin WebSocket. Central VM power requests (start, shutdown, reboot, force-stop, force-reboot) are durable host operations. Controller-hosted qnetd witness candidate and certificate-registration routes are implemented for Core; two-host SBD arming and witness-loss promotion proof remain withheld."
   },
   "servers": [
     {
@@ -1955,11 +1955,169 @@
         }
       }
     },
+    "/api/v1/agent/witness/candidates": {
+      "get": {
+        "operationId": "getAgentWitnessCandidates",
+        "summary": "Get qdevice witness candidates",
+        "description": "Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Only a fresh current pool master may retrieve candidates. Same-site other pool masters are returned without CA trust or a pin and are unusable by current Core; the Controller candidate carries the runtime qnetd CA PEM and DER SHA-256 pin. Controller qnetd CA state is volatile under /run and is recreated after runtime loss. The request stores no pool data.",
+        "tags": [
+          "Core agent \u2192 Controller"
+        ],
+        "security": [
+          {
+            "HostCertificate": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candidate list. The Controller candidate contains the current runtime CA and pin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolWitnessCandidates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Host certificate is missing, invalid, revoked, or not enrolled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The host is not a fresh current pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Runtime qnetd CA, service, or readiness is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected Controller operation failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.4.11",
+        "x-audience": "agent"
+      }
+    },
+    "/api/v1/agent/witness/register": {
+      "post": {
+        "operationId": "registerAgentWitness",
+        "summary": "Register a qdevice witness certificate",
+        "description": "Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, a reported membership matching pool_id/master/fencing_generation, and pool-witness-v1. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.",
+        "tags": [
+          "Core agent \u2192 Controller"
+        ],
+        "security": [
+          {
+            "HostCertificate": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolWitnessRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Native qnetd certificate and runtime CA pin. address is empty for Controller-hosted qnetd.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolWitnessRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed input, invalid deterministic cluster name, or invalid CSR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Host certificate is missing, invalid, revoked, or not enrolled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale or mismatched pool authority, fencing generation, or capability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Runtime qnetd CA, service, or signing operation is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage or unexpected Controller operation failure. Reconcile Core state before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-introduced-version": "0.4.11",
+        "x-audience": "agent"
+      }
+    },
     "/api/v1/agent/report": {
       "post": {
         "operationId": "reportHost",
         "summary": "Report observations and reconcile commands",
-        "description": "Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects.",
+        "description": "Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false.",
         "tags": [
           "Core agent \u2192 Controller"
         ],
@@ -6576,7 +6734,7 @@
       "post": {
         "operationId": "changePoolMaster",
         "summary": "Change the pool master of a pool",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Hands the pool authority from the current pool master to a ready member of the same pool, keeping the pool, its networks, its storage registrations, its ISO library and its virtual machines with their identities and their names. While the change runs the pool master refuses every pool authority write \u2014 placements, definitions, start admission, joins, maintenance and pool resource registrations \u2014 with a message asking the operator to retry; nothing is queued behind it. Running guests are unaffected, stop and force-stop are never refused, and storage reservation releases are deliberately never frozen. There is no automatic succession: this is an operator action against a cooperating master. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Hands the pool authority from the current pool master to a ready member of the same pool, keeping the pool, its networks, its storage registrations, its ISO library and its virtual machines with their identities and their names. While the change runs the pool master refuses every pool authority write \u2014 placements, definitions, start admission, joins, maintenance and pool resource registrations \u2014 with a message asking the operator to retry; nothing is queued behind it. Running guests are unaffected, stop and force-stop are never refused, and storage reservation releases are deliberately never frozen. This route has no automatic action: it is an operator request against a cooperating master. Core separately supports automatic promotion in eligible two-host pools using a recorded usable BMC fence profile with Host fencing enabled. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -7087,7 +7245,7 @@
         "x-audience": "client",
         "operationId": "promotePoolMaster",
         "summary": "Promote a surviving member after Nex Core fences the old pool master",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The operator action for a pool master that is gone. Exactly one durable pool-promote command is journaled, addressed to the candidate \u2014 the one pool command besides pool-join that does not go to the master, because the master is the host that is gone. confirmation is the pool's name, typed; fence_confirmed must be literally true and is the operator's separate acknowledgement that the old pool master will be powered off. Neither is evidence: Core produces and verifies the fence proof itself, no proof crosses the wire, and the acknowledgement is a precondition only. There is no expected_version, because the generation to check against is the dead master's and the candidate re-proves the whole verdict immediately before it activates. Nothing about the old master is pre-refused here \u2014 whether it answers, whether this Controller can reach it, when it was last seen \u2014 and neither is a missing or unusable fence profile, a lagging replica, a VM ownership conflict or a member holding a higher authority: all of those are Core's decision at run time and arrive asynchronously on the operation, surfaced verbatim in last_promotion. The Controller stores no verdict, fence proof, restriction, stage, candidate or generation, so a Controller restarted or replaced mid-promotion knows nothing about it until the hosts report and then re-projects it. There is no automatic succession, no election and no quorum, and no force, override, \"declare host lost\" or timeout-based path exists or may be added. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The operator action for a pool master that is gone. Exactly one durable pool-promote command is journaled, addressed to the candidate \u2014 the one pool command besides pool-join that does not go to the master, because the master is the host that is gone. confirmation is the pool's name, typed; fence_confirmed must be literally true and is the operator's separate acknowledgement that the old pool master will be powered off. Neither is evidence: Core produces and verifies the fence proof itself, no proof crosses the wire, and the acknowledgement is a precondition only. There is no expected_version, because the generation to check against is the dead master's and the candidate re-proves the whole verdict immediately before it activates. Nothing about the old master is pre-refused here \u2014 whether it answers, whether this Controller can reach it, when it was last seen \u2014 and neither is a missing or unusable fence profile, a lagging replica, a VM ownership conflict or a member holding a higher authority: all of those are Core's decision at run time and arrive asynchronously on the operation, surfaced verbatim in last_promotion. The Controller stores no verdict, fence proof, restriction, stage, candidate or generation, so a Controller restarted or replaced mid-promotion knows nothing about it until the hosts report and then re-projects it. This route remains an explicit manual promotion. Separately, Core supports a narrow automatic promotion for eligible two-host pools using a recorded BMC fence profile; it requires Host fencing enabled and does not use watchdog, storage lease or Nex Witness. The automatic path is owned and resumed by Core, not triggered by this route. No force, override, \"declare host lost\" or timeout-based path exists or may be added. Implemented in development product 0.1.0.",
         "parameters": [
           {
             "name": "id",
@@ -11215,6 +11373,17 @@
               }
             ],
             "description": "The evidence of a watchdog exclusion, present only when method says so."
+          },
+          "storage_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolStorageLeaseExclusion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Native exclusion evidence shape; not currently enabled as an accepted promotion proof path."
           }
         },
         "required": [
@@ -12803,7 +12972,7 @@
           "replica_error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\"."
+            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\"."
           },
           "replica_observed_at": {
             "type": "string",
@@ -12877,6 +13046,16 @@
               }
             ],
             "description": "That host's own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof."
+          },
+          "sanlock_host_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pool-master-assigned stable sanlock host ID. Zero or absent means this legacy member cannot participate in a storage lease."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Last native sanlock generation this host itself observed while its configured lease ID was live; not a proof by itself."
           }
         },
         "required": [
@@ -12926,6 +13105,33 @@
               }
             ],
             "description": "The pool's fencing count, setting and prerequisite checklist, computed by the master over this membership when it reports it. Like the readiness on each member row it is a memory-only observation overlaid on the reported copy and never part of the durable record."
+          },
+          "witness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWitnessRecord"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The master's durable qdevice witness selection and CA pin. Runtime readiness is re-established from the native cluster after restart."
+          },
+          "next_sanlock_host_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Monotonic host-ID allocator watermark; prevents reuse after a member is ejected."
+          },
+          "storage_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolStorageLeaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reserved durable storage-lease configuration. The current product does not expose an accepted operator setup or automatic promotion workflow for it."
           }
         },
         "required": [
@@ -15168,7 +15374,7 @@
                 "type": "null"
               }
             ],
-            "description": "This host's own part of a pool master change or eject, reported by every participant so the Controller can assemble one honest picture from several hosts instead of keeping a job of its own."
+            "description": "This host's own part of a pool master change or eject, reported by every participant so the Controller can assemble one honest picture from several hosts instead of keeping a job of its own. Its optional automatic flag is true only for the supported Core-started two-host BMC promotion; older Core versions omit the flag, which reads as false. Host fencing must be enabled. It is metadata, not fence proof; storage lease and qdevice witness do not trigger automatic promotion."
           },
           "authority": {
             "anyOf": [
@@ -15190,7 +15396,7 @@
                 "type": "null"
               }
             ],
-            "description": "Reported by a promotion candidate only: its own fence-verified promotion of itself to pool master, with the stage it has durably reached and the last verdict it computed. The Controller mirrors it and records no candidate, stage or verdict of its own."
+            "description": "Reported by a promotion candidate only: its own fence-verified promotion of itself to pool master, with the stage it has durably reached and the last verdict it computed. The Controller mirrors it and records no candidate, stage or verdict of its own. Its optional automatic flag is true only for the supported Core-started two-host BMC promotion; older Core versions omit the flag, which reads as false. Host fencing must be enabled. It is metadata, not fence proof; storage lease and qdevice witness do not trigger automatic promotion."
           },
           "restricted": {
             "anyOf": [
@@ -15464,6 +15670,10 @@
           "os": {
             "type": "string",
             "description": "guest-get-osinfo pretty name; absent unless agent is connected. Maximum 4096 UTF-8 bytes."
+          },
+          "os_id": {
+            "type": "string",
+            "description": "guest-get-osinfo id: the guest's POSIX os-release ID (for example debian or ubuntu), or mswindows on Windows. Guest-reported and optional; maximum 200 UTF-8 bytes."
           },
           "hostname": {
             "type": "string",
@@ -16230,6 +16440,16 @@
           "signature": {
             "type": "string",
             "description": "Base64 ASN.1 ECDSA P-256/SHA-256 signature by the pool CA key over the whole replica with signature empty."
+          },
+          "witness_credentials": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolWrappedWitnessCredential"
+            },
+            "description": "Per-member sealed native qdevice credentials. The shared qdevice key is wrapped separately to each member and bound to the fencing generation."
           }
         },
         "required": [
@@ -16267,6 +16487,11 @@
           "verified": {
             "type": "boolean",
             "description": "True only when the replica was verified against the pool CA, its sections recomputed, and the file durably written."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Native host generation in the configured authority lockspace after this member joined it; absent or zero means no sanlock preparation acknowledgement."
           },
           "error": {
             "type": "string",
@@ -16976,6 +17201,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When this host wrote this report."
+          },
+          "automatic": {
+            "type": "boolean",
+            "description": "True only when Core initiated this promotion automatically through the supported two-host BMC path. Omitted for manual promotions and by older Core versions. This is reported metadata, not a fence proof. Automatic promotion requires Host fencing enabled; storage-lease and witness-based promotion paths are not implemented; qdevice registration and status do not produce fence proof."
           }
         },
         "required": [
@@ -17851,6 +18080,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When this host wrote this report."
+          },
+          "automatic": {
+            "type": "boolean",
+            "description": "True only when Core initiated this promotion automatically through the supported two-host BMC path. Omitted for manual promotions and by older Core versions. This is reported metadata, not a fence proof. Automatic promotion requires Host fencing enabled; storage-lease and witness-based promotion paths are not implemented; qdevice registration and status do not produce fence proof."
           }
         },
         "required": [
@@ -18034,6 +18267,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When this host wrote this report."
+          },
+          "automatic": {
+            "type": "boolean",
+            "description": "True only when Core initiated this promotion automatically through the supported two-host BMC path. Omitted for manual promotions and by older Core versions. This is reported metadata, not a fence proof. Automatic promotion requires Host fencing enabled; storage-lease and witness-based promotion paths are not implemented; qdevice registration and status do not produce fence proof."
           }
         },
         "required": [
@@ -18854,7 +19091,7 @@
                 "type": "null"
               }
             ],
-            "description": "What this pool's own watchdog cluster is doing. Absent from a master too old to form one, which a client shows as no cluster line rather than as a cluster that is off."
+            "description": "The master's current cluster or qdevice status. This is a memory-only observation. A two-host qdevice may report forming or degraded while SBD arming and witness-loss proof remain withheld. Absent on older masters, which a client shows as no cluster line rather than as a cluster that is off."
           }
         },
         "required": [
@@ -19208,7 +19445,7 @@
       },
       "PoolFenceCluster": {
         "type": "object",
-        "description": "The pool's own Corosync/Pacemaker cluster, which carries no resources and exists only so that a diskless sbd has a quorum to lose. Nex Core forms one for a pool of three or more ready hosts with Host fencing on and no clustered-storage repository; a pool that has clustered storage keeps the cluster clustered storage already owns and is not armed at all in this release. Like the counts beside it, this is the master's memory-only observation over the membership it owns, derived on every report and never stored: the durable facts are the membership and each host's own armed report.",
+        "description": "The master's memory-only pool cluster observation. Pools of three to five ready hosts can form the watchdog cluster when Host fencing is on and no clustered-storage repository is configured. An eligible two-host pool instead can register Controller-hosted qnetd and configure Corosync qdevice; the reported forming/degraded status reflects qdevice state, but no two-host SBD arming or witness-loss exclusion proof is enabled. Durable witness selection and CA pin are in PoolMembership.witness; native readiness is rechecked after restart.",
         "properties": {
           "state": {
             "type": "string",
@@ -19220,7 +19457,7 @@
               "armed",
               "degraded"
             ],
-            "description": "off is the pool's own Host fencing setting. not_available is this pool: clustered storage, fewer than three hosts, more hosts than Nex Core has exercised, or no usable watchdog. forming is a cluster Nex Core has started and is waiting to see quorate. arming is the one-host-at-a-time rollout. degraded is a cluster whose hosts are not all armed."
+            "description": "off is the pool's Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice is not verified and degraded can mean it is connected and voting; two-host watchdog arming remains withheld in either state."
           },
           "detail": {
             "type": "string",
@@ -19439,6 +19676,334 @@
           "device"
         ],
         "x-go-type": "protocol.SystemDiskReplaceRequest"
+      },
+      "PoolWitnessCandidate": {
+        "type": "object",
+        "description": "A qnetd candidate advertised by the Controller. Current Core uses only the controller candidate: same-site pool-master candidates have no CA or pin and are not usable.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pool-master",
+              "controller"
+            ]
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "ca_pem": {
+            "type": "string",
+            "maxLength": 1048576,
+            "description": "PEM CA certificate; empty for an unusable pool-master candidate."
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase SHA-256 of the CA certificate DER; empty for an unusable pool-master candidate."
+          }
+        },
+        "required": [
+          "kind",
+          "ca_pem",
+          "ca_sha256"
+        ],
+        "x-go-type": "protocol.PoolWitnessCandidate"
+      },
+      "PoolWitnessCandidates": {
+        "type": "object",
+        "properties": {
+          "candidates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolWitnessCandidate"
+            }
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "x-go-type": "protocol.PoolWitnessCandidates"
+      },
+      "PoolWitnessRegistrationRequest": {
+        "type": "object",
+        "description": "Core registration request. cluster_name is the deterministic name for pool_id; fencing_generation binds credentials to the current pool fencing configuration.",
+        "properties": {
+          "pool_id": {
+            "type": "string"
+          },
+          "cluster_name": {
+            "type": "string"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "csr_pem": {
+            "type": "string",
+            "maxLength": 1048576
+          }
+        },
+        "required": [
+          "pool_id",
+          "cluster_name",
+          "fencing_generation",
+          "csr_pem"
+        ],
+        "x-go-type": "protocol.PoolWitnessRegistrationRequest"
+      },
+      "PoolWitnessRegistration": {
+        "type": "object",
+        "description": "Controller-signed qdevice credentials. address is empty for the Controller candidate; Core derives the qnetd address from its pinned Controller URL.",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "certificate_pem": {
+            "type": "string"
+          },
+          "ca_pem": {
+            "type": "string"
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "address",
+          "certificate_pem",
+          "ca_pem",
+          "ca_sha256"
+        ],
+        "x-go-type": "protocol.PoolWitnessRegistration"
+      },
+      "PoolWitnessRecord": {
+        "type": "object",
+        "description": "The pool master's durable Controller qnetd selection and CA pin. Native readiness is re-established from Corosync and qdevice after restart; this record is replicated with pool authority.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "controller"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "ca_pem": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "ca_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cluster_name": {
+            "type": "string"
+          },
+          "credentials_ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "address",
+          "ca_pem",
+          "ca_sha256",
+          "fencing_generation",
+          "cluster_name"
+        ],
+        "x-go-type": "protocol.PoolWitnessRecord"
+      },
+      "PoolWrappedWitnessCredential": {
+        "type": "object",
+        "description": "One host's native qdevice PKCS#12 credential, sealed to that host in its authority replica. It contains a shared qdevice key and is bound to the fencing generation.",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "fencing_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wrapped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWrappedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "host_id",
+          "fencing_generation",
+          "wrapped"
+        ],
+        "x-go-type": "protocol.PoolWrappedWitnessCredential"
+      },
+      "PoolStorageLeaseRepository": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "repository_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "repository_identity": {
+            "$ref": "#/components/schemas/StorageIdentity"
+          },
+          "lockspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_id",
+          "repository_generation",
+          "repository_identity",
+          "lockspace"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseRepository"
+      },
+      "PoolStorageLeaseConfig": {
+        "type": "object",
+        "description": "Durable selection of the exact shared NFS repository used by the native sanlock storage-lease design. The feature is not available as an operator workflow and does not currently authorize automatic promotion.",
+        "properties": {
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolStorageLeaseRepository"
+            }
+          },
+          "authority_repository_id": {
+            "type": "string"
+          },
+          "host_dead_seconds": {
+            "type": "integer"
+          },
+          "fence_timeout_seconds": {
+            "type": "integer"
+          },
+          "prepared_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "io_timeout_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repositories",
+          "authority_repository_id",
+          "host_dead_seconds",
+          "fence_timeout_seconds",
+          "io_timeout_seconds"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseConfig"
+      },
+      "PoolStorageLeaseLockspaceProof": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "repository_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "repository_identity_digest": {
+            "type": "string"
+          },
+          "lockspace": {
+            "type": "string"
+          },
+          "host_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "host_state": {
+            "type": "string"
+          },
+          "host_dead_seconds": {
+            "type": "integer"
+          },
+          "held_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository_id",
+          "repository_generation",
+          "repository_identity_digest",
+          "lockspace",
+          "host_generation",
+          "host_state",
+          "host_dead_seconds",
+          "held_seconds"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseLockspaceProof"
+      },
+      "PoolStorageLeaseExclusion": {
+        "type": "object",
+        "description": "Native sanlock exclusion evidence shape. The corresponding two-host storage-lease proof path remains unavailable pending acceptance.",
+        "properties": {
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolStorageLeaseLockspaceProof"
+            }
+          },
+          "host_lease_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bound_seconds": {
+            "type": "integer"
+          },
+          "watchdog_kind": {
+            "type": "string"
+          },
+          "watchdog_timeout_seconds": {
+            "type": "integer"
+          },
+          "armed_generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "repositories",
+          "host_lease_id",
+          "bound_seconds",
+          "watchdog_kind",
+          "watchdog_timeout_seconds",
+          "armed_generation"
+        ],
+        "x-go-type": "protocol.PoolStorageLeaseExclusion"
       }
     }
   },
@@ -19736,7 +20301,7 @@
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the promotion candidate. S6 adds no new capability string.",
-      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". There is no automatic succession, no election and no quorum here, and no force, override, \"declare host lost\" or timeout-based path exists or may be added."
+      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". This command is the manual promotion path. A separate Core-owned automatic path is limited to eligible two-host pools with Host fencing enabled and a recorded usable BMC profile; no automatic watchdog, storage lease or Nex Witness path exists. There is no election; no force, override, \"declare host lost\" or timeout-based path exists or may be added."
     },
     "pool-fence-profile": {
       "summary": "Record or clear how a member of this pool would be power-fenced",

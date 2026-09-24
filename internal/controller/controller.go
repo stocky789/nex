@@ -35,6 +35,7 @@ type Controller struct {
 	db           *sql.DB
 	cfg          Config
 	mediaMu      sync.Mutex
+	witnessMu    sync.Mutex
 	mu           sync.Mutex
 	seen         map[string]time.Time
 	ca           *authority
@@ -354,6 +355,8 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/agent/report", c.agent(c.report))
 	m.HandleFunc("GET /api/v1/agent/storage/credentials/{handle}", c.agent(c.agentStorageCredential))
 	m.HandleFunc("POST /api/v1/agent/storage/credentials/{handle}/ack", c.agent(c.acknowledgeStorageCredential))
+	m.HandleFunc("GET /api/v1/agent/witness/candidates", c.agent(c.agentWitnessCandidates))
+	m.HandleFunc("POST /api/v1/agent/witness/register", c.agent(c.agentWitnessRegister))
 	m.HandleFunc("POST /api/v1/agent/rotate", c.agent(c.rotate))
 	m.HandleFunc("GET /source", func(w http.ResponseWriter, r *http.Request) {
 		if c.cfg.SourcePath == "" {

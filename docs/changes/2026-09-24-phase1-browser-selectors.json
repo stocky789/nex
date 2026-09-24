@@ -24,7 +24,7 @@
     "reason": "Test assertions add no durable product state."
   },
   "verification": {
-    "method": "Inspected failed forge run 4437; the full local Phase 1 browser suite passed all 22 reported checks after the test correction. Hosted rerun remains pending.",
+    "method": "Inspected failed forge run 4437; the full local Phase 1 browser suite passed all 22 reported checks after the test correction. Forge run 4449 passed that browser step, then failed in the separate managed VM suite.",
     "evidence": [
       "tests/integration/phase1_browser.py",
       "docs/BUG_LEDGER.md"

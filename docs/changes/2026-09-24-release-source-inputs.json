@@ -1,0 +1,31 @@
+{
+  "summary": "Retain appliance runtime inputs and guest OS assets in the release source archive",
+  "paths": [
+    "scripts/build-source.py",
+    "tests/test_build_source.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The release source closure is repaired; operator installation and recovery steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The source archive and appliance image build do not change a Controller request, Core command, observed result, or client-facing endpoint.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The failed release build has not been rerun and no milestone acceptance status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The archive build copies existing files and introduces no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "The new source-retention test failed before the fix and passed afterward. The source and appliance test modules passed, and a freshly built source tarball was inspected for the two appliance inputs and guest OS image and notice files. No full appliance image build or forge rerun was performed.",
+    "evidence": ["tests/test_build_source.py", "tests/test_appliance_build.py", "scripts/build-source.py"]
+  }
+}

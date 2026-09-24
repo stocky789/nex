@@ -10,6 +10,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const moduleURL = bundleTestModule(new URL("./pool-members.tsx", import.meta.url), "pool-members");
 const src = readFileSync(new URL("./pool-members.tsx", import.meta.url), "utf8");
+for (const name of ["confirm", "setMaintenance", "changeMaster", "eject", "cancelTransfer", "promote", "setFenceProfile", "setHostFencing", "setBMCProvisioning"]) {
+  const start = src.indexOf(`async function ${name}(`);
+  const end = src.indexOf("\n  async function ", start + 1);
+  assert.match(src.slice(start, end < 0 ? undefined : end), /catch \(e\) \{\n      void refresh\(true\);/, `${name} reconciles the host report after an ambiguous submit failure`);
+}
 const { MembersTable, AddHostDialog, MaintenanceDialog, memberChecks, poolChecks, convergenceSummary, joinProgressText, peerOriginOf, maintenanceText, guestsText, maintenanceInFlight, maintenanceResultText, replicaText, replicaGenerations, replicaTimes, recoveryText, seenAgo, membershipVersionReady, fencingSummaryText, HostFencingSetting } = await import(moduleURL);
 const { heldRequestID } = await import(bundleTestModule(new URL("./managed.tsx", import.meta.url), "managed-held"));
 
@@ -229,7 +234,7 @@ assert.match(renderToStaticMarkup(createElement(MaintenanceDialog, { member: dra
 assert.equal(membershipVersionReady({ authoritative: true, generation: 7 }), true);
 assert.equal(membershipVersionReady({ authoritative: false, generation: 7 }), false);
 assert.equal(membershipVersionReady({ authoritative: true, generation: 0 }), false);
-assert.match(src, /submitReady=\{membershipVersionReady\(report\)\}/);
+assert.match(src, /submitReady=\{membershipVersionReady\(report\) && !writesDisabled\}/);
 assert.match(drainConflict, /role="alert"[^>]*>the pool master reports membership generation 8; reload the pool and retry/);
 
 // The POST is exactly the contract's: desired state, the loaded generation, and the held request
@@ -383,10 +388,17 @@ assert.match(blockedRows, /<button type="button" aria-describedby="pool-actions-
 assert.match(blockedRows, /<button type="button" class="danger" aria-describedby="pool-actions-blocked [^"]+-eject" disabled="">Eject from pool</);
 assert.match(blockedRows, /disabled=""[^>]*>Make pool master<\/button><small id="[^"]+-promote">Another pool authority transfer is already in progress on this pool\.<\/small>/);
 assert.match(blockedRows, /disabled=""[^>]*>Eject from pool<\/button><small id="[^"]+-eject">Another pool authority transfer is already in progress on this pool\.<\/small>/);
-// The same reason disables "Add host to pool" and the polling covers a running transfer.
+// The same reason disables "Add host to pool"; mounted panels keep reports current while idle too.
 assert.match(src, /const transferring = transferInProgress\(report\?\.transfer\) \|\| \(report\?\.members \|\| \[\]\)\.some\(member => transferInProgress\(member\.transfer\)\);/);
-assert.match(src, /if \(\(!joining && !transferring && !promoting\) \|\| unavailable\) return;/);
-assert.match(src, /aria-describedby=\{blockedReason \? "pool-actions-blocked" : undefined\} disabled=\{unavailable \|\| !report \|\| Boolean\(blockedReason\)\}/);
+assert.match(src, /const timer = window\.setInterval\(catchUp, 10_000\)/);
+assert.match(src, /document\.addEventListener\("visibilitychange", catchUp\)/);
+assert.match(src, /window\.addEventListener\("online", catchUp\)/);
+assert.match(src, /if \(reportPending\.current && !force\) return;/, "the timer does not supersede a slow pool read");
+assert.match(src, /await refresh\(true\);/, "a mutation starts a new read even if the timer read is still pending");
+assert.match(src, /const writesDisabled = unavailable \|\| Boolean\(error\);/);
+assert.match(src, /submitReady=\{membershipVersionReady\(report\) && !writesDisabled\}/);
+assert.match(src, /submitReady=\{!writesDisabled\}/, "an open join dialog cannot submit against a failed report");
+assert.match(src, /aria-describedby=\{blockedReason \? "pool-actions-blocked" : undefined\} disabled=\{writesDisabled \|\| !report \|\| Boolean\(blockedReason\)\}/);
 assert.match(src, /<p className="warning" id="pool-actions-blocked" role="status">\{blockedReason\}<\/p>/);
 
 // The three requests are exactly the contract's bodies, each with the loaded membership
