@@ -1214,6 +1214,14 @@ esac`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var previous managedDomain
+	if err := xml.Unmarshal([]byte(legacy), &previous); err != nil {
+		t.Fatal(err)
+	}
+	expected, err = preserveLiveTuning(expected, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := NewManaged(t.TempDir())
 	if err = os.MkdirAll(e.stateDir, 0700); err != nil {
 		t.Fatal(err)

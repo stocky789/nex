@@ -12,6 +12,14 @@ optional autostart. The VM belongs to a pool with a separate assignment to one h
 checks storage and network access from the pool master using a fresh observation of that host; a
 pool registration does not make a local disk shared.
 
+Core automatically assigns a shared disk I/O thread to VirtIO and SCSI disks and offers
+VirtIO network adapters up to four queues, limited by the VM's vCPU count. No extra settings
+are required. Network parallelism depends on the guest driver activating those queues;
+these defaults do not guarantee a speed increase for every workload. Development testing
+found increased TCP retransmissions during saturated receive traffic with four queues;
+production performance qualification remains open in the
+[validation report](../qa/2026-09-24-automatic-vm-io.md).
+
 The VM is created stopped. **Start after creation** makes the host start it once, as the last
 step of the same creation task, after it has verified the definition.
 For a VM on local storage, ordinary local power control remains available through its host when
@@ -535,6 +543,9 @@ failed and uncertain transfers show their own status.
   writable instance. Retain host-local recovery access.
 
 ## Verification
+
+The automatic disk and network defaults have separate
+[validation results and limits](../qa/2026-09-24-automatic-vm-io.md).
 
 The GUI navigation on this page was rewritten for the Controller console redesign (development
 build 0.4.8); the walkthrough is recorded in the

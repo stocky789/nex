@@ -30,7 +30,7 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.4.11`, may publish to the private forge for internal labs.
+  The current working version, `0.4.12`, may publish to the private forge for internal labs.
   CI no longer blocks public publication, so leave the deploy secrets unset until that
   evidence is recorded for this exact version: the `debian/copyright` and matching source for
   `ipmitool` and `sbd` are still marked outstanding in

@@ -7545,3 +7545,37 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: The regression now compares any startup frame with the previous framebuffer and waits for a one-second idle interval, with a separate deadline for reading a full frame. The two GitHub workflow copies use separate concurrency groups on github.com while retaining the shared forge group.
 - Regression: `go test ./internal/vmhost -run '^TestHostConsoleIncrementalUpdateOnlyOnChange$' -count=5` and `go test ./...` passed locally. The test runs in `.github/workflows/github.yml` on GitHub and in `.github/workflows/phase1.yml` on the forge. GitHub rerun requires a project-owner push.
 - Avoid: Using a fixed short sleep to infer that a login shell is idle, or sharing a cancelling workflow group between jobs that should only skip.
+
+## BUG-0551 — Running VM update could accept a persistent-only device change
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: A partial live device update could be reported complete when only the persistent
+  definition matched the requested devices.
+- Root cause: The observer checked inactive XML and running state without verifying requested
+  devices in live XML. This was identified during IOThread/multiqueue review, not reproduced
+  against an unmodified binary.
+- Fix: Verify requested live disks, SCSI controller assignments and NIC queues before accepting
+  completion; tolerate extra live devices whose asynchronous removal remains pending.
+- Regression: `go test ./internal/vmhost -run 'TestManaged(ObserveDefinitionRejectsConfigOnlyLiveHotplug|LiveObservationRejectsConfigOnlyHotplug)' -count=1`
+  passed. The first test invokes the actual observer with matching persistent configuration and
+  mismatching live queues; the second covers missing disk assignments and IOThread IDs. Existing
+  forge `.github/workflows/phase1.yml` and its `.gitea` copy run the Go suite on pushes and pull
+  requests; `.github/workflows/github.yml` runs the non-race suite on GitHub.
+- Avoid: Inferring active device configuration from inactive XML plus a running power state.
+
+## BUG-0552 — New SCSI controller hotplug serialized the Go type name
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: The disposable native KVM check rejected a live SCSI disk addition with
+  `unknown device type 'managedController'`.
+- Root cause: The controller had a containing-field XML tag but no element name when marshaled
+  alone for `virsh attach-device`. The fake command test checked ordering but not the XML root.
+- Fix: Give the controller an explicit `controller` XML element name.
+- Regression: `TestManagedApplyLiveReconcilesDevices` captures the actual attachment fragment
+  and requires a `controller` root and IOThread assignment before the disk.
+  `go test -race ./internal/vmhost -count=1` passed. The native nested Debian KVM rerun
+  successfully added the controller and disk. Existing forge Go jobs in
+  `.github/workflows/phase1.yml` and the `.gitea` copy run the regression on pushes and pull
+  requests; `.github/workflows/github.yml` also runs it without race instrumentation.
+- Avoid: Assuming a containing struct's XML field tag determines a standalone device fragment,
+  or checking command order without examining the exact fragment sent to libvirt.

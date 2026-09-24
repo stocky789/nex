@@ -14,6 +14,13 @@ Tags are edited on the same tab's **Tags** card; see [Tag virtual machines](tag-
 Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
 
+With the updated Core, saving a stopped VM applies the automatic disk I/O thread and
+VirtIO network queue defaults described in [VM creation](create-virtual-machine.md).
+During a live edit, existing devices keep their configuration and newly attached devices
+receive the defaults where supported. A SCSI disk added to an existing controller uses that
+controller's existing I/O thread configuration until a stopped save. Updating Core or rebooting
+the guest alone does not rewrite an existing VM's definition. No restart is forced.
+
 ## Prerequisites
 
 - Administrator access to [Nex Controller](manage-controller.md) and a VM
@@ -217,6 +224,9 @@ before relying on the numbers; a stale status does not prove the VM stopped.
   report; the mirror follows what the host reports as current.
 
 ## Verification
+
+See the [automatic I/O validation report](../qa/2026-09-24-automatic-vm-io.md) for the
+separate live-edit, stopped-save and performance evidence and its limits.
 
 The GUI navigation on this page was rewritten for the Controller console redesign (development
 build 0.4.8); the walkthrough is recorded in the

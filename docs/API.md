@@ -3681,6 +3681,26 @@ The existing VM list still includes adopted Controller appliances with
 `status` and optional `error`, with `role: guest`. Creation status never substitutes for
 fresh libvirt execution state.
 
+**Automatic I/O defaults (existing contract, 2026-09-24):** `vm-create` and stopped
+`vm-update` definitions use one shared IOThread (ID 1) for VirtIO disks and the VirtIO SCSI
+controller; SATA disks and CD drives remain unthreaded. VirtIO NICs offer `min(cpu.count, 4)`
+queues, omitting the override for one queue and leaving libvirt's backend selection intact.
+There are no new request or inventory fields. The assigned Core records the exact expected
+XML in its managed journal `Domain`, applies it through libvirt and verifies the observed
+thread assignments and queue counts. The pool master's existing VM specification and adoption
+path remain unchanged; Controller replacement does not regenerate the VM's devices.
+
+Running updates preserve existing disk, SCSI controller and NIC tuning. New VirtIO disks and
+new SCSI controllers receive the IOThread default; a new SCSI disk on an existing controller
+inherits that controller's configuration. Core observes both live and persistent thread state
+before attaching a device that references it. New NICs receive the queue default. Interrupted
+operations retain the existing observation-before-retry semantics and do not count partially
+applied changes as success. A stopped save applies the full defaults to an older definition;
+agent upgrade, autostart and guest reboot alone do not. Older Core retains its prior defaults.
+Authentication, authorization, idempotency and wire schemas are unchanged. Queue exposure does
+not establish guest driver activation or improved workload performance; see
+[validation evidence](qa/2026-09-24-automatic-vm-io.md).
+
 API impact: **existing contract** — a terminal Core `vm-create` failure before a definition is
 created remains task, audit and idempotent-replay data under an internal failed-create identity,
 so it cannot collide with a Core VM identity. It is excluded from Controller VM-list, ownership,

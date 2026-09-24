@@ -411,7 +411,7 @@ class ManagedVMContractTests(unittest.TestCase):
                              int(re.search(pattern, body)[1]))
         self.assertEqual(schemas['VMDisk']['properties']['size_gib']['maximum'],
                          int(re.search(r'd\.SizeGiB > (\d+)', shared)[1]))
-        for schema, field, pattern in [('VMCPU', 'count', r'CPU\.Count > (\d+)'),
+        for schema, field, pattern in [('VMCPU', 'count', r'CPU\.Count > (\d+) \|\|'),
                                        ('VMMemory', 'size_mib', r'Memory\.SizeMiB > (\d+)')]:
             for body in (source, engine):
                 self.assertEqual({int(m) for m in re.findall(pattern, body)},

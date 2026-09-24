@@ -6,12 +6,36 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.11` →
-> Debian `0.4.11`).
+> development software. Builds use the newest numbered changelog heading (`0.4.12` →
+> Debian `0.4.12`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.12] — 2026-09-24
+
+### Minor Feature
+
+- Nex Core automatically assigns a shared disk I/O thread to VirtIO and SCSI disks and
+  offers VirtIO network adapters up to four queues, limited by the VM's CPU count.
+  These defaults apply to new VMs and stopped saves, without additional frontend settings.
+- Live edits preserve existing devices' tuning while new devices receive supported defaults;
+  running VMs retain their identity and settings when connected to a replacement Controller.
+
+### Bug Fixes
+
+- Running VM edits verify the active devices as well as the saved definition, so a partially
+  applied disk or network attachment is not incorrectly reported as complete.
+- Live SCSI disk additions attach the required controller before the disk, and VM network
+  checks accept libvirt's resolved bridge without losing the configured network identity.
+
+### Miscellaneous
+
+- Native VM lifecycle and nested-lab workload checks are recorded in the
+  [validation report](docs/qa/2026-09-24-automatic-vm-io.md). Four network queues increased
+  receive-side TCP retransmissions under saturation; production performance qualification
+  remains open, and faster performance is not guaranteed for every workload.
 
 ## [0.4.11] — 2026-09-24
 
