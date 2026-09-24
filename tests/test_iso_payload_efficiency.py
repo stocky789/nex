@@ -34,8 +34,8 @@ class IsoPayloadEfficiencyTests(unittest.TestCase):
             checksum.write_text(f'{expected}  virtio-win.iso\n')
             late = (ROOT / 'installer/late-install.sh').read_text()
             block = late.split('[ -f /cdrom/nex/media/virtio-win.iso.gz ]', 1)[1]
-            block = '[ -f /cdrom/nex/media/virtio-win.iso.gz ]' + block.split('mkdir -p /target/var/cache/nex-install', 1)[0]
-            script = 'set -eu\n' + block.replace('/cdrom', str(cdrom)).replace('/target', str(target))
+            block = '[ -f /cdrom/nex/media/virtio-win.iso.gz ]' + block.split('\nfi\n', 1)[0]
+            script = ('set -eu\ninstall -d -m755 /target/usr/share/nex/media\nvirtio_iso=/target/usr/share/nex/media/virtio-win.iso\n' + block).replace('/cdrom', str(cdrom)).replace('/target', str(target))
 
             result = subprocess.run(['sh', '-c', script], text=True, capture_output=True)
             restored = target / 'usr' / 'share' / 'nex' / 'media' / 'virtio-win.iso'

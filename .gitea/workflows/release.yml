@@ -1,9 +1,9 @@
 name: Release
-# Push-driven release. Every push to main rebuilds the ISO and both Debian packages
+# Push-driven release. Every push to main rebuilds both ISOs and Debian packages
 # at the newest CHANGELOG version, then creates the Gitea release for tag vX.Y.Z[-preN],
 # replacing that version's previous release and moving its tag when the version was
 # already published. Forge release assets are the ISO, matching source bundle and
-# compliance manifest only — not standalone .deb downloads. Packages remain build
+# compliance manifests and hash-pinned Nex netinst payloads. Packages remain build
 # products for the ISO and, when deploy secrets are set, the signed APT update feed.
 # The CHANGELOG heading and the Debian package version are one number in two
 # notations, so a release can never ship stamped with a version its changelog does
@@ -122,11 +122,14 @@ jobs:
           fi
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Build source archive, packages and ISO
+      - name: Build source archive, packages and both ISOs
         env:
           NEX_VERSION: ${{ steps.version.outputs.version }}
           NEX_HOST_WORKSPACE: ${{ steps.host.outputs.workspace }}
           NEX_APPLIANCE_SIGNING_KEY: ${{ steps.signing.outputs.key }}
+          NEX_PUBLIC_URL: ${{ secrets.NEX_PUBLIC_URL || 'https://nexvirtualization.com' }}
+          NEX_DEPLOY_HOST: ${{ secrets.NEX_DEPLOY_HOST }}
+          NEX_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           export NEX_DOCKER=$PWD/scripts/ci-docker.sh
@@ -136,6 +139,12 @@ jobs:
           mkdir -p "$TMPDIR"
           # build.sh rebuilds the appliance and the nex-core-local package from current
           # source, then the ISO from that package. The Controller package is separate.
+          # The baked URLs must name the destination this run actually publishes.
+          if [ -n "${NEX_DEPLOY_HOST:-}" ]; then
+            export NEX_NETINST_BASE_URL="${NEX_PUBLIC_URL%/}/downloads/${NEX_VERSION}"
+          else
+            export NEX_NETINST_BASE_URL="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}/releases/download/${NEX_TAG}"
+          fi
           bash installer/build.sh
           python3 packaging/controller/build.py \
             --source dist/nex-source.tar.gz --version "$NEX_VERSION" \
@@ -151,7 +160,9 @@ jobs:
           manifest="dist/nex-core-${NEX_VERSION}-compliance-manifest.json"
           core="dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb"
           controller="dist/controller/nex-controller_${NEX_VERSION}_amd64.deb"
-          for artifact in "$iso" "$source" "$manifest" "$core" "$controller"; do
+          netinst="dist/nex-core-${NEX_VERSION}-amd64-netinst.iso"
+          netinst_manifest="dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json"
+          for artifact in "$iso" "$source" "$manifest" "$core" "$controller" "$netinst" "$netinst_manifest" dist/netinst/*.deb; do
             [ -f "$artifact" ] || { echo "missing artifact: $artifact" >&2; exit 1; }
             stat --printf='%n: %s bytes\n' "$artifact"
           done
@@ -164,9 +175,21 @@ jobs:
           ( cd dist && for artifact in \
               "nex-core-${NEX_VERSION}-amd64.iso" \
               "nex-core-${NEX_VERSION}-source.tar.gz" \
-              "nex-core-${NEX_VERSION}-compliance-manifest.json"; do
+              "nex-core-${NEX_VERSION}-compliance-manifest.json" \
+              "nex-core-${NEX_VERSION}-amd64-netinst.iso" \
+              "nex-core-${NEX_VERSION}-netinst-compliance-manifest.json"; do
               sha256sum "$artifact" > "$artifact.sha256"
             done )
+          # Validate every ISO/source/payload binding before any public upload.
+          validation=$(mktemp -d)
+          trap 'rm -rf "$validation"' EXIT
+          payload_args=()
+          for payload in dist/netinst/*.deb; do
+            payload_args+=(--netinst-payload "$payload")
+          done
+          python3 scripts/release-publish.py --check --root "$validation" \
+            --iso "$iso" --source "$source" --compliance-manifest "$manifest" \
+            --netinst-iso "$netinst" --netinst-manifest "$netinst_manifest" "${payload_args[@]}"
 
       - name: Smoke-start the packaged Controller
         env:
@@ -242,7 +265,27 @@ jobs:
             "dist/nex-core-${NEX_VERSION}-source.tar.gz" \
             "dist/nex-core-${NEX_VERSION}-source.tar.gz.sha256" \
             "dist/nex-core-${NEX_VERSION}-compliance-manifest.json" \
-            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json.sha256"
+            "dist/nex-core-${NEX_VERSION}-compliance-manifest.json.sha256" \
+            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
+            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso.sha256" \
+            "dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            "dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json.sha256" \
+            dist/netinst/*.deb
+
+      - name: Verify anonymous netinst downloads on forge-only releases
+        if: steps.deploy.outputs.enabled == 'false'
+        env:
+          NEX_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          base="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}/releases/download/${NEX_TAG}"
+          for payload in dist/netinst/*.deb; do
+            response=$(curl -sSIL -o /dev/null -w '%{http_code} %{content_type}' --max-time 60 --retry 5 "$base/${payload##*/}")
+            case "$response" in
+              '200 application/octet-stream'*|'200 application/vnd.debian.binary-package'*|'200 application/x-debian-package'*) ;;
+              *) echo "Netinst payload is not publicly downloadable: ${payload##*/}: $response" >&2; exit 1 ;;
+            esac
+          done
 
       - name: Publish to the website host
         if: steps.deploy.outputs.enabled == 'true'
@@ -277,17 +320,21 @@ jobs:
             "dist/nex-core-${NEX_VERSION}-amd64.iso" \
             "dist/nex-core-${NEX_VERSION}-source.tar.gz" \
             "dist/nex-core-${NEX_VERSION}-compliance-manifest.json" \
-            "dist/core-local/nex-core-local_${NEX_VERSION}_amd64.deb" \
+            "dist/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
+            "dist/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            dist/netinst/*.deb \
             "dist/controller/nex-controller_${NEX_VERSION}_amd64.deb" \
             scripts/release-publish.py \
             "$target:$staging/"
 
+          # Reuse the transferred Core bytes under APT's required package filename.
           # Packages first: the signing key never leaves the host, and nex-apt-publish
           # is the one command the publishing user may run as root without a password.
           # shellcheck disable=SC2086
           ssh $ssh_opts "$target" "set -eu
+            ln '$staging'/nex-core-local-*.deb '$staging/nex-core-local_${NEX_VERSION}_amd64.deb'
             sudo -n /usr/local/sbin/nex-apt-publish '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
-            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --keep 3
+            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' --netinst-payload '$staging'/nex-core-local-*.deb --netinst-payload '$staging'/dlm-controld-*.deb --keep 3
             rm -rf '$staging'"
 
           # Static pages last: same host, same secrets, one Release run.
@@ -304,13 +351,21 @@ jobs:
           # Read the small Packages index below to verify the released version.
           # The site answers 503 for a moment while the publish it just did settles (run 4319),
           # and curl treats 5xx as retryable only with --retry.
+          payload_paths=()
+          for payload in dist/netinst/*.deb; do
+            [ -f "$payload" ] || { echo 'missing netinst payloads' >&2; exit 1; }
+            payload_paths+=("/downloads/${NEX_VERSION}/${payload##*/}")
+          done
           for path in \
             "/" \
             "/apt/dists/nex/InRelease" \
             "/apt/dists/nex/main/binary-amd64/Packages" \
             "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64.iso.sha256" \
             "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-source.tar.gz" \
-            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json"; do
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-compliance-manifest.json" \
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-amd64-netinst.iso" \
+            "/downloads/${NEX_VERSION}/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json" \
+            "${payload_paths[@]}"; do
             code=$(curl -sSI -o /dev/null -w '%{http_code}' --max-time 60 --retry 10 --retry-delay 3 "${NEX_PUBLIC_URL}${path}")
             [ "$code" = 200 ] || { echo "$path returned $code" >&2; exit 1; }
           done

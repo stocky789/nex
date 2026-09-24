@@ -175,6 +175,7 @@ install -m 755 installer/gui/recheck.sh "$overlay/usr/lib/partman/init.d/00nex-r
 install -m 755 installer/gui/prepare.sh "$overlay/usr/lib/nex-installer/prepare"
 install -m 755 installer/gui/wizard-text.sh "$overlay/usr/lib/nex-installer/wizard-text"
 install -m 644 installer/gui/wizard-text.templates "$overlay/usr/share/nex-installer/wizard-text.templates"
+install -m 755 installer/gui/netinst-network.sh "$overlay/usr/lib/nex-installer/netinst-network"
 install -m 755 installer/gui/dhcp-preview.sh "$overlay/usr/lib/nex-installer/dhcp-preview"
 install -m 644 installer/gui/start.sh "$overlay/usr/lib/debian-installer.d/S66nex-wizard"
 # Load safe package/account defaults before the GUI; no file-preseed screen.

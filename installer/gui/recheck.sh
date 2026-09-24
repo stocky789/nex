@@ -6,6 +6,13 @@ SYS=/sys
 DEV=/dev
 MDSTAT=/proc/mdstat
 PARTMAN=/var/lib/partman
+# Also applies to the native serial installer, which configures networking via netcfg.
+if [ -f /cdrom/nex/netinst.tsv ]; then
+    /bin/sh /cdrom/nex/netinst-fetch.sh --check || {
+        echo 'Net installer sources are unavailable; check networking and retry before erasing disks.' >&2
+        exit 1
+    }
+fi
 if [ -f /run/nex-installer/active ]; then
     /usr/bin/nex-config --recheck /run/nex-installer/config.ini
     # The operator confirmed erasing these disks: one, or every member of the mirror.

@@ -331,7 +331,7 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       clearRequest("vm");
       // The creation operation rides along in the route, so a create that fails after this 202
       // still names its task once the VM listing no longer includes it.
-      await reload(); if (mounted.current) { setForm(""); location.hash = `/vms/${result.vm_id}/${result.operation.id}`; }
+      await reload(); if (mounted.current) { setForm(""); onCloseCreate(); location.hash = `/vms/${result.vm_id}/${result.operation.id}`; }
       // Placement warnings come back with the accepted 202. This panel is about to unmount with
       // the route change, so they go to the shell's notice, which clears itself when the
       // operation leaves queued/dispatched.

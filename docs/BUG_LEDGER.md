@@ -7802,3 +7802,164 @@ Append resolved defects with their evidence and the approach to avoid.
   `python3 -m unittest discover -s tests -p 'test_*.py'` passed (399 tests). The forge and
   GitHub checks run the Python suite on pushes and pull requests; no remote rerun is claimed.
 - Avoid: Requiring identical workflow text when provider behavior intentionally differs.
+
+## BUG-0571 — Native network installation could miss newly installed NIC drivers
+
+- Date: 2026-09-24. Status: fixed in the working tree; clean early-hook network discovery verified, full installation acceptance separate.
+- Symptom: A disposable serial net installation reported no network interfaces even though
+  the matching VirtIO network module had been installed from the media.
+- Root cause: udev retained its boot-time module index after anna installed additional
+  driver packages. Debian's hardware detection regenerated indexes and replayed device
+  events without reloading udev; the new driver's alias was not discovered.
+- Fix: The shared installer account/media hook regenerates module indexes with `depmod`,
+  reloads udev, then invokes native `update-dev`, after component loading. Both native serial installation and the Nex
+  graphical/text preparation use this hook; no adapter-specific module list is added.
+- Regression: In a fresh disposable QEMU failure, only loopback was present; running
+  `udevadm control --reload` followed by `update-dev` discovered the VirtIO interface
+  without manually loading its driver. The focused module-loading test in
+  `python3 -m unittest discover -s tests -p test_netinst.py` fails against the original hook and passes with the fix for
+  both initial and repeated preparation. All seven netinst tests passed in the Debian
+  builder container, including real APT selection (`docker run --rm --entrypoint python3
+  -v "$PWD:/work:ro" nex-iso-builder -m unittest discover -s tests -p test_netinst.py`).
+  The native account integration test
+  against `user-setup-udeb` 1.107 and `installer/check.sh` passed. The existing forge
+  Python suite runs the new regression on pushes and pull requests; clean unattended
+  installation of the corrected artifact remains a separate acceptance check. A fresh
+  serial QEMU boot with the exact corrected hook overlaid reached DHCP, HTTPS source
+  preflight and automatic partition/base installation without manual driver loading.
+- Avoid: Adding an adapter-specific `modprobe` workaround, or assuming that installing
+  module files and replaying udev events also refreshes udev's cached indexes.
+
+## BUG-0572 — CI concurrency checks rejected the GitHub runner split
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge execution pending.
+- Symptom: The Python suite failed two CI security checks despite the workflows retaining
+  the shared forge runner group.
+- Root cause: BUG-0550 made the GitHub copies select separate groups on github.com and
+  the shared group on the forge, but the checks still required an unconditional literal.
+- Fix: Both checks now require the complete GitHub conditional or the Gitea literal,
+  according to the workflow copy. Production concurrency configuration is unchanged.
+- Regression: `python3 -m unittest discover -s tests -p 'test_ci_security.py' -v`
+  failed the two concurrency assertions before correction and passes all 13 checks
+  afterward. Temporary copies with an incorrect shared group were rejected for both
+  workflows and both providers (four expected failures). The existing Python discovery
+  suite runs these checks in `.github/workflows/phase1.yml` and `github.yml` on pushes
+  and pull requests; their forge/GitHub gates remain unchanged.
+- Avoid: Weakening the assertion to merely search for a shared-group name somewhere in
+  the file, or changing production scheduling to satisfy a stale test.
+
+## BUG-0573 — Network installer lost APT's package download plan
+
+- Date: 2026-09-24. Status: fixed; final netinst passed clean unattended BIOS installation, first boot and reboot.
+- Symptom: A disposable native net installation created an empty download plan and fetched
+  only the driver ISO. APT's required-package URI lines appeared in syslog instead of the
+  redirected plan file, so the later local-only install could not find its packages.
+- Root cause: Debian Installer's `in-target` wrapper routes command stdout to its logger
+  by default. The new plan capture treated it as a plain command wrapper.
+- Fix: Request native `in-target --pass-stdout` for the APT URI-plan command. Preserve
+  native target setup and logging for the actual package installation. An empty plan
+  remains valid when a retry finds all requested packages already installed.
+- Regression: `python3 -m unittest discover -s tests -p test_netinst.py` passed all eight
+  tests in the Debian builder. The new check executes the actual plan-capture shell block
+  with the native wrapper's stdout behavior: the corrected call selects the required
+  package, while removing `--pass-stdout` reproduces an empty plan. The real APT fixture
+  separately verifies package selection, URI filename encoding and already-installed
+  package exclusion. `installer/check.sh` passed. The forge Python suite runs these tests
+  on pushes and pull requests; the complete corrected VM installation is tracked separately.
+- Avoid: Replacing `in-target` with raw `chroot`, inventing an empty-plan failure for valid
+  retries, or treating an APT plan visible in syslog as evidence that redirected output exists.
+
+## BUG-0574 — VM creation leaves the result page blank until refresh
+
+- Date: 2026-09-24. Status: fixed in the working tree.
+- Symptom: accepting a VM creation navigates to its result route but leaves the page empty.
+- Cause: the wizard cleared its local form while the shell kept `creating=true`, hiding the VM list.
+- Fix: call the existing shell close callback on accepted creation before navigating.
+- Regression: the accepted-create fixture in `tests/integration/phase1_browser.py` now checks
+  visible task and VM details without refresh. The isolated browser block failed before the fix
+  and passed afterward; UI tests, typecheck and build passed. Both forge Phase 1 workflow copies
+  already execute this browser suite on pushes and pull requests; hosted CI was not run here.
+  See [browser evidence and limits](qa/2026-09-24-vm-create-navigation.md).
+- Avoid: forcing a full-page reload or clearing wizard drafts during Storage/Networks side trips.
+
+## BUG-0575 — ISO smoke guest test failed with multiple installed kernels
+
+- Date: 2026-09-24. Status: fixed in the working tree.
+- Symptom: Network-installed Core passed initial boot checks but its nested-guest smoke
+  test failed when copying the kernel.
+- Root cause: The fixture expanded `/boot/vmlinuz-*` into multiple source files while
+  its destination was a single file. Network installation can retain the base kernel
+  alongside the newer pinned kernel.
+- Fix: Copy the currently running kernel using `uname -r`.
+- Regression: `python3 -m unittest discover -s tests -p test_iso_smoke.py` passes its
+  shell execution with two kernel files; restoring the wildcard reproduces the failure.
+  Existing forge Python discovery runs it on pushes and pull requests. Final native
+  nested-guest checks are recorded in the network-installer QA report.
+- Avoid: Deleting valid installed kernels to accommodate a test fixture's assumption.
+
+## BUG-0576 — Disk validator fixture rejected the netinst media probe
+
+- Date: 2026-09-24. Status: fixed locally; hosted rerun pending.
+- Symptom: The installer workflow aborted on its first valid disk scenario with a
+  filesystem-stub assertion after the netinst change.
+- Root cause: The actual validator now checks the netinst media marker before disk
+  validation, but the fixture only recognized partition-file existence checks.
+- Fix: Model the exact netinst marker path and retain strict partition-path assertions.
+  Add a netinst scenario proving that missing management networking is rejected.
+- Regression: `python3 tests/integration/installer-disk.py` reproduced the original
+  assertion in the Debian builder, then passed with the fix, including simulated disk
+  safety scenarios and real GTK column dragging under Xvfb. The container needed
+  `xvfb`, `xauth` and `xdotool` in addition to its existing build dependencies.
+  Both installer workflow copies already run this script on pushes and pull requests;
+  no workflow change is needed. Independent review found no outstanding issues.
+- Avoid: Accepting arbitrary filesystem probes in the stub or removing production
+  network validation to accommodate a stale test.
+
+## BUG-0577 — Phase 1 browser gate waited for removed UI elements
+
+- Date: 2026-09-24. Status: fixed; Phase 1 browser step passed in forge run 4449.
+- Symptom: PR #8 run 4437 failed in `controller-browser` while waiting for `a.activity`;
+  the `phase1` gate then failed and dependent jobs were skipped.
+- Root cause: the browser suite still targeted the former activity link and warning
+  class after those controls became an activity disclosure and status banner.
+- Fix: open the activity disclosure and its Tasks link, and assert the host notices
+  through their status role. Keep the queued-task count assertion on the disclosure.
+- Regression: the forge log establishes the original timeout at the removed link.
+  A local Phase 1 browser run reached the next stale warning assertion after the
+  first correction. After both corrections, the full
+  `.cache/vm-create-venv/bin/python tests/integration/phase1.py --browser` run passed
+  all 22 reported checks, including the accepted VM creation route. Forge run 4449
+  passed that step; the overall browser lane then failed in the separate managed VM suite.
+- Avoid: reviewing a changed browser fixture as passing based on focused unit tests
+  while its required end-to-end gate is red.
+
+## BUG-0578 — Managed VM browser gate waited for the former activity link
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun pending.
+- Symptom: PR #8 run 4449 failed in `controller-browser` while waiting for a
+  `1 task running` link during a simulated ISO upload.
+- Root cause: the activity control is now a disclosure with an `Open Tasks` link,
+  while this separate browser suite still targeted the former direct link.
+- Fix: assert the running count on the disclosure, open it, then follow `Open Tasks`.
+- Regression: the forge log shows the missing link and the activity group in the
+  accessibility snapshot. The full local simulated managed VM browser suite passed
+  19 reported checks after the correction. Both forge Phase 1 workflows already
+  execute this suite on pull requests; no new forge run is claimed.
+- Avoid: updating one browser suite's selectors while leaving sibling flows on the
+  removed control.
+
+## BUG-0579 — Chart pixel assertion rejected correct antialiased fill
+
+- Date: 2026-09-25. Status: fixed locally; forge rerun pending.
+- Symptom: after clearing the activity-link check, the local managed VM browser
+  suite failed its stacked chart assertion with 83 single-fill pixels and five
+  apparent double-fill pixels. The captured chart showed separate fill bands.
+- Root cause: the fixed cutoff of fewer than five pixels treated a few
+  antialiased edge pixels as an overlapping stack.
+- Fix: bound apparent overlap to less than one tenth of the measured single-fill
+  coverage, retaining the check that hiding the middle vCPU leaves the same fill.
+- Regression: the full local simulated managed VM browser suite passed all 19
+  reported checks, including the chart result (83 single-fill pixels before and
+  after hiding, two apparent overlap pixels afterward). The forge Phase 1 workflows
+  already run this suite on pull requests; no new forge run is claimed.
+- Avoid: treating a tiny fixed number of edge pixels as proof of overlapping fills.

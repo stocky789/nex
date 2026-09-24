@@ -51,7 +51,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends gcc pkg-config libglib2.0-dev libgtk2.0-dev xvfb xdotool python3 gzip dpkg-dev busybox
+          sudo apt-get install --yes --no-install-recommends gcc pkg-config libcrypt-dev libglib2.0-dev libgtk2.0-dev xvfb xdotool python3 gzip dpkg-dev busybox
 
       - name: Check installer source contract
         run: bash installer/check.sh
@@ -60,6 +60,7 @@ jobs:
         run: |
           set -eu
           python3 -m unittest discover -s tests -p 'test_iso_payload_efficiency.py' -v
+          python3 -m unittest discover -s tests -p 'test_netinst*.py' -v
           python3 tests/integration/installer-shell.py
           python3 tests/integration/installer-text-wizard.py
           cc -Wall -Wextra -Werror tests/integration/installer-network.c installer/gui/nex-network.c $(pkg-config --cflags --libs glib-2.0) -o /tmp/nex-network-test

@@ -266,8 +266,9 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         assert no_page_scroll(), 'desktop page overflow'
         capture('desktop-shell')
         lab.passed('browser global search ("/", case-insensitive, no-match, Escape, settings jump), scope label, host list selection, slide-over Escape, keyboard panel tabs Overview/Networking/Storage/Activity and desktop console layout')
-        # The activity pill opens Tasks; browser history moves between hash routes.
-        page.locator('a.activity').click()
+        # The activity menu opens Tasks; browser history moves between hash routes.
+        page.locator('details.activity > summary').click()
+        page.get_by_role('link', name='Open Tasks', exact=True).click()
         expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
         expect(rail.get_by_role('link', name='Tasks', exact=True)).to_have_attribute('aria-current', 'page')
         page.go_back()
@@ -294,6 +295,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
                            'operation_id': '', 'status': 'succeeded', 'kind': 'bridge', 'source': 'br0'}
         warning_operation = [{'id': 'warning-create', 'host_id': host_id, 'kind': 'vm-create', 'request_id': 'warning-create',
                               'status': 'queued', 'actor': 'operator', 'created_at': '2026-09-20T00:00:00Z', 'updated_at': '2026-09-20T00:00:00Z'}]
+        warning_vms = []
         page.route('**/api/v1/pools/*/members', lambda route: route.fulfill(json={
             'authoritative': True, 'members': [{'host_id': host_id, 'maintenance': False}],
         }))
@@ -302,7 +304,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         page.route('**/api/v1/operations', lambda route: route.fulfill(json=warning_operation))
         page.route('**/api/v1/vms', lambda route: route.fulfill(status=202, json={
             'vm_id': 'warning-vm', 'operation': {'id': 'warning-create'}, 'warnings': ['Placement warning from Core fixture'],
-        }) if route.request.method == 'POST' else route.continue_())
+        }) if route.request.method == 'POST' else route.fulfill(json=warning_vms))
         refresh_route('vms')
         page.get_by_role('button', name='Create VM', exact=True).click()
         page.get_by_label('VM name').fill('Warning fixture')
@@ -318,9 +320,17 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         warning = page.get_by_text('Placement warning from Core fixture', exact=False)
         expect(warning).to_be_visible()
         assert page.evaluate('location.hash') == '#/vms/warning-vm/warning-create', 'accepted create must navigate to its task route'
+        # The result route must render without a browser refresh after the wizard closes.
+        expect(page.get_by_role('region', name='Create VM', exact=True)).not_to_be_visible()
+        expect(page.get_by_role('region', name='Creation task', exact=True)).to_be_visible()
+        capture('create-result-without-refresh')
         warning_operation[0]['status'] = 'succeeded'
+        warning_vms.append({'id': 'warning-vm', 'pool_id': pool_id, 'host_id': host_id, 'name': 'Warning fixture',
+                            'status': 'succeeded', 'state': 'shut off', 'freshness': 'fresh', 'operation_id': 'warning-create'})
         # The next automatic inventory poll (every 10 s) sees the terminal task.
         expect(warning).not_to_be_visible(timeout=15000)
+        expect(panel.get_by_role('heading', name=re.compile('^Warning fixture'))).to_be_visible()
+        capture('created-vm-without-refresh')
         page.unroute('**/api/v1/vms')
         page.unroute('**/api/v1/operations')
         page.unroute('**/api/v1/networks')
@@ -438,7 +448,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         power.get_by_role('button', name='Start', exact=True).click()
         expect(page.locator('.notice')).to_contain_text('Start queued for Toolbar fixture. Follow its progress in Tasks.')
         expect(dialog).not_to_be_visible()
-        expect(page.locator('a.activity')).to_have_text('2 tasks running')  # the pill counts every unfinished task, queued included
+        expect(page.locator('details.activity > summary')).to_have_text('2 tasks running')  # the pill counts every unfinished task, queued included
         rail.get_by_role('link', name='Tasks', exact=True).click()
         expect(tasks_row('fixture-queued-start')).to_contain_text('Waiting to be sent')
         expect(tasks_row('fixture-edit')).to_contain_text('Awaiting agent result')
@@ -512,7 +522,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         capture('health-summary-revoked')
         # Revoked and stale both read "not reporting" in the summary; the host panel tells
         # them apart, and only a revoked host is told to re-enroll.
-        revoked_notice = page.locator('.warning', has_text='Access revoked. Re-enroll this host to resume reporting.')
+        revoked_notice = panel.get_by_role('status').filter(has_text='Access revoked. Re-enroll this host to resume reporting.')
         refresh_route(f'hosts/{host_id}')
         expect(revoked_notice).to_be_visible()
         summary_host['revoked'] = False
@@ -521,7 +531,7 @@ def browser_acceptance(lab, password, host_id, pool_id, stop_agent, probe_mode):
         expect(host_row).to_contain_text(host['hostname'] + ' not reporting')
         expect(host_row.locator('.ov-icon')).to_have_class(re.compile(r'\bwarn\b'))
         refresh_route(f'hosts/{host_id}')
-        expect(page.locator('.warning', has_text='VMs on this host are shown as Unknown, not stopped.')).to_be_visible()
+        expect(panel.get_by_role('status').filter(has_text='VMs on this host are shown as Unknown, not stopped.')).to_be_visible()
         expect(revoked_notice).to_have_count(0)
         summary_host['connection'] = 'fresh'
         summary_host['inventory']['checks'] = [{'name': 'libvirt', 'status': 'healthy', 'freshness': 'fresh',

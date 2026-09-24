@@ -86,6 +86,10 @@ static int disk_stat(const char *path, struct stat *st) {
     st->st_rdev=makedev(202,1); return 0;
 }
 static gboolean file_test(const gchar *path, GFileTest test) {
+    if (!strcmp(path,"/cdrom/nex/netinst.tsv")) {
+        assert(test==G_FILE_TEST_EXISTS);
+        return !strcmp(scenario,"netinst");
+    }
     assert(test==G_FILE_TEST_EXISTS && g_str_has_suffix(path,"/partition"));
     return !strcmp(scenario,"partition");
 }
@@ -257,6 +261,7 @@ with tempfile.TemporaryDirectory(prefix='nex-disk-check-') as directory:
             assert error in result.stderr, (scenario,disk,result.stderr)
     for name in ['xvda','xvdz','xvdaa','sda','sdaa','vda','vdaa','nvme0n1','nvme12n34','nvme0c0n1']:
         check('valid','/dev/'+name)
+    check('netinst','/dev/xvda','net installer requires a management network')
     for name in ['xvda/../sda','sda_bad','loop0','sr0','Xvda','']:
         check('valid','/dev/'+name,'supported installation disk')
     for name in ['xvda1','sda1','vda1','nvme0n1p1']:

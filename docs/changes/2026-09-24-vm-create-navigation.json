@@ -1,0 +1,35 @@
+{
+  "summary": "Close shell wizard state after accepted VM creation so the result page renders without refresh.",
+  "paths": [
+    "web/src/managed.tsx",
+    "tests/integration/phase1_browser.py",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-24-vm-create-navigation.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Restores the existing documented creation result workflow; no operator steps change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation-only wizard state fix. Traced ManagedVMs POST /api/v1/vms through Controller createVM, the Core vm-create command and GET vms/operations observations: all requests, results, authorization and retry contracts remain unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "A presentation regression fix does not change milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Closes transient browser wizard state. VM identity, definition and durable operation ownership remain on Core."
+  },
+  "verification": {
+    "method": "The isolated existing browser fixture failed its new visibility assertion before the fix and passed afterward. UI tests, typecheck and build passed; see QA report for scope and limits.",
+    "evidence": [
+      "tests/integration/phase1_browser.py",
+      "docs/qa/2026-09-24-vm-create-navigation.md"
+    ]
+  }
+}

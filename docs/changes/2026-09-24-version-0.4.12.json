@@ -1,5 +1,5 @@
 {
-  "summary": "Bump the changelog-derived working version to 0.4.12 and document automatic Core VM I/O defaults and measured limits.",
+  "summary": "Record version 0.4.12 for the network installer and automatic VM I/O defaults.",
   "paths": [
     "CHANGELOG.md",
     "docs/guide/change-management-network.md",
@@ -10,12 +10,12 @@
     "docs/guide/pool-authority-and-recovery.md",
     "docs/guide/publish-a-release.md",
     "docs/guide/software-updates.md",
-    "installer/README.md",
-    "docs/qa/2026-09-24-automatic-vm-io-trials.csv"
+    "docs/qa/2026-09-24-automatic-vm-io-trials.csv",
+    "installer/README.md"
   ],
   "guide": {
     "impact": "updated",
-    "reason": "Update current development-version labels to 0.4.12; operator workflows are unchanged. VM tuning behavior and qualification limits are documented in the companion implementation assessment.",
+    "reason": "Version labels and operator guidance cover both the network installer and VM I/O defaults; their detailed behavior is assessed in companion change records.",
     "pages": [
       "docs/guide/change-management-network.md",
       "docs/guide/host-maintenance-mode.md",
@@ -29,7 +29,7 @@
   },
   "api": {
     "impact": "none",
-    "reason": "This release-note and version-label change alters no client endpoint, Controller-to-Core command, or observed-result contract. The companion VM tuning change uses the existing contract.",
+    "reason": "Release labels and notes change no client endpoint, Controller-to-Core command or observed-result contract; the companion VM I/O change uses its existing contract.",
     "pages": []
   },
   "roadmap": {
@@ -41,12 +41,13 @@
     "reason": "Release notes and version labels create no product resource or durable pool setting."
   },
   "verification": {
-    "method": "Current and v0.4.12 tag version resolution both returned 0.4.12 0.4.12; 10 release-version tests and the repository privacy test passed. Documentation gate passed. Normalized the prior trial CSV to LF without changing any parsed cells after the staged diff check exposed CRLF whitespace. Combined HEAD-to-worktree diff check passed; the existing index is preserved and still contains the old CSV line endings until the operator stages this correction. No build, tag, publication or deployment was performed.",
+    "method": "Both parent branches checked changelog-derived version 0.4.12 and release-version tests. Their installation and VM I/O evidence is recorded separately; the merged release and forge checks still require execution.",
     "evidence": [
       "CHANGELOG.md",
+      "docs/qa/2026-09-24-automatic-vm-io.md",
+      "docs/qa/iso/2026-09-24-net-installer.md",
       "scripts/release-version.py",
-      "tests/test_release_version.py",
-      "docs/qa/2026-09-24-automatic-vm-io.md"
+      "tests/test_release_version.py"
     ]
   }
 }

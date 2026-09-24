@@ -1,0 +1,66 @@
+{
+  "summary": "Add a network-install ISO using direct Debian and Fedora downloads and Nex-only release payloads, with matching forge build workflows",
+  "paths": [
+    ".gitea/workflows/installer.yml",
+    ".gitea/workflows/release.yml",
+    ".github/workflows/installer.yml",
+    ".github/workflows/release.yml",
+    "docs/BUG_LEDGER.md",
+    "docs/LICENSING.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-24-net-installer.md",
+    "docs/qa/iso/2026-09-24-net-installer.md",
+    "installer/README.md",
+    "installer/build-gui.sh",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/gui/netinst-network.sh",
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/recheck.sh",
+    "installer/gui/wizard-text.sh",
+    "installer/late-install.sh",
+    "installer/netinst-fetch.sh",
+    "installer/netinst-manifest.py",
+    "installer/root-account.sh",
+    "scripts/release-publish.py",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/root-account.py",
+    "tests/test_ci_security.py",
+    "tests/test_iso_payload_efficiency.py",
+    "tests/test_iso_smoke.py",
+    "tests/test_netinst.py",
+    "tests/test_netinst_network.py",
+    "tests/test_netinst_release.py",
+    "tests/test_release_reachability.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators choose full or network installation, configure internet access and recover from unavailable or invalid downloads.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/publish-a-release.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local wizard, Debian Installer, build and release tooling change; no Controller operation, Core command, observed-state or client-facing API contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "An additional installation variant does not promote a platform milestone or close its acceptance gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new pool or Controller-owned state; existing installer settings continue into host configuration and the package database."
+  },
+  "verification": {
+    "method": "Local automated checks, independent review and clean final-artifact BIOS installation/first boot/reboot for both ISO variants passed; UEFI installation, hardware and hosted forge/publication limits are recorded in the QA report.",
+    "evidence": [
+      "docs/qa/iso/2026-09-24-net-installer.md"
+    ]
+  }
+}

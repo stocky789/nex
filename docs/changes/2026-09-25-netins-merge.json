@@ -1,0 +1,35 @@
+{
+  "summary": "Resolve the main branch merge and repair the managed VM browser gate.",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/qa/iso/2026-09-24-net-installer.md",
+    "tests/integration/managed_vm_browser.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The merge preserves existing operator behavior; the QA edits only reconcile bug references and the browser edits update test assertions.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The merged installer and browser test changes introduce no new client API, Controller operation, Core command or observed-state contract. API changes arriving from main retain their own change records and contracts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The merge and browser test corrections do not change milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Conflict resolution and test assertions add no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Inspected PR #8 forge run 4449 and ran the full simulated managed VM browser suite locally after fixing its activity selector and chart assertion; all 19 reported checks passed. Hosted rerun of the merged branch remains pending.",
+    "evidence": [
+      "tests/integration/managed_vm_browser.py",
+      "docs/BUG_LEDGER.md",
+      "docs/qa/iso/2026-09-24-net-installer.md"
+    ]
+  }
+}

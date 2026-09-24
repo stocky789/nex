@@ -125,6 +125,10 @@ for path in "$SYS"/class/net/*; do
     nics="$nics ${path##*/}"
 done
 # A host with no adapter installs offline, exactly as the graphical wizard does.
+if [ -z "$nics" ] && [ -f "$ROOT/cdrom/nex/netinst.tsv" ]; then
+    fail_note nex-installer/failed "The net installer requires a network adapter and internet access. Use the offline ISO if networking is unavailable."
+    exit 1
+fi
 if [ -z "$nics" ]; then
     db_fset nex-installer/no-nic seen false
     db_input critical nex-installer/no-nic || true
@@ -268,7 +272,8 @@ step_management() {
         if [ -z "$choices" ]; then choices=$entry; else choices="$choices, $entry"; fi
     done
     # Offline stays last so the highlighted default is the first adapter.
-    db_subst nex-installer/management choices "$choices, $OFFLINE"
+    [ -f "$ROOT/cdrom/nex/netinst.tsv" ] || choices="$choices, $OFFLINE"
+    db_subst nex-installer/management choices "$choices"
     ask nex-installer/management || return 1
     if [ "$RET" = "$OFFLINE" ]; then v_management=; else v_management=${RET%% *}; fi
 }

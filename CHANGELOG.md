@@ -17,6 +17,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
+- Add a smaller network installer alongside the full offline ISO. It downloads Debian
+  packages directly from Debian and Windows driver media from Fedora; Nex hosting supplies
+  the Nex Core package, its Controller appliance and the custom DLM package.
+- Network installation checks source availability before disk preparation, verifies every
+  downloaded payload and resumes interrupted transfers.
 - Nex Core automatically assigns a shared disk I/O thread to VirtIO and SCSI disks and
   offers VirtIO network adapters up to four queues, limited by the VM's CPU count.
   These defaults apply to new VMs and stopped saves, without additional frontend settings.
@@ -32,6 +37,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Miscellaneous
 
+- Forge release builds produce both installer variants, their checksums and matching
+  source/compliance records, plus the packages needed by the network installer.
 - Native VM lifecycle and nested-lab workload checks are recorded in the
   [validation report](docs/qa/2026-09-24-automatic-vm-io.md). Four network queues increased
   receive-side TCP retransmissions under saturation; production performance qualification
