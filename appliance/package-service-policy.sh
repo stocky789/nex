@@ -84,7 +84,6 @@ POLICY
             services='sanlock wdmd corosync-qdevice corosync-qnetd'
         fi
         for unit in $units; do
-            deb-systemd-helper disable "$unit"
             systemctl --root="$root/" disable "$unit"
             state=$(systemctl --root="$root/" is-enabled "$unit" 2>&1 || :)
             case $state in

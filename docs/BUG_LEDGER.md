@@ -7736,3 +7736,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Retain the two appliance runtime inputs explicitly and the guest OS catalogue's missing file types in the source archive.
 - Regression: `test_appliance_and_guest_os_inputs_are_retained` failed before the fix with the missing qnetd helper, then passed. `python3 -m unittest tests.test_build_source` passed (9 tests), `python3 -m unittest tests.test_appliance_build` passed (12 tests), and a fresh source archive contained the missing inputs and sampled image/license files. The forge Python discovery job includes this regression; no full appliance image build or forge rerun is claimed.
 - Avoid: Adding a file consumed by the image build without checking its presence in the release's staged source archive.
+
+## BUG-0566 — Appliance build called a dpkg-only helper after package installation
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4459 installed `corosync-qnetd` but failed during `package-service-policy install` immediately after `/bin/deb-systemd-helper was not called from dpkg. Exiting.`
+- Root cause: The `disable` step invoked `deb-systemd-helper` from the appliance's shell wrapper, outside a dpkg maintainer script. Debian's helper exits 1 without `DPKG_MAINTSCRIPT_PACKAGE`.
+- Fix: Use the existing offline `systemctl --root` disable and `is-enabled` readback. This removes the boot link without calling the dpkg-only helper; a later package upgrade sees the unit's missing link as disabled.
+- Regression: `test_package_disable_does_not_call_dpkg_maintainer_helper` failed before the fix with exit 17 from a refusing helper, then passed using real `systemctl --root` against a temporary service tree. `python3 -m unittest tests.test_storage_packaging` passed (23 tests). A disposable appliance image build from the pinned Debian base completed through package installation and image finalization using a temporary signing key; boot and forge rerun remain unverified. The forge Python discovery job includes the regression.
+- Avoid: Calling maintainer-script helpers from ordinary build or installer shell steps.

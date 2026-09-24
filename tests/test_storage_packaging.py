@@ -140,6 +140,27 @@ class StoragePackagingTests(unittest.TestCase):
             self.assertNotIn("stop", log.read_text())
             self.assertFalse(list((root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")))
 
+    def test_package_disable_does_not_call_dpkg_maintainer_helper(self):
+        helper = ROOT / "appliance/package-service-policy.sh"
+        with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
+            root = Path(directory)
+            unit = root / "usr/lib/systemd/system/corosync-qnetd.service"
+            unit.parent.mkdir(parents=True)
+            unit.write_text("[Unit]\nDescription=Test qnetd\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n")
+            link = root / "etc/systemd/system/multi-user.target.wants/corosync-qnetd.service"
+            link.parent.mkdir(parents=True)
+            link.symlink_to("/usr/lib/systemd/system/corosync-qnetd.service")
+            commands = root / "commands"
+            commands.mkdir()
+            maintainer_helper = commands / "deb-systemd-helper"
+            maintainer_helper.write_text("#!/bin/sh\necho 'not called from dpkg' >&2\nexit 17\n")
+            maintainer_helper.chmod(0o755)
+            env = dict(os.environ, NEX_PACKAGE_ROOT=str(root), PATH=f"{commands}:{os.environ['PATH']}")
+            result = subprocess.run(["sh", str(helper), "disable", "qnetd"], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(link.is_symlink())
+
     def test_package_install_failure_restores_existing_service_policy(self):
         helper = ROOT / "appliance/package-service-policy.sh"
         with tempfile.TemporaryDirectory(prefix="nex-service-policy-") as directory:
