@@ -1,0 +1,53 @@
+{
+  "summary": "Prefill the host Networking management form from the live Nex-managed configuration. Core parses /etc into inventory.management_network.current (stage none when no change record); the UI seeds from current. API impact: changed contract (ManagementNetworkStatus.current; stage enum gains none).",
+  "paths": [
+    "internal/protocol/hostnetwork.go",
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/management_network_test.go",
+    "web/src/host-network.tsx",
+    "web/src/host-network.test.mjs",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "tests/test_api_contract.py",
+    "docs/guide/change-management-network.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-host-network-current-config.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Change-management-network steps now say the Interfaces table and DNS start filled from the host's reported current configuration when Nex manages the files.",
+    "pages": [
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "ManagementNetworkStatus gains current (live parsed Spec) and stage may be none when there is no change record but Current is reported. Spec remains the staged/applied/last change. Both sides: Core projects Current; Controller GET already passes the status through; UI seeds the edit form from current. Older Cores omit current; the UI falls back to spec then blanks.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix for an existing management-network panel; no phase gate movement.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The live configuration is the host's own Nex-managed /etc files; Current is an observation projected into inventory so a fresh Controller adopts it with nothing to re-enter.",
+    "record": "Host-scoped. Same durable files as the management-network edit path (/etc/network/interfaces, /etc/dhcpcd.conf, /etc/resolv.conf) plus optional <state-dir>/management-network.json for in-flight changes. Inventory.management_network.current is parsed from those files on every report; a replacement Controller reads it back with the host's inventory."
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost/ -run 'TestManagementNetworkRender|TestReadManagementNetworkStatusReportsCurrent'; node web/src/host-network.test.mjs; python3 -m unittest tests.test_api_contract.HostNetworkContractTests; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Native host and browser walkthrough not re-run in this change.",
+    "evidence": [
+      "internal/vmhost/management_network_test.go",
+      "web/src/host-network.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

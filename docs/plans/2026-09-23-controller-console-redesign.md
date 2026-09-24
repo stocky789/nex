@@ -135,7 +135,7 @@ built now with the phase-gated state, connected when that phase lands.
 | Panel header with Online/Stale badge, role · pool · IP line | now |
 | Tabs: Overview, Hardware, Performance, Networking, Storage, Console, Activity | now (existing host components move in) |
 | Stale explanation block | now |
-| Hardware card (model), NIC port tiles by speed with legend, Interfaces and Bonds & VLANs buttons | now (`hosts/{id}/hardware`, inventory NICs, `hosts/{id}/network`) |
+| Hardware card (model), NIC port tiles by speed with legend, Interfaces & VLANs button | now (`hosts/{id}/hardware`, inventory NICs, `hosts/{id}/network`) |
 | Disk tiles with role, memory meter, VMs on this host, properties (IP, CPU, Core version, uptime, fencing) | now |
 | Quick actions: Refresh inventory, Console, Maintenance, Re-enroll, Revoke access | now |
 

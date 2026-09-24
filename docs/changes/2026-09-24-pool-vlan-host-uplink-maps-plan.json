@@ -1,0 +1,28 @@
+{
+  "summary": "Complete plan for pool VLAN per-host uplink maps: refuse join until every pool VLAN is mapped and apply-valid; auto identity map when names match; mapping modal only otherwise; maps embedded on the master registration; remap UI; Controller only asks. Planning only until implementation.",
+  "paths": [
+    "docs/plans/2026-09-24-pool-vlan-host-uplink-maps.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "No behaviour changes; join-a-pool and network guide updates land with the implementing slices."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Planning only. The plan declares a changed pool-network contract (per-host uplink maps, host-resolved peer GET, placement readiness) for the implementing slices; docs/API.md is not updated here."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The published roadmap describes shipped behaviour; it changes when the feature ships. The decision is recorded in docs/plans."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No state changes in this record. The planned feature is Core-owned on the pool master: durable per-host uplink maps on the pool VLAN registration, adopted via Inventory.managed / pool network APIs."
+  },
+  "verification": {
+    "method": "Documentation link and scope review against the current name-equality apply path and Phase 4 join preview; documentation gate run for this record.",
+    "evidence": [
+      "docs/plans/2026-09-24-pool-vlan-host-uplink-maps.md"
+    ]
+  }
+}

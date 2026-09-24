@@ -34,6 +34,10 @@ type poolJoinBroker struct {
 // next report, not on the one that carried it. It is a variable only so tests can shorten it.
 var poolJoinWait = 45 * time.Second
 
+// poolBMCProbeWait covers the two minutes Core gives a management controller probe, plus the
+// report that carries its answer back.
+var poolBMCProbeWait = 3 * time.Minute
+
 // poolJoinInvitationTTL matches the master's invitation lifetime. It bounds how long a
 // dispatched command row may still carry the invitation before it is scrubbed.
 const poolJoinInvitationTTL = 15 * time.Minute
@@ -87,14 +91,21 @@ func (c *Controller) completePoolResults(host string, results []protocol.PoolRes
 
 // poolResultValid bounds what a host may put into a brokered answer, for the action that was
 // asked: a succeeded invitation must carry a usable invitation, a succeeded promotion
-// preflight must carry a verdict for the host that was asked, and a failed result carries
-// neither. Nothing in an answer is ever stored, so this is the whole of the trust boundary.
+// preflight must carry a verdict for the host that was asked, a management controller probe
+// carries a well-formed answer (a failed one may still say what answered), and a failed
+// result carries nothing else. Nothing in an answer is ever stored, so this is the whole of the trust boundary.
 func poolResultValid(action string, v protocol.PoolResult) bool {
 	if (v.Status != "succeeded" && v.Status != "failed") || len(v.Error) > 4096 || v.ObservedAt.IsZero() {
 		return false
 	}
 	if v.Status == "failed" {
-		return v.Invitation == nil && v.Promotion == nil
+		return v.Invitation == nil && v.Promotion == nil && (v.BMCProbe == nil || action == "bmc-probe" && v.BMCProbe.Valid() == nil)
+	}
+	if action == "bmc-probe" {
+		return v.Invitation == nil && v.Promotion == nil && v.BMCProbe != nil && v.BMCProbe.Valid() == nil
+	}
+	if v.BMCProbe != nil {
+		return false
 	}
 	if action == "promotion-preflight" {
 		return v.Invitation == nil && v.Promotion != nil && v.Promotion.CandidateHostID == v.HostID
@@ -280,6 +291,10 @@ func (c *Controller) relayPoolRequest(w http.ResponseWriter, r *http.Request, re
 		delete(b.pending, request.RequestID)
 		b.mu.Unlock()
 	}()
+	wait := poolJoinWait
+	if request.Action == "bmc-probe" {
+		wait = poolBMCProbeWait
+	}
 	select {
 	case found := <-result:
 		return found, true
@@ -290,7 +305,7 @@ func (c *Controller) relayPoolRequest(w http.ResponseWriter, r *http.Request, re
 		// accepted rather than refused as already active.
 		fail(w, statusClientClosedRequest, poolRequestAbandoned(request.Action))
 		return protocol.PoolResult{}, false
-	case <-time.After(poolJoinWait):
+	case <-time.After(wait):
 		write(w, http.StatusGatewayTimeout, protocol.PoolResult{RequestID: request.RequestID, PoolID: request.PoolID, HostID: request.HostID, Status: "failed", Error: poolRequestDeadline(request.Action), ObservedAt: time.Now().UTC()})
 		return protocol.PoolResult{}, false
 	}
@@ -304,6 +319,10 @@ var poolRequestCopyByAction = map[string]poolRequestCopy{
 	"promotion-preflight": {
 		abandoned: "the client disconnected before the promotion candidate answered; retry",
 		deadline:  "the promotion candidate did not answer the promotion preflight before the deadline; retry",
+	},
+	"bmc-probe": {
+		abandoned: "the client disconnected before the pool master finished probing the management controller; detect again",
+		deadline:  "the pool master did not finish probing the management controller before the deadline; detect again",
 	},
 }
 

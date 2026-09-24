@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 
-const { badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary, clampSlideoverWidth, loadSlideoverWidth, saveSlideoverWidth, slideoverMinWidth } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
+const { badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary, clampSlideoverWidth, loadSlideoverWidth, saveSlideoverWidth, slideoverMinWidth, Sparkline, monotone } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
 
 for (const v of ["fresh", "healthy", "succeeded", "current", "available", "confirmed", "connected", "ready", "in_sync", "passed", "verified", "up"]) assert.equal(badgeTone(v), "ok", v);
 for (const v of ["stale", "degraded", "pending", "dispatched", "needs_attention", "behind", "unverified", "uncertain", "warning", "disconnected", "unresponsive", "timeout", "awaiting_fencing", "staged", "applied"]) assert.equal(badgeTone(v), "warn", v);
@@ -64,5 +64,15 @@ const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 assert.match(style, /\.rail a\.rail-sub \{[^}]*min-height: 44px/);
 assert.doesNotMatch(style, /\.rail a\.rail-sub \{[^}]*margin: -2px 6px 0/);
 assert.match(main, /size=\{path === "containers" \? 16 : 20\}/);
+
+// Usage sparklines stay thin when stretched full-width, and use a monotone curve instead of
+// jagged polylines (especially noisy on disk/network).
+assert.equal(monotone([[0, 50], [50, 50], [100, 50]]), "M0.00,50.00C16.67,50.00 33.33,50.00 50.00,50.00C66.67,50.00 83.33,50.00 100.00,50.00");
+const spark = renderToStaticMarkup(createElement(Sparkline, { values: [10, 40, 20, 80], series: 3, width: 240, height: 30 }));
+assert.match(spark, /vector-effect="non-scaling-stroke"/);
+assert.match(spark, /stroke-width="1"/);
+assert.match(spark, /stroke-linejoin="round"/);
+assert.match(spark, /C[\d.,\s-]+C/, "monotone cubic segments, not only L joins");
+assert.doesNotMatch(spark, /stroke-width="1\.5"/);
 
 console.log("ui ok");

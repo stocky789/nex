@@ -231,7 +231,7 @@ function Overview({ data, host, master, poolName, history, hardware, hardwareNot
             title={`${n.name} · ${n.mac} · ${up ? `link up${n.speed_mbps ? ` at ${speedLabel(n.speed_mbps)}b/s` : ""}` : "no link"}`}>{up && n.speed_mbps ? speedLabel(n.speed_mbps) : n.name}</span>;
         })}</div> : <p className="muted">No physical interfaces reported.</p>}
         <div className="host-legend"><span><i className="fast" />10 GbE or faster</span><span><i className="up" />Below 10 GbE or speed not reported</span><span><i className="down" />No link</span></div>
-        <div className="host-links"><button type="button" onClick={onNetworking}>Interfaces</button><button type="button" onClick={onNetworking}>Bonds &amp; VLANs</button></div>
+        <div className="host-links"><button type="button" onClick={onNetworking}>Interfaces &amp; VLANs</button></div>
       </section>
       <section className="host-card"><h3>Disks</h3>{inv.disks?.length ? disks : <p className="muted">No disks reported.</p>}</section>
       <section className="host-card">

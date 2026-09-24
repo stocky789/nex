@@ -63,6 +63,33 @@ func TestFencingProofBindsExactConfig(t *testing.T) {
 	_ = s
 }
 
+func TestBMCTargetIDFollowsRedfishIdRules(t *testing.T) {
+	// Dell iDRAC and fence_redfish use System.Embedded.1; the old opaque-ID check rejected the dots.
+	base := StorageClusterFence{Kind: FenceRedfish, Endpoint: "bmc.example.test", TargetID: "System.Embedded.1", Username: "root", CredentialRef: "fence-cred"}
+	if err := base.Valid(); err != nil {
+		t.Fatalf("Dell Redfish system Id rejected: %v", err)
+	}
+	for _, id := range []string{"1", "system-1", "System.Embedded.1", "blade.1-2"} {
+		f := base
+		f.TargetID = id
+		if err := f.Valid(); err != nil {
+			t.Fatalf("valid BMC target %q rejected: %v", id, err)
+		}
+		f.Kind = FenceIPMI
+		if err := f.Valid(); err != nil {
+			t.Fatalf("valid IPMI plug %q rejected: %v", id, err)
+		}
+	}
+	// RFC1738 unsafe / path breakers must stay refused (DSP0266 §6.1 / §9.6.6).
+	for _, id := range []string{"", ".Embedded", "System Embedded.1", "System/Embedded.1", "System#1", "System|1", "System~1", "{sys}", "a%2Eb"} {
+		f := base
+		f.TargetID = id
+		if err := f.Valid(); err == nil {
+			t.Fatalf("unsafe BMC target %q accepted", id)
+		}
+	}
+}
+
 func TestVirshURIIsBoundToPinnedSSHTransport(t *testing.T) {
 	base := StorageClusterFence{Kind: FenceVirsh, Endpoint: "fence.example.test", TargetID: "11111111-2222-4333-8444-555555555555", CredentialRef: "credential", SSHHostKeyRef: "hostkey", SSHLogin: "fence", SSHPort: 2222}
 	for _, uri := range []string{"qemu:///system", "qemu+ssh://fence@fence.example.test:2222/system"} {

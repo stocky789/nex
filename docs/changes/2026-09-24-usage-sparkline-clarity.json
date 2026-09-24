@@ -1,0 +1,39 @@
+{
+  "summary": "Thin and smooth usage-history sparklines so stretched SVG strokes stay readable. API impact: none.",
+  "paths": [
+    "web/src/ui.tsx",
+    "web/src/ui.test.mjs",
+    "web/src/overview.tsx",
+    "web/src/stats.tsx",
+    "docs/design/controller-console/reference.html",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-usage-sparkline-clarity.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Visual chart chrome only; operator workflows and guide steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller presentation only; no host or Controller API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Ephemeral SVG stroke styling; no durable state."
+  },
+  "verification": {
+    "method": "node web/src/ui.test.mjs; node web/src/overview.test.mjs; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "web/src/ui.test.mjs",
+      "web/src/ui.tsx",
+      "web/src/overview.tsx"
+    ]
+  }
+}

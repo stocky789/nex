@@ -173,13 +173,21 @@ func (c StorageClusterConfig) ValidFor(s StorageRegistration) error {
 // certificateFingerprint is a SHA-256 leaf digest: 64 lower-case hex digits.
 var certificateFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// bmcTargetID is a Redfish ComputerSystem Id or an IPMI plug used as one URI path segment.
+// DMTF DSP0266 §9.6.6: Id must not contain RFC1738-defined unsafe characters
+// ({ } space | ^ ~ [ ] ` \), and Redfish URIs must not percent-encode path segments.
+// Period and hyphen are allowed and required for Dell iDRAC (System.Embedded.1). Length is
+// capped so a profile stays bounded; the first character must be alphanumeric so a bare
+// "." or "-" cannot slip through as a segment.
+var bmcTargetID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
 func (f StorageClusterFence) Valid() error {
 	if f.CredentialRef != "" && !storageOpaqueID.MatchString(f.CredentialRef) {
 		return errors.New("invalid fence credential reference")
 	}
 	switch f.Kind {
 	case FenceRedfish, FenceIPMI:
-		if !storageServer(f.Endpoint) || !storageOpaqueID.MatchString(f.TargetID) || (f.Username != "" && !storageOpaqueID.MatchString(f.Username)) || (f.TLSFingerprint != "" && !certificateFingerprint.MatchString(f.TLSFingerprint)) || f.CredentialRef == "" || f.DevicePath != "" || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" {
+		if !storageServer(f.Endpoint) || !bmcTargetID.MatchString(f.TargetID) || (f.Username != "" && !storageOpaqueID.MatchString(f.Username)) || (f.TLSFingerprint != "" && !certificateFingerprint.MatchString(f.TLSFingerprint)) || f.CredentialRef == "" || f.DevicePath != "" || f.VirshURI != "" || f.SSHLogin != "" || f.SSHPort != 0 || f.SSHHostKeyRef != "" {
 			return errors.New("invalid BMC fence profile")
 		}
 		if f.Cipher != 0 && f.Cipher != 3 && f.Cipher != 17 || f.Cipher != 0 && f.Kind != FenceIPMI {

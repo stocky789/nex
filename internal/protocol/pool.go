@@ -1317,10 +1317,89 @@ type PoolRequest struct {
 	RequestID    string `json:"request_id"`
 	PoolID       string `json:"pool_id"`
 	HostID       string `json:"host_id"`
-	Action       string `json:"action"` // invite or promotion-preflight
+	Action       string `json:"action"` // invite, promotion-preflight or bmc-probe
 	MemberHostID string `json:"member_host_id,omitempty"`
 	MasterURL    string `json:"master_url,omitempty"`
+	// Endpoint, Username and CredentialRef address the management controller a bmc-probe
+	// asks about. CredentialRef is the opaque reference the one-time credential handoff
+	// returned; the master retires the material behind it once the probe has answered.
+	Endpoint      string `json:"endpoint,omitempty"`
+	Username      string `json:"username,omitempty"`
+	CredentialRef string `json:"credential_ref,omitempty"`
 }
+
+func (r PoolRequest) Valid() error {
+	if r.RequestID == "" || len(r.RequestID) > 128 || r.PoolID == "" || r.HostID == "" {
+		return errors.New("pool request does not address a host")
+	}
+	switch r.Action {
+	case "invite", "promotion-preflight":
+		if r.Endpoint != "" || r.Username != "" || r.CredentialRef != "" {
+			return errors.New("only a management controller probe names a controller or a credential")
+		}
+	case "bmc-probe":
+		if r.MemberHostID == "" || r.MasterURL != "" || !storageServer(r.Endpoint) ||
+			r.Username != "" && !storageOpaqueID.MatchString(r.Username) ||
+			r.CredentialRef != "" && !storageOpaqueID.MatchString(r.CredentialRef) ||
+			(r.Username == "") != (r.CredentialRef == "") {
+			return errors.New("a management controller probe names one host, one controller address, and an account only together with its credential")
+		}
+	default:
+		return errors.New("unknown pool request")
+	}
+	return nil
+}
+
+// PoolBMCProbeMaxTargets bounds the systems one probe reports for one controller.
+const PoolBMCProbeMaxTargets = 16
+
+// PoolBMCProbeResult is the master's answer to a bmc-probe: which way one management
+// controller answered it, and the profile it recommends an operator records. It is computed
+// for one round trip and stored by no one; recording the profile is Set BMC access, which
+// pins and proves the controller again.
+type PoolBMCProbeResult struct {
+	Methods     []PoolBMCProbeMethod `json:"methods"`
+	Recommended *PoolBMCProbeChoice  `json:"recommended,omitempty"`
+}
+
+type PoolBMCProbeMethod struct {
+	Kind      string   `json:"kind"` // redfish or ipmilan
+	Reachable bool     `json:"reachable"`
+	TargetIDs []string `json:"target_ids,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+}
+
+type PoolBMCProbeChoice struct {
+	Kind     string `json:"kind"`
+	TargetID string `json:"target_id"`
+	Reason   string `json:"reason"`
+}
+
+func (r PoolBMCProbeResult) Valid() error {
+	if len(r.Methods) > 2 {
+		return errors.New("invalid management controller probe result")
+	}
+	seen, reachable := map[string]bool{}, map[string]bool{}
+	for _, m := range r.Methods {
+		if m.Kind != FenceRedfish && m.Kind != FenceIPMI || seen[m.Kind] || len(m.TargetIDs) > PoolBMCProbeMaxTargets ||
+			!m.Reachable && len(m.TargetIDs) != 0 || len(m.Detail) > 512 {
+			return errors.New("invalid management controller probe result")
+		}
+		for _, id := range m.TargetIDs {
+			if !BMCTargetIDValid(id) {
+				return errors.New("invalid management controller probe result")
+			}
+		}
+		seen[m.Kind], reachable[m.Kind] = true, m.Reachable
+	}
+	if c := r.Recommended; c != nil && (!reachable[c.Kind] || !BMCTargetIDValid(c.TargetID) || c.Reason == "" || len(c.Reason) > 512) {
+		return errors.New("invalid management controller probe result")
+	}
+	return nil
+}
+
+// BMCTargetIDValid is the rule a fence profile applies to its Redfish system Id or IPMI plug.
+func BMCTargetIDValid(id string) bool { return bmcTargetID.MatchString(id) }
 
 // PoolJoinInvitation is the master-issued, single-use credential a joining Core redeems
 // against the master by itself.  It exists in Controller memory only for the remainder of
@@ -1343,6 +1422,7 @@ type PoolResult struct {
 	// Promotion is the candidate's full structured verdict, answered to a preflight.  It
 	// is computed on Core for that one round trip and stored by no one.
 	Promotion *PoolPromotionVerdict `json:"promotion,omitempty"`
+	BMCProbe  *PoolBMCProbeResult   `json:"bmc_probe,omitempty"`
 }
 
 // PoolJoinStatus is the joining host's own report of its durable staged join.  Stage is the

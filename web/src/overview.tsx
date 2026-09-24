@@ -9,8 +9,10 @@ import { storageAccess } from "./storage";
 import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
-import { AttentionList, Badge, Meter, badgeTone } from "./ui";
+import { AttentionList, Badge, Meter, badgeTone, monotone } from "./ui";
 import "./overview.css";
+
+export { monotone };
 
 // Each chart range reads the finest stored tier that covers it and keeps the steps inside its span.
 const chartRanges = { "1H": { range: "24h", seconds: 3600 }, "1D": { range: "24h", seconds: 86400 }, "1W": { range: "30d", seconds: 7 * 86400 }, "1M": { range: "30d", seconds: 30 * 86400 } };
@@ -270,24 +272,6 @@ function kpiTrend(what: string, values: Point[], window: string, windowText: str
   if (!t) return {};
   const summary = `${what} ${windowText}: ${Math.round(t.first)}% to ${Math.round(t.now)}%.`;
   return { badge: <span className="ov-change" title={summary}>{t.change ? `${t.change} ${window}` : "— steady"}</span> };
-}
-
-// A monotone cubic through one run of points (the Fritsch–Carlson family, as d3's curveMonotoneX
-// draws it): every segment stays between its two end values, so a line never overshoots 100% or
-// dips below 0, and a flat stretch stays flat.
-export function monotone(p: [number, number][]): string {
-  const d = p.slice(1).map(([x, y], k) => (y - p[k][1]) / (x - p[k][0]));
-  const m = p.map((_, k) => {
-    if (k === 0 || k === p.length - 1) return d[k === 0 ? 0 : k - 1] ?? 0;
-    const h0 = p[k][0] - p[k - 1][0], h1 = p[k + 1][0] - p[k][0];
-    const mean = (d[k - 1] * h1 + d[k] * h0) / (h0 + h1);
-    return (Math.sign(d[k - 1]) + Math.sign(d[k])) * Math.min(Math.abs(d[k - 1]), Math.abs(d[k]), Math.abs(mean) / 2);
-  });
-  const f = (v: number) => v.toFixed(2);
-  return `M${f(p[0][0])},${f(p[0][1])}` + p.slice(1).map(([x, y], k) => {
-    const [x0, y0] = p[k], h = (x - x0) / 3;
-    return `C${f(x0 + h)},${f(y0 + m[k] * h)} ${f(x - h)},${f(y - m[k + 1] * h)} ${f(x)},${f(y)}`;
-  }).join("");
 }
 
 // The known runs of a series as points in the chart's 0–100 box: a gap in the data is a gap in

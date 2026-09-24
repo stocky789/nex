@@ -1009,7 +1009,9 @@ database and keeps nothing after the exchange. Core refuses a request whose `hos
 is not this master or whose action is not `invite`. The Controller discards a result whose pool,
 host or `request_id` does not match, or which succeeded without an unexpired invitation, and
 answers `504` with a Core-shaped `PoolResult` body rather than the usual `{"error": …}`. A report
-carrying more than 32 results is a malformed report (`400 too many pool results`).
+carrying more than 32 results is a malformed report (`400 too many pool results`). The same broker
+carries `promotion-preflight` (answered with `promotion`) and `bmc-probe` (answered with
+`bmc_probe`, waited on for 3 minutes); see the fence-verified promotion routes below.
 
 **The invitation itself.** Single use, 15 minutes, bound to the pool, the master and the joining
 host. It is the existing one-use offer record with no CSR hash: the master binds the presented CSR
@@ -2042,10 +2044,30 @@ bodies. Every literal refusal with its status code is in the [generated referenc
   replay payload is the client's profile **as sent**, without the credential and without the
   Core-allocated reference, so an exact retry stays byte-identical. `503 Core did not acknowledge
   fence credential delivery; retry with the same request_id` when the handoff is not acknowledged.
+- `POST /api/v1/pools/{id}/members/{host_id}/bmc-probe` — `{request_id, endpoint, username?,
+  credential?: {secret}}`, with `username` and `credential` both present or both absent. The Detect
+  step of Set BMC access: one brokered pool request (`action: "bmc-probe"`, `PoolRequest{member_host_id,
+  endpoint, username?, credential_ref?}`) to the **master**, which probes HTTPS Redfish and IPMI
+  RMCP+ itself, from the host that would fence. Same gates as `fence-profile` (fresh master with
+  `pool-authority-transfer-v1`, host in its reported membership). The password goes over the same
+  one-time credential handoff with a probe-only `bmc_probe` purpose, bound to the same stable
+  `request_id` and target member. Core verifies that scope and removes both private
+  credential copies after the probe, including a failed one; a delivered probe that never runs
+  expires after 10 minutes on Core's local probe tick or its next startup. A recorded fence
+  credential cannot be used for Detect. `200 {host_id, status,
+  error, bmc_probe}` whenever the master answers: `status: "failed"` carries Core's sentence in
+  `error`, and may still carry `bmc_probe.methods` to say what did answer; `bmc_probe.recommended
+  {kind, target_id, reason}` is what to record. The relay waits up to **3 minutes** (Core gives a
+  probe 2, then answers on its next report) and extends the response write deadline to match;
+  `504` with a failed `PoolResult` after that. No discovery result or pool setting is journalled,
+  audited or stored; Core holds only the expiring private handoff until it can retire it. Detect
+  is safe to repeat with a new `request_id`; recording the result is `fence-profile`, which proves the
+  controller again. A result for another action that carries `bmc_probe`, or a probe answer that
+  fails `PoolBMCProbeResult.Valid`, is discarded as if it had not arrived.
 
 Audit: `pool.promote` and `pool.fence-profile` against the pool ID, beside the automatic
-`pool-promote` / `pool-fence-profile` rows. **The preflight audits nothing**, because it changes
-nothing. No credential material and no `credential_ref` is ever audited.
+`pool-promote` / `pool-fence-profile` rows. **The preflight and the BMC probe audit nothing**,
+because they change nothing. No credential material and no `credential_ref` is ever audited.
 
 **Deliberately not pre-refused.** Everything about the old master — whether it answers, whether the
 Controller can reach it, when it was last seen — is not evidence in either direction and refuses
@@ -2747,7 +2769,12 @@ which is the string an operator must type to apply. `state` is the record's stag
 host has never staged a change, and **`unknown` whenever `connection` is not `fresh`**; the record
 itself is still returned when it is stale, because a running rollback deadline must stay visible —
 losing contact during the countdown reads as *unknown, with the deadline*, never as success or
-failure. `check` is the host's `management-network` health check and is `null` when the host is not
+failure. `management_network.current` is the live configuration parsed from the host's Nex-managed
+`/etc/network/interfaces` and `/etc/resolv.conf` (and is reported with `stage: none` even when no
+`management-network.json` exists yet), so the Controller prefills the edit form from what is on
+disk rather than showing every interface as not configured. `management_network.spec` remains the
+staged, applied or last change. `current` is absent when those files are missing or were not
+written by Nex. `check` is the host's `management-network` health check and is `null` when the host is not
 fresh, for the same reason; the host emits that check only as `failed`, while the record is
 `rolled-back` (carrying Core's rollback reason) or while the record is unreadable (`the management
 network record is unreadable`), so its absence means cleared. `nics` is the host's own reported
@@ -3201,7 +3228,10 @@ fencing. Until Core reports fresh validated status, clustered health and executi
 remain blocked.
 
 Fence profiles are closed types (`redfish`, `ipmilan`, `virsh`, or `scsi_pr`), not arbitrary
-commands. The development-only `virsh` profile must bind to the same pinned SSH scope: its
+commands. A BMC (`redfish` / `ipmilan`) `target_id` is the Redfish ComputerSystem `Id` or IPMI
+plug: it follows DMTF DSP0266 §9.6.6 (no RFC1738 unsafe characters in an Id used as a URI
+segment) and therefore allows period — Dell iDRAC uses `System.Embedded.1`. It is not validated
+as a Nex opaque storage/host ID. The development-only `virsh` profile must bind to the same pinned SSH scope: its
 `virsh_uri` is exactly `qemu:///system`, or
 `qemu+ssh://<ssh_login>@<endpoint>[:<ssh_port>]/system`. The latter has the same login and endpoint
 as the fence fields, permits an omitted URI port only when `ssh_port` is `22`, and rejects a

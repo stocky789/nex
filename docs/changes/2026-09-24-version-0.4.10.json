@@ -1,0 +1,50 @@
+{
+  "summary": "Bump the changelog-derived working version to 0.4.10 and place the staged BMC detection and host UI fixes under that version. The pool VLAN host-uplink mapping remains a plan, not a released capability.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/changes/2026-09-24-version-0.4.10.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Current development-version labels now identify 0.4.10; the version bump changes no operator steps.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The staged BMC probe contract is unchanged; its new POST /api/v1/pools/{id}/members/{host_id}/bmc-probe operation is first introduced in working version 0.4.10, so only its introduction metadata changes.",
+    "pages": ["docs/api/openapi.json", "docs/api/index.html"],
+    "operations": ["POST /api/v1/pools/{id}/members/{host_id}/bmc-probe"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version metadata and release notes do not change a milestone gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "A working-version label introduces no durable resource or setting."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both returned 0.4.10 0.4.10; python3 -m unittest tests.test_release_version passed 10 tests; python3 -m unittest tests.test_api_contract passed 74 tests; python3 scripts/generate_api.py --check confirmed generated pages current; python3 scripts/check_docs.py --worktree passed for 58 uncommitted paths; python3 -m unittest discover -s tests -p 'test_repository_privacy.py' passed one test. Independent read-only review confirmed the tagged 0.4.9 notes stay intact and all eight staged change records are represented; no browser or hardware walkthrough was run for this version-only edit.",
+    "evidence": ["CHANGELOG.md", "scripts/release-version.py", "tests/test_release_version.py"]
+  }
+}

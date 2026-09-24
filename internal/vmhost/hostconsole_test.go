@@ -222,3 +222,48 @@ func TestHostTermTabStopsAtNextMultipleOfEight(t *testing.T) {
 		t.Fatalf("tab after \"abc\": cur = %d, want 8", fromCol3.cur)
 	}
 }
+
+// BUG-0544 regression: lowercase glyphs were copies of A-Z, so the host console
+// looked like an all-caps BIOS font, and only the ESC byte of CSI sequences was
+// dropped so apt/prompt colour codes printed as "[32m".
+func TestHostConsoleFontLowercaseDistinct(t *testing.T) {
+	for ch := byte('a'); ch <= 'z'; ch++ {
+		upper := hostGlyph(ch - ('a' - 'A'))
+		lower := hostGlyph(ch)
+		same := true
+		for i := range lower {
+			if lower[i] != upper[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			t.Fatalf("glyph for %q is identical to %q", ch, ch-('a'-'A'))
+		}
+	}
+}
+
+func TestHostTermStripsANSISequences(t *testing.T) {
+	term := newHostTerm()
+	term.write([]byte("\x1b[0m\x1b[33mFetched\x1b[0m hello"))
+	got := string(term.cells[:term.cur])
+	if got != "Fetched hello" {
+		t.Fatalf("after CSI colour codes: %q, want %q", got, "Fetched hello")
+	}
+
+	// Sequences often arrive split across PTY reads.
+	split := newHostTerm()
+	split.write([]byte{0x1b, '['})
+	split.write([]byte("1m26 packages"))
+	got = string(split.cells[:split.cur])
+	if got != "26 packages" {
+		t.Fatalf("split CSI: %q, want %q", got, "26 packages")
+	}
+
+	osc := newHostTerm()
+	osc.write([]byte("\x1b]0;title\x07ok"))
+	got = string(osc.cells[:osc.cur])
+	if got != "ok" {
+		t.Fatalf("OSC: %q, want %q", got, "ok")
+	}
+}

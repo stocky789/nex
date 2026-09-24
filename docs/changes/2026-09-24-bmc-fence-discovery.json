@@ -1,0 +1,58 @@
+{
+  "summary": "Set BMC access gains Detect: the pool master probes a management controller for Redfish and IPMI and recommends a kind and system Id or plug, which the dialog pre-fills. API impact: new contract — POST /api/v1/pools/{id}/members/{host_id}/bmc-probe, relayed as pool request action bmc-probe with PoolResult.bmc_probe.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_bmc_probe_test.go",
+    "internal/vmhost/bmc_probe.go",
+    "internal/vmhost/bmc_probe_test.go",
+    "internal/agent/pool_bmc_probe.go",
+    "internal/agent/pool_bmc_probe_test.go",
+    "internal/agent/run.go",
+    "internal/controller/controller.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/poolpromotion.go",
+    "internal/controller/pool_bmc_probe_test.go",
+    "web/src/pool-promotion.tsx",
+    "web/src/pool-members.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "web/src/style.css",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "tests/test_api_contract.py",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/plans/2026-09-24-bmc-fence-discovery.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-bmc-fence-discovery.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Set BMC access now starts with Detect before the operator confirms kind and identifier.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New admin route POST /api/v1/pools/{id}/members/{host_id}/bmc-probe with the fence-profile gates; PoolRequest gains action bmc-probe with endpoint, username and credential_ref; PoolResult gains bmc_probe (PoolBMCProbeResult/Method/Choice). The password uses the existing one-time credential handoff with probe-only bmc_probe scope and Core retirement/expiry. The relay waits 3 minutes and extends the response write deadline. A Core without the action answers failed, which is relayed as status failed.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Refines the existing Set BMC access fallback; the published roadmap board is unchanged."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Detect is a one-shot answer: the master writes nothing to the membership and retires both private probe password copies after use or after a 10-minute timeout if never used; the Controller journals, audits and stores nothing. The durable record remains the existing fence profile on the pool master, recorded by Set BMC access and recovered from the master's reported membership as before."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/controller/ -run 'BMC|Probe|Fence|PoolResult|Preflight|PoolJoin'; go test -count=1 ./internal/protocol/ ./internal/agent/ ./internal/vmhost/ -run 'BMC|Probe'; node web/src/pool-promotion.test.mjs; node web/src/pool-members.test.mjs; npx tsc --noEmit (web); python3 scripts/generate_api.py --check; python3 -m unittest tests.test_api_contract; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/controller/pool_bmc_probe_test.go",
+      "internal/agent/pool_bmc_probe_test.go",
+      "internal/vmhost/bmc_probe_test.go",
+      "internal/protocol/pool_bmc_probe_test.go",
+      "web/src/pool-promotion.test.mjs",
+      "tests/test_api_contract.py"
+    ],
+    "limits": "Controller relay tested against a simulated master in the Go test lab; the dialog was checked as static markup in a browser (field order and Detect placement), not walked through interactively against a live pool. Detect against a physical management controller (Redfish-only and IPMI-only acceptance cases in the plan) has not been run."
+  }
+}

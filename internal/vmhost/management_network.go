@@ -1142,19 +1142,211 @@ func managementRollbackDue(rec *ManagementNetworkRecord) string {
 	return ""
 }
 
+// managementNICComment matches the section headers both the installer and the renderer write:
+// "# nex0 (52:54:00:12:34:56)" or "# enp1s0 (52:54:00:12:34:56) -> nex0".
+var managementNICComment = regexp.MustCompile(`(?i)^#\s+(\S+)\s+\(([0-9a-f:]+)\)(?:\s*->\s*(\S+))?\s*$`)
+
+// ParseManagementNetworkSpec recovers a ManagementNetworkSpec from Nex-rendered interfaces and
+// resolv.conf content. interfaces must begin with managementHeader; otherwise ok is false and
+// the files are treated as foreign. A nil resolv yields an empty DNS list.
+func ParseManagementNetworkSpec(interfaces string, resolv *string) (ManagementNetworkSpec, bool) {
+	if !strings.HasPrefix(interfaces, managementHeader) {
+		return ManagementNetworkSpec{}, false
+	}
+	bridge := parseManagementBridge(interfaces)
+	if bridge.Port == "" || (bridge.Method != "static" && bridge.Method != "dhcp") {
+		return ManagementNetworkSpec{}, false
+	}
+	mgmtName, vlan := bridge.Port, 0
+	if raw, tag, tagged := strings.Cut(bridge.Port, "."); tagged {
+		mgmtName, vlan = raw, 0
+		if n, err := fmt.Sscanf(tag, "%d", &vlan); n != 1 || err != nil || vlan < 1 || vlan > 4094 {
+			return ManagementNetworkSpec{}, false
+		}
+	}
+	type pending struct {
+		name, mac string
+		body      string
+	}
+	var sections []pending
+	var cur *pending
+	for _, line := range strings.Split(interfaces, "\n") {
+		if m := managementNICComment.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			name := m[1]
+			if m[3] != "" {
+				name = m[3]
+			}
+			hw, err := net.ParseMAC(m[2])
+			if err != nil {
+				continue
+			}
+			sections = append(sections, pending{name: name, mac: hw.String()})
+			cur = &sections[len(sections)-1]
+			continue
+		}
+		if cur != nil {
+			cur.body += line + "\n"
+		}
+	}
+	byName := map[string]ManagementNIC{}
+	for _, sec := range sections {
+		nic := ManagementNIC{Name: sec.name, MAC: sec.mac, Mode: "disabled"}
+		if sec.name == mgmtName {
+			nic.Mode, nic.Management, nic.VLAN = bridge.Method, true, vlan
+			if bridge.Method == "static" {
+				nic.Address, nic.Gateway = bridge.Address, bridge.Gateway
+			}
+			if nic.MAC == "" && bridge.MAC != "" {
+				if hw, err := net.ParseMAC(bridge.MAC); err == nil {
+					nic.MAC = hw.String()
+				}
+			}
+			byName[nic.Name] = nic
+			continue
+		}
+		mode := secondaryIfaceMode(sec.body, sec.name)
+		nic.Mode = mode
+		if mode == "static" {
+			nic.Address, nic.Gateway = secondaryIfaceAddress(sec.body, sec.name)
+			if nic.Gateway != "" {
+				// Only the management interface may carry a gateway.
+				nic.Gateway = ""
+			}
+		}
+		byName[nic.Name] = nic
+	}
+	if _, ok := byName[mgmtName]; !ok {
+		mac := bridge.MAC
+		if hw, err := net.ParseMAC(mac); err == nil {
+			mac = hw.String()
+		}
+		byName[mgmtName] = ManagementNIC{Name: mgmtName, MAC: mac, Mode: bridge.Method, VLAN: vlan, Address: bridge.Address, Gateway: bridge.Gateway, Management: true}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	spec := ManagementNetworkSpec{Interfaces: make([]ManagementNIC, 0, len(names))}
+	for _, name := range names {
+		spec.Interfaces = append(spec.Interfaces, byName[name])
+	}
+	if resolv != nil {
+		for _, line := range strings.Split(*resolv, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "nameserver" {
+				if _, ok := ipv4(fields[1]); ok {
+					spec.DNS = append(spec.DNS, fields[1])
+				}
+			}
+		}
+	}
+	if err := ValidateManagementNetworkSpec(spec); err != nil {
+		return ManagementNetworkSpec{}, false
+	}
+	return spec, true
+}
+
+func secondaryIfaceMode(body, name string) string {
+	mode, auto := "disabled", false
+	for _, line := range strings.Split(body, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		switch fields[0] {
+		case "auto", "allow-hotplug":
+			if len(fields) >= 2 && fields[1] == name {
+				auto = true
+			}
+		case "iface":
+			if len(fields) >= 4 && fields[1] == name {
+				switch fields[3] {
+				case "dhcp", "static":
+					mode = fields[3]
+				case "manual":
+					mode = "disabled"
+				}
+			}
+		}
+	}
+	if mode != "disabled" && !auto {
+		// A static/dhcp stanza without auto is not brought up; treat as disabled.
+		return "disabled"
+	}
+	return mode
+}
+
+func secondaryIfaceAddress(body, name string) (address, gateway string) {
+	inside := false
+	for _, line := range strings.Split(body, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		switch fields[0] {
+		case "iface":
+			inside = len(fields) >= 4 && fields[1] == name
+			continue
+		case "auto", "allow-hotplug", "source", "source-directory", "mapping":
+			inside = false
+			continue
+		}
+		if !inside || len(fields) < 2 {
+			continue
+		}
+		switch fields[0] {
+		case "address":
+			address = fields[1]
+		case "gateway":
+			gateway = fields[1]
+		}
+	}
+	return address, gateway
+}
+
+// currentManagementNetworkSpec is the on-disk configuration parsed for inventory. It returns
+// ok=false when the files are foreign or incomplete; callers then omit Current rather than
+// inventing one.
+func currentManagementNetworkSpec() (ManagementNetworkSpec, bool) {
+	interfacesPath, _, resolvPath := managementTargets()
+	interfaces, err := readManagementTarget(interfacesPath)
+	if err != nil || interfaces == nil {
+		return ManagementNetworkSpec{}, false
+	}
+	resolv, err := readManagementTarget(resolvPath)
+	if err != nil {
+		resolv = nil
+	}
+	return ParseManagementNetworkSpec(*interfaces, resolv)
+}
+
 // ReadManagementNetworkStatus is the inventory projection: what this host reports about its own
-// management network, including how long an unconfirmed change still has.
+// management network, including how long an unconfirmed change still has and — when the
+// on-disk files are Nex-managed — the live configuration an operator sees before staging.
 func ReadManagementNetworkStatus(dir string) (*ManagementNetworkStatus, error) {
 	managementMu.Lock()
 	defer managementMu.Unlock()
 	rec, err := loadManagementRecord(dir)
-	if err != nil || rec == nil {
+	if err != nil {
 		return nil, err
+	}
+	current, hasCurrent := currentManagementNetworkSpec()
+	if rec == nil {
+		if !hasCurrent {
+			return nil, nil
+		}
+		return &ManagementNetworkStatus{
+			Revision: 0, Stage: protocol.ManagementNetworkNone, Current: &current, ObservedAt: time.Now().UTC(),
+		}, nil
 	}
 	status := &ManagementNetworkStatus{
 		Revision: rec.Revision, Stage: rec.Stage, OperationID: rec.OperationID, WindowSeconds: rec.WindowSeconds,
 		Spec: &rec.Spec, Deadline: rec.Deadline, LastError: rec.Error, RequestedRollback: rec.RequestedRollback,
 		ObservedAt: time.Now().UTC(),
+	}
+	if hasCurrent {
+		status.Current = &current
 	}
 	if rec.Stage == protocol.ManagementNetworkApplied {
 		// What is left of the window, measured the way the rollback measures it, so the

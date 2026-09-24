@@ -697,6 +697,18 @@ export type FenceProfileInput =
   | { kind: "redfish" | "ipmilan"; endpoint: string; target_id: string; username: string }
   | { kind: "virsh"; endpoint: string; target_id: string; virsh_uri: string; ssh_login: string; ssh_port: number };
 export type FenceCredentialInput = { secret: string } | { ssh_private_key: string; ssh_known_hosts: string };
+type BMCKind = "redfish" | "ipmilan";
+export type BMCProbeView = {
+  host_id: string; status: "succeeded" | "failed"; error: string;
+  bmc_probe: { methods: { kind: BMCKind; reachable: boolean; target_ids?: string[]; detail?: string }[] | null; recommended?: { kind: BMCKind; target_id: string; reason: string } } | null;
+};
+
+// Only Core's recommendation fills anything in; a refusal is Core's own sentence.
+export function bmcProbePrefill(view: BMCProbeView): { kind: BMCKind; targetID: string; note: string } | { error: string } {
+  const choice = view.status === "succeeded" ? view.bmc_probe?.recommended : undefined;
+  if (!choice) return { error: view.error || "The pool master found no method to recommend." };
+  return { kind: choice.kind, targetID: choice.target_id, note: choice.reason };
+}
 
 // The normal path is a management controller: an address, an account and a password. Nex Core
 // asks that controller which machine it manages and refuses to power anything off unless the
@@ -705,18 +717,21 @@ export type FenceCredentialInput = { secret: string } | { ssh_private_key: strin
 // The virsh device below it is for a Nex Core running as a virtual machine in a disposable
 // lab, where there is no controller to ask. It stays reachable, behind a disclosure, because
 // it is not how a real pool is protected.
-export function FenceProfileDialog({ report, member, busy, submitError, onConfirm, onClear, onClose }: {
+export function FenceProfileDialog({ report, member, busy, submitError, onConfirm, onClear, onClose, onDetect }: {
   report: PromotionReport; member: PromotionMember; busy: boolean; submitError: string;
   onConfirm: (fence: FenceProfileInput, credential: FenceCredentialInput) => void;
   onClear: () => void; onClose: () => void;
+  onDetect?: (endpoint: string, username: string, secret: string) => Promise<BMCProbeView>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const [kind, setKind] = useState<"redfish" | "ipmilan">("redfish");
+  const [kind, setKind] = useState<BMCKind>("redfish");
   const [address, setAddress] = useState("");
   const [systemID, setSystemID] = useState("");
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [detecting, setDetecting] = useState(false);
+  const [detected, setDetected] = useState<{ note: string } | { error: string } | null>(null);
   const [lab, setLab] = useState(false);
   const [endpoint, setEndpoint] = useState("");
   const [targetID, setTargetID] = useState("");
@@ -736,6 +751,19 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
   const complete = lab
     ? Boolean(endpoint.trim() && targetID.trim() && login.trim() && port.trim() && key.trim() && knownHosts.trim())
     : Boolean(address.trim() && systemID.trim() && account.trim() && password);
+  // The account goes with Detect only together with its password; either alone probes anonymously.
+  async function detect() {
+    if (!onDetect || !address.trim() || detecting || busy) return;
+    setDetecting(true); setDetected(null);
+    const signIn = account.trim() && password;
+    try {
+      const prefill = bmcProbePrefill(await onDetect(address.trim(), signIn ? account.trim() : "", signIn ? password : ""));
+      if ("kind" in prefill) { setKind(prefill.kind); setSystemID(prefill.targetID); }
+      setDetected(prefill);
+    } catch (e) {
+      setDetected({ error: (e as Error).message });
+    } finally { setDetecting(false); }
+  }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!complete || busy) return;
@@ -770,8 +798,23 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
       </button>
     </p>}
     {manual && <form onSubmit={submit}>
-      {!lab && <fieldset disabled={busy}>
+      {!lab && <fieldset disabled={busy || detecting}>
         <legend>Management controller of {name}</legend>
+        <label htmlFor="fence-address">Address</label>
+        <input id="fence-address" required autoComplete="off" placeholder="bmc.example.test" aria-describedby="fence-address-help" value={address} onChange={event => setAddress(event.target.value)} />
+        <p className="help" id="fence-address-help">The management controller of {name}, reachable from every host that could be promoted — not only from this browser.</p>
+        <label htmlFor="fence-account">Account</label>
+        <input id="fence-account" required autoComplete="off" aria-describedby="fence-account-help" value={account} onChange={event => setAccount(event.target.value)} />
+        <p className="help" id="fence-account-help">An account with power control on this controller. Nex Core needs nothing else from it.</p>
+        <label htmlFor="fence-password">Password</label>
+        <input id="fence-password" required type="password" className="secret" autoComplete="off" aria-describedby="fence-password-help" value={password} onChange={event => setPassword(event.target.value)} />
+        <p className="help" id="fence-password-help">Entered once. It is sent to Nex Core over the one-time credential handoff, never stored by this Controller, never written to the audit trail and never shown back here.</p>
+        {onDetect && <div className="actions pool-fence-detect">
+          <button type="button" disabled={!address.trim()} onClick={() => void detect()}>{detecting ? "Detecting…" : "Detect"}</button>
+          {detected && ("error" in detected
+            ? <p className="alert" role="alert">{detected.error}</p>
+            : <p className="help" role="status">{detected.note}</p>)}
+        </div>}
         <fieldset className="pool-fence-kind">
           <legend>Kind</legend>
           <label className="checkbox" htmlFor="fence-kind-redfish">
@@ -783,20 +826,11 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
             IPMI
           </label>
         </fieldset>
-        <label htmlFor="fence-address">Address</label>
-        <input id="fence-address" required autoComplete="off" placeholder="bmc.example.test" aria-describedby="fence-address-help" value={address} onChange={event => setAddress(event.target.value)} />
-        <p className="help" id="fence-address-help">The management controller of {name}, reachable from every host that could be promoted — not only from this browser.</p>
         <label htmlFor="fence-system">{kind === "redfish" ? "Redfish system identifier" : "IPMI plug"}</label>
         <input id="fence-system" required autoComplete="off" placeholder={kind === "redfish" ? "1" : "1"} aria-describedby="fence-system-help" value={systemID} onChange={event => setSystemID(event.target.value)} />
         <p className="help" id="fence-system-help">{kind === "redfish"
           ? "The ComputerSystem this controller manages, usually 1 or System.Embedded.1."
           : "The outlet or plug this controller powers, usually 1."}</p>
-        <label htmlFor="fence-account">Account</label>
-        <input id="fence-account" required autoComplete="off" aria-describedby="fence-account-help" value={account} onChange={event => setAccount(event.target.value)} />
-        <p className="help" id="fence-account-help">An account with power control on this controller. Nex Core needs nothing else from it.</p>
-        <label htmlFor="fence-password">Password</label>
-        <input id="fence-password" required type="password" className="secret" autoComplete="off" aria-describedby="fence-password-help" value={password} onChange={event => setPassword(event.target.value)} />
-        <p className="help" id="fence-password-help">Entered once. It is sent to Nex Core over the one-time credential handoff, never stored by this Controller, never written to the audit trail and never shown back here.</p>
         <p className="help">When you submit this, Nex Core connects to the controller, records the exact certificate it presents and asks it which machine it manages. It refuses unless the answer is {name}'s own machine, so a host that does not report a unique hardware identity cannot be given a controller here. Afterwards every connection must present that same certificate: the recorded fingerprint is shown on this host's row, and you can compare it with the controller's own page.</p>
       </fieldset>}
       {lab && <>
@@ -826,7 +860,7 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
       </>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || !complete}>{busy ? "Submitting…" : lab ? "Record virsh fence device" : "Set BMC access"}</button>
+        <button className="primary" disabled={busy || detecting || !complete}>{busy ? "Submitting…" : lab ? "Record virsh fence device" : "Set BMC access"}</button>
       </div>
     </form>}
     {manual && <p className="help pool-fence-lab">

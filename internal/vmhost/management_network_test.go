@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,16 @@ func TestManagementNetworkRender(t *testing.T) {
 		t.Errorf("resolv.conf: %q", *files.Resolv)
 	}
 
+	// Round-trip: the inventory projection must recover the rendered Spec so the Controller
+	// can prefill the edit form before any management-network.json exists.
+	parsed, ok := ParseManagementNetworkSpec(*files.Interfaces, files.Resolv)
+	if !ok {
+		t.Fatal("ParseManagementNetworkSpec rejected a rendered file")
+	}
+	if !reflect.DeepEqual(parsed, staticSpec()) {
+		t.Fatalf("parse round-trip:\ngot  %+v\nwant %+v", parsed, staticSpec())
+	}
+
 	// A DHCP management bridge lets DHCP own resolv.conf unless DNS is overridden.
 	dhcp := ManagementNetworkSpec{Interfaces: []ManagementNIC{{Name: "nex0", MAC: "52:54:00:12:34:56", Mode: "dhcp", Management: true}}}
 	files, err = RenderManagementNetwork(dhcp)
@@ -192,6 +203,35 @@ func TestManagementNetworkRender(t *testing.T) {
 	}
 	if files.Resolv == nil || !strings.Contains(*files.DHCPCD, "\ninterface br0\n    nohook resolv.conf\n") {
 		t.Errorf("a DNS override must take resolv.conf away from dhcpcd:\n%s", *files.DHCPCD)
+	}
+}
+
+// A freshly installed host has no management-network.json, but its /etc files are still the
+// live configuration. Inventory must project them as Current with stage "none" so the
+// Controller prefills the edit form instead of showing every interface as not configured.
+func TestReadManagementNetworkStatusReportsCurrentWithoutRecord(t *testing.T) {
+	_, dir, _ := managementRoot(t)
+	status, err := ReadManagementNetworkStatus(dir)
+	if err != nil || status == nil {
+		t.Fatalf("status: %+v %v", status, err)
+	}
+	if status.Stage != protocol.ManagementNetworkNone || status.Revision != 0 || status.Spec != nil || status.Current == nil {
+		t.Fatalf("expected stage none with Current only: %+v", status)
+	}
+	if len(status.Current.Interfaces) != 1 || !status.Current.Interfaces[0].Management || status.Current.Interfaces[0].Mode != "dhcp" || status.Current.Interfaces[0].Name != "nex0" {
+		t.Fatalf("installer current: %+v", status.Current)
+	}
+	if len(status.Current.DNS) != 1 || status.Current.DNS[0] != "192.0.2.53" {
+		t.Fatalf("installer DNS: %+v", status.Current.DNS)
+	}
+
+	// Foreign interfaces must not invent a Current or a none-stage status.
+	root, dir, _ := managementRoot(t)
+	if err := os.WriteFile(filepath.Join(root, "etc/network/interfaces"), []byte("# hand written\nauto lo\niface lo inet loopback\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if status, err = ReadManagementNetworkStatus(dir); err != nil || status != nil {
+		t.Fatalf("foreign interfaces must stay silent: %+v %v", status, err)
 	}
 }
 

@@ -99,7 +99,7 @@ func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandof
 		return ClusterSecretReceipt{}, false
 	}
 	parts := strings.Split(strings.TrimPrefix(binding, prefix), ":")
-	if len(parts) != 3 || handoff.Offer.RepositoryID != "" || (parts[1] != "chap" && parts[1] != "fence_bmc" && parts[1] != "fence_ssh") {
+	if len(parts) != 3 || handoff.Offer.RepositoryID != "" || (parts[1] != "chap" && parts[1] != "fence_bmc" && parts[1] != "fence_ssh" && parts[1] != "bmc_probe") {
 		return ClusterSecretReceipt{}, false
 	}
 	clusterRequestID, clusterErr := hex.DecodeString(parts[0])

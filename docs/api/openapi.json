@@ -7348,6 +7348,163 @@
         }
       }
     },
+    "/api/v1/pools/{id}/members/{host_id}/bmc-probe": {
+      "post": {
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.10",
+        "x-audience": "client",
+        "operationId": "probePoolBMC",
+        "summary": "Detect how a member's management controller answers",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself \u2014 HTTPS Redfish and IPMI RMCP+ \u2014 from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile's gates: a fresh pool master with pool-authority-transfer-v1 whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "host_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The member of this pool whose management controller is probed."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolBMCProbeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The master answered. status failed carries Core's sentence in error, with bmc_probe when Core still learned what answered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolBMCProbeView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown field, body over 1 MiB, or \"pool, host, a stable request_id and a management controller address are required; an account is given only together with its password\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Administrator session required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected (\"CSRF token required\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "\"pool not found\" or \"host not found\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused without asking anything: \"the pool master must be fresh and active to record a fence profile\", \"recording a fence profile needs pool-authority-transfer-v1 on the pool master; upgrade <host>\", \"the pool master has not reported its membership; a fence profile cannot be recorded yet\", \"no such member of this pool\", \"request_id already used with another credential payload\", \"pool request is already active\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "499": {
+            "description": "The client disconnected before the master answered (\"the client disconnected before the pool master finished probing the management controller; detect again\"). The broker entry is released.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Controller storage failure (\"storage unavailable\", \"inventory unavailable\"). Nothing was asked; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "\"Core did not acknowledge fence credential delivery; retry with the same request_id\". Nothing was probed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The master did not answer within 3 minutes (\"the pool master did not finish probing the management controller before the deadline; detect again\"). The body is a PoolResult with status failed. Nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/storage/{id}": {
       "delete": {
         "tags": [
@@ -13469,7 +13626,9 @@
           "action": {
             "type": "string",
             "enum": [
-              "invite"
+              "invite",
+              "promotion-preflight",
+              "bmc-probe"
             ]
           },
           "member_host_id": {
@@ -13477,6 +13636,18 @@
           },
           "master_url": {
             "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "bmc-probe only: the management controller address, a bare host name or IP address."
+          },
+          "username": {
+            "type": "string",
+            "description": "bmc-probe only: the account to sign in with; present exactly when credential_ref is."
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "bmc-probe only: the opaque reference the one-time credential handoff returned for the password. The master retires the material once the probe has answered, whatever the outcome, and refuses a reference that names a recorded fence device."
           }
         },
         "required": [
@@ -13562,6 +13733,17 @@
               }
             ],
             "description": "The promotion candidate's verdict, answered to a promotion-preflight pool request. Nothing about it is stored by the Controller."
+          },
+          "bmc_probe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolBMCProbeResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The master's answer to a bmc-probe pool request. It may accompany a failed result, to say what did answer. Nothing about it is stored by the Controller."
           }
         },
         "required": [
@@ -16399,7 +16581,7 @@
       },
       "ManagementNetworkStatus": {
         "type": "object",
-        "description": "The host's own report of its management network, projected from <state-dir>/management-network.json into inventory.management_network. It is the only copy: a replaced Controller adopts an in-flight change, with its deadline, by reading this.",
+        "description": "The host's own report of its management network, projected from <state-dir>/management-network.json and the on-disk Nex-managed files into inventory.management_network. It is the only copy: a replaced Controller adopts an in-flight change, with its deadline, by reading this, and reads the live configuration as current even when no change has been staged.",
         "properties": {
           "revision": {
             "type": "integer",
@@ -16409,13 +16591,14 @@
           "stage": {
             "type": "string",
             "enum": [
+              "none",
               "staged",
               "applied",
               "confirmed",
               "cancelled",
               "rolled-back"
             ],
-            "description": "A record is never deleted, so the last outcome stays readable; rolled-back is what the host reports after an unconfirmed change was restored automatically."
+            "description": "none when the host has no change record but may still report current; a record is never deleted, so the last outcome stays readable; rolled-back is what the host reports after an unconfirmed change was restored automatically."
           },
           "operation_id": {
             "type": "string",
@@ -16458,6 +16641,17 @@
           "observed_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagementNetworkSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the host's Nex-managed /etc files say right now. Independent of spec: spec is the staged, applied or last change; current is parsed from disk so a Controller can show live addressing before any change has been staged. Absent when the files are missing or were not written by Nex."
           }
         },
         "required": [
@@ -17958,6 +18152,168 @@
           "fence"
         ],
         "description": "Record or clear how a member of this pool would be power-fenced. Unknown fields are refused."
+      },
+      "PoolBMCProbeResult": {
+        "type": "object",
+        "properties": {
+          "methods": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PoolBMCProbeMethod"
+            },
+            "description": "At most one entry per kind."
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolBMCProbeChoice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The profile Core recommends recording; absent when no method can be recommended."
+          }
+        },
+        "required": [
+          "methods"
+        ],
+        "x-go-type": "protocol.PoolBMCProbeResult",
+        "description": "Which way one management controller answered the pool master, computed for one round trip and stored by no one. Recording a profile is still Set BMC access, which pins and proves the controller again."
+      },
+      "PoolBMCProbeMethod": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "redfish",
+              "ipmilan"
+            ]
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "target_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Redfish ComputerSystem Ids or IPMI plugs the controller reported, at most 16; empty when unreachable."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Core's short sentence about this method, at most 512 bytes."
+          }
+        },
+        "required": [
+          "kind",
+          "reachable"
+        ],
+        "x-go-type": "protocol.PoolBMCProbeMethod"
+      },
+      "PoolBMCProbeChoice": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "redfish",
+              "ipmilan"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "The system Id or plug to record."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One plain sentence saying why."
+          }
+        },
+        "required": [
+          "kind",
+          "target_id",
+          "reason"
+        ],
+        "x-go-type": "protocol.PoolBMCProbeChoice"
+      },
+      "PoolBMCProbeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Stable key for this Detect; it binds the one-time credential handoff. Use a new one for each Detect: the master retires a probe password after one use."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "The management controller address, a bare host name or IP address."
+          },
+          "username": {
+            "type": "string",
+            "description": "Optional account; given exactly when credential is."
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageCredentials"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional {secret}: the account's password. Delivered to the pool master over the one-time encrypted credential handoff with probe-only bmc_probe purpose, never stored, logged, audited or echoed by the Controller. Core removes both temporary private copies after the probe or expires an undelivered handoff after 10 minutes on its local tick or next startup."
+          }
+        },
+        "required": [
+          "request_id",
+          "endpoint"
+        ],
+        "description": "Ask the pool master how a member's management controller answers. Unknown fields are refused."
+      },
+      "PoolBMCProbeView": {
+        "type": "object",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "Core's own sentence when status is failed; a failure with no text becomes \"the pool master could not probe the management controller\"."
+          },
+          "bmc_probe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolBMCProbeResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The master's answer, mirrored verbatim. Always present when status is succeeded; may be present when it failed, to say what did answer."
+          }
+        },
+        "required": [
+          "host_id",
+          "status",
+          "error",
+          "bmc_probe"
+        ],
+        "description": "One brokered report round trip to the pool master. Nothing is stored, journalled or audited and no command is issued."
       },
       "OperationView": {
         "allOf": [

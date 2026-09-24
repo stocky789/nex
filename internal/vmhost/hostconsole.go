@@ -243,9 +243,22 @@ func writeFB(c net.Conn, pixels []byte) error {
 	return err
 }
 
+// hostTerm escape states: ground text, then the ESC / CSI / OSC parsers that
+// drop sequences programs still emit despite TERM=dumb (apt colour, coloured
+// prompts). Only the ESC byte used to be discarded, so "[32m" printed literally.
+const (
+	termGround = iota
+	termESC
+	termCSI
+	termOSC
+	termOSCST // OSC saw ESC; waiting for '\' to finish ST
+	termCharset
+)
+
 type hostTerm struct {
 	cells []byte
 	cur   int
+	esc   int
 }
 
 func newHostTerm() *hostTerm {
@@ -258,7 +271,50 @@ func newHostTerm() *hostTerm {
 
 func (t *hostTerm) write(b []byte) {
 	for _, ch := range b {
+		switch t.esc {
+		case termESC:
+			switch ch {
+			case '[':
+				t.esc = termCSI
+			case ']':
+				t.esc = termOSC
+			case '(', ')':
+				t.esc = termCharset
+			default:
+				t.esc = termGround // single-character escape: eat it
+			}
+			continue
+		case termCSI:
+			// CSI parameters and intermediates are 0x20-0x3F; finals are 0x40-0x7E.
+			if ch >= 0x40 && ch <= 0x7e {
+				t.esc = termGround
+			}
+			continue
+		case termOSC:
+			if ch == 0x07 { // BEL
+				t.esc = termGround
+			} else if ch == 0x1b {
+				t.esc = termOSCST
+			}
+			continue
+		case termOSCST:
+			if ch == '\\' {
+				t.esc = termGround
+			} else if ch == 0x1b {
+				// nested ESC while waiting for ST: restart escape parse
+				t.esc = termESC
+			} else {
+				t.esc = termOSC
+			}
+			continue
+		case termCharset:
+			t.esc = termGround
+			continue
+		}
+
 		switch ch {
+		case 0x1b:
+			t.esc = termESC
 		case '\r':
 			t.cur -= t.cur % hostCols
 		case '\n':
@@ -279,9 +335,6 @@ func (t *hostTerm) write(b []byte) {
 			for i := 0; i < n; i++ {
 				t.put(' ')
 			}
-		case 0x1b:
-			// ponytail: dumb TERM strips most sequences; drop CSI/OSC leftovers byte-wise in callers with TERM=linux.
-			continue
 		default:
 			if ch >= 32 {
 				t.put(ch)

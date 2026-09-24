@@ -491,7 +491,8 @@ class PoolJoinContractTests(unittest.TestCase):
         # second caller of it, so its route is part of what this file must document.
         documented = json.dumps({path: self.api['paths'][path] for path in
                                  ('/api/v1/pools/{id}/members', '/api/v1/pools/{id}/join-candidates',
-                                  '/api/v1/pools/{id}/master/promote/preflight')})
+                                  '/api/v1/pools/{id}/master/promote/preflight',
+                                  '/api/v1/pools/{id}/members/{host_id}/bmc-probe')})
         capability = re.search(r'PoolJoinCapability = "([^"]+)"',
                                (ROOT / 'internal/protocol/pool.go').read_text())[1]
         self.assertGreater(len(messages), 10, 'refusal adapter found nothing: check the handler style')
@@ -503,7 +504,7 @@ class PoolJoinContractTests(unittest.TestCase):
         for name in ('poolRequestAbandoned', 'poolRequestDeadline'):
             body = re.search(r'func ' + name + r'\(.*?\n}\n', self.handlers, re.S)[0]
             sentences.update(re.findall(r'return "([^"]+)"', body))
-        self.assertEqual(len(sentences), 4, 'relay adapter found the wrong number of sentences')
+        self.assertEqual(len(sentences), 6, 'relay adapter found the wrong number of sentences')
         for text in sentences:
             self.assertIn(text, documented, text)
 
@@ -876,9 +877,10 @@ class HostNetworkContractTests(unittest.TestCase, PoolStructParityMixin):
             self.assertEqual(schema['x-go-type'], 'protocol.' + name)
         for name, enum in [('ManagementNetworkStatus', 'stage'), ('ManagementNetworkRequest', 'action')]:
             self.assertTrue(schemas[name]['properties'][enum]['enum'])
-        stages = re.findall(r'ManagementNetwork(?:Staged|Applied|Confirmed|Cancelled|RolledBack)\s+= "([\w-]+)"',
+        stages = re.findall(r'ManagementNetwork(?:None|Staged|Applied|Confirmed|Cancelled|RolledBack)\s+= "([\w-]+)"',
                             self.wire)
         self.assertEqual(schemas['ManagementNetworkStatus']['properties']['stage']['enum'], stages)
+        self.assertIn('current', schemas['ManagementNetworkStatus']['properties'])
         # The two host-report/command envelope fields a fresh Controller adopts from.
         self.assertIn('ManagementNetworkStatus', json.dumps(
             schemas['Inventory']['properties']['management_network']))
@@ -1196,6 +1198,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
     PROMOTE = '/api/v1/pools/{id}/master/promote'
     FENCE = '/api/v1/pools/{id}/members/{host_id}/fence-profile'
     BMC = '/api/v1/pools/{id}/members/{host_id}/bmc-provisioning'
+    BMCPROBE = '/api/v1/pools/{id}/members/{host_id}/bmc-probe'
     HOSTFENCING = '/api/v1/pools/{id}/host-fencing'
 
     @classmethod
@@ -1213,7 +1216,8 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         for name in ('PoolPromotionCheck', 'PoolPromotionHost', 'PoolPromotionVM',
                      'PoolPromotionVerdict', 'PoolPromotionStatus', 'PoolWrappedFenceCredential',
                      'PoolRestrictedStatus', 'PoolMember', 'PoolAuthorityReplica', 'PoolCommand',
-                     'PoolResult'):
+                     'PoolRequest', 'PoolResult', 'PoolBMCProbeResult', 'PoolBMCProbeMethod',
+                     'PoolBMCProbeChoice'):
             schema = self.assert_parity(schemas, 'internal/protocol/pool.go', name, name)
             self.assertEqual(schema['x-go-type'], 'protocol.' + name)
             if name in self.peer['components']['schemas']:
@@ -1232,7 +1236,8 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         controller = (ROOT / 'internal/controller/controller.go').read_text()
         for path, handler in [(self.PREFLIGHT, 'promotionPreflight'),
                               (self.PROMOTE, 'promotePoolMaster'),
-                              (self.FENCE, 'setPoolFenceProfile')]:
+                              (self.FENCE, 'setPoolFenceProfile'),
+                              (self.BMCPROBE, 'probePoolBMC')]:
             self.assertIn(f'"POST {path}", c.admin(c.{handler})', controller)
             operation = self.api['paths'][path]['post']
             self.assertEqual(operation['security'], [{'AdminSession': []}])
@@ -1251,12 +1256,26 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         self.assertEqual(self.api['paths'][self.PREFLIGHT]['post']['responses']['504']
                          ['content']['application/json']['schema']['$ref'],
                          '#/components/schemas/PoolResult')
+        # A probe is the same kind of relayed answer, and its wait is the documented one.
+        probe = self.api['paths'][self.BMCPROBE]['post']['responses']
+        self.assertEqual(probe['200']['content']['application/json']['schema']['$ref'],
+                         '#/components/schemas/PoolBMCProbeView')
+        self.assertEqual(probe['504']['content']['application/json']['schema']['$ref'],
+                         '#/components/schemas/PoolResult')
+        self.assertNotIn('202', probe)
+        relay = (ROOT / 'internal/controller/pooljoin.go').read_text()
+        minutes = re.search(r'poolBMCProbeWait = (\d+) \* time\.Minute', relay)[1]
+        self.assertIn(f'within {minutes} minutes', probe['504']['description'])
+        self.assertIn('"bmc-probe"', relay)
+        self.assertIn('bmc-probe', self.api['components']['schemas']['PoolRequest']
+                      ['properties']['action']['enum'])
 
     def test_request_shapes_match_the_handlers(self):
         schemas = self.api['components']['schemas']
         for struct, name in [('poolPreflightAPIRequest', 'PoolPromotionPreflightRequest'),
                              ('poolPromoteAPIRequest', 'PoolPromoteRequest'),
-                             ('poolFenceProfileAPIRequest', 'PoolFenceProfileRequest')]:
+                             ('poolFenceProfileAPIRequest', 'PoolFenceProfileRequest'),
+                             ('poolBMCProbeAPIRequest', 'PoolBMCProbeRequest')]:
             schema = self.assert_parity(schemas, 'internal/controller/poolpromotion.go', struct, name)
             self.assertFalse(schema['additionalProperties'])  # DisallowUnknownFields
         # There is no expected_version on a promotion: the generation to check against is
@@ -1271,7 +1290,7 @@ class PoolPromotionContractTests(unittest.TestCase, PoolStructParityMixin):
         capability = re.search(r'PoolAuthorityTransferCapability = "([^"]+)"',
                                (ROOT / 'internal/protocol/pool.go').read_text())[1]
         documented = json.dumps({path: self.api['paths'][path]
-                                 for path in (self.PREFLIGHT, self.PROMOTE, self.FENCE, self.BMC, self.HOSTFENCING)})
+                                 for path in (self.PREFLIGHT, self.PROMOTE, self.FENCE, self.BMC, self.BMCPROBE, self.HOSTFENCING)})
         purposes = re.findall(r'purpose = "([^"]+)"', self.handlers) + \
             re.findall(r'purpose := "([^"]+)"', self.handlers)
         self.assertEqual(len(purposes), 2)

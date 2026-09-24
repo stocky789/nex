@@ -23,6 +23,7 @@ import (
 )
 
 const clusterSecretDirectory = "storage-cluster/secrets"
+const probeSecretTTL = 10 * time.Minute
 
 var clusterSecretMu sync.Mutex
 
@@ -37,7 +38,7 @@ type ClusterSecretReceipt struct {
 	RecipientHostID   string    `json:"recipient_host_id"`
 	FenceTargetHostID string    `json:"fence_target_host_id,omitempty"`
 	RepositoryID      string    `json:"repository_id,omitempty"`
-	Kind              string    `json:"kind"` // chap, fence_bmc, fence_ssh
+	Kind              string    `json:"kind"` // chap, fence_bmc, fence_ssh, bmc_probe
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -97,11 +98,11 @@ func validClusterSecret(s *Store, r ClusterSecretReceipt, m ClusterSecretMateria
 		return errors.New("invalid cluster credential")
 	}
 	switch r.Kind {
-	case "chap", "fence_bmc":
+	case "chap", "fence_bmc", "bmc_probe":
 		if m.Credentials == nil || m.SSHPrivateKey != "" || m.SSHKnownHosts != "" {
 			return errors.New("invalid typed cluster credential")
 		}
-		if r.Kind == "fence_bmc" {
+		if r.Kind == "fence_bmc" || r.Kind == "bmc_probe" {
 			// Core decides this, not the Controller: the password is about to become the
 			// script a fence agent runs, and the agent would strip whitespace Core keeps.
 			if err := vmhost.FenceSecretUsable(m.Credentials.Secret); err != nil {
@@ -321,6 +322,117 @@ func SaveClusterSecret(s *Store, r ClusterSecretReceipt, m ClusterSecretMaterial
 		return empty, err
 	}
 	return r, nil
+}
+
+// A probe receipt is never attached to a pool record. Retire both its private receipt and
+// its materialized fence script; expiry covers a handoff whose brokered probe never ran.
+func retireProbeSecret(s *Store, reference string) error {
+	if reference == "" {
+		return errors.New("management controller probe credential reference is missing")
+	}
+	return retireProbeSecrets(s, reference, time.Time{})
+}
+
+func retireExpiredProbeSecrets(s *Store, now time.Time) error {
+	return retireProbeSecrets(s, "", now.Add(-probeSecretTTL))
+}
+
+// readProbeSecret accepts only a signed, probe-scoped handoff for this exact
+// request and target. A fence credential script alone is not authority to probe.
+func readProbeSecret(s *Store, request protocol.PoolRequest) (string, error) {
+	clusterSecretMu.Lock()
+	defer clusterSecretMu.Unlock()
+	dir, err := clusterSecretDir(s)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	key, err := clusterSecretKey(s)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		b, err := readClusterSecret(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return "", err
+		}
+		var stored storedClusterSecret
+		if json.Unmarshal(b, &stored) != nil || stored.Receipt.Reference != request.CredentialRef {
+			continue
+		}
+		r := stored.Receipt
+		if r.Kind != "bmc_probe" || r.PoolID != request.PoolID || r.HostID != request.HostID || r.RecipientHostID != request.HostID || r.FenceTargetHostID != request.MemberHostID || r.ClusterRequestID != request.RequestID || r.CreatedAt.IsZero() || time.Since(r.CreatedAt) > probeSecretTTL || stored.Material.Credentials == nil || !hmac.Equal([]byte(stored.Proof), []byte(clusterSecretProof(key, r, stored.Material))) {
+			return "", errors.New("management controller probe credential scope is invalid")
+		}
+		return stored.Material.Credentials.Secret, nil
+	}
+	return "", errors.New("management controller probe credential is unavailable")
+}
+
+func retireProbeSecrets(s *Store, reference string, before time.Time) error {
+	clusterSecretMu.Lock()
+	defer clusterSecretMu.Unlock()
+	dir, err := clusterSecretDir(s)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	key, err := clusterSecretKey(s)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		b, err := readClusterSecret(path)
+		if err != nil {
+			if reference == "" && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		var stored storedClusterSecret
+		if err := json.Unmarshal(b, &stored); err != nil {
+			if reference == "" && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		r := stored.Receipt
+		if r.Kind != "bmc_probe" || reference != "" && r.Reference != reference || !before.IsZero() && r.CreatedAt.After(before) {
+			continue
+		}
+		if r.Reference == "" || !hmac.Equal([]byte(stored.Proof), []byte(clusterSecretProof(key, r, stored.Material))) {
+			if firstErr == nil {
+				firstErr = errors.New("management controller probe credential receipt is invalid")
+			}
+			continue
+		}
+		if err := vmhost.RetirePoolFenceCredential(s.dir, r.Reference); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // ValidateClusterSecretReceipt is the native-control gate: an opaque receipt

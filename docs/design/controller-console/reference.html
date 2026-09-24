@@ -385,8 +385,20 @@ function chart() {
 }
 function spark(d, c, w = 84, h = 28) {
   const X = i => i / (d.length - 1) * w, Y = v => h - 2 - (v / 100) * (h - 4);
-  const p = d.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${p}L${w},${h}L0,${h}Z" fill="${c}" opacity=".15"/><path d="${p}" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="${X(d.length - 1)}" cy="${Y(d[d.length - 1])}" r="2.5" fill="${c}"/></svg>`;
+  const pts = d.map((v, i) => [X(i), Y(v)]);
+  const slopes = pts.slice(1).map(([x, y], k) => (y - pts[k][1]) / (x - pts[k][0]));
+  const m = pts.map((_, k) => {
+    if (k === 0 || k === pts.length - 1) return slopes[k === 0 ? 0 : k - 1] ?? 0;
+    const h0 = pts[k][0] - pts[k - 1][0], h1 = pts[k + 1][0] - pts[k][0];
+    const mean = (slopes[k - 1] * h1 + slopes[k] * h0) / (h0 + h1);
+    return (Math.sign(slopes[k - 1]) + Math.sign(slopes[k])) * Math.min(Math.abs(slopes[k - 1]), Math.abs(slopes[k]), Math.abs(mean) / 2);
+  });
+  const f = v => v.toFixed(2);
+  const p = `M${f(pts[0][0])},${f(pts[0][1])}` + pts.slice(1).map(([x, y], k) => {
+    const [x0, y0] = pts[k], t = (x - x0) / 3;
+    return `C${f(x0 + t)},${f(y0 + m[k] * t)} ${f(x - t)},${f(y - m[k + 1] * t)} ${f(x)},${f(y)}`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${p}L${w},${h}L0,${h}Z" fill="${c}" opacity=".12"/><path d="${p}" fill="none" stroke="${c}" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><circle cx="${X(d.length - 1)}" cy="${Y(d[d.length - 1])}" r="2" fill="${c}"/></svg>`;
 }
 function renderDash() {
   const run = VMS.filter(v => v.state === 'running').length, { svg, lines } = chart();
@@ -528,7 +540,7 @@ function hostPanel(h) {
       ${h.fresh !== 'ok' ? `<div class="why">${h.stale}. VMs on this host are shown as Unknown, not stopped. Fence or wait for reconnect before restarting them elsewhere.</div>` : ''}
       <div class="card"><h3>Network interfaces</h3><div class="ports">${nics.map(([c, l], i) => `<div class="port ${c}" title="eno${i + 1}">${l}</div>`).join('')}</div>
         <div class="legend"><span><i style="background:#3F8F5A"></i>25 GbE</span><span><i style="background:#2C7FB8"></i>10 GbE</span><span><i style="background:#5FA84B"></i>1 GbE</span><span><i style="background:var(--line)"></i>No link</span></div>
-        <div class="actions" style="margin-top:12px"><button class="btn">Interfaces</button><button class="btn">Bonds &amp; VLANs</button></div></div>
+        <div class="actions" style="margin-top:12px"><button class="btn">Interfaces &amp; VLANs</button></div></div>
       <div class="card"><h3>Disks</h3><div class="disks">${['nvme0', 'nvme1', 'sda', 'sdb'].map((d, i) => `<div class="disk"><b>${d}</b>${i < 2 ? '1.9 TB NVMe' : '8 TB HDD'}<br><span style="color:var(--ok)">${i < 2 ? 'mirror' : 'raidz'}</span></div>`).join('')}</div></div>
       <div class="card"><h3>Memory <span class="muted num">${h.mem ?? '—'}% of ${h.ram} GiB</span></h3><div class="meter"><i style="width:${h.mem || 0}%"></i></div></div>
       <div class="card"><h3>Virtual machines</h3><table><tbody>${VMS.filter(v => v.host === h.name).map(v => `<tr data-vm="${v.name}"><td><span class="st ${stateBadge(v.state)[0]}"></span>${v.name}</td><td>${v.vcpu} vCPU</td><td>${v.mem} GiB</td></tr>`).join('')}</tbody></table></div>

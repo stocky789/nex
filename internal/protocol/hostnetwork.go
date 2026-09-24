@@ -22,8 +22,10 @@ const ManagementNetworkConflict = "management network conflict"
 // Stages of a host's management network record, as reported in ManagementNetworkStatus.Stage.
 // A record is never deleted, so the last outcome stays readable: "rolled-back" is what the
 // host reports (with a failing "management-network" check) after an unconfirmed change was
-// automatically restored.
+// automatically restored. "none" is reported when the host has no change record but still
+// projects its on-disk configuration as Current (installer or last confirmed layout).
 const (
+	ManagementNetworkNone       = "none"
 	ManagementNetworkStaged     = "staged"
 	ManagementNetworkApplied    = "applied"
 	ManagementNetworkConfirmed  = "confirmed"
@@ -58,7 +60,12 @@ type ManagementNetworkStatus struct {
 	Stage       string                 `json:"stage"`
 	OperationID string                 `json:"operation_id,omitempty"`
 	Spec        *ManagementNetworkSpec `json:"spec,omitempty"`
-	Deadline    time.Time              `json:"deadline,omitempty"`
+	// Current is what the host's Nex-managed /etc files say right now. It is independent of
+	// Spec: Spec is the staged, applied or last change record; Current is parsed from disk so
+	// a Controller can show the live addressing before any change has been staged. Absent when
+	// the files are missing or were not written by Nex.
+	Current  *ManagementNetworkSpec `json:"current,omitempty"`
+	Deadline time.Time              `json:"deadline,omitempty"`
 	// WindowSeconds is the rollback window the operator chose when the change was staged. It
 	// is reported because "how long will I have" must survive a reload: the deadline only
 	// exists once the change is applied, and the default is not the operator's choice.

@@ -269,19 +269,37 @@ export function Meter({ percent, label, series = 1 }: { percent: number; label: 
   return <div className="meter" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value)}><i style={{ width: `${value}%`, background: `var(--s${series})` }} /></div>;
 }
 
+// A monotone cubic through points (Fritsch–Carlson / d3 curveMonotoneX): no overshoot past
+// segment ends, and flats stay flat. Shared by Overview charts and decorative sparklines.
+export function monotone(p: [number, number][]): string {
+  const d = p.slice(1).map(([x, y], k) => (y - p[k][1]) / (x - p[k][0]));
+  const m = p.map((_, k) => {
+    if (k === 0 || k === p.length - 1) return d[k === 0 ? 0 : k - 1] ?? 0;
+    const h0 = p[k][0] - p[k - 1][0], h1 = p[k + 1][0] - p[k][0];
+    const mean = (d[k - 1] * h1 + d[k] * h0) / (h0 + h1);
+    return (Math.sign(d[k - 1]) + Math.sign(d[k])) * Math.min(Math.abs(d[k - 1]), Math.abs(d[k]), Math.abs(mean) / 2);
+  });
+  const f = (v: number) => v.toFixed(2);
+  return `M${f(p[0][0])},${f(p[0][1])}` + p.slice(1).map(([x, y], k) => {
+    const [x0, y0] = p[k], h = (x - x0) / 3;
+    return `C${f(x0 + h)},${f(y0 + m[k] * h)} ${f(x - h)},${f(y - m[k + 1] * h)} ${f(x)},${f(y)}`;
+  }).join("");
+}
+
 // Sparkline draws values in 0–100 with a soft area fill and an end dot; it is decorative, so the
-// caller shows the current value as text next to it.
+// caller shows the current value as text next to it. Strokes use non-scaling width so a full-width
+// stretch keeps a thin line instead of a fat ribbon.
 export function Sparkline({ values, series = 1, width = 84, height = 28, title }: { values: number[]; series?: 1 | 2 | 3 | 4; width?: number; height?: number; title?: string }) {
   if (values.length < 2) return null;
   const colour = `var(--s${series})`;
   const x = (i: number) => (i / (values.length - 1)) * width;
   const y = (v: number) => height - 2 - (Math.min(100, Math.max(0, v)) / 100) * (height - 4);
-  const line = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const line = monotone(values.map((v, i) => [x(i), y(v)]));
   return <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} width={width} height={height} preserveAspectRatio="none" {...title ? { role: "img", "aria-label": title } : { "aria-hidden": true }}>
     {title && <title>{title}</title>}
-    <path d={`${line}L${width},${height}L0,${height}Z`} fill={colour} opacity={0.15} />
-    <path d={line} fill="none" stroke={colour} strokeWidth={1.5} />
-    <circle cx={x(values.length - 1)} cy={y(values[values.length - 1])} r={2.5} fill={colour} />
+    <path d={`${line}L${width},${height}L0,${height}Z`} fill={colour} opacity={0.12} />
+    <path d={line} fill="none" stroke={colour} strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    <circle cx={x(values.length - 1)} cy={y(values[values.length - 1])} r={2} fill={colour} />
   </svg>;
 }
 

@@ -6,12 +6,35 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.9` →
-> Debian `0.4.9`).
+> development software. Builds use the newest numbered changelog heading (`0.4.10` →
+> Debian `0.4.10`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.10] — 2026-09-24
+
+### Minor Feature
+
+- **Set BMC access** has a **Detect** button that checks whether Redfish or IPMI answers and
+  fills in the system ID.
+
+### Bug Fixes
+
+- BMC Detect removes its temporary password from Nex Core after a probe and expires it if the
+  probe never runs.
+- Fence profiles accept Redfish system IDs with dots, such as `System.Embedded.1`.
+- Host Networking shows the current addressing, VLAN, gateway and DNS for Nex-managed
+  interfaces; its Refresh button, interface labels and Addressing controls are clearer.
+- Host console text uses normal mixed-case letters, and terminal colour codes no longer
+  appear as junk such as `[32m`.
+- Host overview has one **Interfaces & VLANs** button for Networking.
+- VM and host usage sparklines use thinner, smoother lines for busy disk and network traces.
+
+### Miscellaneous
+
+- Documented the planned pool VLAN host-uplink mapping; it is not implemented yet.
 
 ## [0.4.9] — 2026-09-24
 

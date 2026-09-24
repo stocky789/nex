@@ -291,6 +291,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/pools/{id}/master/promote/preflight", c.admin(c.promotionPreflight))
 	m.HandleFunc("POST /api/v1/pools/{id}/master/promote", c.admin(c.promotePoolMaster))
 	m.HandleFunc("POST /api/v1/pools/{id}/members/{host_id}/fence-profile", c.admin(c.setPoolFenceProfile))
+	m.HandleFunc("POST /api/v1/pools/{id}/members/{host_id}/bmc-probe", c.admin(c.probePoolBMC))
 	m.HandleFunc("POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning", c.admin(c.setPoolBMCProvisioning))
 	m.HandleFunc("POST /api/v1/pools/{id}/host-fencing", c.admin(c.setPoolHostFencing))
 	m.HandleFunc("GET /api/v1/hosts/{id}/network", c.admin(c.hostNetwork))

@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.9. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.10. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (**Settings** → **Members** → each host's
 **Authority copy** check), how to **change which host is the pool master**, how to **eject a host
 from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
@@ -527,10 +527,15 @@ master keeps. A device you record here is never replaced by automatic provisioni
 
 1. Open the pool's **Settings** → **Members** section, open **Actions** on the host's row and
    select **Set BMC access…**. The row's note says whether a device is already recorded.
-2. Choose **Redfish** or **IPMI**, then fill in the controller's **address**, the **Redfish system
-   identifier** or **IPMI plug** it manages, the **account** with power control, and that account's
-   **password**.
-3. Select **Set BMC access**. The password is handed to Nex Core over a one-time encrypted delivery
+2. Fill in the controller's **address**, the **account** with power control and that account's
+   **password**, then select **Detect**. The pool master probes the controller for Redfish and
+   IPMI, picks the method that works, and fills in the kind and the **Redfish system identifier**
+   or **IPMI plug**, with one line saying why. Account and password are optional for Detect, but
+   without them a Redfish controller may not list its systems. If nothing answers, Nex Core's
+   sentence is shown in the dialog and nothing is filled in; you can still choose **Redfish** or
+   **IPMI** and type the identifier yourself. Detect records no fence profile. The master removes
+   its temporary password after the probe, or expires it if the probe never runs.
+3. Check the kind and identifier, then select **Set BMC access**. The password is handed to Nex Core over a one-time encrypted delivery
    and is never stored by Nex Controller, never written to its database, never audited, never
    logged and never shown again. The account name is not a secret and is shown on the host's row.
 4. Nex Core decides, and for a Redfish device it decides by doing the work now: it connects to the

@@ -1,0 +1,37 @@
+{
+  "summary": "Tidy the host Management network panel: Refresh in the heading, clearer NIC/MAC cells, select arrow spacing, and panel inset. API impact: none.",
+  "paths": [
+    "web/src/host-network.tsx",
+    "web/src/host-network.test.mjs",
+    "web/src/style.css",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-host-network-form-tidy.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Layout and control chrome only; the stage/apply/confirm workflow and field meanings are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller presentation only; same hosts/{id}/network contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation of host-reported management network state; no durable Controller state."
+  },
+  "verification": {
+    "method": "node web/src/host-network.test.mjs",
+    "evidence": [
+      "web/src/host-network.test.mjs",
+      "web/src/host-network.tsx",
+      "web/src/style.css"
+    ]
+  }
+}

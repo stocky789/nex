@@ -12,7 +12,7 @@ const moduleURL = bundleTestModule(new URL("./host-network.tsx", import.meta.url
 const src = readFileSync(new URL("./host-network.tsx", import.meta.url), "utf8");
 const {
   HostNetworkPanel, ApplyDialog, windowError, diffRows, describeNIC,
-  manageableNICs, countdownText, stagedWindowText, stageLabel, rowsFromHost, specFromRows,
+  manageableNICs, countdownText, stagedWindowText, stageLabel, rowsFromHost, specFromRows, editSeed,
 } = await import(moduleURL);
 const { heldRequestID } = await import(bundleTestModule(new URL("./managed.tsx", import.meta.url), "managed-held"));
 
@@ -87,6 +87,13 @@ assert.deepEqual(formRows.map(r => [r.name, r.mac, r.mode, r.vlan, r.address, r.
   ["nex1", "52:54:00:12:34:57", "disabled", "", "", ""],
 ]);
 assert.deepEqual(rowsFromHost(nics).map(r => r.mode), ["disabled", "disabled"], "with no record every interface starts unconfigured");
+assert.deepEqual(editSeed(null), undefined);
+assert.deepEqual(editSeed({ revision: 0, stage: "none", current: spec }), spec, "live Current prefills the form");
+assert.equal(editSeed({
+  revision: 2, stage: "rolled-back", spec,
+  current: { interfaces: [{ name: "nex0", mac: "52:54:00:12:34:56", mode: "static", address: "192.0.2.10/24", gateway: "192.0.2.1", management: true }], dns: ["192.0.2.53"] },
+}).interfaces[0].address, "192.0.2.10/24", "Current wins over a rolled-back Spec");
+assert.equal(editSeed({ revision: 2, stage: "staged", spec }).interfaces[0].address, "192.0.2.20/24", "without Current, Spec remains the fallback");
 assert.deepEqual(specFromRows(formRows, "nex0", "192.0.2.53, 192.0.2.54"), {
   interfaces: [
     { name: "nex0", mac: "52:54:00:12:34:56", mode: "static", vlan: 10, address: "192.0.2.20/24", gateway: "192.0.2.1", management: true },
@@ -127,6 +134,28 @@ assert.match(form, /name="management-nic"[^>]*value="nex0"/);
 assert.match(form, /name="management-nic"[^>]*value="nex1"/);
 assert.doesNotMatch(form, /name="management-nic"[^>]*value="br0"/);
 assert.match(form, /<label class="sr-only" for="address-nex0">/, "every input is labelled");
+assert.match(form, /host-network-nic"><b>nex0<\/b><small class="mono">/, "interface name and MAC are stacked as a labelled cell");
+assert.match(form, /class="section-heading"[\s\S]*Refresh/, "Refresh sits in the panel heading, not above Interfaces");
+assert.doesNotMatch(form, /fold-actions/, "the old Refresh strip under the heading is gone");
+
+// A Nex-managed host that has never staged a change still prefills from Current.
+const currentOnly = panel({ view: {
+  ...view, state: "none",
+  management_network: {
+    revision: 0, stage: "none",
+    current: {
+      interfaces: [
+        { name: "nex0", mac: "52:54:00:12:34:56", mode: "static", address: "192.0.2.10/24", gateway: "192.0.2.1", management: true },
+        { name: "nex1", mac: "52:54:00:12:34:57", mode: "disabled" },
+      ],
+      dns: ["192.0.2.53", "192.0.2.54"],
+    },
+  },
+} });
+assert.match(currentOnly, /value="static"/);
+assert.match(currentOnly, /value="192\.0\.2\.10\/24"/);
+assert.match(currentOnly, /value="192\.0\.2\.1"/);
+assert.match(currentOnly, /id="host-network-dns"[^>]*value="192\.0\.2\.53 192\.0\.2\.54"/);
 
 // Staged: the review diff, Apply and Discard, and nothing changed on the host yet.
 const stagedMarkup = panel();

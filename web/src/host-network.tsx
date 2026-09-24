@@ -11,7 +11,11 @@ type Connection = "fresh" | "stale" | "unknown" | "revoked";
 export type NIC = { name: string; mac?: string; kind?: string; master?: string; parent?: string; addresses?: string[]; state?: string };
 export type ManagementNIC = { name: string; mac: string; mode: string; vlan?: number; address?: string; gateway?: string; management?: boolean };
 export type Spec = { interfaces: ManagementNIC[]; dns?: string[] };
-export type ManagementRecord = { revision: number; stage: string; operation_id?: string; spec?: Spec; deadline?: string; window_seconds?: number; seconds_remaining?: number; last_error?: string; requested_rollback?: boolean; observed_at?: string };
+export type ManagementRecord = {
+  revision: number; stage: string; operation_id?: string; spec?: Spec; current?: Spec;
+  deadline?: string; window_seconds?: number; seconds_remaining?: number; last_error?: string;
+  requested_rollback?: boolean; observed_at?: string;
+};
 export type LastOperation = { operation_id: string; action?: string; status: string; error?: string; conflict?: boolean };
 export type HostNetworkView = {
   host_id: string; hostname: string; connection: Connection; supported: boolean; state: string;
@@ -57,6 +61,13 @@ export function windowError(minutes: number) {
 // and bonded NICs. Bridges, VLAN devices and VM ports are rendered by Core, not chosen here.
 export function manageableNICs(nics?: NIC[]) {
   return (nics || []).filter(nic => nic.name !== "lo" && (!nic.kind || nic.kind === "physical" || nic.kind === "bond"));
+}
+
+// The configuration the edit form starts from: the host's live on-disk layout when Core reported
+// it, otherwise the last change Spec. Spec alone is the staged/applied proposal, which must not
+// overwrite the form after a rollback with something that is no longer running.
+export function editSeed(record?: ManagementRecord | null): Spec | null | undefined {
+  return record?.current ?? record?.spec;
 }
 
 export function describeNIC(nic: ManagementNIC) {
@@ -133,9 +144,10 @@ export function specFromRows(rows: Row[], management: string, dns: string): Spec
 }
 
 function EditForm({ view, busy, onStage }: { view: HostNetworkView; busy: boolean; onStage: (spec: Spec, windowSeconds: number) => void }) {
-  const [rows, setRows] = useState<Row[]>(() => rowsFromHost(view.nics, view.management_network?.spec));
-  const [management, setManagement] = useState(() => (view.management_network?.spec?.interfaces || []).find(i => i.management)?.name || manageableNICs(view.nics)[0]?.name || "");
-  const [dns, setDNS] = useState(() => (view.management_network?.spec?.dns || []).join(" "));
+  const seed = editSeed(view.management_network);
+  const [rows, setRows] = useState<Row[]>(() => rowsFromHost(view.nics, seed));
+  const [management, setManagement] = useState(() => (seed?.interfaces || []).find(i => i.management)?.name || manageableNICs(view.nics)[0]?.name || "");
+  const [dns, setDNS] = useState(() => (seed?.dns || []).join(" "));
   const [minutes, setMinutes] = useState(String(DEFAULT_WINDOW_MINUTES));
   const [showWindowError, setShowWindowError] = useState(false);
   const edit = (name: string, patch: Partial<Row>) => setRows(current => current.map(row => (row.name === name ? { ...row, ...patch } : row)));
@@ -154,8 +166,8 @@ function EditForm({ view, busy, onStage }: { view: HostNetworkView; busy: boolea
       <div className="table-scroll"><table>
         <thead><tr><th>Interface</th><th>Management</th><th>Addressing</th><th>VLAN</th><th>Address</th><th>Gateway</th></tr></thead>
         <tbody>{rows.map(row => <tr key={row.name}>
-          <th scope="row">{row.name}<small className="mono">{row.mac || "no MAC reported"}</small></th>
-          <td><label><input type="radio" name="management-nic" value={row.name} checked={management === row.name} onChange={() => setManagement(row.name)} /> <span className="sr-only">Use {row.name} for management</span></label></td>
+          <th scope="row"><span className="host-network-nic"><b>{row.name}</b><small className="mono">{row.mac || "no MAC reported"}</small></span></th>
+          <td className="host-network-mgmt"><label><input type="radio" name="management-nic" value={row.name} checked={management === row.name} onChange={() => setManagement(row.name)} /> <span className="sr-only">Use {row.name} for management</span></label></td>
           <td>
             <label className="sr-only" htmlFor={`mode-${row.name}`}>Addressing for {row.name}</label>
             <select id={`mode-${row.name}`} value={row.mode} onChange={event => edit(row.name, { mode: event.target.value })}>
@@ -331,10 +343,11 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
   return <section className="panel host-network-panel" aria-label="Management network">
     <div className="section-heading">
       <h2>Management network</h2>
-      <span><Badge value={stage.badge} label={stage.label} />{view && <> <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span></>}</span>
-    </div>
-    <div className="managed-actions actions fold-actions">
-      <button type="button" disabled={loading || unavailable} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>
+      <span className="host-network-meta">
+        <Badge value={stage.badge} label={stage.label} />
+        {view && <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span>}
+        <button type="button" className="sm" disabled={loading || unavailable} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>
+      </span>
     </div>
     {notice && <p className="notice" role="status">{notice}</p>}
     {error && <p className="alert" role="alert">This host could not be asked for its management network: {error}</p>}

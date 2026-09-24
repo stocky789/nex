@@ -1,0 +1,40 @@
+{
+  "summary": "Replace the duplicate Interfaces and Bonds & VLANs host-overview buttons with one Interfaces & VLANs control that opens Networking. API impact: none.",
+  "paths": [
+    "web/src/host-panel.tsx",
+    "docs/design/controller-console/reference.html",
+    "docs/guide/change-management-network.md",
+    "docs/plans/2026-09-23-controller-console-redesign.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-host-interfaces-vlans-button.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Guide step named both Overview buttons; it now names the single Interfaces & VLANs control.",
+    "pages": [
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Label and button count only; same Overview → Networking navigation, no API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Presentation-only control that switches a host panel tab; no durable state."
+  },
+  "verification": {
+    "method": "Inspected host-panel Overview: one button calls onNetworking. Guide and design reference wording updated to match. No new unit test; behavior is an existing tab switch with a label change.",
+    "evidence": [
+      "web/src/host-panel.tsx",
+      "docs/guide/change-management-network.md",
+      "docs/design/controller-console/reference.html"
+    ]
+  }
+}

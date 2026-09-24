@@ -1,0 +1,39 @@
+{
+  "summary": "Fix host console all-caps glyphs and strip ANSI CSI/OSC so shell output looks like a normal terminal. API impact: none.",
+  "paths": [
+    "internal/vmhost/hostconsole.go",
+    "internal/vmhost/hostconsole_font.go",
+    "internal/vmhost/hostconsole_test.go",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-24-host-console-font.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Rendering fix only; host console steps and controls are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Same host-console-v1 RFB ticket/stream; pixel content of the in-process shell framebuffer only.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Ephemeral RFB session pixels; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/vmhost -run 'TestHostConsoleFontLowercaseDistinct|TestHostTermStripsANSISequences|TestHostTermTab|TestHostConsole'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/vmhost/hostconsole_test.go",
+      "internal/vmhost/hostconsole.go",
+      "internal/vmhost/hostconsole_font.go"
+    ],
+    "limits": "Browser walkthrough against a live host console after Core rebuild not recorded in this slice."
+  }
+}

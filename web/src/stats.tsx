@@ -691,7 +691,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
         scale: s.unit,
         show: !hidden.has(s.key),
         stroke: color(i),
-        width: 2,
+        width: 1.25,
         // Only the left-axis unit fills, so a second-axis series (IOPS beside bytes/s) never muddies the stack.
         fill: (chart.stacked && s.unit === units[0]) || chart.series.length === 1 ? color(i) + "40" : undefined,
         spanGaps: false,

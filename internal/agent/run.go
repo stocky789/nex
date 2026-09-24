@@ -510,6 +510,12 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 					done()
 					continue
 				}
+				if request.Action == "bmc-probe" {
+					work, done := context.WithTimeout(context.Background(), 2*time.Minute)
+					results = append(results, ExecutePoolBMCProbe(work, s, request))
+					done()
+					continue
+				}
 				results = append(results, ExecutePoolRequest(s, request))
 			}
 			transientPoolResults.append(s, results)
@@ -770,6 +776,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	var clusterReconcileRunning atomic.Bool
 	var fenceCheckRunning atomic.Bool
 	var quorumReadingRunning atomic.Bool
+	var nextProbeSecretSweep time.Time
 	// Deferred before cancel so it runs after it: Run must not return while its background
 	// work still reads the store, because a caller may re-enroll and rewrite it next.
 	var runWork sync.WaitGroup
@@ -892,6 +899,13 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		ticker := time.NewTicker(cfg.ProbeInterval)
 		defer ticker.Stop()
 		tickStorage := func() {
+			now := time.Now()
+			if !now.Before(nextProbeSecretSweep) {
+				if err := retireExpiredProbeSecrets(s, now); err != nil {
+					log.Printf("management controller probe credential cleanup failed")
+				}
+				nextProbeSecretSweep = now.Add(time.Minute)
+			}
 			scheduleClusterReconcile()
 			scheduleFenceChecks()
 			scheduleQuorumReading()

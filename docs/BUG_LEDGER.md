@@ -7437,3 +7437,75 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `DefaultNetworks` treats an installer management VLAN slave (`nexN.<tag>` on `br0`) as the uplink via its parent NIC, while skipping Core guest VLAN bridges named `<uplink>v<tag>`; `RegisterDefaults` registers default networks before local storage (`internal/vmhost/managed.go`).
 - Regression: `TestDefaultNetworksFollowManagementVLANOnBridge`, `TestRegisterDefaultsRegistersManagementVLANBridge`, and the existing `TestDefaultNetworksFollowBridgesOnPhysicalPorts` (`internal/vmhost`). Hand-revert of the VLAN branch fails the management-VLAN test.
 - Avoid: assuming the management bridge always enslaves the raw NIC; the installer uses `nexN.<tag>` when a management VLAN is chosen.
+
+## BUG-0544 — Host console showed all-caps text and raw ANSI junk
+
+- Date: 2026-09-24. Status: fixed in the working tree; regression asserted.
+- Symptom: Opening a host Console showed blocky all-caps text and literal colour codes such as `[32m` / `[0m` during apt and coloured prompts.
+- Root cause: `hostConsoleFont` reused A–Z bitmaps for a–z, and `hostTerm.write` discarded only the ESC byte of CSI/OSC sequences so the rest printed as characters.
+- Fix: Distinct lowercase glyphs in `internal/vmhost/hostconsole_font.go`; CSI/OSC/charset escape parsing in `hostTerm.write` (`internal/vmhost/hostconsole.go`).
+- Regression: `TestHostConsoleFontLowercaseDistinct` and `TestHostTermStripsANSISequences` (`internal/vmhost`).
+- Avoid: dropping only `0x1b` and assuming `TERM=dumb` means no CSI will arrive; never alias lowercase glyphs to uppercase.
+
+## BUG-0545 — Host Networking form showed Not configured for live management addressing
+
+- Date: 2026-09-24. Status: fixed in the working tree; regression asserted.
+- Symptom: Opening a host's Networking tab Management network form showed Addressing *Not
+  configured*, empty VLAN/address/gateway and empty DNS even when the host had a live
+  installer or confirmed Nex management network.
+- Root cause: The edit form seeded only from `management_network.spec`, which exists only when
+  `<state-dir>/management-network.json` holds a change record. Installer-configured hosts had
+  no record, so every interface defaulted to disabled. Observed NIC addresses alone cannot seed
+  the form (address lives on `br0`; no DNS/VLAN/mode).
+- Fix: Nex Core parses the Nex-managed `/etc` files into `ManagementNetworkStatus.current` and
+  reports stage `none` with that Current when no change record exists; the UI prefills from
+  `current` (falling back to `spec`).
+- Regression: `TestManagementNetworkRender` round-trip and
+  `TestReadManagementNetworkStatusReportsCurrentWithoutRecord` (`internal/vmhost`);
+  `web/src/host-network.test.mjs` current-only prefill; HostNetworkContractTests stage enum /
+  `current` property.
+- Avoid: treating "no staged change" as "no configuration"; the durable files on the host are
+  the configuration.
+
+## BUG-0546 — Dell Redfish system Id System.Embedded.1 refused as fence target
+
+- Date: 2026-09-24. Status: fixed in the working tree; regression asserted.
+- Symptom: Setting BMC access with Redfish and Dell's ComputerSystem Id `System.Embedded.1`
+  returned `invalid BMC fence profile`. IPMI over LAN on the same iDRAC often does not answer,
+  so Redfish is the workable path and was blocked at validation.
+- Root cause: `StorageClusterFence.Valid` required `target_id` to match `storageOpaqueID`
+  (`[A-Za-z0-9_-]` only). DMTF DSP0266 §9.6.6 allows period in Id values; Dell and
+  `fence_redfish` use `System.Embedded.1`.
+- Fix: Validate BMC `target_id` with `bmcTargetID`, which allows `.` while still refusing
+  RFC1738 unsafe / path-breaking characters (`internal/protocol/cluster.go`).
+- Regression: `TestBMCTargetIDFollowsRedfishIdRules` (`internal/protocol`).
+- Avoid: Reusing opaque storage/host ID character sets for Redfish resource Ids.
+
+## BUG-0547 — BMC Detect left passwords in the Core credential store
+
+- Date: 2026-09-24. Status: fixed in the working tree; regression asserted.
+- Symptom: Every passworded Detect left a private JSON receipt containing the BMC password even
+  after the probe answered. A handoff whose probe never ran kept both the receipt and the
+  materialized password file indefinitely.
+- Root cause: Detect reused the permanent `fence_bmc` credential purpose. Its cleanup removed
+  only the materialized file, while the shared cluster-secret receipt retained the password and
+  could recreate that file on replay. An undelivered probe had no Core-side expiry. Core also
+  accepted an unrecorded permanent handoff by reference, and one damaged unrelated receipt
+  stopped the expiry scan before it could reach later probes.
+- Fix: Give Detect a distinct `bmc_probe` credential purpose. Nex Core removes both private
+  copies after an answered probe, and sweeps unused probe receipts after ten minutes on its own
+  tick, including after restart. Core checks the signed purpose, request and target before using
+  the password, and sweeps past damaged receipts. Permanent fence and storage secrets are excluded.
+- Regression: `TestABMCProbeAnswersFromTheMasterRecordsNothingAndRetiresItsCredential`,
+  `TestABMCProbeRunsOnlyOnTheMaster`, and
+  `TestUndeliveredBMCProbeCredentialExpiresWithoutTouchingRecordedFenceSecrets`,
+  `TestABMCProbeRefusesAnUnrecordedPermanentCredential`,
+  `TestABMCProbeCredentialIsBoundToItsRequestAndTarget`, and
+  `TestExpiredBMCProbeCredentialSurvivesUnrelatedCorruptReceipt`
+  (`go test -count=1 ./internal/agent -run 'TestABMCProbe|TestUndeliveredBMCProbeCredential|TestExpiredBMCProbe'`).
+  `TestBMCProbeIsRelayedToTheMasterAndStoresNothing` checks the probe-only handoff purpose
+  (`go test -count=1 ./internal/controller -run TestBMCProbe`). Both packages run in the forge's
+  `.github/workflows/phase1.yml` Go suite and its `.gitea/workflows/phase1.yml` copy.
+- Avoid: Treating deletion of a materialized credential as deletion of every persisted copy,
+  using a permanent credential scope for a one-shot operation, or trusting a script path without
+  validating the handoff's signed purpose and target.

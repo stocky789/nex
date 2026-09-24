@@ -1,0 +1,39 @@
+{
+  "summary": "Accept Redfish ComputerSystem Ids with periods (Dell System.Embedded.1) on BMC fence profiles. API impact: existing contract — same fence-profile fields; target_id validation aligned with DMTF DSP0266 Id rules.",
+  "paths": [
+    "internal/protocol/cluster.go",
+    "internal/protocol/cluster_test.go",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-24-bmc-fence-discovery.md",
+    "docs/changes/2026-09-24-bmc-redfish-target-id.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps already say the Redfish system identifier is usually 1 or System.Embedded.1; code now matches that instruction.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "POST fence-profile shape unchanged; BMC target_id now accepts DMTF-legal Id characters including period. Documented under the fence-profile validation note.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix plus a docs/plans discovery sketch; published roadmap board unchanged until that feature ships.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Validation of an existing Core-owned fence profile field; no new durable state."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol -run 'TestBMCTargetIDFollowsRedfishIdRules|TestVirshURIIsBoundToPinnedSSHTransport|TestFencingProofBindsExactConfig'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/protocol/cluster_test.go",
+      "internal/protocol/cluster.go"
+    ],
+    "limits": "Live iDRAC Set BMC access after Controller/Core rebuild not recorded in this slice; IPMI Over LAN on the lab Dell still does not answer."
+  }
+}

@@ -17,7 +17,7 @@ const {
   oldMasterReachable, fenceProfileMissing, fenceUnusableReason, lastPromotionText, restrictedClearsText,
   fenceHostIDs, unfenceableBlockers, fenceBlockerReason, fenceCellText,
   restrictedUnconfirmed, HostRestrictedBanner,
-  bmcText, manualBMCOffered, bmcReenableOffered,
+  bmcText, manualBMCOffered, bmcReenableOffered, bmcProbePrefill,
   FencingDetail, fencingText, fenceCheckLines, watchdogText, fenceMethodName,
 } = await import(moduleURL);
 
@@ -557,6 +557,29 @@ assert.match(membersSrc, /\/fence-profile`, "POST", credential \? \{ request_id,
 assert.match(membersSrc, /heldRequestID\(heldFence\.current, `\$\{poolID\}\\nfence-profile\\n\$\{member\.host_id\}\\n\$\{JSON\.stringify\(fence\)\}`\)/);
 assert.match(membersSrc, /onClear=\{\(\) => void setFenceProfile\(fenceTarget, null\)\}/);
 assert.match(src, /kind: "virsh", endpoint: endpoint\.trim\(\), target_id: targetID\.trim\(\), virsh_uri: "qemu:\/\/\/system", ssh_login: login\.trim\(\), ssh_port: Number\(port\)/);
+
+// Detect: offered only when the page can ask the pool master, and it comes before the method.
+assert.doesNotMatch(fenceDialog, />Detect</);
+const detectDialog = renderToStaticMarkup(createElement(FenceProfileDialog, { ...fenceProps, onDetect: async () => ({}) }));
+assert.match(detectDialog, /<button type="button" disabled="">Detect<\/button>/, "no address, no Detect");
+assert.ok(detectDialog.indexOf(">Detect<") < detectDialog.indexOf('id="fence-kind-redfish"'));
+assert.ok(detectDialog.indexOf('id="fence-password"') < detectDialog.indexOf(">Detect<"));
+// Only Core's recommendation fills the form in; a refusal is its own sentence.
+const probe = { host_id: "host-a", status: "succeeded", error: "", bmc_probe: {
+  methods: [{ kind: "redfish", reachable: true, target_ids: ["System.Embedded.1"] }, { kind: "ipmilan", reachable: false, detail: "no answer" }],
+  recommended: { kind: "redfish", target_id: "System.Embedded.1", reason: "Redfish answered and manages this host." } } };
+assert.deepEqual(bmcProbePrefill(probe), { kind: "redfish", targetID: "System.Embedded.1", note: "Redfish answered and manages this host." });
+assert.deepEqual(bmcProbePrefill({ ...probe, status: "failed", error: "neither Redfish nor IPMI answered at bmc.example.test" }),
+  { error: "neither Redfish nor IPMI answered at bmc.example.test" });
+assert.deepEqual(bmcProbePrefill({ ...probe, bmc_probe: { methods: [] } }), { error: "The pool master found no method to recommend." });
+assert.match(src, /if \("kind" in prefill\) \{ setKind\(prefill\.kind\); setSystemID\(prefill\.targetID\); \}/);
+// The body is the contract's: an account only with its password, a fresh request each time.
+assert.match(membersSrc, /\/bmc-probe`, "POST",\n\s*username \? \{ request_id, endpoint, username, credential: \{ secret \} \} : \{ request_id, endpoint \}\)/);
+assert.match(membersSrc, /const request_id = crypto\.randomUUID\(\);\n\s*return api<BMCProbeView>/);
+assert.match(membersSrc, /onDetect=\{\(endpoint, username, secret\) => detectBMC\(fenceTarget, endpoint, username, secret\)\}/);
+// Detect never locks the dialog open: Close follows only the Set BMC access request.
+assert.match(src, /onCancel=\{event => \{ event\.preventDefault\(\); if \(!busy\) onClose\(\); \}\}\n\s*onClose=\{\(\) => \{ if \(busy\) dialog\.current\?\.showModal\(\); else onClose\(\); \}\}>\n\s*<div className="section-heading"><h2 id="fence-title"/);
+assert.doesNotMatch(src, /iDRAC|XClarity|iLO\b/);
 
 // ------------------------------------------------------------ OD-5: no escape hatch anywhere
 

@@ -409,13 +409,25 @@ body.console-focus .slideover-resize { display: none; }
 }
 
 /* Managed VM forms reuse the compact resource panels and native controls. */
-select { font: inherit; min-width: 0; width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel); color: var(--text); }
+select {
+  font: inherit;
+  min-width: 0;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 10px;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--text);
+}
 /* Select pickers render in the page, not as an OS popup window. Native pickers are separate
    compositor popups that some Wayland desktops dismiss on the pointer movement following the
    click, so the menu opens and closes at once (BUG-0064). Browsers without base-select keep
    their native picker. */
 select, ::picker(select) { appearance: base-select; }
 ::picker(select) { border: 1px solid var(--line); border-radius: var(--radius-panel); padding: 2px 0; background: var(--panel); color: var(--text); font-weight: 400; box-shadow: var(--shadow-pop); }
+select::picker-icon { color: var(--muted); flex-shrink: 0; }
 select option { padding: 5px 8px; }
 select option:hover, select option:focus-visible { background: var(--select); }
 select option:checked { font-weight: 600; }
@@ -495,9 +507,18 @@ progress { width: 100%; accent-color: var(--accent); }
 .pool-guests { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 .pool-maintenance-dialog .section-heading, .host-network-dialog .section-heading { margin: -14px -16px 10px; }
 .host-network-dialog caption, .host-network-panel caption { padding: 4px 8px; text-align: left; color: var(--muted); font-size: 11px; }
-.host-network-form { display: grid; gap: 12px; }
-.host-network-form input:not([type="radio"]), .host-network-form select { width: 100%; min-width: 7ch; }
-.host-network-form th[scope="row"] { white-space: nowrap; text-align: left; }
+.host-network-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.host-network-panel > :is(.alert, .warning, .notice, .empty, .task-error, .table-scroll, .host-network-form, .host-network-countdown, .host-network-staged) { margin: 12px 14px; }
+.host-network-form { display: grid; gap: 14px; }
+.host-network-form input:not([type="radio"]), .host-network-form select { width: 100%; min-width: 0; }
+.host-network-form select { min-width: 14ch; }
+.host-network-form th, .host-network-form td { vertical-align: middle; }
+.host-network-form tr:last-child > * { border-bottom: 0; }
+.host-network-form th[scope="row"] { color: var(--text); font-size: 13px; font-weight: 400; white-space: nowrap; text-align: left; }
+.host-network-nic { display: grid; gap: 3px; line-height: 1.25; }
+.host-network-nic b { font-weight: 600; }
+.host-network-nic small { font-size: 11px; line-height: 1.3; }
+.host-network-mgmt { width: 1%; text-align: center; }
 .host-network-countdown, .host-network-staged { display: grid; gap: 8px; }
 
 /* Planned master change and member eject (pool Hosts tab). */
@@ -508,6 +529,8 @@ progress { width: 100%; accent-color: var(--accent); }
 /* The promotion verdict's advisory line sits inside a member's detail, so it is emphasis on one
    line rather than the block callout .warning renders. */
 .pool-fence-advisory { color: var(--warn); }
+.pool-fence-dialog .pool-fence-detect { justify-content: flex-start; align-items: center; margin: 2px 0 10px; }
+.pool-fence-detect p { margin: 0; }
 /* The Host fencing setting sits in the pool status detail with its own checklist. It defaults
    to on, so the consequence beside it has to be readable once that detail is open. */
 .pool-host-fencing { margin: 0; }

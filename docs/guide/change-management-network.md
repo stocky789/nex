@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.9. Change a Nex Core host's own management addressing — which interface
+Development product 0.4.10. Change a Nex Core host's own management addressing — which interface
 carries management, DHCP or a static address, an optional management VLAN tag, the default gateway
 and the DNS servers — from Nex Controller, in a staged flow with a timed rollback the **host**
 performs by itself: **Hosts** in the rail → the host's row → the panel's **Networking** tab → the
@@ -68,12 +68,14 @@ What this workflow is **not**, in this release:
 ## Steps
 
 1. Select **Hosts** in the rail, select the host's row to open its panel, and select the
-   **Networking** tab (the **Interfaces** and **Bonds & VLANs** buttons on the panel's
-   **Overview** tab open it too). The **Management network** panel is above the
+   **Networking** tab (the **Interfaces & VLANs** button on the panel's
+   **Overview** tab opens it too). The **Management network** panel is above the
    read-only *Network interfaces* list. Its badge shows the current state — *no change staged*,
    *staged, not applied*, *applied, waiting to be confirmed*, *confirmed*, *cancelled*, *rolled
    back automatically* or *rolled back at your request* — and the configuration revision.
-2. Fill in the **Interfaces** table. One row per physical or bonded interface the host reported:
+2. Fill in the **Interfaces** table. When Nex manages this host's network files, the table and
+   DNS servers start filled from what the host reports as its current configuration; change only
+   what you intend to. One row per physical or bonded interface the host reported:
    - **Management** — the radio that marks the one interface carrying management. Exactly one.
    - **Addressing** — *Not configured*, *DHCP* or *Static*.
    - **VLAN** — the management VLAN tag, or blank for untagged.

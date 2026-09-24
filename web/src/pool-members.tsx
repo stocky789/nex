@@ -4,7 +4,7 @@ import { heldRequestID } from "./managed";
 import { EjectDialog, MasterChangeDialog, MemberActions, ResumeDialog, TransferStrip, authorityText, behindText, hostName, transferInProgress, transferResumePrompt, type Authority, type LastTransfer, type Transfer } from "./pool-authority";
 import {
   FenceProfileDialog, FencingDetail, fencingText, PromotionActions, PromotionDialog, PromotionStrip, RestrictedNote,
-  promotionInProgress, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
+  promotionInProgress, type BMCProbeView, type FenceCluster, type FenceCredentialInput, type FenceProfileInput, type FencePrerequisite, type FenceSummary, type LastPromotion,
   type MemberFence, type Promotion, type PromotionVerdict, type Restricted,
 } from "./pool-promotion";
 import { Badge, Section, badgeTone, date, type Tone } from "./ui";
@@ -752,6 +752,13 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       setFenceError(`${(e as Error).message} Submitting again repeats the same request; it never records a second change.`);
     } finally { setFenceBusy(false); }
   }
+  // Detect asks the pool master and waits for its answer; nothing is recorded, so each Detect is
+  // a fresh request and the password is handed over again.
+  function detectBMC(member: Member, endpoint: string, username: string, secret: string) {
+    const request_id = crypto.randomUUID();
+    return api<BMCProbeView>(`pools/${encodeURIComponent(poolID)}/members/${encodeURIComponent(member.host_id)}/bmc-probe`, "POST",
+      username ? { request_id, endpoint, username, credential: { secret } } : { request_id, endpoint });
+  }
   // Host fencing is one pool setting, and the pool master keeps it. Turning it off needs no
   // confirmation: it only stops Nex Core arming anything, and the consequence of leaving it on
   // is on the page beside the switch.
@@ -820,7 +827,8 @@ export function PoolMembers({ poolID, api, unavailable, hosts, coreAvailable, on
       onConfirm={targetHostID => void cancelTransfer(targetHostID)} onClose={() => { if (!cancelBusy) setResumeOpen(false); }} />}
     {report && fenceTarget && <FenceProfileDialog report={report} member={fenceTarget} busy={fenceBusy} submitError={fenceError}
       onConfirm={(fence, credential) => void setFenceProfile(fenceTarget, fence, credential)}
-      onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }} />}
+      onClear={() => void setFenceProfile(fenceTarget, null)} onClose={() => { if (!fenceBusy) setFenceTarget(null); }}
+      onDetect={(endpoint, username, secret) => detectBMC(fenceTarget, endpoint, username, secret)} />}
     {open && <AddHostDialog candidates={candidates} loading={candidatesLoading} error={candidatesError} busy={busy} submitError={submitError} onConfirm={confirm} onClose={() => { if (!busy) setOpen(false); }} onRetryCandidates={() => void loadCandidates()}
       onEnrollHost={onEnrollHost && (() => { setOpen(false); onEnrollHost(); })} />}
   </Section>;

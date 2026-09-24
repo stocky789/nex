@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -492,20 +493,90 @@ func fenceProfileCredentialKind(body poolFenceProfileAPIRequest) (string, int, e
 // broker has no persistence, so nothing here is written to the Controller database, and the
 // material is never logged, audited or echoed.
 func (c *Controller) deliverFenceCredential(body poolFenceProfileAPIRequest, kind, pool, master, host string) (*protocol.StorageClusterFence, int, error) {
-	binding := "cluster-credential:" + hex.EncodeToString([]byte(body.RequestID)) + ":" + kind + ":" + hex.EncodeToString([]byte(host))
-	if _, err := c.credentials.offer(storageCredentialRequest{RequestID: body.RequestID, RegistrationRequestID: binding, PoolID: pool, HostID: master, Credentials: *body.Credential}); err != nil {
-		return nil, http.StatusConflict, err
-	}
-	receipt, ok := c.credentials.wait(body.RequestID)
-	if !ok || receipt.Receipt == "" {
-		return nil, http.StatusServiceUnavailable, fmt.Errorf("Core did not acknowledge fence credential delivery; retry with the same request_id")
+	receipt, status, err := c.deliverFenceSecret(body.RequestID, kind, pool, master, host, *body.Credential)
+	if err != nil {
+		return nil, status, err
 	}
 	fence := *body.Fence
-	fence.CredentialRef = receipt.Receipt
+	fence.CredentialRef = receipt
 	if kind == "fence_ssh" {
-		fence.SSHHostKeyRef = receipt.Receipt
+		fence.SSHHostKeyRef = receipt
 	}
 	return &fence, 0, nil
+}
+
+// deliverFenceSecret is the handoff itself: it returns only the opaque reference Core
+// allocated for the material.
+func (c *Controller) deliverFenceSecret(requestID, kind, pool, master, host string, credential protocol.StorageCredentials) (string, int, error) {
+	binding := "cluster-credential:" + hex.EncodeToString([]byte(requestID)) + ":" + kind + ":" + hex.EncodeToString([]byte(host))
+	if _, err := c.credentials.offer(storageCredentialRequest{RequestID: requestID, RegistrationRequestID: binding, PoolID: pool, HostID: master, Credentials: credential}); err != nil {
+		return "", http.StatusConflict, err
+	}
+	receipt, ok := c.credentials.wait(requestID)
+	if !ok || receipt.Receipt == "" {
+		return "", http.StatusServiceUnavailable, fmt.Errorf("Core did not acknowledge fence credential delivery; retry with the same request_id")
+	}
+	return receipt.Receipt, 0, nil
+}
+
+// poolBMCProbeAPIRequest is one Detect from Set BMC access. The password, when there is one,
+// goes to the master over the same one-time handoff a fence profile's does, and the master
+// retires it once the probe has answered.
+type poolBMCProbeAPIRequest struct {
+	RequestID  string                       `json:"request_id"`
+	Endpoint   string                       `json:"endpoint"`
+	Username   string                       `json:"username,omitempty"`
+	Credential *protocol.StorageCredentials `json:"credential,omitempty"`
+}
+
+// probePoolBMC implements POST /api/v1/pools/{id}/members/{host_id}/bmc-probe: one brokered
+// round trip to the pool master, which asks the management controller itself. Nothing is
+// journalled, audited or stored; recording what it found is Set BMC access.
+func (c *Controller) probePoolBMC(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, host := r.PathValue("id"), r.PathValue("host_id")
+	var body poolBMCProbeAPIRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	request := protocol.PoolRequest{RequestID: body.RequestID, PoolID: pool, HostID: host, Action: "bmc-probe", MemberHostID: host, Endpoint: body.Endpoint, Username: body.Username}
+	if body.Credential != nil {
+		request.CredentialRef = fenceProfileCredentialPlaceholder
+	}
+	if !nameValid(pool) || !nameValid(host) || !nameValid(body.RequestID) || request.Valid() != nil || body.Credential != nil && !scopedCredentialValid("fence_bmc", *body.Credential) {
+		fail(w, http.StatusBadRequest, "pool, host, a stable request_id and a management controller address are required; an account is given only together with its password")
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	defer tx.Rollback()
+	master, status, err := c.poolFenceProfileTarget(tx, pool, host)
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		fail(w, http.StatusInternalServerError, "storage unavailable")
+		return
+	}
+	http.NewResponseController(w).SetWriteDeadline(time.Now().Add(credentialWait + poolBMCProbeWait + time.Minute))
+	request.HostID = master
+	if body.Credential != nil {
+		if request.CredentialRef, status, err = c.deliverFenceSecret(body.RequestID, "bmc_probe", pool, master, host, *body.Credential); err != nil {
+			fail(w, status, err.Error())
+			return
+		}
+	}
+	result, ok := c.relayPoolRequest(w, r, request)
+	if !ok {
+		return
+	}
+	if result.Status != "succeeded" && result.Error == "" {
+		result.Error = "the pool master could not probe the management controller"
+	}
+	write(w, http.StatusOK, map[string]any{"host_id": host, "status": result.Status, "error": result.Error, "bmc_probe": result.BMCProbe})
 }
 
 // commandFenceProfile journals the one durable command to the master.

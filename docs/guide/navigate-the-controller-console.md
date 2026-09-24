@@ -2,7 +2,7 @@
 
 ## Status
 
-Development build 0.4.9 of Nex Controller. The console replaces the earlier desktop layout
+Development build 0.4.10 of Nex Controller. The console replaces the earlier desktop layout
 (toolbar, resource tree, detail tabs and bottom task strip) with a labelled rail, a top bar,
 filterable lists with slide-over panels, a pool **Overview**, operational **Storage** and
 **Networks** screens and pool **Settings**. Every workflow reachable before remains reachable;
