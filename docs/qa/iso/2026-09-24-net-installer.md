@@ -3,8 +3,9 @@
 Date: 2026-09-24  
 Result: both final ISO variants passed unattended BIOS installation, first boot and reboot.  
 Scope: development version 0.4.12; network installer alongside the full offline ISO.  
-Status: local build, binding checks and BIOS installation passed; UEFI installation,
-physical hardware and hosted publication remain unverified.
+Status: original local build, binding checks and BIOS installation passed;
+2026-09-25 corrected overlay passed disposable UEFI installation and first boot.
+Rebuilt-ISO UEFI installation, physical hardware and hosted publication remain unverified.
 
 ## Environment and method
 
@@ -154,9 +155,44 @@ passed. These fixture changes do not alter the product images.
 
 ## Acceptance still required
 
-- UEFI full installation, complete graphical-wizard installation, tagged VLAN, failed
-  DNS/unavailable sources and interruption after disk writes remain distinct from the
-  BIOS installation and component checks above. A restart is not rollback.
+### Published 0.4.12 UEFI regression, 2026-09-25
+
+The published netinst ISO (`SHA-256 abe135e52c14ea5accd1fa2d8a6637f4f6cbfb5a59d69ded91ed7ac19fede5af`)
+was booted in a disposable UEFI/KVM VM with a new 24 GiB virtual disk. A test-only
+initrd overlay supplied valid wizard answers and sent sanitized diagnostic excerpts
+to the serial console; the shipping network and partition scripts were unchanged.
+The wizard's DHCP setup and first source check passed. Debian `netcfg` then removed
+the live resolver. At partman's init hook all five source probes failed name
+resolution, the hook returned 1, and Debian displayed its component menu. The
+partman log contained only its opening lines; no partition was written.
+
+A second disposable VM used the locally rebuilt GTK frontend and corrected
+network/partition scripts overlaid onto the verified public ISO. Its partman
+preflight passed, partitioning completed and base installation started. The
+inspected capture showed Nex's progress panel with current installer activity.
+A separate forced partman failure showed a Nex stopped screen with the failure
+line in the visible log, no Debian component list or action buttons, and no
+later component ran. The first capture exposed an old-log scroll defect; a
+rebuilt frontend scrolled the failure log to its latest lines, confirmed by a
+second inspected capture. The automated resolver fixtures and source checks
+passed locally after the tracked correction. In the Debian builder,
+`python3 -m unittest discover -s tests -p 'test_netinst*.py' -v` passed all 17
+tests without skips; `bash installer/check.sh`, the installer handoff and shell
+checks, the documentation gate and repository-privacy test also passed.
+
+A fresh corrected-overlay UEFI VM then completed the installer and powered off.
+The serial log contained the test install-pass marker after package configuration
+and GRUB setup. Booting its disposable disk without the ISO loaded the installed
+EFI boot path and emitted a first-boot pass marker. The test-only service checked
+`ID=nex-core`, the Core package's installed status and a nonempty netinst manifest
+before printing that marker. This verifies the corrected scripts and frontend
+overlaid on the exact public ISO, not a newly mastered release image or a manual
+graphical-wizard walkthrough. Rebuilt-artifact installation, physical hardware,
+tagged VLAN, adverse-network recovery and forge publication checks remain open.
+
+- Rebuilt-ISO UEFI installation, complete manual graphical-wizard installation,
+  tagged VLAN, failed DNS/unavailable sources and interruption after disk writes
+  remain distinct from the corrected-overlay run above. A restart is not rollback.
 - Inspect a real forge run and retained artifacts after an owner-authorized push. Verify
   final redistribution source/notices and delivery under [licensing requirements](../../LICENSING.md).
   Physical hardware and public publication remain unverified.

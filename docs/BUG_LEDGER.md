@@ -7963,3 +7963,37 @@ Append resolved defects with their evidence and the approach to avoid.
   after hiding, two apparent overlap pixels afterward). The forge Phase 1 workflows
   already run this suite on pull requests; no new forge run is claimed.
 - Avoid: treating a tiny fixed number of edge pixels as proof of overlapping fills.
+
+## BUG-0580 — Netinst returned to Debian's menu before partitioning
+
+- Date: 2026-09-25. Status: local overlay passed UEFI installation, first boot
+  and graphical failure; rebuilt release and forge verification remain open.
+- Symptom: the published 0.4.12 graphical netinst repeatedly showed Debian's full
+  component menu with **Partition disks** selected instead of continuing installation.
+- Root cause: Nex activated the selected management network and passed source preflight,
+  but Debian `netcfg` then removed `/etc/resolv.conf`. The partman init hook's second
+  source check failed DNS resolution before disk writes. The Nex GTK shell also checked
+  the nonexistent `main-menu/select` tag, so Debian's actual `debian-installer/main-menu`
+  question exposed a menu that could skip required steps.
+- Fix: retain the installer-time resolver and restore it before partman's source check.
+  The GUI stops on a Nex error screen with a live log if Debian still returns to its
+  component menu; it offers no component selection or advance action.
+- Regression: a disposable UEFI VM with the verified published ISO reproduced the
+  missing resolver and partman hook failure. A temporary resolver-restore overlay
+  passed the same hook, completed partitioning and entered base installation.
+  `tests/test_netinst_network.py` reproduces the missing-resolver case with file-backed
+  fixtures and checks the saved resolver, restoration and fail-closed missing copy;
+  it failed before the fix and passes afterward. `installer/check.sh` failed on the
+  original menu tag and passes with the interception. Both checks run in the forge's
+  installer workflow on pushes and pull requests. A rebuilt GTK frontend overlaid
+  onto the published ISO passed partman and reached base installation in a
+  disposable UEFI VM. A forced partman failure showed only Nex's stopped screen
+  and a visible failure log line; no later component ran. A fresh 24 GiB
+  disposable UEFI VM then completed installation and booted without the ISO;
+  first-boot checks confirmed Nex Core identity, the installed Core package and
+  a nonempty netinst manifest. This was a temporary overlay on the verified
+  public ISO, not a rebuilt release artifact. In the Debian builder,
+  `python3 -m unittest discover -s tests -p 'test_netinst*.py' -v` passed all 17
+  tests without skips; `bash installer/check.sh` passed. No forge run is claimed.
+- Avoid: removing the second pre-disk network check, guessing a replacement DNS server,
+  or hiding Debian's menu while allowing another installer component to run.

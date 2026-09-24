@@ -57,7 +57,7 @@ p = p.with_name('ui.h')
 s = p.read_text()
 old = '#endif /* !_UI_H_ */'
 assert s.count(old) == 1
-s = s.replace(old, 'void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting);\nvoid cdebconf_gtk_nex_progress(struct frontend *fe, const char *step, const char *info, gdouble fraction);\nvoid cdebconf_gtk_nex_completion(GtkWidget *question_box);\nvoid cdebconf_gtk_nex_failure(struct frontend *fe, GtkWidget *question_box);\ngboolean cdebconf_gtk_nex_is_completion(struct frontend *fe);\n\n' + old)
+s = s.replace(old, 'void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting);\nvoid cdebconf_gtk_nex_install_stopped(struct frontend *fe);\nvoid cdebconf_gtk_nex_progress(struct frontend *fe, const char *step, const char *info, gdouble fraction);\nvoid cdebconf_gtk_nex_completion(GtkWidget *question_box);\nvoid cdebconf_gtk_nex_failure(struct frontend *fe, GtkWidget *question_box);\ngboolean cdebconf_gtk_nex_is_completion(struct frontend *fe);\n\n' + old)
 p.write_text(s)
 p = p.with_name('progress.c')
 s = p.read_text()
@@ -105,6 +105,17 @@ p.write_text(s)
 # Preserve the native successful finish-install GO/reboot gate and handlers.
 p = p.with_name('go.c')
 s = p.read_text()
+old = '    gdk_threads_enter();\n#ifdef DI_UDEB\n'
+assert s.count(old) == 1
+s = s.replace(old, '''    gdk_threads_enter();
+    if (fe->questions->tag && !strcmp(fe->questions->tag, "debian-installer/main-menu")) {
+        cdebconf_gtk_nex_install_stopped(fe);
+        gdk_threads_leave();
+        wait_answer(fe);
+        goto end;
+    }
+#ifdef DI_UDEB
+''')
 old = '    label = cdebconf_gtk_get_text(fe, "debconf/button-continue", "Continue");'
 assert s.count(old) == 1
 s = s.replace(old, '''    label = cdebconf_gtk_nex_is_completion(fe)

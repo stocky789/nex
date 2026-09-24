@@ -8,6 +8,10 @@ MDSTAT=/proc/mdstat
 PARTMAN=/var/lib/partman
 # Also applies to the native serial installer, which configures networking via netcfg.
 if [ -f /cdrom/nex/netinst.tsv ]; then
+    # netcfg removes the live resolver after the Nex wizard's preflight.
+    if [ -f /run/nex-installer/active ]; then
+        install -m 644 /run/nex-installer/netinst-resolv.conf /etc/resolv.conf
+    fi
     /bin/sh /cdrom/nex/netinst-fetch.sh --check || {
         echo 'Net installer sources are unavailable; check networking and retry before erasing disks.' >&2
         exit 1

@@ -21,14 +21,21 @@ class NetinstNetwork(unittest.TestCase):
             source = (ROOT / 'installer/gui/netinst-network.sh').read_text()
             source = source.replace('/run/nex-installer', str(state))
             source = source.replace('/etc/resolv.conf', str(resolver))
+            source = source.replace('/etc/udhcpc/default.script', str(root / 'dhcp-script'))
             source = source.replace('/usr/bin/busybox', str(root / 'busybox'))
             helper.write_text(source)
+            dhcp_script = root / 'dhcp-script'
+            dhcp_script.write_text(f'#!/bin/sh\necho "nameserver 203.0.113.53" > {resolver}\n')
+            dhcp_script.chmod(0o755)
             for name in ('ip', 'busybox'):
                 stub = root / name
                 stub.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$COMMAND_LOG"\n'
-                                'case "$0" in *busybox) exit "${DHCP_STATUS:-0}";; esac\n')
+                                'case "$0" in *busybox) '
+                                '[ "${DHCP_STATUS:-0}" = 0 ] && echo "nameserver 198.51.100.53" > "$RESOLVER"; '
+                                'exit "${DHCP_STATUS:-0}";; esac\n')
                 stub.chmod(0o755)
-            env = {**os.environ, 'PATH': str(root) + ':/usr/bin:/bin', 'COMMAND_LOG': str(log)}
+            env = {**os.environ, 'PATH': str(root) + ':/usr/bin:/bin', 'COMMAND_LOG': str(log),
+                   'RESOLVER': str(resolver)}
 
             def run(mode, vlan='0', address='', gateway='', dns='', **extra):
                 return subprocess.run(['sh', str(helper), 'eth0', mode, vlan, address, gateway, dns],
@@ -40,14 +47,51 @@ class NetinstNetwork(unittest.TestCase):
             self.assertIn('addr replace 192.0.2.10/24 dev nxinstall', commands)
             self.assertIn('route replace default via 192.0.2.1 dev nxinstall', commands)
             self.assertEqual(resolver.read_text(), 'nameserver 192.0.2.53\n')
+            self.assertEqual((state / 'netinst-resolv.conf').read_text(), resolver.read_text())
             self.assertEqual(run('dhcp', DHCP_STATUS='1').returncode, 1)
             self.assertIn('link delete dev nxinstall', log.read_text())
             self.assertEqual(run('dhcp', dns='198.51.100.53').returncode, 0)
             self.assertEqual(resolver.read_text(), 'nameserver 198.51.100.53\n')
+            self.assertEqual((state / 'netinst-resolv.conf').read_text(), resolver.read_text())
             self.assertIn('udhcpc -n -t 5 -T 3 -i eth0', log.read_text())
             self.assertNotIn(' -q ', log.read_text(), 'DHCP must renew during long downloads')
+            self.assertEqual(subprocess.run(['sh', str(helper), 'renew'], env=env).returncode, 0)
+            self.assertEqual((state / 'netinst-resolv.conf').read_text(), 'nameserver 203.0.113.53\n')
             self.assertEqual(run('static', address='192.0.2.20/24').returncode, 0)
             self.assertEqual(resolver.read_text(), '', 'a retry must not retain stale DNS')
+            self.assertEqual((state / 'netinst-resolv.conf').read_text(), '')
+
+    def test_netcfg_resolver_removal_before_partitioning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / 'run/nex-installer'
+            state.mkdir(parents=True)
+            (state / 'active').touch()
+            (state / 'config.ini').write_text('[Host]\n')
+            (state / 'netinst-resolv.conf').write_text('nameserver 192.0.2.53\n')
+            resolver = root / 'resolv.conf'
+            media = root / 'cdrom/nex'
+            media.mkdir(parents=True)
+            (media / 'netinst.tsv').touch()
+            fetch = media / 'netinst-fetch.sh'
+            fetch.write_text(f'#!/bin/sh\ntest "$(cat {resolver})" = "nameserver 192.0.2.53"\n')
+            check = root / 'nex-config'
+            check.write_text('#!/bin/sh\nexit 0\n')
+            check.chmod(0o755)
+            source = (ROOT / 'installer/gui/recheck.sh').read_text()
+            for original, replacement in (('/run/nex-installer', state),
+                                           ('/cdrom/nex', media),
+                                           ('/etc/resolv.conf', resolver),
+                                           ('/usr/bin/nex-config', check)):
+                source = source.replace(original, str(replacement))
+            source = source.replace('PARTMAN=/var/lib/partman', f'PARTMAN={root / "partman"}')
+            result = subprocess.run(['sh', '-c', source], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(resolver.read_text(), 'nameserver 192.0.2.53\n')
+            (state / 'netinst-resolv.conf').unlink()
+            resolver.unlink()
+            result = subprocess.run(['sh', '-c', source], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, 'missing validated DNS must stop before partitioning')
 
     def test_config_network_gate_and_preflight(self):
         if not shutil.which('cc') or not shutil.which('pkg-config'):
@@ -124,7 +168,7 @@ class NetinstNetwork(unittest.TestCase):
 
     def test_preflight_precedes_destructive_operations(self):
         recheck = (ROOT / 'installer/gui/recheck.sh').read_text()
-        self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.index('if [ -f /run/nex-installer/active ]'))
+        self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.rindex('if [ -f /run/nex-installer/active ]'))
         self.assertLess(recheck.index('netinst-fetch.sh --check'), recheck.index('dd if=/dev/zero'))
         config = (ROOT / 'installer/gui/nex-config.c').read_text()
         self.assertLess(config.index('netinst-network'), config.index('netinst-fetch.sh'))

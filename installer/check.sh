@@ -61,6 +61,8 @@ start = Path('installer/gui/start.sh').read_text()
 wizard = Path('installer/gui/wizard-text.sh').read_text()
 templates = Path('installer/gui/wizard-text.templates').read_text()
 gui = Path('installer/build-gui.sh').read_text()
+assert '"debian-installer/main-menu"' in gui and 'cdebconf_gtk_nex_install_stopped(fe);' in gui, \
+    'The graphical installer must stop on Debian main-menu instead of exposing component selection'
 assert '/usr/lib/nex-installer/wizard-text' in start and '/usr/bin/nex-wizard' in start
 assert '"$nex_wizard"' in start, 'One setup loop must drive whichever frontend is running'
 assert 'nex-config --apply /run/nex-installer/config.ini' in start

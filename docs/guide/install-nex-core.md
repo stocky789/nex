@@ -177,7 +177,10 @@ existing ZFS DKMS package still builds its kernel module locally.
    Verified completed downloads can be reused on a retry within the current installation;
    a failed or corrupt download does not become an installed package.
    The installation engine can still show error or recovery questions; do not accept an
-   installation error as a completed host. On a reported failure, **View log** opens
+   installation error as a completed host. If a required backend step returns to Debian's
+   component selection, the graphical installer stops on a Nex error screen with the
+   activity log visible. It does not allow later steps to be selected. Restart setup
+   after correcting the cause. On other reported failures, **View log** opens
    the latest entries from the same three logs
    (up to 128 KiB each); close it to return to the error and recovery controls.
    A missing log is reported as unavailable. Inspect diagnostics before restarting. If disk identity changes before partitioning,
@@ -318,14 +321,20 @@ source; it may have no candidate until a compatible release is actually publishe
 - **Installation/package setup fails:** retain the installer error and logs with the image
   checksum for diagnosis. Do not treat the base Debian installation alone as a successful
   Nex installation. Retry on a new disposable disk after resolving the error.
+- **Netinst stops before partitioning:** check that the management network still has DNS
+  and can reach the release sources. The partition check stops before disk writes if a
+  source is unavailable. Restart setup after correcting the connection, or use the full
+  ISO when reliable internet access is unavailable.
 - **Installer starts again after completion:** eject the ISO and select the installed disk.
 - **Wrong disk selected before writing:** cancel and correct the VM's attached storage.
   There is no Nex undo for an accepted disk overwrite.
 
 ## Verification
 
-Netinst implementation checks and outstanding final-artifact, BIOS/UEFI, network-failure
-and forge checks are recorded in [network-installer verification](../qa/iso/2026-09-24-net-installer.md).
+The published 0.4.12 netinst UEFI DNS failure, corrected-overlay full UEFI
+installation and first boot, and inspected graphical failure screen are recorded in
+[network-installer verification](../qa/iso/2026-09-24-net-installer.md).
+Rebuilt-release-ISO installation and forge checks remain open.
 Historical offline results below do not establish netinst acceptance.
 
 The packaging efficiency checks and disposable offline-installation results are

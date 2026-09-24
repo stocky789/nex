@@ -5,8 +5,12 @@ set -eu
 
 # Keep Debian's DHCP handling and lease renewal, including an explicit DNS override.
 case "${1:-}" in
-    bound|renew|deconfig|nak|leasefail)
+    bound|renew)
         [ -z "${NEX_NETINST_DNS:-}" ] || export dns="$NEX_NETINST_DNS"
+        /etc/udhcpc/default.script "$1"
+        cp /etc/resolv.conf /run/nex-installer/netinst-resolv.conf
+        exit ;;
+    deconfig|nak|leasefail)
         exec /etc/udhcpc/default.script "$1" ;;
 esac
 
@@ -52,3 +56,4 @@ if [ -n "$dns" ] || [ "$mode" = static ]; then
     : > /etc/resolv.conf
     for server in $dns; do printf 'nameserver %s\n' "$server" >> /etc/resolv.conf; done
 fi
+cp /etc/resolv.conf "$state/netinst-resolv.conf"

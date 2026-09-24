@@ -274,10 +274,7 @@ static void nex_update_shell(struct frontend *fe)
 
     /* Set plain text before applying markup so installer titles cannot inject it. */
     gtk_label_set_text(GTK_LABEL(data->title), nex_has_failure(fe) ? "Installation needs attention" : complete ? "Nex Core installation complete" :
-        question != NULL && question->tag != NULL &&
-        !strcmp(question->tag, "main-menu/select")
-            ? "Installation options"
-            : (fe->title ? fe->title : "Install Nex Core"));
+        (fe->title ? fe->title : "Install Nex Core"));
     for (i = 0; i < G_N_ELEMENTS(nex_stages); i++) {
         gchar *key = g_strdup_printf("nex-stage-%u", i);
         label = g_object_get_data(G_OBJECT(data->window), key);
@@ -364,6 +361,30 @@ void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting)
         gtk_widget_hide(panel);
         gtk_widget_show(data->target_box);
     }
+}
+
+/* Debian exposes its component menu after a failed step. Keep the log visible and
+ * stop here: choosing another component could skip required partitioning. */
+void cdebconf_gtk_nex_install_stopped(struct frontend *fe)
+{
+    struct frontend_data *data = fe->data;
+    GtkWidget *window = data->window;
+    const char *hidden[] = { "nex-progress-track", "nex-progress-info",
+                             "nex-progress-power", "nex-progress-activity" };
+    unsigned int i;
+
+    cdebconf_gtk_nex_set_waiting(fe, TRUE);
+    for (i = 0; i < G_N_ELEMENTS(hidden); i++)
+        gtk_widget_hide(g_object_get_data(G_OBJECT(window), hidden[i]));
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(window), "nex-progress-step")),
+        "Installation stopped");
+    gtk_label_set_text(GTK_LABEL(data->title), "Installation needs attention");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(window), "nex-purpose")),
+        "A required installation step could not complete. Check the activity log, "
+        "then restart setup after correcting the cause. No later step will run.");
+    nex_refresh_live_log(window);
+    gdk_threads_add_idle_full(G_PRIORITY_LOW, nex_scroll_log,
+        g_object_ref(g_object_get_data(G_OBJECT(window), "nex-live-log")), g_object_unref);
 }
 
 /* Keep native progress accessibility/state, with an original flat track. */
@@ -540,8 +561,9 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
         g_object_set_data(G_OBJECT(window), "nex-progress-info", label);
         gtk_box_pack_start(GTK_BOX(panel), label, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(panel), nex_label("Please keep this machine powered on.",
-            "nex-caption"), FALSE, FALSE, 0);
+        label = nex_label("Please keep this machine powered on.", "nex-caption");
+        g_object_set_data(G_OBJECT(window), "nex-progress-power", label);
+        gtk_box_pack_start(GTK_BOX(panel), label, FALSE, FALSE, 0);
         activity = nex_label("Still working…", "nex-caption");
         g_object_set_data(G_OBJECT(window), "nex-progress-activity", activity);
         gtk_box_pack_start(GTK_BOX(panel), activity, FALSE, FALSE, 0);

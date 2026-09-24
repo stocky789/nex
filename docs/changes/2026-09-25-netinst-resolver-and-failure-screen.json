@@ -1,0 +1,38 @@
+{
+  "summary": "Keep netinst DNS through Debian network setup and stop safely if installer components fail",
+  "paths": [
+    "docs/BUG_LEDGER.md",
+    "docs/guide/install-nex-core.md",
+    "docs/plans/2026-09-24-net-installer.md",
+    "docs/qa/iso/2026-09-24-net-installer.md",
+    "installer/build-gui.sh",
+    "installer/check.sh",
+    "installer/gui/netinst-network.sh",
+    "installer/gui/nex-shell.c",
+    "installer/gui/recheck.sh",
+    "tests/test_netinst_network.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The graphical installer now stops with visible diagnostics instead of exposing Debian's component menu after a backend failure; netinst recovery instructions describe DNS loss before partitioning.",
+    "pages": ["docs/guide/install-nex-core.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local wizard networking, Debian netcfg, partman preflight and GTK display change; no Controller operation, Core command, observed-state result or client-facing API contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This repairs an installation variant without changing a platform milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The saved resolver is temporary installer state and creates no durable pool or Controller record."
+  },
+  "verification": {
+    "method": "Reproduce the published ISO failure, then install and first-boot a corrected temporary overlay in disposable UEFI VMs; run focused regressions and inspect the graphical failure screen.",
+    "evidence": ["docs/qa/iso/2026-09-24-net-installer.md"]
+  }
+}

@@ -1,8 +1,27 @@
 # Nex Core network installer
 
 Date: 2026-09-24  
-Status: implemented; both final ISO variants passed disposable BIOS installation and reboot.
-UEFI installation, physical hardware and hosted publication acceptance remain open.
+Status: both original ISO variants passed disposable BIOS installation and reboot.
+The published 0.4.12 netinst has a reproduced UEFI graphical-install failure before
+partitioning. A corrected temporary overlay passed disposable UEFI installation and
+first boot; rebuilt-artifact, physical-hardware and publication acceptance remain open.
+
+## 2026-09-25 correction
+
+The published 0.4.12 graphical netinst passes the wizard's network preflight, then
+Debian `netcfg` removes the live resolver before partman's second preflight. The
+second check fails DNS resolution and returns to Debian's component menu without
+erasing the disk. Save the wizard's installer-time resolver and restore it before
+that second check; keep the check before any disk write. If a backend component
+still falls back to Debian's menu, the graphical frontend stops with a visible
+log instead of offering later components that could skip required work. The
+corrected overlay passed fresh UEFI installation and first boot; verify a
+newly mastered ISO before closing release acceptance.
+
+API impact: none; the affected flow is local wizard networking → Debian `netcfg` →
+partman preflight → installer display, with no Controller/Core operation or client API.
+Guide impact: updated for the visible failure and recovery path. State owner: none;
+the resolver copy exists only in the installer runtime and adds no durable state.
 
 ## Scope and source ownership
 
