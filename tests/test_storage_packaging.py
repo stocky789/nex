@@ -115,13 +115,10 @@ class StoragePackagingTests(unittest.TestCase):
         # supplies ocf:heartbeat:Filesystem. Do not add a redundant direct package.
         iso_builder = (ROOT / "installer/build.sh").read_text()
         self.assertIn('mapfile -t packages < installer/packages.txt', iso_builder)
-        # Only the separately staged ovmf-generic is excluded from the APT closure.
-        self.assertIn('[[ $package == ovmf-generic ]] || apt_packages+=("$package")', iso_builder)
-        # BUG-0533: its exact pin must come from an immutable snapshot; live sid drops it.
-        self.assertIn("deb https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main", iso_builder)
-        self.assertNotIn("deb.debian.org/debian sid", iso_builder)
+        self.assertIn('install "${packages[@]}"', iso_builder)
+        self.assertNotIn('sid main', iso_builder)
+        self.assertNotIn('ovmf-generic', iso_builder)
         self.assertIn('--no-install-recommends', iso_builder)
-        self.assertIn('install "${apt_packages[@]}"', iso_builder)
         self.assertIn("pacemaker", installer)
         self.assertIn("fence-agents-virsh", installer)
         self.assertTrue(all(client in package for client in CLUSTERED_GFS2))

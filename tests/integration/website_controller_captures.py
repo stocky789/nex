@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Capture the real Controller with disposable, explicitly simulated public-demo data.
 
-Captures four host panel tabs against a clean fixture, then registers demo storage, a
-guest network and an ISO, creates VMs through the real API and captures the VM list,
-a VM panel and the completed Create VM review.
+Registers demo storage, a guest network and an ISO, creates VMs through the real
+API, then captures the populated console screens and the Create VM review.
 
 Requires built web/dist, Go, openssl and Python Playwright/Chromium as in phase1 CI.
 Default output is disposable CI evidence. To replace website images, pass
@@ -33,10 +32,6 @@ import urllib.request
 from phase1 import Lab, ROOT, eventually, run
 
 HOSTNAME = 'nex-core-01'
-VIEWS = [('Overview', 'Health checks', 'desktop-shell.png'),  # host panel tabs
-         ('Networking', 'Network interfaces', 'networking-desktop.png'),
-         ('Storage', 'Disks', 'storage-desktop.png'),
-         ('Activity', 'Activity and health history', 'activity-desktop.png')]
 # Demo pool resources behind the managed-VM views. Names and paths stay neutral so
 # assert_public_text keeps passing; the ISO is a 64 KiB fixture with a valid descriptor.
 # A current Nex Core advertises every managed capability; omitting any renders the demo
@@ -99,7 +94,7 @@ def capture(lab, args):
     inventory = {
         'observed_at': now, 'hostname': HOSTNAME, 'cpu_model': 'Example x86-64 processor',
         'cpu_count': 16, 'memory_bytes': 64 * 1024**3, 'virtualization': ['vmx'],
-        'os_version': 'Nex Core 0.1.4', 'agent_version': '0.1.4',
+        'os_version': 'Nex Core 0.4.10', 'agent_version': '0.4.10',
         'nics': [{'name': 'enp1s0', 'mac': '02:00:00:00:00:01',
                   'addresses': ['198.51.100.10/24'], 'state': 'up'},
                  {'name': 'enp2s0', 'mac': '02:00:00:00:00:02',
@@ -159,6 +154,7 @@ def capture(lab, args):
                             'generation': max(1, int(storage.get('generation') or 1)),
                             'capabilities': {'vm_disk': True, 'iso': True, 'thin': True},
                             'access': {'status': 'healthy', 'readable': True, 'writable': True,
+                                       'total_bytes': 1024**4, 'available_bytes': 640 * 1024**3,
                                        'observed_at': now},
                         })
                         for key in ('status', 'error'):
@@ -212,32 +208,12 @@ def capture(lab, args):
         page.get_by_label('Password', exact=True).fill(password.read_text())
         page.get_by_role('button', name='Sign in', exact=True).click()
         expect(page.locator('summary[aria-label^="Scope: Community demo, ' + HOSTNAME + '."]')).to_be_visible()
-        page.goto(lab.url + '/#/hosts/' + identity['host_id'])
-        host_panel = page.get_by_role('region', name=HOSTNAME, exact=True)
-        for tab, heading, filename in VIEWS:
-            host_panel.get_by_role('tab', name=tab, exact=True).click()
-            expect(host_panel.get_by_role('heading', name=heading, exact=True)).to_be_visible()
-            expect(host_panel.locator('header .badge', has_text='Online')).to_be_visible()
+        def shot(filename):
             page.wait_for_load_state('networkidle')
             expect(page.locator('input[type="password"]')).to_have_count(0)
             expect(page.get_by_label('Single-use enrollment token')).to_have_count(0)
-            body = page.locator('body').inner_text()
-            assert_public_text(body)
-            # One Nex Core version: the package version, shown once; no separate agent row.
-            assert 'Agent version' not in body, body
-            if tab == 'Overview':
-                assert re.search(r'Nex Core\n0\.1\.4\b', body), body
-            assert password.read_text() not in page.content() and token not in page.content()
-            # The scope names the site; the panel says the host is its pool's master.
-            assert all(label in body for label in ['Community demo', HOSTNAME, 'Master of ' + HOSTNAME]), body
-            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-            path = args.output / filename
-            page.screenshot(path=str(path))
-            hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
-
-        def shot(filename):
-            page.wait_for_load_state('networkidle')
             assert_public_text(page.locator('body').inner_text())
+            assert password.read_text() not in page.content() and token not in page.content()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             path = args.output / filename
             page.screenshot(path=str(path))
@@ -306,6 +282,23 @@ def capture(lab, args):
         assert_public_text(json.dumps(lab.api('/api/v1/vms')))
         lab.passed('three demo VMs created through the real API on registered storage, network and uploaded media; the simulated host confirmed every operation and reports them running')
 
+        for route, label, filename in [
+            ('/', 'Placement', 'desktop-shell.png'),
+            ('/networks', NETWORK_NAME, 'networking-desktop.png'),
+            ('/storage', STORAGE_NAME, 'storage-desktop.png'),
+        ]:
+            page.goto(lab.url + '/#' + route)
+            page.reload()
+            expect(page.get_by_text(label, exact=True).first).to_be_visible()
+            shot(filename)
+
+        page.goto(lab.url + '/#/')
+        page.reload()
+        page.locator('summary[aria-label="No tasks running. Show tasks"]').click()
+        expect(page.locator('.activity-tasks').get_by_text('Create VM').first).to_be_visible()
+        assert identity['host_id'] not in page.locator('body').inner_text()
+        shot('activity-desktop.png')
+
         vms()
         table = page.locator('table.list')
         for name, *_ in DEMO_VMS:
@@ -362,7 +355,7 @@ def capture(lab, args):
         assert not errors, errors
         version = browser.version
         browser.close()
-    lab.passed('four real browser host panel tabs, neutral rendered identity, no credential fields or browser errors')
+    lab.passed('seven populated console screens, neutral rendered identity, no credential fields or browser errors')
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps({
         'date_utc': datetime.now(timezone.utc).isoformat(), 'results': lab.results,

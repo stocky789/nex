@@ -130,17 +130,17 @@ installation, first boot and reboot passed under TCG. The full ISO, correspondin
 manifest and both packages were then published and independently downloaded over public HTTPS;
 their hashes, manifest bindings and signed APT metadata passed. Hosted CI remains unverified.
 
-## OVMF 2023 certificate package — 2026-09-16
+## Historical OVMF 2023 certificate package — 2026-09-16
 
-The installer carries Debian `ovmf-generic` `2026.05-2` from Debian sid because
+The earlier installer carried Debian `ovmf-generic` `2026.05-2` from Debian sid because
 the Debian 13 package does not provide the required 2023 Microsoft certificate
-template. The ISO builder uses an isolated, signed sid APT source for that exact
-package only; sid is not available to ordinary ISO dependency resolution or to
-an installed host. It pins the binary SHA-256
+template. That ISO builder used an isolated, signed sid APT source for that exact
+package only; sid was not available to ordinary ISO dependency resolution or to
+an installed host. It pinned the binary SHA-256
 `0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb`, retains
 the matching `edk2` `2026.05-2` `.dsc`, upstream tarball, Debian patch tarball,
 the package copyright, and a checksum manifest under
-`/nex/third-party/ovmf-generic/`. The installer retains that directory under
+`/nex/third-party/ovmf-generic/`. That installer retained the directory under
 `/usr/share/doc/nex-core/third-party/ovmf-generic/`.
 
 Exact-tree final ISO `403dc489fc8fb7d948fe3d27a561c4203a54642c27ac18141dae6ede4c84267c` was
@@ -154,6 +154,14 @@ The later exact-tree 0.2.9 ISO
 `fe49ea1d69e16b45eaf3abd25cfec0e1645096a9fbe0a2532b6b2e5b136d1f64` also passed the
 parsed 2023 `db` certificate, unattended offline installation, first-boot and reboot checks. This
 reconfirms the scoped OVMF package result and does not close any whole-ISO distribution gate.
+
+Decision: project owner, 2026-09-24 — new Nex Core ISOs use Debian 13 stable's `ovmf`
+through the ordinary pinned `trixie` APT closure. The sid-only staging and source copy are
+removed. The general component manifest and matching-source process must retain the exact
+stable `edk2` source and `ovmf` notice for each built ISO. Historical 2023-certificate and
+installation evidence above applies only to the earlier artifacts; the stable package's
+enrolled template lacks those 2023 certificates. A new ISO, fresh signed guests and existing
+guest firmware-state compatibility require fresh acceptance evidence before release.
 
 ## virtio-win guest driver ISO — 2026-09-16
 

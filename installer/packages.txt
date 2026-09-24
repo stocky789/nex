@@ -3,7 +3,7 @@ qemu-utils
 libvirt-daemon-system
 libvirt-clients
 virtinst
-ovmf-generic
+ovmf
 python3-virt-firmware
 swtpm
 swtpm-tools

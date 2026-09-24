@@ -7536,3 +7536,12 @@ Append resolved defects with their evidence and the approach to avoid.
   correction and passed all `sh` scenarios afterward. The forge installer job runs this script
   on pushes and pull requests through `.github/workflows/installer.yml`.
 - Avoid: Preserving a stale wording assertion after changing the operator-facing confirmation.
+
+## BUG-0550 — GitHub checks failed on delayed host console shell startup
+
+- Date: 2026-09-24. Status: local fix; GitHub rerun outstanding.
+- Symptom: Four GitHub `GitHub checks` runs failed in `TestHostConsoleIncrementalUpdateOnlyOnChange` because an incremental request received a frame during shell startup. `Controller foundation` also showed cancelled runs beside deliberately skipped jobs.
+- Root cause: The test assumed all shell startup output arrived within 200 ms; later real output legitimately changed the framebuffer. GitHub `Controller foundation` and `Release` also shared a cancelling concurrency group even though their jobs skip on github.com.
+- Fix: The regression now compares any startup frame with the previous framebuffer and waits for a one-second idle interval, with a separate deadline for reading a full frame. The two GitHub workflow copies use separate concurrency groups on github.com while retaining the shared forge group.
+- Regression: `go test ./internal/vmhost -run '^TestHostConsoleIncrementalUpdateOnlyOnChange$' -count=5` and `go test ./...` passed locally. The test runs in `.github/workflows/github.yml` on GitHub and in `.github/workflows/phase1.yml` on the forge. GitHub rerun requires a project-owner push.
+- Avoid: Using a fixed short sleep to infer that a login shell is idle, or sharing a cancelling workflow group between jobs that should only skip.

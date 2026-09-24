@@ -119,6 +119,13 @@ Later final-package and deployed-Controller checks are recorded separately. The 
 Windows TPM/Secure Boot requirements matrix and current BUG-0213 graceful-shutdown timing remain
 open in the [production-readiness tracker](2026-09-14-production-readiness-handoff.md#vm-foundation-added-2026-09-16).
 
+**Firmware package follow-up, 2026-09-24:** the project owner chose Debian 13 stable `ovmf`
+for new Core ISOs instead of the separately pinned sid `ovmf-generic`. The earlier Windows and
+2023-certificate results remain valid only for the tested artifacts. Stable OVMF provides the
+same libvirt firmware paths but not the 2023 Microsoft CAs; fresh signed-guest boot and existing
+guest NVRAM compatibility must be rechecked before the new ISO is accepted. This changes no
+Controller/Core API or durable VM definition.
+
 ## Follow-up after acceptance — bundled virtio-win (2026-09-16; reopened 2026-09-17)
 
 The second CD drive fixed the install path; the recorded lab used manually imported virtio-win

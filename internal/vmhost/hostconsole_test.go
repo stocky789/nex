@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -60,7 +61,7 @@ func requestFrame(c net.Conn, incremental byte) error {
 	return err
 }
 
-func readFrame(t *testing.T, c net.Conn) {
+func readFrame(t *testing.T, c net.Conn) []byte {
 	t.Helper()
 	hdr := make([]byte, 4+12)
 	if _, err := io.ReadFull(c, hdr); err != nil {
@@ -73,6 +74,7 @@ func readFrame(t *testing.T, c net.Conn) {
 	if _, err := io.ReadFull(c, pixels); err != nil {
 		t.Fatal(err)
 	}
+	return pixels
 }
 
 func sendKey(t *testing.T, c net.Conn, sym uint32, down bool) {
@@ -122,26 +124,44 @@ func TestHostConsoleIncrementalUpdateOnlyOnChange(t *testing.T) {
 	defer conn.Close()
 	rfbHandshake(t, conn)
 
-	drain := func() {
+	drain := func() []byte {
 		if err := requestFrame(conn, 0); err != nil {
 			t.Fatal(err)
 		}
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		readFrame(t, conn)
+		pixels := readFrame(t, conn)
 		_ = conn.SetDeadline(time.Time{})
+		return pixels
 	}
-	drain() // whatever the shell has printed by the time the handshake finishes
-	time.Sleep(200 * time.Millisecond)
-	drain() // and anything from shell startup that lands shortly after
-
-	if err := requestFrame(conn, 1); err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.SetDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, err := conn.Read(make([]byte, 1)); err == nil {
-		t.Fatal("idle console answered an incremental request with nothing changed")
-	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("expected a read timeout, got %v", err)
+	pixels := drain()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if err := requestFrame(conn, 1); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		var first [1]byte
+		if _, err := conn.Read(first[:]); errors.Is(err, os.ErrDeadlineExceeded) {
+			break
+		} else if err != nil {
+			t.Fatalf("expected a frame or read timeout, got %v", err)
+		}
+		// Shell startup can still change the screen after the first full frame.
+		// Only an identical reply proves the idle incremental request was answered.
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		frame := make([]byte, 15+hostWidth*hostHeight*4)
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			t.Fatal(err)
+		}
+		if first[0] != 0 {
+			t.Fatalf("not a FramebufferUpdate: %d", first[0])
+		}
+		if bytes.Equal(pixels, frame[15:]) {
+			t.Fatal("idle console answered an incremental request with nothing changed")
+		}
+		pixels = frame[15:]
+		if time.Now().After(deadline) {
+			t.Fatal("console did not become idle after shell startup")
+		}
 	}
 	_ = conn.SetDeadline(time.Time{})
 

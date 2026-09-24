@@ -77,6 +77,7 @@
         "A Controller deployment interrupted part-way on a freshly installed host, which now starts again and finishes"
       ],
       open: [
+        "Fresh signed Windows/Linux guest boot under Debian stable OVMF, and existing guest firmware state across the package switch, still need disposable-lab verification",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
         "Replacing the Controller appliance on the same host that runs it, which is still being decided; today a replacement Controller runs on another machine and takes the pool back from its hosts"

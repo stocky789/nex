@@ -1,0 +1,46 @@
+{
+  "summary": "Use Debian 13 stable OVMF for new Nex Core ISOs and retire the sid-only firmware package path.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "installer/packages.txt",
+    "installer/build.sh",
+    "installer/late-install.sh",
+    "installer/check.sh",
+    "tests/test_storage_packaging.py",
+    "tests/test_source_bundle.py",
+    "tests/integration/iso-smoke.py",
+    "tests/integration/fresh_install_host.py",
+    "docs/LICENSING.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/plans/2026-09-16-windows-11-lab-fixes.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/changes/2026-09-24-stable-ovmf.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New guest Secure Boot templates use Debian stable OVMF without the 2023 Microsoft CAs; the VM guide now states the boot-media limit and the edit guide distinguishes saved VM state from a host firmware package change.",
+    "pages": ["docs/guide/create-virtual-machine.md", "docs/guide/edit-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The ISO package selection changes no Controller, Core or client API; Core continues to discover the same libvirt enrolled-keys firmware descriptor and OVMF paths.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The stable-firmware switch reopens guest Secure Boot compatibility acceptance for the next ISO.",
+    "pages": ["website/src/routes/roadmap/+page.svelte"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The package source change adds no pool setting, VM identity or Controller-owned state; the selected firmware package is installed on each Core host by the ISO."
+  },
+  "verification": {
+    "method": "bash installer/check.sh passed; python3 -m unittest discover -s tests passed 399 tests, including storage packaging and source-bundle checks; bash -n installer/build.sh installer/late-install.sh and Python syntax checks passed. The exact Debian stable ovmf 2025.02-8+deb13u1 package was extracted and its enrolled firmware descriptor, paths, and two Microsoft 2011 db certificate fingerprints were inspected using virt-fw-vars and OpenSSL in a disposable Debian trixie container. python3 scripts/check_docs.py --worktree, repository privacy, website check/build and diff checks passed. A new full ISO build, matching source-bundle inspection, disposable install, fresh signed-guest boot and existing-guest NVRAM compatibility remain unrun.",
+    "evidence": ["installer/check.sh", "tests/test_storage_packaging.py", "tests/integration/iso-smoke.py", "tests/integration/fresh_install_host.py"],
+    "limits": "No new ISO or host was built or installed in this change; historical sid-OVMF artifact evidence cannot verify stable-OVMF behavior."
+  }
+}

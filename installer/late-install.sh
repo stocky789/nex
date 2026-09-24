@@ -10,10 +10,6 @@ if [ -d /cdrom/nex/third-party/dlm-pacemaker-abi ]; then
     mkdir -p /target/usr/share/doc/nex-core/third-party
     cp -a /cdrom/nex/third-party/dlm-pacemaker-abi /target/usr/share/doc/nex-core/third-party/
 fi
-if [ -d /cdrom/nex/third-party/ovmf-generic ]; then
-    mkdir -p /target/usr/share/doc/nex-core/third-party
-    cp -a /cdrom/nex/third-party/ovmf-generic /target/usr/share/doc/nex-core/third-party/
-fi
 if [ -d /cdrom/nex/third-party/virtio-win ]; then
     mkdir -p /target/usr/share/doc/nex-core/third-party
     cp -a /cdrom/nex/third-party/virtio-win /target/usr/share/doc/nex-core/third-party/

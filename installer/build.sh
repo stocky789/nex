@@ -208,69 +208,6 @@ MANIFEST
     )
 }
 
-stage_ovmf_generic() {
-    # OVMF's 2023 Microsoft certificates are not available in trixie. Keep sid
-    # isolated to this exact signed package and its matching edk2 source; it is
-    # never an APT candidate for the rest of the image. Fetch it from an immutable
-    # snapshot: sid drops superseded versions, so a live mirror cannot serve this pin.
-    local version=2026.05-2
-    local binary=ovmf-generic_${version}_all.deb
-    local binary_sha256=0f2d4de080ebeaf0972c5e212253c28dd2d90aa641542f42f37c6d6ecd4c67eb
-    local source=edk2_${version}
-    local upstream_source=edk2_2026.05
-    local apt_root=$cache/ovmf-generic-sid
-    local fetch
-    mkdir -p "$apt_root/lists/partial" "$apt_root/archives/partial"
-    cat > "$apt_root/sources.list" <<'SOURCES'
-deb https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main
-deb-src https://snapshot.debian.org/archive/debian/20260920T000000Z/ sid main
-SOURCES
-    local -a sid_apt=(
-        -o "Dir::Etc::sourcelist=$apt_root/sources.list"
-        -o Dir::Etc::sourceparts=-
-        -o "Dir::State::lists=$apt_root/lists"
-        -o "Dir::Cache::archives=$apt_root/archives"
-        -o Acquire::Check-Valid-Until=false
-    )
-    apt-get "${sid_apt[@]}" update
-    fetch=$(mktemp -d "$apt_root/fetch.XXXXXX")
-    (
-        cd "$fetch"
-        apt-get "${sid_apt[@]}" download "ovmf-generic=$version"
-        apt-get "${sid_apt[@]}" source "edk2=$version"
-    )
-    test -f "$fetch/$binary"
-    printf '%s  %s\n' "$binary_sha256" "$fetch/$binary" | sha256sum --check
-    grep -Fx "Version: $version" "$fetch/$source.dsc"
-    grep -Fq 'b2495b2473d620240b2c8ece10f2c8b75771a8f9cab58573b74de8d4d01c6851 61298772 edk2_2026.05.orig.tar.xz' "$fetch/$source.dsc"
-    grep -Fq '460a8c66db4c18e070612ea51f15a1cf71679653ccb9bf4414f56259d1107870 76388 edk2_2026.05-2.debian.tar.xz' "$fetch/$source.dsc"
-    local extract=$fetch/extract
-    dpkg-deb -x "$fetch/$binary" "$extract"
-    # This is the enrolled template selected by libvirt for Core's explicit
-    # enrolled-keys Secure Boot feature. Keep the standard descriptor paths.
-    local descriptor=$extract/usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
-    test -f "$descriptor"
-    grep -Fq '/usr/share/OVMF/OVMF_CODE_4M.ms.fd' "$descriptor"
-    grep -Fq '/usr/share/OVMF/OVMF_VARS_4M.ms.fd' "$descriptor"
-    test -f "$extract/usr/share/OVMF/OVMF_CODE_4M.ms.fd"
-    test -f "$extract/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
-    grep -aFq 'Microsoft UEFI CA 2023' "$extract/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
-    grep -aFq 'Windows UEFI CA 2023' "$extract/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
-    cp "$fetch/$binary" "$stage/nex/repo/"
-    local third_party=$stage/nex/third-party/ovmf-generic
-    mkdir -p "$third_party/source"
-    cp "$fetch/$source.dsc" "$fetch/$upstream_source.orig.tar.xz" "$fetch/$source.debian.tar.xz" "$third_party/source/"
-    cp "$extract/usr/share/doc/ovmf-generic/copyright" "$third_party/"
-    (
-        cd "$third_party"
-        sha256sum copyright source/* > checksums.sha256
-        cat > manifest.tsv <<MANIFEST
-component\tversion\tbinary\tbinary_sha256\tsource
-ovmf-generic\t$version\t$binary\t$binary_sha256\tedk2 $version
-MANIFEST
-    )
-}
-
 assert_iso_artifacts_current() {
     local deb=$1
     local want=$2
@@ -446,23 +383,18 @@ apt_snapshot=(
 apt-get "${apt_snapshot[@]}" update
 : > "$cache/empty-status"
 mapfile -t packages < installer/packages.txt
-apt_packages=()
-for package in "${packages[@]}"; do
-    [[ $package == ovmf-generic ]] || apt_packages+=("$package")
-done
 apt_closure=(-y --download-only --no-install-recommends "${apt_snapshot[@]}" -o Dir::State::status="$cache/empty-status")
 # Against an empty archive directory apt lists every file of the closure; the download
 # then runs against the kept archive directory, where apt verifies and reuses what is
 # already there and fetches only the rest.
 resolve=$(mktemp -d "$cache/resolve.XXXXXX")
 mkdir -p "$resolve/partial" "$downloads/debs"
-apt-get "${apt_closure[@]}" --print-uris -o Dir::Cache::archives="$resolve" install "${apt_packages[@]}" \
+apt-get "${apt_closure[@]}" --print-uris -o Dir::Cache::archives="$resolve" install "${packages[@]}" \
     | sed -n "s/^'[^']*' \([^ ]*\) .*/\1/p" | sort > "$cache/debs.list"
 rm -rf "$resolve"
 [[ -s $cache/debs.list ]] || { echo 'APT did not resolve the requested offline package closure' >&2; exit 1; }
-apt-get "${apt_closure[@]}" -o Dir::Cache::archives="$downloads/debs" install "${apt_packages[@]}"
+apt-get "${apt_closure[@]}" -o Dir::Cache::archives="$downloads/debs" install "${packages[@]}"
 xargs -a "$cache/debs.list" -I{} cp "$downloads/debs/{}" "$stage/nex/repo/"
-stage_ovmf_generic
 stage_virtio_win
 # Keep only the DLM rebuilt against this media's Pacemaker fencing ABI.
 rm -f "$stage/nex/repo"/dlm-controld_*.deb
@@ -493,8 +425,7 @@ Nex Core $version / internal development image
 Base: $base/$iso
 Base SHA256: $expected
 Debian signing fingerprint: $fingerprint
-APT sources: immutable snapshot.debian.org pins ($source_snapshot, $security_snapshot);
-isolated Debian sid for ovmf-generic 2026.05-2 only
+APT sources: immutable Debian trixie snapshot.debian.org pins ($source_snapshot, $security_snapshot)
 Bundled media: Fedora virtio-win 0.1.302 with matching Fedora corresponding-source RPM
 Build UTC: $(date -u +%FT%TZ)
 Nex package version: ${NEX_ISO_VERSION:-unknown}

@@ -1,0 +1,47 @@
+{
+  "summary": "Bump the changelog-derived working version to 0.4.11 and collect the staged ISO, gallery, and CI changes in its release notes.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/changes/2026-09-24-version-0.4.11.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Current development-version labels now identify 0.4.11; operator steps are unchanged.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md",
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The staged packaging, gallery and CI changes and this version label change alter no client operation, Controller-to-Core command, or observed-result contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The staged firmware change already records its roadmap update; the version label changes no milestone status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version and release-note text persist no product resource or setting."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both returned 0.4.11 0.4.11; python3 -m unittest tests.test_release_version passed 10 tests; python3 scripts/check_docs.py --worktree passed for 43 uncommitted paths; python3 -m unittest discover -s tests -p 'test_repository_privacy.py' passed one test; git diff --check and git diff --cached --check passed. The staged diff was inspected against the release notes. No ISO or host was built for this version-only change.",
+    "evidence": ["CHANGELOG.md", "scripts/release-version.py", "tests/test_release_version.py"]
+  }
+}

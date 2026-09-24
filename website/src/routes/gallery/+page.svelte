@@ -5,21 +5,21 @@
   const screenshots = [
     {
       file: "desktop-shell.png",
-      title: "Hosts at a glance",
-      description: "The resource tree, host overview and recent tasks share one workspace.",
-      alt: "Nex Controller General tab with the site tree showing the host as pool master of its automatic pool, host hardware details, health checks and recent tasks."
+      title: "Pool overview",
+      description: "Host and VM counts, placement and recent tasks share one workspace.",
+      alt: "Nex Controller Overview with a labelled navigation rail, five pool summary cards, three fictional VMs on the master host and recent successful tasks."
     },
     {
       file: "vms-desktop.png",
       title: "Virtual machines in the pool",
-      description: "Every VM in the pool with its assigned host, observed state and creation task.",
-      alt: "Nex Controller pool Virtual machines tab listing three fictional demo VMs — app-01, db-01 and web-01 — each assigned to the demo host, observed running with fresh state and a succeeded creation task."
+      description: "Filterable VMs with their assigned host, observed state and resources.",
+      alt: "Nex Controller VMs screen listing three fictional running VMs, with status, pool, host, guest OS, CPU, memory and filter controls."
     },
     {
       file: "vm-general-desktop.png",
       title: "A virtual machine in detail",
-      description: "Configuration, observed state and the task that created it, with power controls in the toolbar.",
-      alt: "Nex Controller VM details for the fictional web-01 guest showing observed running state, CPU topology, memory, disk, network adapter, install ISO, firmware and its succeeded creation task, with toolbar power controls enabled."
+      description: "A slide-over keeps the VM list visible beside state and controls.",
+      alt: "Nex Controller VMs screen with the fictional web-01 VM selected in a slide-over panel, showing its running state, console preview, configuration and power controls."
     },
     {
       file: "create-vm-desktop.png",
@@ -29,21 +29,21 @@
     },
     {
       file: "networking-desktop.png",
-      title: "Host networking",
-      description: "The Networking tab shows observed interfaces, addresses and connection state.",
-      alt: "Nex Controller Networking tab listing two fictional host interfaces, example addresses and their observed up state."
+      title: "Pool networks",
+      description: "See each network, its host access and attached VMs.",
+      alt: "Nex Controller Networks screen showing the fictional Guest network, its uplink, accessible host, three attached VMs and registration result."
     },
     {
       file: "storage-desktop.png",
-      title: "Storage on the host",
-      description: "The Storage tab lists local disks and their reported capacity.",
-      alt: "Nex Controller Storage tab showing local disk paths and observed capacities."
+      title: "Pool storage and media",
+      description: "Review repository health, host access and the ISO library.",
+      alt: "Nex Controller Storage screen showing a healthy fictional local repository with capacity and host access, plus an uploaded installation ISO."
     },
     {
       file: "activity-desktop.png",
-      title: "Activity history",
-      description: "The Activity tab records changes, who made them and when they happened.",
-      alt: "Nex Controller Activity tab showing site creation, enrollment token, automatic pool creation and host enrollment records."
+      title: "Recent task activity",
+      description: "Open the activity menu to check recent tasks from any screen.",
+      alt: "Nex Controller Overview with the top-bar activity menu open, showing recent successful VM, media and network tasks."
     }
   ];
 
@@ -143,7 +143,7 @@
     <p class="eyebrow"><span class="small-line"></span> Inside Nex Controller</p>
     <h1 id="gallery-title">Nex Controller.<br /><span>A closer look.</span></h1>
     <p class="gallery-description">Hosts, virtual machines, networking, storage and activity in one workspace.</p>
-    <p class="gallery-note">Development screenshots with fictional demo data. Captured 11 September 2026 from a real Controller build; the host inventory and its virtual machines are a simulated demo fixture, not a running production system.</p>
+    <p class="gallery-note">Development screenshots with fictional demo data. Captured 24 September 2026 from a real Controller build; the host inventory and its virtual machines are a simulated demo fixture, not a running production system.</p>
   </section>
 
   <section class="gallery-grid" aria-label="Controller screenshots">

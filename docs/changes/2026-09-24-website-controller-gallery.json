@@ -1,0 +1,45 @@
+{
+  "summary": "Replace all seven Controller gallery screenshots with current console captures from a disposable demo Controller and update their captions. API impact: none.",
+  "paths": [
+    "tests/integration/website_controller_captures.py",
+    "website/src/routes/gallery/+page.svelte",
+    "website/static/gallery/desktop-shell.png",
+    "website/static/gallery/vms-desktop.png",
+    "website/static/gallery/vm-general-desktop.png",
+    "website/static/gallery/create-vm-desktop.png",
+    "website/static/gallery/networking-desktop.png",
+    "website/static/gallery/storage-desktop.png",
+    "website/static/gallery/activity-desktop.png",
+    "docs/qa/website-controller-captures/results.json",
+    "docs/qa/2026-09-24-website-controller-gallery.md",
+    "docs/changes/2026-09-24-website-controller-gallery.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only gallery images and descriptions change; no operator workflow, permission, error or recovery instruction changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The capture lab uses existing Controller session, site, enrollment, report, storage, network, media, VM and operation calls. It changes no Controller/Core command, response or client-facing API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The gallery refresh changes no milestone or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The screenshots and evidence are static website assets; the disposable lab adds no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Run the disposable Controller capture script, inspect all seven resulting images, build and check the static website, exercise the gallery in Chromium at desktop/tablet/mobile widths, run the repository privacy test and documentation gate. Actual results and limits are recorded in the QA report.",
+    "evidence": [
+      "docs/qa/2026-09-24-website-controller-gallery.md",
+      "docs/qa/website-controller-captures/results.json",
+      "tests/integration/website_controller_captures.py",
+      "tests/integration/website_browser.py"
+    ]
+  }
+}

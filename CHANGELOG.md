@@ -6,12 +6,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.10` →
-> Debian `0.4.10`).
+> development software. Builds use the newest numbered changelog heading (`0.4.11` →
+> Debian `0.4.11`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.11] — 2026-09-24
+
+### Miscellaneous
+
+- New Nex Core ISOs use Debian stable's OVMF guest firmware instead of a pinned sid package;
+  compatibility with media signed only by the 2023 Microsoft keys needs fresh verification.
+- The website gallery shows the current Controller console in seven new screenshots with
+  fictional demo data.
+- The host-console regression check allows shell startup to settle; GitHub workflows that
+  skip their jobs use separate concurrency groups.
 
 ## [0.4.10] — 2026-09-24
 

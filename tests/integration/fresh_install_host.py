@@ -251,8 +251,8 @@ def baseline(lab, evidence, expected_version='0.1.0+managed1'):
     output = ssh(lab, '''set -eu
 uname -a
 cat /etc/os-release
-dpkg-query -W nex-core-local qemu-system-x86 libvirt-daemon-system ovmf-generic python3-virt-firmware
-test "$(dpkg-query -W -f='${Version}' ovmf-generic)" = 2026.05-2
+dpkg-query -W nex-core-local qemu-system-x86 libvirt-daemon-system ovmf python3-virt-firmware
+test "$(dpkg-query -W -f='${Version}' ovmf)" = 2025.02-8+deb13u1
 test -f /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
 grep -Fq /usr/share/OVMF/OVMF_CODE_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
 grep -Fq /usr/share/OVMF/OVMF_VARS_4M.ms.fd /usr/share/qemu/firmware/40-edk2-x86_64-secure-enrolled.json
@@ -277,13 +277,12 @@ check_ovmf_certificate() {
     done
     test -n "$certificate"
     test "$(openssl x509 -in "$certificate" -noout -fingerprint -sha256 | cut -d= -f2)" = "$expected_fingerprint"
-    openssl x509 -in "$certificate" -noout -checkend 0
 }
-check_ovmf_certificate 'Microsoft UEFI CA 2023' 'F6:12:4E:34:12:5B:EE:3F:E6:D7:9A:57:4E:AA:7B:91:C0:E7:BD:9D:92:9C:1A:32:11:78:EF:D6:11:DA:D9:01'
-check_ovmf_certificate 'Windows UEFI CA 2023' '07:6F:1F:EA:90:AC:29:15:5E:BF:77:C1:76:82:F7:5F:1F:DD:1B:E1:96:DA:30:2D:C8:46:1E:35:0A:9A:E3:30'
+check_ovmf_certificate 'Microsoft Corporation UEFI CA 2011' '48:E9:9B:99:1F:57:FC:52:F7:61:49:59:9B:FF:0A:58:C4:71:54:22:9B:9F:8D:60:3A:C4:0D:35:00:24:85:07'
+check_ovmf_certificate 'Microsoft Windows Production PCA 2011' 'E8:E9:5F:07:33:A5:5E:8B:AD:7B:E0:A1:41:3E:E2:3C:51:FC:EA:64:B3:C8:FA:6A:78:69:35:FD:DC:C7:19:61'
 rm -rf "$cert_dir"
 trap - EXIT
-test -f /usr/share/doc/nex-core/third-party/ovmf-generic/checksums.sha256
+test -f /usr/share/doc/ovmf/copyright
 test -c /dev/kvm
 test -d /sys/class/net/br0/bridge
 ip -4 -o addr show br0

@@ -73,7 +73,7 @@ class SourceBundleTests(unittest.TestCase):
             self.assertEqual(components[-1]['source_package'], 'sample')
 
     def test_source_field_keeps_the_exact_source_version(self):
-        self.assertEqual(source_bundle.source_name_version('edk2 (2026.05-2)', 'ignored'), ('edk2', '2026.05-2'))
+        self.assertEqual(source_bundle.source_name_version('edk2 (2025.02-8+deb13u1)', 'ignored'), ('edk2', '2025.02-8+deb13u1'))
         self.assertEqual(source_bundle.source_name_version('libnfs', '5.0.2-1+b2'), ('libnfs', '5.0.2-1+b2'))
         self.assertEqual(source_bundle.source_name_version('', '1'), (None, None))
         self.assertEqual(source_bundle.source_name_version('', '1+b2', 'example'), ('example', '1'))

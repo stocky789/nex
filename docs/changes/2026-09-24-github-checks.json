@@ -1,0 +1,32 @@
+{
+  "summary": "Stabilize the host console CI check and prevent GitHub skip workflows from cancelling each other.",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".github/workflows/release.yml",
+    "internal/vmhost/hostconsole_test.go",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI scheduling and test timing change no operator workflow or installed behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller client operation, Controller-to-Core command, or observed-result contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This CI repair changes no milestone status or published capability.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The CI and test changes persist no product state."
+  },
+  "verification": {
+    "method": "The focused host-console regression passed five consecutive local runs; go test ./..., repository privacy, documentation worktree and git diff --check passed. A GitHub run is pending a project-owner push.",
+    "evidence": ["internal/vmhost/hostconsole_test.go", ".github/workflows/github.yml"]
+  }
+}

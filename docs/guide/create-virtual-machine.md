@@ -251,8 +251,10 @@ Navigation on this page follows the development build 0.4.8 console layout; see
         firmware will usually not boot under the other. Choose it before installing.
       - **Secure Boot** — **On · only signed boot software runs** (the default) or
         **Off · unsigned boot media and drivers allowed**. On, the VM boots the firmware
-        build with the Microsoft keys enrolled, which is what a stock Windows or a signed
-        Linux shim expects. Off disables Secure Boot so unsigned boot media and drivers load;
+        build with Debian stable OVMF's Microsoft keys enrolled. Its template does not include
+        the 2023 Microsoft CAs, so boot media signed only by those CAs may not start until the
+        firmware trust database is updated; verify the intended media on a disposable VM.
+        Off disables Secure Boot so unsigned boot media and drivers load;
         changing an existing VM preserves its NVRAM boot entries and enrolled keys. The field is disabled with **Not available with BIOS**
         when firmware is **BIOS**; BIOS has no Secure Boot. Secure Boot is part of the
         firmware a guest is installed against and can only be changed while the VM is stopped.

@@ -11,7 +11,7 @@ concurrency:
   # One shared Gitea act_runner also runs Release ISO builds. Serialize every
   # heavy Controller foundation and Release run (runs 4222+4223): browser
   # Page.reload timed out while the ISO job starved the host.
-  group: nex-shared-runner
+  group: ${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}
   cancel-in-progress: true
 permissions:
   contents: read

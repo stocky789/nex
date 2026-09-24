@@ -34,7 +34,9 @@ Signing defaults to `~/.local/share/nex-dev/nex-appliance-signing.pem`; override
 The build refuses to finish unless Core package source, Controller appliance source,
 and appliance version all match this build.
 
-The builder is pinned to a Debian container digest. It verifies the base ISO
+The builder is pinned to a Debian container digest. It obtains guest UEFI firmware
+from Debian 13 stable's `ovmf` package through the same pinned `trixie` APT closure
+as other host packages; it does not use testing or sid. It verifies the base ISO
 against a pinned SHA256 and Debian's signed checksum list using the documented
 CD-signing fingerprint. APT authenticates additional packages. Complete package
 dependencies are downloaded using an empty dpkg status so build-container packages
@@ -60,11 +62,11 @@ The added-package manifest does not yet cover every original installer component
 this and matching upstream source retention are release gates, not completed claims.
 
 This recipe is repeatable but **not yet bit-reproducible**: added packages resolve
-against current `trixie` repositories and build timestamps change. Retain the output,
-manifest and cache for each tested build. A dated repository snapshot/package lock
-and complete source bundle are required before external release.
+against the selected dated `trixie` snapshot and build timestamps change. Retain the output,
+manifest and cache for each tested build. The dated snapshot is already pinned;
+a complete package lock and source bundle remain release requirements.
 
-The current working version is `0.4.10`; it is not a release merely because the build
+The current working version is `0.4.11`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).

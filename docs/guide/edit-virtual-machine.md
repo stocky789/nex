@@ -73,7 +73,8 @@ Navigation on this page follows the development build 0.4.8 console layout; see
      or **None**. Both are disabled with **Not available with BIOS** on a BIOS VM. A UEFI VM
      created before these fields existed shows **On** and **None**, which is what it is already
      running: libvirt gave every UEFI VM the enrolled-keys firmware, and no VM had a TPM.
-     Leaving them alone changes nothing about how the guest boots. Both are part of the
+     Leaving them alone does not change the VM definition or its saved NVRAM; a host OVMF
+     package replacement is separate and needs a guest boot check. Both are part of the
      firmware a guest is installed against, so both need the VM stopped. Turning Secure Boot off
      or on changes the firmware build. A TPM can be added, but Nex refuses to remove one because
      the guest may have sealed BitLocker keys or other state to it; recreate the VM if it must have
