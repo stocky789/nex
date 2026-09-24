@@ -93,9 +93,11 @@ Navigation on this page follows the development build 0.4.8 console layout; see
    [Add VM storage repositories](storage-repositories.md). Wait for the row to show
    `healthy`, readable and writable before using it; follow its task on **Tasks** if it
    remains queued or reports an error.
-3. Select **Networks** in the rail. The host registers its untagged network (for example **nex0 untagged**
-   on the installer-created `br0`) itself and reports it once connected, and adds one for any
-   bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For a tagged VLAN, select **Register network**. Enter a name and select the same
+3. Select **Networks** in the rail. The host registers its management-bridge network (for example
+   **nex0 untagged** on the installer-created `br0`) itself and reports it once connected —
+   including when install put a management VLAN (`nex0.<tag>`) on that bridge — and adds one for
+   any bridge it later gains on a physical NIC or bond; use it for VMs on the management LAN. For
+   a tagged VLAN, select **Register network**. Enter a name and select the same
    host. Under **Connection**, choose the host NIC that carries the network and enter its
    **VLAN ID** (1–4094 tagged; 0 uses the NIC untagged, which is only accepted on a NIC
    without host addresses). The bridge name is shown as `<NIC>v<VLAN>`. To use another existing
@@ -112,7 +114,8 @@ Navigation on this page follows the development build 0.4.8 console layout; see
    (the host's own **Local storage** registration is fine), then choose **ISO source**:
    - **Upload from computer**: select or drop one **ISO file**, then select
      **Upload and transfer ISO**. Progress, rate and **Cancel** for the upload to Controller
-     appear as an **Upload ISO** row on **Tasks**, and the top bar's activity pill counts it as
+     appear on **Storage** (in the upload form, or under **ISO library** after you close the
+     form) and as an **Upload ISO** row on **Tasks**. The top bar's activity pill counts it as
      running. You can close the form and keep working while the upload runs, but keep the
      Controller browser tab open.
    - **Download from public URL**: enter the direct **Public ISO URL**. **ISO name** is
@@ -411,11 +414,12 @@ failed and uncertain transfers show their own status.
   For an existing bridge or libvirt network, verify it exists or is active on this host and
   correct networking separately with a recovery path.
 - **The default untagged network is missing:** the host registers it itself, at agent start
-  and within a minute of a bridge on a physical NIC or bond appearing, and reports it on its
-  next connection. Check the **Networking** tab of the host's panel: each physical NIC lists what it
-  carries; bridges, VLAN devices and VM ports are under **All interfaces**. If the host's own
-  registration failed, its task shows the reason. A host running Nex Core from before this
-  behaviour registers nothing itself; upgrade it.
+  and within a minute of a bridge on a physical NIC, bond, or installer management VLAN
+  (`nexN.<tag>` enslaved to `br0`) appearing, and reports it on its next connection. Check the
+  **Networking** tab of the host's panel: each physical NIC lists what it carries; bridges, VLAN
+  devices and VM ports are under **All interfaces**. If the host's own registration failed, its
+  task shows the reason. A host running Nex Core from before this behaviour registers nothing
+  itself; upgrade it.
 - **Controller was rebuilt:** once the host reconnects, its storage registrations, networks,
   ISO records and VM definitions come back automatically with their original names and IDs.
   Not recovered: sites, administrator accounts, audit history and enrollment tokens; the host

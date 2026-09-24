@@ -302,19 +302,22 @@ static gboolean similar_disks(void)
         }
     return FALSE;
 }
-/* Live Disk summary: same wording as the text frontend and nex-config refusals. */
+/* Live Disk summary: plain outcome of the selection (RAID1 only for 2+ disks). */
 static gchar *disk_summary_text(guint selected, guint listed, guint64 smallest, guint64 largest, gboolean has_similar)
 {
     if (selected && largest > smallest + smallest / 10)
         return g_strdup("<span foreground='#B3261E'>Every mirror disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as large as its smallest member. Select disks of similar size.</span>");
     if (!selected)
         return g_strdup(listed > 1 && has_similar
-            ? "No disk selected.\nTip: tick two disks of similar size for a mirrored system disk that survives one disk failure."
+            ? "No disk selected.\nTip: two or more similar-sized disks give RAID1 copies of one system disk — more disks mean more copies, not more space."
             : "No disk selected.");
     if (selected == 1)
-        return g_strdup("1 disk: single disk, ext4, no redundancy.");
-    return g_markup_printf_escaped("%u disks: RAID1 mirror, smallest disk %.1f GiB, keeps running if one disk fails.",
-        selected, smallest / (1024.0 * 1024 * 1024));
+        return g_strdup("What you get: one system disk, no redundancy.");
+    /* RAID1 only: every selected disk is another full copy. Usable size is the smallest. */
+    return g_markup_printf_escaped(
+        "What you get: one %.1f GiB system disk on all %u drives (RAID1 copies — not pooled storage). Survives %u disk failure%s.",
+        smallest / (1024.0 * 1024 * 1024), selected, selected - 1,
+        (selected - 1) == 1 ? "" : "s");
 }
 static void disks_changed(void)
 {
@@ -646,7 +649,7 @@ static gboolean collect(void)
 }
 static void show_review(void)
 {
-    GString *s = g_string_new(NULL); guint i; gchar *group, *m, *a, *g, *management_name, *zone, *erase_label, *targets, **selection, **sizes;
+    GString *s = g_string_new(NULL); guint i; gchar *group, *m, *a, *g, *management_name, *zone, *erase_label, *targets, *layout, **selection, **sizes;
     gsize count; guint64 capacity = 0;
     zone = g_key_file_get_string(config, "Host", "timezone", NULL);
     management_name = g_key_file_get_string(config, "Network", "management", NULL);
@@ -667,18 +670,27 @@ static void show_review(void)
     g_free(management_name);
     selection = g_key_file_get_string_list(config, "Host", "disk", &count, NULL);
     targets = g_strjoinv(" + ", selection);
-    g_string_append_printf(s, "\nERASE AND INSTALL\n%s   •   Whole disk%s   •   %s\nAll existing partitions and data on %s will be removed.",
-        targets, count > 1 ? "s" : "", count > 1 ? "RAID1 mirror, ext4" : "ext4", count > 1 ? "these disks" : "this disk");
-    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(review)), s->str, -1); g_string_free(s, TRUE);
     /* A mirror is as large as its smallest member, so that is the capacity to name. */
     sizes = g_key_file_get_string_list(config, "Host", "disk_size", NULL, NULL);
     for (i = 0; sizes && sizes[i]; i++) {
         guint64 bytes = g_ascii_strtoull(sizes[i], NULL, 10);
         if (!capacity || bytes < capacity) capacity = bytes;
     }
-    erase_label = g_strdup_printf("_Erase all data on %s (%.1f GiB%s)", targets,
-        capacity / (1024.0 * 1024 * 1024), count > 1 ? " mirror" : "");
-    g_strfreev(sizes); g_free(targets); g_strfreev(selection);
+    if (count > 1)
+        layout = g_strdup_printf("one %.1f GiB system disk ×%u RAID1 copies (not pooled; survives %u)",
+            capacity / (1024.0 * 1024 * 1024), (guint)count, (guint)count - 1);
+    else
+        layout = g_strdup("one system disk, ext4, no redundancy");
+    g_string_append_printf(s, "\nERASE AND INSTALL\n%s   •   Whole disk%s   •   %s\nAll existing partitions and data on %s will be removed.",
+        targets, count > 1 ? "s" : "", layout, count > 1 ? "these disks" : "this disk");
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(review)), s->str, -1); g_string_free(s, TRUE);
+    if (count > 1)
+        erase_label = g_strdup_printf("_Erase all data on %s (%.1f GiB ×%u RAID1)", targets,
+            capacity / (1024.0 * 1024 * 1024), (guint)count);
+    else
+        erase_label = g_strdup_printf("_Erase all data on %s (%.1f GiB)", targets,
+            capacity / (1024.0 * 1024 * 1024));
+    g_strfreev(sizes); g_free(layout); g_free(targets); g_strfreev(selection);
     gtk_button_set_label(GTK_BUTTON(confirmation), erase_label); g_free(erase_label);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(confirmation), FALSE);
 }
@@ -829,7 +841,7 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), label("Use IPv4/prefix, for example 192.168.1.20/24. Separate DNS addresses with spaces.\nVLAN 0 is untagged; use 1–4094 for a tagged connection.\nOnly the management adapter may have a default gateway."), FALSE, FALSE, 0);
     g_signal_connect(vlan, "value-changed", G_CALLBACK(dhcp_changed), NULL);
     g_signal_connect(mode, "changed", G_CALLBACK(mode_changed), NULL); g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(nic_list)), "changed", G_CALLBACK(nic_changed), NULL);
-    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Tick one disk, or two or more to mirror. Ticked disks are erased; others are left alone."), FALSE, FALSE, 0);
+    box = page_box(); gtk_box_pack_start(GTK_BOX(box), label("Tick one disk for a single install, or two or more for RAID1 copies of one system disk. The summary shows what you get. Ticked disks are erased; others are left alone."), FALSE, FALSE, 0);
     disk_list = disk_list_widget();
     scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);

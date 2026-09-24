@@ -97,16 +97,12 @@ h3 {
   flex-shrink: 0;
 }
 .wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wordmark img {
   display: block;
-  width: 95px;
-  height: 33px;
-  background-image: url("/nex-brand.png");
-  background-size: 174px 261px;
-  background-position: -14px -27px;
-  background-repeat: no-repeat;
-  /* Whiten the brand board's pale backdrop before blending into the page. */
-  filter: brightness(1.1);
-  mix-blend-mode: multiply;
 }
 .brand-divider {
   height: 31px;
@@ -814,11 +810,12 @@ details[open] summary span {
     gap: 17px;
     padding-block: 21px;
   }
-  .site-header .wordmark {
-    width: 80px;
-    height: 28px;
-    background-size: 146px 220px;
-    background-position: -12px -23px;
+  .site-header .wordmark img {
+    width: auto;
+    height: 32px;
+  }
+  .site-header .wordmark img + img {
+    height: 24px;
   }
   .site-header nav {
     gap: 12px;

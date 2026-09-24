@@ -56,6 +56,9 @@ static GtkWidget *nex_label(const char *text, const char *name)
 #include <stdio.h>
 #include "template.h"
 
+/* How much of each installer log the live Install panel and View log show. */
+enum { NEX_LOG_TAIL = 128 * 1024, NEX_LIVE_LOG_TAIL = 48 * 1024 };
+
 /* The completion question. It is asked once the install has already written the disk,
  * which is why that screen offers no way back and no Go Back button (see build-gui.sh).
  */
@@ -75,13 +78,12 @@ static gboolean nex_has_failure(struct frontend *fe)
     return FALSE;
 }
 
-static gchar *nex_log_tail(const char *path)
+static gchar *nex_log_tail(const char *path, long limit)
 {
     FILE *file = fopen(path, "rb");
     gchar *buffer, *valid;
     long length;
     size_t used;
-    const long limit = 128 * 1024;
     if (file == NULL)
         return g_strdup("Log unavailable.\n");
     if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 ||
@@ -118,19 +120,24 @@ static gboolean nex_scroll_log(gpointer data)
     return FALSE;
 }
 
+static void nex_append_log_files(GString *text, long limit)
+{
+    const char *paths[] = { "/var/log/syslog", "/var/log/partman", "/var/log/nex-installer-prepare.log" };
+    unsigned int i;
+    for (i = 0; i < G_N_ELEMENTS(paths); i++) {
+        gchar *tail = nex_log_tail(paths[i], limit);
+        g_string_append_printf(text, "%s\n%s\n\n", paths[i], tail);
+        g_free(tail);
+    }
+}
+
 static void nex_view_log(GtkWidget *button, gpointer parent)
 {
     GtkWidget *dialog, *scroll, *view, *caption;
     GtkTextBuffer *buffer;
     GString *text = g_string_new("");
-    const char *paths[] = { "/var/log/syslog", "/var/log/partman", "/var/log/nex-installer-prepare.log" };
-    unsigned int i;
     (void)button;
-    for (i = 0; i < G_N_ELEMENTS(paths); i++) {
-        gchar *tail = nex_log_tail(paths[i]);
-        g_string_append_printf(text, "%s\n%s\n\n", paths[i], tail);
-        g_free(tail);
-    }
+    nex_append_log_files(text, NEX_LOG_TAIL);
     dialog = gtk_dialog_new_with_buttons("Nex Core installation log", GTK_WINDOW(parent),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_widget_set_name(dialog, "nex-installer-log");
@@ -154,6 +161,79 @@ static void nex_view_log(GtkWidget *button, gpointer parent)
     gtk_widget_show_all(dialog);
     gtk_window_present(GTK_WINDOW(dialog));
     gdk_threads_add_idle_full(G_PRIORITY_LOW, nex_scroll_log, g_object_ref(view), g_object_unref);
+}
+
+/* Keep the live Install log pinned to new output unless the operator scrolled up. */
+static gboolean nex_live_log_at_bottom(GtkWidget *view)
+{
+    GtkAdjustment *v = gtk_text_view_get_vadjustment(GTK_TEXT_VIEW(view));
+    gdouble upper, page, value;
+    if (v == NULL)
+        return TRUE;
+    upper = gtk_adjustment_get_upper(v);
+    page = gtk_adjustment_get_page_size(v);
+    value = gtk_adjustment_get_value(v);
+    return upper <= page || value >= upper - page - 24.0;
+}
+
+static void nex_refresh_live_log(GtkWidget *window)
+{
+    GtkWidget *view = g_object_get_data(G_OBJECT(window), "nex-live-log");
+    GtkTextBuffer *buffer;
+    GString *text;
+    gboolean follow;
+    if (view == NULL)
+        return;
+    follow = nex_live_log_at_bottom(view);
+    text = g_string_new("");
+    nex_append_log_files(text, NEX_LIVE_LOG_TAIL);
+    buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+    gtk_text_buffer_set_text(buffer, text->str, text->len);
+    g_string_free(text, TRUE);
+    if (follow)
+        gdk_threads_add_idle_full(G_PRIORITY_LOW, nex_scroll_log, g_object_ref(view), g_object_unref);
+}
+
+/* Refresh the live log and animate Still working… while the Install panel is showing,
+ * so a long step like late preseed does not look frozen when the fraction is not moving.
+ */
+static gboolean nex_progress_tick(gpointer window)
+{
+    GtkWidget *panel = g_object_get_data(G_OBJECT(window), "nex-waiting");
+    GtkWidget *activity = g_object_get_data(G_OBJECT(window), "nex-progress-activity");
+    guint phase;
+    static const char *dots[] = {".  ", ".. ", "...", "   "};
+    if (panel == NULL || !gtk_widget_get_visible(panel)) {
+        g_object_set_data(G_OBJECT(window), "nex-progress-tick", NULL);
+        return FALSE;
+    }
+    phase = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(window), "nex-progress-phase")) + 1;
+    g_object_set_data(G_OBJECT(window), "nex-progress-phase", GUINT_TO_POINTER(phase));
+    if (activity != NULL) {
+        gchar *caption = g_strdup_printf("Still working%s", dots[phase % 4]);
+        gtk_label_set_text(GTK_LABEL(activity), caption);
+        g_free(caption);
+    }
+    /* Refresh the live log about once a second (tick is 100 ms). */
+    if (phase % 10 == 0)
+        nex_refresh_live_log(window);
+    return TRUE;
+}
+
+static void nex_progress_activity_set(GtkWidget *window, gboolean on)
+{
+    guint id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(window), "nex-progress-tick"));
+    if (on) {
+        if (id == 0) {
+            g_object_set_data(G_OBJECT(window), "nex-progress-phase", GUINT_TO_POINTER(0));
+            nex_refresh_live_log(window);
+            id = g_timeout_add(100, nex_progress_tick, window);
+            g_object_set_data(G_OBJECT(window), "nex-progress-tick", GUINT_TO_POINTER(id));
+        }
+    } else if (id != 0) {
+        g_source_remove(id);
+        g_object_set_data(G_OBJECT(window), "nex-progress-tick", NULL);
+    }
 }
 
 /* Keep the native reason and recovery controls; add diagnostics without answering GO. */
@@ -278,7 +358,9 @@ void cdebconf_gtk_nex_set_waiting(struct frontend *fe, gboolean waiting)
         gtk_label_set_text(GTK_LABEL(data->title), "Install Nex Core");
         gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(data->window),
             "nex-purpose")), "Follow the installation progress and any prompts below.");
+        nex_progress_activity_set(data->window, TRUE);
     } else {
+        nex_progress_activity_set(data->window, FALSE);
         gtk_widget_hide(panel);
         gtk_widget_show(data->target_box);
     }
@@ -367,6 +449,9 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
         "style \"nex-brand\" { font_name = \"FreeSans Bold 20\" } "
         "style \"nex-heading\" { font_name = \"FreeSans Bold 20\" } "
         "style \"nex-caption\" { font_name = \"FreeSans 10\" } "
+        "style \"nex-live-log\" { font_name = \"FreeMono 9\" "
+        "text[NORMAL] = \"#17233B\" base[NORMAL] = \"#F7F9FC\" } "
+        "widget \"*.nex-live-log\" style \"nex-live-log\" "
         "style \"nex-controls\" { xthickness=1 ythickness=1 "
         "GtkButton::inner-border={12,12,7,7} GtkEntry::inner-border={8,8,6,6} "
         "bg[NORMAL]=\"#EFF3F8\" bg[PRELIGHT]=\"#E1E8F2\" "
@@ -439,6 +524,7 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
     {
         GtkWidget *panel = gtk_vbox_new(FALSE, 16);
         GtkWidget *track = gtk_progress_bar_new();
+        GtkWidget *scroll, *view, *activity;
         g_object_set_data(G_OBJECT(window), "nex-waiting", panel);
         label = nex_label("Preparing the next installation step…", "nex-progress-step");
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
@@ -456,6 +542,23 @@ static void create_main_widgets(struct frontend *fe, GtkWidget *window)
         gtk_box_pack_start(GTK_BOX(panel), label, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(panel), nex_label("Please keep this machine powered on.",
             "nex-caption"), FALSE, FALSE, 0);
+        activity = nex_label("Still working…", "nex-caption");
+        g_object_set_data(G_OBJECT(window), "nex-progress-activity", activity);
+        gtk_box_pack_start(GTK_BOX(panel), activity, FALSE, FALSE, 0);
+        label = nex_label("Installer activity", "nex-caption");
+        gtk_box_pack_start(GTK_BOX(panel), label, FALSE, FALSE, 0);
+        scroll = gtk_scrolled_window_new(NULL, NULL);
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+            GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+        gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scroll), GTK_SHADOW_IN);
+        view = gtk_text_view_new();
+        gtk_widget_set_name(view, "nex-live-log");
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
+        gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
+        gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_CHAR);
+        g_object_set_data(G_OBJECT(window), "nex-live-log", view);
+        gtk_container_add(GTK_CONTAINER(scroll), view);
+        gtk_box_pack_start(GTK_BOX(panel), scroll, TRUE, TRUE, 0);
         gtk_widget_show_all(panel);
         gtk_widget_set_no_show_all(panel, TRUE);
         gtk_widget_hide(panel);

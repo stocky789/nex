@@ -675,7 +675,7 @@ def scenario_mirror_selection(shell, root):
     assert session.subst('nex-installer/erase', 'disk') == '/dev/sda, /dev/sdg', session.explain()
     assert session.subst('nex-installer/erase', 'serial') == 'TESTSERIAL1, TESTSERIAL2'
     assert session.subst('nex-installer/erase', 'layout') == \
-        'md RAID1 mirror of 2 disks, one ext4 root; one disk can fail without stopping the host'
+        'one system disk as 2 identical RAID1 copies (capacity not pooled); survives 1 disk failure'
     for line in ('disk=/dev/sda;/dev/sdg;', 'disk_size=34359738368;34359738368;',
                  'disk_serial=TESTSERIAL1;TESTSERIAL2;', 'disk_major_minor=8:0;8:96;'):
         assert line + '\n' in session.config, (line, session.config, session.explain())

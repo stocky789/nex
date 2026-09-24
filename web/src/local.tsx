@@ -11,7 +11,7 @@ type VM = { id: string; name: string; state: string; blocked_reason?: string; ma
 type Operation = { id: string; vm_id: string; kind: string; status: string; stage: string; error?: string; controller_url?: string; controller_cert_sha256?: string; progress?: number };
 type Draft = { name: string; hostname: string; cpus: number; memory_mib: number; disk_gib: number; network_mode: "dhcp" | "static"; address_cidr: string; gateway: string; dns: string; admin_password: string; site_name: string; bridge: string; storage_dir: string };
 const initial: Draft = { name: "nex-controller", hostname: "nex-controller", cpus: 2, memory_mib: 4096, disk_gib: 32, network_mode: "dhcp", address_cidr: "", gateway: "", dns: "", admin_password: "", site_name: "Main site", bridge: "", storage_dir: "" };
-function Brand() { return <div className="identity"><span className="brand" role="img" aria-label="Nex" /><span>CORE <small>LOCAL HOST</small></span></div>; }
+function Brand() { return <div className="identity"><span className="brand" role="img" aria-label="Nex Core" /><span>LOCAL HOST</span></div>; }
 function Links() { return <footer><span>Nex Core · Independent host access</span><nav aria-label="Resources"><a href="/api/docs/">API reference</a><a href="/source">Source code</a></nav></footer>; }
 const fieldNames: Record<string, string> = { name: "VM name", hostname: "Controller hostname", cpus: "Virtual CPUs", memory_mib: "Memory (MiB)", disk_gib: "System disk (GiB)", network_mode: "IP configuration", address_cidr: "IPv4 address / prefix", gateway: "IPv4 gateway", dns: "DNS servers", site_name: "Site name", bridge: "LAN bridge", storage_dir: "Local storage" };
 const label = (s: string) => s.replaceAll("_", " ").replaceAll("-", " ");

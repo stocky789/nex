@@ -141,7 +141,8 @@ with (output / 'qemu.log').open('w') as log:
         for corner in ((width - 5, 5), (5, height - 5), (width - 5, height - 5)):
             assert welcome.getpixel(corner) == welcome.getpixel((5, 5)), 'Installer leaves desktop exposed; no window manager maximizes it'
         # A cropped brand board paints its textured background over the header.
-        for point in ((20, 20), (100, 20), (210, 20)):
+        # Points sit in the lockup's transparent gaps (hexagon|nex, nex|separator, trailing pad).
+        for point in ((40, 20), (90, 20), (140, 20)):
             assert welcome.getpixel(point) == welcome.getpixel((5, 5)), 'Logo background must blend into the native header without texture'
         click(width - 60, footer)
         field('h', 'nexcore.example.test')

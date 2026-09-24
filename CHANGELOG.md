@@ -6,12 +6,33 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.8` →
-> Debian `0.4.8`).
+> development software. Builds use the newest numbered changelog heading (`0.4.9` →
+> Debian `0.4.9`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.9] — 2026-09-24
+
+### Minor Feature
+
+- VM and host side panels can be dragged wider or narrower from the left edge; the width is
+  remembered in this browser.
+- The top bar's activity pill opens a short task list instead of jumping straight to **Tasks**;
+  **Open Tasks** still reaches the full page.
+- ISO upload progress, rate and Cancel show on Storage (upload form or ISO library) as well as
+  on Tasks.
+
+### Bug Fixes
+
+- A fresh pool whose management NIC used a VLAN tag now shows that management bridge as
+  **nex0 untagged** (or the matching uplink) on **Networks** and in the create-VM network list,
+  instead of staying empty.
+- Installer disk summary and review state what the selection installs: one system-disk size on
+  all selected drives as RAID1 copies (not pooled storage), and how many disk failures it survives.
+- Install progress shows **Still working…** and a live **Installer activity** log while a step
+  is quiet, so a long preseed or package stage does not look hung.
 
 ## [0.4.8] — 2026-09-23
 

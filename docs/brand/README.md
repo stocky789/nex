@@ -1,7 +1,7 @@
 # Nex brand identity
 
-Date: 2026-09-08  
-Status: Original blue/platinum Relay revision 2 identity approved by project owner on 2026-09-08. Additional reference colors extend the palette; they do not replace the primary identity.
+Date: 2026-09-24  
+Status: Hex identity approved by project owner on 2026-09-24, replacing the 2026-09-08 rounded-tile mark. The blue/platinum palette is unchanged; supporting colors extend it and do not replace the primary identity.
 
 ## Brief and product identity
 
@@ -13,13 +13,33 @@ project owner clarified that the original blue, white, and grey identity stays p
 
 ## Approved logo treatment
 
-Use the original rounded graphite `nex` wordmark with a continuous crossed x, and a white lowercase n on an electric-blue tile. Nex Core and Nex Controller use graphite wordmarks with their product descriptors on porcelain/platinum backgrounds. Preserve the original logo shapes and blue icon.
+The symbol is a white lowercase n on an electric-blue rounded hexagon, surrounded by a thin hexagonal ring. The n is Geist Bold. The `nex` wordmark is graphite Geist SemiBold with tightened spacing (−0.045 em), so the icon and wordmark share one letterform.
 
-Do not use split opposing chevrons or an isolated x as the Nex emblem. Keep one current board in this folder.
+The ring color identifies the product; the rest of the symbol is identical:
 
-![Nex brand board and extended palette](nex-brand.png)
+| Product | Ring on light | Ring on dark |
+|---|---|---|
+| Nex Core | Action blue `#2456D9` | Mist blue `#7BA7D9` |
+| Nex Controller | Graphite `#17233B` | Silver blue `#C6CEE4` |
 
-The board is a raster design reference, not a production vector master. Written color values below are authoritative if rendered swatches differ.
+| | Nex Core | Nex Controller |
+|---|---|---|
+| Lockup | ![Nex Core](logo/nex-core-lockup.svg) | ![Nex Controller](logo/nex-controller-lockup.svg) |
+| Symbol | ![Nex Core symbol](logo/nex-core-symbol.svg) | ![Nex Controller symbol](logo/nex-controller-symbol.svg) |
+
+Below 24 px the ring falls under one pixel, so favicons and other small marks use the shared ringless symbol (`nex-symbol-small.svg` and its 16/24/32 px PNG exports). The website represents the project rather than one product, so it pairs the ringless symbol with the wordmark at any size. Do not use a horseshoe/symmetric-arch n, split opposing chevrons, or an isolated x as the Nex emblem.
+
+## Vector masters
+
+`logo/` holds the production SVG masters. The wordmark, icon n, and Core/Controller descriptors (Geist Regular) are outlined, so no font is required. Geist is licensed under the SIL Open Font License 1.1.
+
+| File | Use |
+|---|---|
+| `nex-core-lockup.svg`, `nex-controller-lockup.svg` (+ `-dark`) | Product entry points |
+| `nex-core-symbol.svg`, `nex-controller-symbol.svg` (+ `-dark`) | Symbol where the product name is already clear, 24 px and up |
+| `nex-symbol-small.svg`, `nex-symbol-16/24/32.png` | Favicons and marks under 24 px, shared by both products |
+| `nex-symbol-mono.svg` | One-color mark in `currentColor` for print, installer, and console contexts |
+| `nex-wordmark.svg` (+ `-dark`) | Wordmark alone |
 
 ## Primary palette
 
@@ -54,7 +74,7 @@ background: linear-gradient(45deg, #393149 0%, #202B3B 52%, #08282E 100%);
 color: #E5E8F3;
 ```
 
-Keep the original light presentation dominant: porcelain/platinum surfaces, graphite text, and blue emphasis. Keep logos solid and reproducible in one color. Avoid glow, metallic text, and heavy shadows. Supporting colors do not mandate a dark application theme. Core and Controller share the same palette; product names identify them.
+Keep the original light presentation dominant: porcelain/platinum surfaces, graphite text, and blue emphasis. Keep logos solid and reproducible in one color. Avoid glow, metallic text, and heavy shadows. Supporting colors do not mandate a dark application theme. Core and Controller share the same palette; product names and the symbol's ring color identify them.
 
 ## Contrast and status
 
@@ -66,13 +86,10 @@ Status colors remain separate functional tokens. Use explicit labels and icons f
 
 ## Type and usage
 
-Use the existing proposal's system sans stack for product UI: `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`. The approved wordmark uses custom lettering; it does not establish a font dependency. Use sentence case, readable medium weights, and tabular numerals for aligned metrics where supported.
+Use the existing proposal's system sans stack for product UI: `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`. The wordmark is outlined Geist artwork; it does not establish a UI font dependency. Use sentence case, readable medium weights, and tabular numerals for aligned metrics where supported.
 
-Use the full Nex Core or Nex Controller lockup at product entry points. Use the standalone Nex symbol only where the product name is already clear. A proposed starting clear space is half the symbol height on every side; confirm after the chosen mark is drawn as a vector. Keep a one-color version for small marks, print, and installer/console contexts. Text-only Nex Core remains suitable for a terminal.
+Use the full Nex Core or Nex Controller lockup at product entry points. Use the standalone Nex symbol only where the product name is already clear. Keep clear space of half the symbol height (outer ring included) on every side. Use `logo/nex-symbol-mono.svg` for one-color small marks, print, and installer/console contexts. Text-only Nex Core remains suitable for a terminal.
 
 ## Production asset status
 
-The original blue/platinum identity is approved; supporting colors expand its available palette. Vector masters, separate product lockups, and 16/24/32-pixel icon exports remain to be produced and checked. Continue checking these colors against actual Controller screens when UI styles change. The custom installer header now renders the approved Nex Core lockup directly from this
-board using native image cropping and scaling; it does not approximate the mark with a font.
-This is reuse of the approved raster artwork, not a completed production vector master.
-See [installer logo verification](../qa/iso/2026-09-08-installer-logo.md).
+Vector masters, product lockups, a one-color mark, and 16/24/32 px icon exports exist in `logo/`. The Controller and local host web UI, the website, and the installer/boot splash use copies of or renders from these masters; the previous raster board was retired on 2026-09-24. Continue checking these colors against actual Controller screens when UI styles change.

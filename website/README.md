@@ -45,9 +45,10 @@ for browser verification.
 
 ## License and assets
 
-Original source and configuration use [AGPL-3.0-only](../LICENSE). The unchanged
-`static/nex-brand.png` brand board is displayed using CSS cropping and retains the
-separate artwork terms in [Licensing](../docs/LICENSING.md). System fonts are used;
+Original source and configuration use [AGPL-3.0-only](../LICENSE). The
+`static/nex-symbol-small.svg` and `static/nex-wordmark.svg` logos are unchanged copies of the
+[brand masters](../docs/brand/logo/) and retain the separate artwork terms in
+[Licensing](../docs/LICENSING.md). System fonts are used;
 no external fonts, icons or analytics are loaded.
 
 [Third-party notices](static/THIRD-PARTY-NOTICES.txt) retain direct build dependency

@@ -21,7 +21,7 @@ required, and the installed driver ISO is unchanged.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.8` tree is not a released artifact.
+  The current working `0.4.9` tree is not a released artifact.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.
@@ -105,17 +105,20 @@ required, and the installed driver ISO is unchanged.
    The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
    least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
    One disk erases that disk and installs a whole-disk ext4 layout. Two or more disks are
-   erased and installed as a Linux software RAID1 mirror (`md`) holding one ext4 root, with a
-   small boot partition and a 512 MiB EFI System Partition on each disk, so any of them can start
-   the host on either UEFI or legacy BIOS firmware. Every mirror
-   disk must be within 10% of the smallest selected disk's capacity, because a mirror is only as
-   large as its smallest member; a mismatched selection is refused with that reason.
+   erased and installed as a Linux software RAID1 mirror (`md`): each selected disk holds an
+   identical copy of one ext4 root (sizes are not combined), with a small boot partition and a
+   512 MiB EFI System Partition on each disk, so any of them can start the host on either UEFI
+   or legacy BIOS firmware. Every mirror disk must be within 10% of the smallest selected disk's
+   capacity, because usable size is that of the smallest member; a mismatched selection is
+   refused with that reason.
    The list is a tick list in both installers: click the **Use** box, or move to a disk and press
    Space. Each row names the device, capacity, type (SSD, HDD or NVMe), model, serial and whether
    the disk already **Has partitions**, so you can tell which disk holds old data. The line under
-   the list says what your ticks will produce - `1 disk: single disk, ext4, no redundancy` or
-   `2 disks: RAID1 mirror, smallest disk 128.0 GiB, keeps running if one disk fails` - and turns red with
-   the reason if a ticked disk is too far from the smallest one. Disks under 16 GiB are not listed.
+   the list says what your ticks will produce - `What you get: one system disk, no redundancy` or
+   `What you get: one 128.0 GiB system disk on all 2 drives (RAID1 copies — not pooled storage). Survives 1 disk failure` -
+   and turns red with the reason if a ticked disk is too far from the smallest one. More disks
+   only add more copies of that same system disk; they do not combine capacity or change the RAID
+   level. Disks under 16 GiB are not listed.
    If the machine has
    only one eligible disk it is ticked for you; a mirror is never assumed. The mirrored layout has
    no swap partition; the single-disk layout is unchanged and still has one.
@@ -142,12 +145,16 @@ required, and the installed driver ISO is unchanged.
    then moves to **Install** for package and bootloader work. Only the steps before the bullet
    are ticked, so **Disk** and **Review** are not ticked while **Network** is current.
    The indicator describes the current step, not an estimated overall completion percentage.
+   Under the progress bar, **Still working…** keeps moving and an **Installer activity** log
+   scrolls the latest entries from `/var/log/syslog`, `/var/log/partman` and
+   `/var/log/nex-installer-prepare.log`, so a long quiet step such as finishing preseed still
+   shows that work is continuing. Scroll the log up to pause following new lines; leave it at
+   the bottom to keep following.
    Error and recovery prompts appear when your input is needed.
    Packages are bundled; a mirror or working network is not required.
    The installation engine can still show error or recovery questions; do not accept an
    installation error as a completed host. On a reported failure, **View log** opens
-   the latest entries from `/var/log/syslog`, `/var/log/partman` and
-   `/var/log/nex-installer-prepare.log`
+   the latest entries from the same three logs
    (up to 128 KiB each); close it to return to the error and recovery controls.
    A missing log is reported as unavailable. Inspect diagnostics before restarting. If disk identity changes before partitioning,
    installation must stop rather than silently select another disk.
@@ -182,8 +189,8 @@ required, and the installed driver ISO is unchanged.
    The disk question is a tick list: press Space on each disk of the mirror, then Enter. Each
    choice names the device, capacity, type, model, serial and whether the disk already has partitions, in
    the same order as the graphical list, and the review names every selected disk with its
-   capacity, serial and the resulting layout, including that one disk can fail without stopping
-   the host.
+   capacity, serial and the resulting layout (RAID1 copies of one volume when two or more
+   disks are selected, and how many disk failures that selection can survive).
 10. In the GUI, wait for **Nex Core installation complete**, eject the ISO and choose **Restart now**
     to boot the installed disk. Apart from the installer's **Screenshot** button, **Restart now**
     is the only action on that screen: the disk has already been written, so there is nothing to
@@ -213,8 +220,9 @@ so a missing ESP does not hold up a healthy mirror; that mount behaviour has not
 confirmed on a booted host. Older or hand-built mirrors may still need the
 [emergency-mode steps](replace-a-failed-system-disk.md#troubleshooting).
 Replace a failed mirror member from Nex Controller with
-[Replace a failed system disk](replace-a-failed-system-disk.md). A mirror protects against one
-disk failing; it is not a backup, and it does not protect the data on your virtual machines.
+[Replace a failed system disk](replace-a-failed-system-disk.md). With *n* mirror disks the host
+can survive *n*−1 disk failures; it is not a backup, and it does not protect the data on your
+virtual machines.
 Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
 Verification.
 

@@ -1,0 +1,43 @@
+{
+  "summary": "Show browser-to-Controller ISO upload progress on Storage (upload form and ISO library) using the same meter Tasks already shows. API impact: none.",
+  "paths": [
+    "web/src/rail-screens.tsx",
+    "web/src/settings.tsx",
+    "web/src/managed.tsx",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "web/src/managed.test.mjs",
+    "docs/guide/create-virtual-machine.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-iso-upload-progress-on-storage.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create-VM guide now says upload progress appears on Storage as well as Tasks.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Presentation of existing in-browser upload state only; no Controller or Core API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console QoL for an existing transfer; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Upload progress is ephemeral browser session state owned by the Controller shell UI, not durable pool or Controller inventory."
+  },
+  "verification": {
+    "method": "node web/src/managed.test.mjs; npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Live browser upload not exercised in this change.",
+    "evidence": [
+      "web/src/managed.test.mjs",
+      "web/src/managed.tsx",
+      "web/src/rail-screens.tsx"
+    ]
+  }
+}

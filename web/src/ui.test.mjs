@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 
-const { badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
+const { badgeTone, Badge, Banner, MissingPanel, LoadError, LoadErrorAlert, Panel, Section, ScreenBoundary, clampSlideoverWidth, loadSlideoverWidth, saveSlideoverWidth, slideoverMinWidth } = await import(bundleTestModule(new URL("./ui.tsx", import.meta.url), "ui"));
 
 for (const v of ["fresh", "healthy", "succeeded", "current", "available", "confirmed", "connected", "ready", "in_sync", "passed", "verified", "up"]) assert.equal(badgeTone(v), "ok", v);
 for (const v of ["stale", "degraded", "pending", "dispatched", "needs_attention", "behind", "unverified", "uncertain", "warning", "disconnected", "unresponsive", "timeout", "awaiting_fencing", "staged", "applied"]) assert.equal(badgeTone(v), "warn", v);
@@ -31,6 +31,19 @@ assert.match(panel(load), /slideover-body"[^>]*><div class="alert" role="alert">
 assert.doesNotMatch(panel({ ...load, error: "" }), /Retry/);
 assert.equal(MissingPanel({ icon: "host", noun: "Host", unavailable: true, loading: false, onClose() {} }).props.title, "Host unavailable");
 assert.equal(MissingPanel({ icon: "vm", noun: "VM", unavailable: false, loading: false, onClose() {} }).props.title, "VM not found");
+
+// Slide-over resize: clamp, persist, and expose a left-edge separator on every panel.
+assert.equal(clampSlideoverWidth(200, 1280), slideoverMinWidth);
+assert.equal(clampSlideoverWidth(900, 1280), 900);
+assert.equal(clampSlideoverWidth(2000, 1280), 1280 - 68, "leave the 68 px rail visible");
+const store = new Map();
+const fake = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) };
+assert.equal(loadSlideoverWidth(fake), null);
+saveSlideoverWidth(640, fake);
+assert.equal(loadSlideoverWidth(fake), 640);
+saveSlideoverWidth(null, fake);
+assert.equal(loadSlideoverWidth(fake), null);
+assert.match(panel(load), /role="separator"[^>]*aria-label="Resize panel"/, "every panel exposes the resize handle");
 
 // Each section is a region named by its title alone, not its count or buttons.
 const section = renderToStaticMarkup(createElement(Section, { icon: "host", title: "Members", count: 3, actions: createElement("button", null, "Refresh") }, "x"));

@@ -25,6 +25,41 @@ func TestDefaultNetworksFollowBridgesOnPhysicalPorts(t *testing.T) {
 	}
 }
 
+// Install management VLAN enslaves nexN.<tag> to br0, not the raw NIC. That bridge is still
+// the pool's default guest network and must self-register.
+func TestDefaultNetworksFollowManagementVLANOnBridge(t *testing.T) {
+	nics := []protocol.NIC{
+		{Name: "nex0", Kind: "physical"},
+		{Name: "nex0.100", Kind: "vlan", Parent: "nex0", Master: "br0"},
+		{Name: "br0", Kind: "bridge"},
+		{Name: "vnet0", Kind: "virtual", Master: "br0"},
+	}
+	got := DefaultNetworks(nics)
+	if len(got) != 1 || got[0].Name != "nex0 untagged" || got[0].Source != "br0" || got[0].Uplink != "nex0" || got[0].Kind != "bridge" || got[0].VLAN != 0 {
+		t.Fatalf("management VLAN default %+v", got)
+	}
+}
+
+func TestRegisterDefaultsRegistersManagementVLANBridge(t *testing.T) {
+	ctx := context.Background()
+	previous := DefaultStoragePath
+	DefaultStoragePath = filepath.Join(t.TempDir(), "not-created-yet")
+	t.Cleanup(func() { DefaultStoragePath = previous })
+	e := NewManaged(filepath.Join(t.TempDir(), "state"))
+	nics := []protocol.NIC{
+		{Name: "nex0", Kind: "physical"},
+		{Name: "nex0.42", Kind: "vlan", Parent: "nex0", Master: "br0"},
+		{Name: "br0", Kind: "bridge"},
+	}
+	if err := e.RegisterDefaults(ctx, "pool-1", "host-1", nics); err != nil {
+		t.Fatal(err)
+	}
+	js := journalsOf(t, e)
+	if len(js) != 1 || js[0].Command.Network == nil || js[0].Command.Network.Name != "nex0 untagged" || js[0].Command.Network.Source != "br0" || js[0].Command.Network.Uplink != "nex0" {
+		t.Fatalf("management VLAN journal %+v", js)
+	}
+}
+
 // startEngine is an engine whose state directory exists, as it would after any command.
 func startEngine(t *testing.T) *ManagedEngine {
 	t.Helper()

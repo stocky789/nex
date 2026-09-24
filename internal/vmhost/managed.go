@@ -5710,7 +5710,8 @@ func mediaObserved(ctx context.Context, req protocol.VMMediaRequest, path string
 
 // Default resources every host owns without operator action: its local libvirt image
 // directory as storage named "Local storage", and one untagged network per host bridge that
-// sits on a physical NIC or bond, named "<port> untagged" with the port recorded as the uplink.
+// sits on a physical NIC, bond, or management VLAN subinterface of one, named "<port> untagged"
+// with the physical/bond port recorded as the uplink.
 //
 // The name is only the default applied the first time this path is registered; RegisterDefaults
 // matches an existing registration on DefaultStoragePath, never on its name, so a host that
@@ -5722,21 +5723,52 @@ const DefaultStorageName = "Local storage"
 // Tests may point it at a temporary tree.
 var DefaultStoragePath = "/var/lib/libvirt/images"
 
-// DefaultNetworks derives the untagged default network of every bridge on a physical port.
+// DefaultNetworks derives the untagged default network of every bridge on a physical port,
+// bond, or installer management VLAN (nexN.<tag> enslaved to br0). Core guest VLAN bridges
+// named <uplink>v<tag> are not defaults; those are pool VLAN registrations.
 func DefaultNetworks(nics []protocol.NIC) []protocol.NetworkRegistration {
 	var out []protocol.NetworkRegistration
 	for _, bridge := range nics {
 		if bridge.Kind != "bridge" || !managedSource.MatchString(bridge.Name) {
 			continue
 		}
+		uplink := ""
 		for _, port := range bridge.Ports(nics) {
 			if protocol.ValidUplink(port) {
-				out = append(out, protocol.NetworkRegistration{Name: port + " untagged", Kind: "bridge", Source: bridge.Name, Uplink: port})
+				uplink = port
 				break
 			}
 		}
+		if uplink == "" {
+			for _, nic := range nics {
+				if nic.Master != bridge.Name || nic.Kind != "vlan" || !protocol.ValidUplink(nic.Parent) {
+					continue
+				}
+				tag, ok := vlanSuffix(nic.Name, nic.Parent)
+				if ok && bridge.Name == protocol.GuestBridge(nic.Parent, tag) {
+					continue
+				}
+				uplink = nic.Parent
+				break
+			}
+		}
+		if uplink == "" {
+			continue
+		}
+		out = append(out, protocol.NetworkRegistration{Name: uplink + " untagged", Kind: "bridge", Source: bridge.Name, Uplink: uplink})
 	}
 	return out
+}
+
+// vlanSuffix reports the numeric tag when name is parent.<tag>, as the installer writes for
+// a management VLAN port.
+func vlanSuffix(name, parent string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, parent+".")
+	if !ok || rest == "" {
+		return 0, false
+	}
+	tag, err := strconv.Atoi(rest)
+	return tag, err == nil && tag >= 0 && tag <= 4094
 }
 
 // hostID mints a host-generated resource or operation identity.
@@ -5754,6 +5786,8 @@ func hostID() string {
 // state and whoever issued it, means nothing is added. pool is the host's own pool identity;
 // a legacy host that has none passes its host identity, since a Controller assigns the pool on
 // adoption and matches by resource ID only. It is safe to call on every uplink change.
+// Networks are registered before storage so a storage failure cannot leave the management
+// bridge off the Networks screen.
 func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string, nics []protocol.NIC) error {
 	if !identifier.MatchString(host) || !identifier.MatchString(pool) {
 		return errors.New("defaults need the enrolled host and pool identity")
@@ -5763,6 +5797,15 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 		return err
 	}
 	var commands []protocol.Command
+	for _, n := range DefaultNetworks(nics) {
+		if slices.ContainsFunc(js, func(j managedJournal) bool {
+			return j.Command.Network != nil && j.Command.Network.Kind != "network" && j.Command.Network.Source == n.Source
+		}) {
+			continue
+		}
+		n.ID, n.PoolID, n.HostID = hostID(), pool, host
+		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "network-register", Network: &n})
+	}
 	if !slices.ContainsFunc(js, func(j managedJournal) bool {
 		return j.Command.Storage != nil && j.Command.Storage.Path == DefaultStoragePath
 	}) {
@@ -5776,15 +5819,6 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 		} else {
 			commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: hostID(), PoolID: pool, HostID: host, Name: DefaultStorageName, Path: DefaultStoragePath}})
 		}
-	}
-	for _, n := range DefaultNetworks(nics) {
-		if slices.ContainsFunc(js, func(j managedJournal) bool {
-			return j.Command.Network != nil && j.Command.Network.Kind != "network" && j.Command.Network.Source == n.Source
-		}) {
-			continue
-		}
-		n.ID, n.PoolID, n.HostID = hostID(), pool, host
-		commands = append(commands, protocol.Command{OperationID: hostID(), Kind: "network-register", Network: &n})
 	}
 	for _, c := range commands {
 		if _, err := e.Execute(ctx, c, nil); err != nil {

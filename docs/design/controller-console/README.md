@@ -99,8 +99,9 @@ These come straight from the owner's review. Treat a violation as a defect.
 
 Each item lists where the reference shows it. Build new screens from these before inventing more.
 
-- **Rail** (every screen). Logo cell (`n` on `#3478FF`, 30 px, 3 px radius) above it. Items: icon
-  over a 10 px label; hover lightens the fill; the current section gets a fill only, with no bar.
+- **Rail** (every screen). Logo cell (the dark Nex Controller symbol,
+  `nex-controller-symbol-dark.svg`, 32 px) above it. Items: icon over a 10 px label; hover lightens
+  the fill; the current section gets a fill only, with no bar.
   A small amber dot on Events means unseen warnings. Order: Overview, VMs, Containers, Hosts,
   Storage, Networks, Backups, then pinned to the bottom: Tasks, Events, Settings. **Containers is a
   sub-item of VMs** (container services run in Nex-managed VMs): it sits directly under VMs,
@@ -110,7 +111,7 @@ Each item lists where the reference shows it. Build new screens from these befor
 - **Top bar**. Left: site status dot + site name, `/`, pool name + host-count badge + chevron (the
   scope switcher menu, which also holds Create site and Add host). Centre: global search (max
   460 px, `/` focuses it) that jumps to VMs, hosts, IPs and settings sections. Right: the activity
-  pill (pulse + "N tasks running", opens Tasks), theme toggle, account menu (username, Sign out).
+  pill (pulse + "N tasks running", opens a short task list; **Open Tasks** reaches the full page), theme toggle, account menu (username, Sign out).
 - **Filter sidebar** (VMs, 250 px). Search, "Group by host" switch, facet groups (checkbox, value,
   count in muted parentheses) with collapse chevrons, then Clear filters and Customize columns at
   the bottom. Collapses behind a Filters button under 900 px.
@@ -120,11 +121,14 @@ Each item lists where the reference shows it. Build new screens from these befor
   First column carries the status dot and name. Links (host, parent) in accent. Utilisation cells
   use the 60 px mini bar plus the percentage; the bar turns `--warn` above 80 %. Row actions (`.row-actions`) stack as one column of equal-width small buttons in the last
   cell, danger included, with no extra offset, so every row's buttons line up.
-- **Slide-over panel** (420 px, wider when a tab needs it, full width on phones). Header: icon, name,
-  state badge, close. Sub-line: parent links. Quick actions row (primary first). Text tabs with an
-  accent underline. Body: cards (`--panel`, `--line-soft` border, 3 px radius) holding a console
-  preview, key/value lists (label muted left, value right), meters, sparkline rows, tables.
-  Escape closes it; the list stays interactive.
+- **Slide-over panel** (420 px default, wider when a tab needs it, full width on phones). Drag the
+  left edge to resize; the chosen width is kept in this browser (`nex.slideover.width`). Double-click
+  the handle, or focus it and press Home, to reset. Width eases when it changes from a tab, keyboard
+  step or reset; it tracks the pointer directly while dragging. Header: icon, name, state badge,
+  close. Sub-line: parent links. Quick actions row (primary first). Text tabs with an accent
+  underline. Body: cards (`--panel`, `--line-soft` border, 3 px radius) holding a console preview,
+  key/value lists (label muted left, value right), meters, sparkline rows, tables. Escape closes it;
+  the list stays interactive.
 - **Warning block** (`.why`): `--warn` text on `--warn-bg`, full rectangle, no stripe.
 - **KPI tile**: every tile has the same four rows so a row of tiles lines up: uppercase label
   (+ optional badge), large value with muted unit, a thin bar, a muted foot line. Hosts and

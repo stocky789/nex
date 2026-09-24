@@ -51,7 +51,14 @@ def main():
             img_src = [part for part in response.headers.get('content-security-policy', '').split(';')
                        if part.strip().startswith('img-src')]
             logo_pixels_checkable = not img_src or 'data:' in img_src[0]
-            for logo in page.locator('.wordmark').all() if logo_pixels_checkable else []:
+            for logo in page.locator('.wordmark').all():
+                assert logo.locator('img').evaluate_all(
+                    'images => images.length === 2 && images.every(i => i.complete && i.naturalWidth > 0)'
+                ), 'Logo image failed to load'
+            # The wordmark is cropped to its letters, so check its source for a backdrop instead.
+            assert '<rect' not in (Path(__file__).resolve().parents[2] / 'website/static/nex-wordmark.svg').read_text(), 'Wordmark has a backdrop'
+            # The symbol's corners lie outside the hexagon, so they must show the page, not a backdrop.
+            for logo in page.locator('.wordmark img:first-child').all() if logo_pixels_checkable else []:
                 png = base64.b64encode(logo.screenshot()).decode()
                 assert page.evaluate('''async png => {
                     const image = new Image();
@@ -63,10 +70,11 @@ def main():
                     ctx.drawImage(image, 0, 0);
                     const background = getComputedStyle(document.documentElement)
                         .backgroundColor.match(/\\d+/g).slice(0, 3).map(Number);
-                    return [[1, image.height - 2], [image.width - 2, image.height - 2]]
+                    return [[1, 1], [image.width - 2, 1], [1, image.height - 2],
+                            [image.width - 2, image.height - 2]]
                         .every(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data]
                             .slice(0, 3).every((value, i) => Math.abs(value - background[i]) <= 2));
-                }''', png), 'Logo raster background differs from the page'
+                }''', png), 'Logo background differs from the page'
             assert page.evaluate('''() => [...document.querySelectorAll('*')].every(el => {
                 const s = getComputedStyle(el);
                 return [...s.animationDuration.split(','), ...s.transitionDuration.split(',')]

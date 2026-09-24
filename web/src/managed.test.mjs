@@ -21,7 +21,7 @@ const { ManagedVMs, VMDetails, VMDelete, InstallMedia, VMUsage, staleNote, delet
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
   media: [], vms: [], api: async () => ({}), reload: async () => {}, setTab: () => {},
-  unavailable: false, uploading: false, startIsoUpload: async () => ({}), creating: false,
+  unavailable: false, upload: null, onCancelUpload: () => {}, startIsoUpload: async () => ({}), creating: false,
   onCloseCreate: () => {},
 };
 const tabs = ["", "Virtual machines", "Storage", "Networking"];
@@ -82,6 +82,29 @@ assert.match(isoTransferNotice("windows.iso", undefined), /has no host transfer 
 // A URL download never passes through the Controller, so its banner says what the host is doing.
 assert.match(isoTransferNotice("virtio-win.iso", "queued", "download"), /^The host download of virtio-win\.iso is queued/);
 assert.match(isoTransferNotice("virtio-win.iso", "succeeded", "download"), /^virtio-win\.iso is on the host/);
+
+// Browser-to-Controller ISO upload progress belongs on Storage as well as Tasks: the upload form
+// shows the meter while open, and the ISO library keeps it after Close so the operator need not
+// leave the page.
+const activeUpload = {
+  name: "guest.iso", loaded: 50_000_000, total: 100_000_000, percent: 50, rate: 8_000_000,
+  state: "uploading", message: "", actor: "operator", updated_at: "2026-09-24T00:00:00Z",
+};
+pending = { iso: { payload: JSON.stringify({ storage_id: "storage-1" }), id: "iso-req" } };
+const uploadOnForm = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Storage", upload: activeUpload }));
+assert.match(uploadOnForm, /aria-label="ISO upload to Controller"/);
+assert.match(uploadOnForm, /Upload progress for guest\.iso/);
+assert.match(uploadOnForm, /50%/);
+assert.match(uploadOnForm, />Cancel</);
+assert.equal((uploadOnForm.match(/aria-label="ISO upload to Controller"/g) || []).length, 1, "form open: progress once, not also under the library");
+pending = {};
+const uploadOnLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Storage", upload: activeUpload }));
+assert.match(uploadOnLibrary, /aria-label="ISO upload to Controller"/);
+assert.match(uploadOnLibrary, /Upload progress for guest\.iso/);
+assert.match(uploadOnLibrary, /to Controller/);
+assert.doesNotMatch(uploadOnLibrary, /Upload running · see Tasks/);
+assert.equal((uploadOnLibrary.match(/aria-label="ISO upload to Controller"/g) || []).length, 1, "form closed: progress under the ISO library");
+assert.match(railSource, /export function UploadProgress/);
 
 // BUG-0203: only an import that never became host-held media can be discarded. The confirmation
 // action uses the existing DELETE contract, reconciles an ambiguous response, then reloads.

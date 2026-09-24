@@ -1,0 +1,84 @@
+{
+  "summary": "Adopt the approved hex/Geist Nex identity: SVG masters, product lockups, one-color mark and icon exports, and switch the Controller and local host web UI, website, installer header and boot splash from the retired raster board. API impact: none; artwork, CSS and static assets only.",
+  "paths": [
+    "ARTWORK-LICENSE.md",
+    "docs/brand/README.md",
+    "docs/brand/logo/nex-controller-lockup-dark.svg",
+    "docs/brand/logo/nex-controller-lockup.svg",
+    "docs/brand/logo/nex-controller-symbol-dark.svg",
+    "docs/brand/logo/nex-controller-symbol.svg",
+    "docs/brand/logo/nex-core-lockup-dark.svg",
+    "docs/brand/logo/nex-core-lockup.svg",
+    "docs/brand/logo/nex-core-symbol-dark.svg",
+    "docs/brand/logo/nex-core-symbol.svg",
+    "docs/brand/logo/nex-symbol-16.png",
+    "docs/brand/logo/nex-symbol-24.png",
+    "docs/brand/logo/nex-symbol-32.png",
+    "docs/brand/logo/nex-symbol-mono.svg",
+    "docs/brand/logo/nex-symbol-small.svg",
+    "docs/brand/logo/nex-wordmark-dark.svg",
+    "docs/brand/logo/nex-wordmark.svg",
+    "docs/brand/nex-brand.png",
+    "docs/design/controller-console/README.md",
+    "docs/design/controller-console/reference.html",
+    "docs/development.md",
+    "installer/assets/boot-splash.png",
+    "installer/assets/boot-splash.svg",
+    "installer/assets/nex-core-lockup.png",
+    "scripts/build-source.py",
+    "tests/integration/website_browser.py",
+    "tests/integration/wizard-review.py",
+    "tests/test_build_source.py",
+    "web/build.mjs",
+    "web/public/index.html",
+    "web/public/local.html",
+    "web/public/nex-brand.png",
+    "web/public/nex-controller-lockup-dark.svg",
+    "web/public/nex-controller-lockup.svg",
+    "web/public/nex-controller-symbol-dark.svg",
+    "web/public/nex-core-lockup.svg",
+    "web/public/nex-symbol-small.svg",
+    "web/src/local.css",
+    "web/src/local.tsx",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "web/src/tokens.css",
+    "website/README.md",
+    "website/src/app.css",
+    "website/src/app.html",
+    "website/src/routes/+page.svelte",
+    "website/src/routes/gallery/+page.svelte",
+    "website/src/routes/roadmap/+page.svelte",
+    "website/static/nex-brand.png",
+    "website/static/nex-symbol-small.svg",
+    "website/static/nex-wordmark.svg"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only logo artwork changes; no operator workflow, control, label meaning or step changes. The local host header text shortens from CORE LOCAL HOST to LOCAL HOST beside the Nex Core lockup.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Static assets and styling only; no Controller operation, Core command/result, client-facing API or installer question contract changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Static artwork; neither Core nor the Controller stores anything."
+  },
+  "verification": {
+    "method": "Web UI: typecheck, npm test, build, test_build_source, Playwright capture of Controller login (light/dark, mobile), rail and local host UI against a mock API. Website: check/build, website_browser.py (static and nginx/CSP) and website_hardening_browser.py. Installer: installer-logo.py on a staged GTK initrd with the new artwork (fails the old), wizard-review.py in disposable QEMU/KVM at 800x600 passed the logo checks and then failed the unrelated masked-password assertion that fails identically at HEAD; boot splash rendered and inspected, not booted in isolinux/GRUB; no full ISO rebuild.",
+    "evidence": [
+      "tests/integration/installer-logo.py",
+      "tests/integration/wizard-review.py",
+      "tests/integration/website_browser.py",
+      "tests/test_build_source.py"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Brand artwork only; no roadmap phase, gate or scope changes.",
+    "pages": []
+  }
+}

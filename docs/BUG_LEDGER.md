@@ -7428,3 +7428,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: When the POST is skipped, a status read that reports the current generation and digest as verified is recorded as the acknowledgement (`internal/agent/pool_authority.go`).
 - Regression: `TestPoolReplicaSkippedPushKeepsTheMasterCheckFresh` (`internal/agent`) failed before the fix and passes after; `TestPoolReplicaPushShortCircuitsOnPostAckOnly` still passes.
 - Avoid: an idempotency short-circuit that skips the bookkeeping a freshness check depends on.
+
+## BUG-0543 — Management VLAN install left Networks empty
+
+- Date: 2026-09-24. Status: fixed in the working tree; regression asserted.
+- Symptom: A fresh pool whose installer management NIC used a VLAN tag showed **No networks reported yet** on the Controller Networks screen even after the master was enrolled, and Create VM offered no network to select.
+- Root cause: `DefaultNetworks` only followed physical/bond bridge ports, so `br0` with port `nexN.<tag>` produced no default and nothing was journalled for Controller adoption. Default network registration also ran after local storage.
+- Fix: `DefaultNetworks` treats an installer management VLAN slave (`nexN.<tag>` on `br0`) as the uplink via its parent NIC, while skipping Core guest VLAN bridges named `<uplink>v<tag>`; `RegisterDefaults` registers default networks before local storage (`internal/vmhost/managed.go`).
+- Regression: `TestDefaultNetworksFollowManagementVLANOnBridge`, `TestRegisterDefaultsRegistersManagementVLANBridge`, and the existing `TestDefaultNetworksFollowBridgesOnPhysicalPorts` (`internal/vmhost`). Hand-revert of the VLAN branch fails the management-VLAN test.
+- Avoid: assuming the management bridge always enslaves the raw NIC; the installer uses `nexN.<tag>` when a management VLAN is chosen.

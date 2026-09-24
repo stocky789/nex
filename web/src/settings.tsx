@@ -130,4 +130,4 @@ function UpdatesPanel({
   );
 }
 
-export { Backups, Containers, Tasks, Events, taskTimestamp, resubmitLink, type Upload } from "./rail-screens";
+export { Backups, Containers, Tasks, Events, taskTimestamp, resubmitLink, UploadProgress, type Upload } from "./rail-screens";

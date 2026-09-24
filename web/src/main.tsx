@@ -16,6 +16,7 @@ import { Icon, type IconKind } from "./icons";
 import { followUpdate, type UpdateStatus } from "./updates";
 import { LoadError, LoadErrorAlert, Menu, ScreenBoundary, badgeTone, date } from "./ui";
 import { operationLabel, statusLabel } from "./labels";
+import { ActivityMenu } from "./activity";
 import { taskCounts, newFailures, readPreference, writePreference } from "./dock";
 import { attentionItems, sampleCounts } from "./overview-model";
 import { consoleBlocker } from "./vm-panel";
@@ -792,7 +793,7 @@ function App() {
       >
         Skip to content
       </a>
-      <a className="logo" href="#/" aria-label="Nex Controller overview"><span aria-hidden="true">n</span></a>
+      <a className="logo" href="#/" aria-label="Nex Controller overview"><img src="/nex-controller-symbol-dark.svg" alt="" width="32" height="32" /></a>
       <header className="top">
         <Menu className="scope" summaryLabel={`Scope: ${site?.name || "no site"}, ${pool?.name || "all pools"}. Change scope`} label={<>
           <span className={`dot ${scopeTone}`} aria-hidden="true" /><b>{site?.name || "No site"}</b>
@@ -809,8 +810,7 @@ function App() {
         <GlobalSearch data={data} />
         <div className="tools">
           {/* Under 900 px the words fold away and the pill keeps the pulse and the count. */}
-          <a className="activity" href="#/tasks">{running ? <><span className="pulse" aria-hidden="true" />{running}<span className="activity-words"> {running === 1 ? "task" : "tasks"} running</span></>
-            : <><span className="activity-words">No tasks running</span><span className="activity-idle" aria-hidden="true">0</span></>}</a>
+          <ActivityMenu operations={data.operations} hosts={data.hosts} upload={upload} running={running} onCancelUpload={cancelUpload} />
           <button type="button" className="icon-button" aria-label={`Theme: ${theme || "system"}. Change theme`} title={`Theme: ${theme || "system"}`} onClick={() => {
             const next = theme === "" ? "light" : theme === "light" ? "dark" : "";
             setTheme(next);
@@ -878,7 +878,7 @@ function App() {
               pool. List screens (VMList, HostList) own #/vms and #/hosts; when creating is true
               VMList is hidden and the wizard is shown here. Storage and Networks routes only
               render a heading above, and this mount supplies the real tables. */}
-          {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} uploading={upload?.state === "uploading"} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
+          {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} upload={upload} onCancelUpload={cancelUpload} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
           {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
           {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
               update,

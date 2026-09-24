@@ -16,7 +16,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefile',
          'cmd/nex-controller/main.go', 'cmd/nex-core-agent/main.go',
-         'web/public/nex-brand.png', 'web/public/third-party-notices.txt', 'docs/brand/README.md',
+         'web/public/third-party-notices.txt', 'docs/brand/README.md',
          'web/package.json', 'web/package-lock.json', 'web/build.mjs', 'web/tsconfig.json',
          'docs/development.md', 'docs/controller-dependencies.md', 'docs/LICENSING.md',
          'appliance/Dockerfile', 'packaging/core-local/Dockerfile',
@@ -29,8 +29,8 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
          'packaging/controller/apply-update', 'packaging/controller/postinst',
          'packaging/controller/prerm',
          'docs/API.md', 'docs/api/openapi.json', 'docs/api/index.html', 'docs/api/reference.css')
-TREES = {'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
-         'web/public': {'.html'}, 'packaging/systemd': {'.service'},
+TREES = {'docs/brand/logo': {'.svg', '.png'}, 'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
+         'web/public': {'.html', '.svg'}, 'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
          'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg',
                                   '.conf'},

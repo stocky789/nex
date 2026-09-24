@@ -1,0 +1,42 @@
+{
+  "summary": "Installer Disk step and Review say what the selection actually installs: one system-disk size on all selected drives as RAID1 copies (not pooled), and how many failures it survives.",
+  "paths": [
+    "installer/gui/nex-wizard.c",
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/README.md",
+    "installer/check.sh",
+    "tests/integration/installer-disk.py",
+    "tests/integration/installer-text-wizard.py",
+    "docs/guide/install-nex-core.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-installer-raid1-copy-wording.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Install disk step example and mirror explanation match the What you get summary.",
+    "pages": ["docs/guide/install-nex-core.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Local Debian installer presentation only; no Controller/Core API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Installer wording only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "python3 tests/integration/installer-disk.py (summary harness covers 1-, 2-, 3- and 5-disk outcomes); bash installer/check.sh; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "tests/integration/installer-disk.py",
+      "installer/check.sh",
+      "docs/guide/install-nex-core.md"
+    ]
+  }
+}

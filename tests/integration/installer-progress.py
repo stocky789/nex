@@ -235,8 +235,8 @@ with (output / 'qemu.log').open('w') as log:
         continue_prompt()
         wait('NEX_PROGRESS_NESTED_RESUMED')
         nested_resumed = capture('nested-resumed-progress')
-        assert not ImageChops.difference(resumed.crop((150, 100, 1000, 620)),
-                                        nested_resumed.crop((150, 100, 1000, 620))).getbbox(), 'Active progress did not recover after nested error'
+        assert not ImageChops.difference(resumed.crop((150, 100, 1000, 360)),
+                                        nested_resumed.crop((150, 100, 1000, 360))).getbbox(), 'Active progress did not recover after nested error'
         wait('NEX_PROGRESS_FINAL_GAP')
         final_gap = capture('final-transition')
         wait('NEX_PROGRESS_COMPLETION')

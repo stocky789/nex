@@ -1,0 +1,42 @@
+{
+  "summary": "Self-register the install management bridge as the pool default network when that bridge is fed by a VLAN subinterface (nexN.tag), so a fresh Controller Networks tab is not empty. API impact: none — same network-register adoption path.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/defaults_test.go",
+    "web/src/vm-create.test.mjs",
+    "docs/guide/create-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-management-vlan-default-network.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Create-VM guide now states the installer management VLAN on br0 still self-registers as the default network.",
+    "pages": [
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No new or changed Controller/Core contract; RegisterDefaults still journals network-register for adoption.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix restoring the already-planned default management network; no phase gate change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Default network remains host-journalled on Nex Core and Controller-adopted.",
+    "record": "managed journal network-register for the management bridge (source br0, uplink nexN); fresh Controller recovers it via Inventory.managed.networks adoption"
+  },
+  "verification": {
+    "method": "go test ./internal/vmhost -run 'TestDefaultNetworksFollow|TestRegisterDefaults'; node web/src/vm-create.test.mjs (networkUsable for nex0 untagged). Live host with management VLAN not re-walked in this change.",
+    "evidence": [
+      "internal/vmhost/defaults_test.go",
+      "web/src/vm-create.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

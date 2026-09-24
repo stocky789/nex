@@ -448,7 +448,10 @@ step_erase() {
     db_subst nex-installer/erase disk "$targets"
     db_subst nex-installer/erase disksize "$capacities"
     db_subst nex-installer/erase serial "$serials"
-    db_subst nex-installer/erase layout "$(set -- $v_disks; if [ $# -gt 1 ]; then echo "md RAID1 mirror of $# disks, one ext4 root; one disk can fail without stopping the host"; else echo "one ext4 filesystem, no redundancy"; fi)"
+    db_subst nex-installer/erase layout "$(set -- $v_disks; if [ $# -gt 1 ]; then
+        n=$#; f=$((n - 1))
+        echo "one system disk as $n identical RAID1 copies (capacity not pooled); survives $f disk $([ "$f" -eq 1 ] && echo failure || echo failures)"
+    else echo "one system disk, no redundancy"; fi)"
     db_subst nex-installer/erase hostname "$v_hostname"
     db_subst nex-installer/erase timezone "$v_timezone"
     db_subst nex-installer/erase keymap "$v_keymap"

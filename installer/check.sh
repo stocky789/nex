@@ -150,8 +150,9 @@ for fact in ('"Capacity"', '"Type"', '"Model"', '"Serial"', '"Contents"'):
     assert fact in graphical, fact
 assert 'queue/rotational' in graphical and 'queue/rotational' in wizard
 assert 'has_partitions' in graphical and 'has partitions' in wizard
-assert 'keeps running if one disk fails.' in graphical
-assert 'one disk can fail without stopping the host' in wizard
+assert 'What you get: one %.1f GiB system disk on all %u drives' in graphical
+assert 'RAID1 copies — not pooled storage' in graphical
+assert 'capacity not pooled); survives' in wizard
 assert 'compare_names' in graphical.split('/sys/class/block', 1)[1], 'both frontends list disks in one order'
 assert "within 10% of the smallest selected disk's capacity" in wizard
 assert 'disk_serial "$name"' in wizard.split('step_disk()', 1)[1].split('step_erase()', 1)[0], \
@@ -166,9 +167,12 @@ assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an u
 assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
 assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in graphical, \
     'GTK discover must skip disks below 16 GiB like the text frontend'
-assert 'smallest disk %.1f GiB' in graphical, 'mirror summary must not call raw capacity usable'
+assert 'not pooled storage' in graphical, 'mirror summary must say capacity is not pooled'
 assert 'Template: nex-installer/disk-error\n' in templates
 assert '"/var/log/partman"' in Path('installer/gui/nex-shell.c').read_text(), 'View log must include the partman log'
+assert 'nex-live-log' in Path('installer/gui/nex-shell.c').read_text(), 'Install progress must show a live activity log'
+assert 'Still working' in Path('installer/gui/nex-shell.c').read_text(), 'Install progress must show activity while a step is quiet'
+assert 'nex_progress_tick' in Path('installer/gui/nex-shell.c').read_text()
 
 packages = Path('installer/packages.txt').read_text().split()
 assert len(packages) == len(set(packages)), 'Duplicate package'

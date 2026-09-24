@@ -1,0 +1,50 @@
+{
+  "summary": "Bump the changelog-derived project version from 0.4.8 to 0.4.9 and put the installer RAID1 disk-summary wording under the new heading. API impact: none — no operation is introduced, so no x-introduced-version stamp moves.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/software-updates.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/change-management-network.md",
+    "docs/changes/2026-09-24-version-0.4.9.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Working-version stamps on install, updates, publish and pool guide pages move to 0.4.9. Operator workflows are unchanged by the bump.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/software-updates.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/change-management-network.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release metadata only; the installer wording under 0.4.9 has no Controller/Core API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release metadata only; phase gates unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product setting or resource is introduced."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current --format both returns 0.4.9 0.4.9; python3 -m unittest tests.test_release_version; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'.",
+    "evidence": [
+      "scripts/release-version.py",
+      "tests/test_release_version.py",
+      "CHANGELOG.md"
+    ]
+  }
+}

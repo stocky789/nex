@@ -64,7 +64,7 @@ against current `trixie` repositories and build timestamps change. Retain the ou
 manifest and cache for each tested build. A dated repository snapshot/package lock
 and complete source bundle are required before external release.
 
-The current working version is `0.4.8`; it is not a release merely because the build
+The current working version is `0.4.9`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).
@@ -85,7 +85,9 @@ The GUI runs Nex's own upfront GTK wizard: Welcome → Host → Network → Disk
 A vertical step list sits beside a white form panel, with persistent Back/primary-action
 navigation and scrollable page content. Hostname is editable on both Host and Network;
 the fields share one value and the same validation. The native backend progress shell uses matching
-typography and colors while retaining its error and recovery controls.
+typography and colors while retaining its error and recovery controls. While a backend
+step is running it shows **Still working…** and a live **Installer activity** log that
+tails the same syslog, partman and prepare logs as **View log** on failure.
 It detects adapters, shows MAC/link/driver information, and saves per-NIC disabled, DHCP
 or static IPv4 settings with one optional VLAN (0 untagged, 1–4094 tagged). The selected
 management adapter alone owns the default route and DNS; installed interface names are
@@ -113,7 +115,8 @@ A lone eligible disk is ticked for them; a mirror never is, but a tip offers it 
 similar-sized disks are present. `nex-config` stays the authority: the summary repeats its rules,
 it does not replace them.
 One disk installs a whole-disk ext4 layout, unchanged. Two or more disks install an md RAID1
-mirror (metadata 1.2) of a single ext4 root. Every mirror disk gets the same GPT layout on either
+mirror (metadata 1.2) of a single ext4 root: identical copies, not combined capacity. Every
+mirror disk gets the same GPT layout on either
 firmware - a 1 MiB BIOS boot partition, a 512 MiB ESP, then the array member as partition 3 - so
 the member index never depends on the firmware and `grub-install --target=i386-pc` has somewhere
 to embed. Every member must be within 10% of the smallest selected disk's capacity.

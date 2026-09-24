@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Component, createContext, useContext, useEffect, useId, useRef, type ReactNode } from "react";
+import { Component, createContext, useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { auditLabel, relativeTime, statusLabel } from "./labels";
 import type { Audit, Data } from "./types";
 import { Icon, type IconKind } from "./icons";
@@ -71,10 +71,35 @@ export function Menu({ label, summaryLabel, className = "", align, children }: {
   </details>;
 }
 
+// Slide-over width is a per-browser convenience (localStorage), like Overview tile collapse.
+// The rail is 68 px; leave it visible. Defaults stay in CSS when nothing is stored.
+const slideoverWidthKey = "nex.slideover.width";
+export const slideoverMinWidth = 360;
+export function clampSlideoverWidth(px: number, viewport = typeof window !== "undefined" ? window.innerWidth : 1280): number {
+  const max = Math.max(slideoverMinWidth, viewport - 68);
+  return Math.min(max, Math.max(slideoverMinWidth, Math.round(px)));
+}
+export function loadSlideoverWidth(store?: Pick<Storage, "getItem">): number | null {
+  try {
+    const raw = (store ?? localStorage).getItem(slideoverWidthKey);
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clampSlideoverWidth(n) : null;
+  } catch { return null; }
+}
+export function saveSlideoverWidth(px: number | null, store?: Pick<Storage, "setItem" | "removeItem">) {
+  try {
+    const s = store ?? localStorage;
+    if (px == null) s.removeItem(slideoverWidthKey);
+    else s.setItem(slideoverWidthKey, String(clampSlideoverWidth(px)));
+  } catch { /* blocked or full store: keep the in-memory width for this session */ }
+}
+
 // Panel is the slide-over that opens beside a list, so the list stays in view and usable.
 // Escape closes it unless a menu, a dialog or console focus mode has taken the key, and
 // closing returns focus to whatever opened it (normally the row).
 // Its tabs are one tab stop: the arrow keys, Home and End move between them and select.
+// Drag the left edge (or focus it and use the arrows) to widen or narrow; double-click resets.
 export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide, onClose, children }: {
   icon: IconKind; title: ReactNode; badge?: ReactNode; sub?: ReactNode; actions?: ReactNode;
   tabs?: readonly string[]; tab?: string; onTab?: (tab: string) => void; wide?: boolean; onClose: () => void; children: ReactNode;
@@ -84,6 +109,9 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
   const id = useId();
   const close = useRef(onClose);
   close.current = onClose;
+  const [width, setWidth] = useState<number | null>(() => loadSlideoverWidth());
+  const widthRef = useRef(width);
+  widthRef.current = width;
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     panel.current?.focus();
@@ -93,7 +121,79 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); opener?.focus(); };
   }, []);
-  return <section ref={panel} tabIndex={-1} className={`slideover${wide ? " wide" : ""}`} aria-label={typeof title === "string" ? title : undefined}>
+  useEffect(() => {
+    const onResize = () => setWidth(w => w == null ? null : clampSlideoverWidth(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const applyWidth = (next: number | null) => {
+    const value = next == null ? null : clampSlideoverWidth(next);
+    setWidth(value);
+    saveSlideoverWidth(value);
+    const el = panel.current;
+    if (!el) return;
+    if (value == null) el.style.removeProperty("--slideover-width");
+    else el.style.setProperty("--slideover-width", `${value}px`);
+  };
+  // Drag writes the CSS variable on the element (rAF-coalesced) so the edge tracks the pointer
+  // without a React render per move; width eases only when not dragging (keyboard, reset, wide).
+  const onResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = panel.current;
+    if (!el) return;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    document.body.classList.add("slideover-resizing");
+    let latest = widthRef.current ?? el.getBoundingClientRect().width;
+    let raf = 0;
+    const paint = () => {
+      raf = 0;
+      el.style.setProperty("--slideover-width", `${latest}px`);
+      target.setAttribute("aria-valuenow", String(latest));
+    };
+    const onMove = (ev: PointerEvent) => {
+      latest = clampSlideoverWidth(window.innerWidth - ev.clientX);
+      if (!raf) raf = requestAnimationFrame(paint);
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (raf) cancelAnimationFrame(raf);
+      paint();
+      target.releasePointerCapture(ev.pointerId);
+      document.body.classList.remove("slideover-resizing");
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+      applyWidth(latest);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  };
+  const onResizeKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 40 : 16;
+    const current = widthRef.current ?? panel.current?.getBoundingClientRect().width ?? 420;
+    if (e.key === "ArrowLeft") { e.preventDefault(); applyWidth(current + step); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); applyWidth(current - step); }
+    else if (e.key === "Home") { e.preventDefault(); applyWidth(null); }
+  };
+  const style = width != null ? { ["--slideover-width" as string]: `${width}px` } : undefined;
+  const max = typeof window !== "undefined" ? Math.max(slideoverMinWidth, window.innerWidth - 68) : 820;
+  return <section ref={panel} tabIndex={-1} className={`slideover${wide ? " wide" : ""}`} style={style} aria-label={typeof title === "string" ? title : undefined}>
+    <div
+      className="slideover-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize panel"
+      aria-valuemin={slideoverMinWidth}
+      aria-valuemax={max}
+      aria-valuenow={width ?? undefined}
+      title="Drag to resize. Double-click to reset."
+      tabIndex={0}
+      onPointerDown={onResizePointerDown}
+      onDoubleClick={() => applyWidth(null)}
+      onKeyDown={onResizeKeyDown}
+    />
     <header>
       <h2><Icon kind={icon} size={18} />{title}{badge}</h2>
       <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><Icon kind="close" size={18} /></button>

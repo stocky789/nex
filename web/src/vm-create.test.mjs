@@ -19,7 +19,20 @@ const stubbed = code
   .replace('from "./managed"', 'from "data:text/javascript,"')
   .replace('from "./storage"', 'from "data:text/javascript,export const storageUsable=()=>true;"');
 writeFileSync(file, stubbed);
-const { recommendedCPU, availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady, placementBlocker } = await import(`file://${file}`);
+const { recommendedCPU, availableBaseline, baselineUnavailable, fixedCPU, selectCPU, cpuSelectionIssue, restoredNICs, autoDiskName, topologyIssue, vmNameIssue, bootKeys, renumber, defaultTPM, defaultDriversMedia, nextDriversMedia, effectiveBoot, secureBootText, tpmText, driversDriveReady, placementBlocker, networkUsable, describeNetwork } = await import(`file://${file}`);
+
+// The install management bridge (nex0 untagged on br0) must be selectable when creating a VM on
+// that host. An empty create-network list with a live master is the same gap as an empty Networks
+// tab: Core never adopted a succeeded host-local bridge for the placement host.
+const defaultNet = { id: "net-1", host_id: "host-1", name: "nex0 untagged", status: "succeeded", kind: "bridge", source: "br0", uplink: "nex0" };
+assert.equal(networkUsable(defaultNet, "host-1"), true);
+assert.equal(networkUsable(defaultNet, "host-2"), false, "a host-local bridge is only for its own host");
+assert.equal(networkUsable({ ...defaultNet, status: "queued" }, "host-1"), false);
+assert.equal(describeNetwork(defaultNet), "Untagged on nex0");
+const poolVLAN = { id: "vlan-1", host_id: "host-1", name: "Servers", status: "succeeded", kind: "vlan", source: "nex0v100", uplink: "nex0", vlan: 100, member_access: [{ host_id: "host-2", uplink_present: true, bridge: "nex0v100" }] };
+assert.equal(networkUsable(poolVLAN, "host-1"), true);
+assert.equal(networkUsable(poolVLAN, "host-2"), true);
+assert.equal(networkUsable(poolVLAN, "host-3"), false);
 
 // BUG-0196: Windows 11 refuses to install without a TPM 2.0, so a Windows guest is drafted with
 // one and every other guest is not. The wizard applies this to a new draft and whenever the

@@ -18,7 +18,7 @@
 </div>
 <header class="site-header wrap">
   <a class="brand" href="#main" aria-label="Nex home"
-    ><span class="wordmark" aria-hidden="true"></span
+    ><span class="wordmark" aria-hidden="true"><img src="/nex-symbol-small.svg" alt="" width="38" height="38" /><img src="/nex-wordmark.svg" alt="" width="81" height="28" /></span
     ><span class="brand-divider"></span
     ><span class="brand-caption">Virtualization,<br />built together.</span></a
   >
@@ -332,8 +332,7 @@
 <footer class="wrap">
   <div class="footer-top">
     <a class="brand" href="#main" aria-label="Nex home"
-      ><span class="wordmark" aria-hidden="true"></span
-    ></a>
+      ><span class="wordmark" aria-hidden="true"><img src="/nex-symbol-small.svg" alt="" width="38" height="38" /><img src="/nex-wordmark.svg" alt="" width="81" height="28" /></span></a>
     <p>Community-driven.<br />Built together.</p>
     <a class="text-link" href="#main"
       >Back to top <span aria-hidden="true">↑</span></a

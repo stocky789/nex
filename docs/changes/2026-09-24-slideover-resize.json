@@ -1,0 +1,42 @@
+{
+  "summary": "Make every Controller slide-over panel drag-resizable from the left edge, with browser-local width persistence and smooth width easing outside of an active drag. API impact: none.",
+  "paths": [
+    "web/src/ui.tsx",
+    "web/src/ui.test.mjs",
+    "web/src/style.css",
+    "web/src/hosts.css",
+    "docs/design/controller-console/README.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-slideover-resize.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can resize VM and host slide-over panels; the navigate guide documents the gesture and browser-local storage.",
+    "pages": [
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller presentation only; width is localStorage, not a host or Controller API.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console interaction polish; no phase gate moves.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Panel width is a per-browser convenience in localStorage (nex.slideover.width), not durable Controller or Core state."
+  },
+  "verification": {
+    "method": "npm --prefix web test (ui.test.mjs covers clamp/persist/handle markup); npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Drag and keyboard resize not exercised in a live browser in this change.",
+    "evidence": [
+      "web/src/ui.test.mjs",
+      "web/src/ui.tsx",
+      "web/src/style.css"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Status
 
-Development build 0.4.8 of Nex Controller. The console replaces the earlier desktop layout
+Development build 0.4.9 of Nex Controller. The console replaces the earlier desktop layout
 (toolbar, resource tree, detail tabs and bottom task strip) with a labelled rail, a top bar,
 filterable lists with slide-over panels, a pool **Overview**, operational **Storage** and
 **Networks** screens and pool **Settings**. Every workflow reachable before remains reachable;
@@ -67,7 +67,8 @@ features is available yet.
    **No matches**.
 4. Read the activity pill: **N tasks running** with a pulse while tasks are in progress
    (including an ISO upload from this browser), otherwise **No tasks running**. Select it to
-   open **Tasks**.
+   open a short task list; use **Open Tasks** at the bottom for the full **Tasks** page (also on
+   the rail).
 5. Select the theme button to cycle this browser between the system theme, light and dark.
 6. Open the account menu (the person icon). It shows **Signed in as** with your account and
    links to the **API reference** and **Nex source code**, and holds **Sign out**.
@@ -107,10 +108,11 @@ features is available yet.
 ### Lists and slide-over panels
 
 8. On **VMs** or **Hosts**, select a row to open its slide-over panel. The panel header shows
-   the name, status and where it runs; quick actions sit below it and tabs below those. Press
-   Escape or select the close button (×) to close the panel; the list stays where it was and,
-   on **VMs**, the keyboard focus returns to the row. A panel link can be copied and opened
-   directly.
+   the name, status and where it runs; quick actions sit below it and tabs below those. Drag the
+   left edge of the panel to make it wider or narrower; double-click the edge (or focus it and press
+   Home) to restore the default width. Press Escape or select the close button (×) to close the
+   panel; the list stays where it was and, on **VMs**, the keyboard focus returns to the row. A
+   panel link can be copied and opened directly.
 9. On **VMs**, use the filter sidebar: search by name, IP address or tag, the **Group by host**
    switch, the **Status**, **Pool**, **Host**, **Guest OS**, **Network** and **Tags** facets with counts,
    **Clear filters**, and **Customize columns**. The view buttons **All**, **Running**,
@@ -156,8 +158,8 @@ features is available yet.
 ### Narrow screens
 
 15. Below about 900 px wide the search field folds into a **Search** button that opens it over
-    the top bar, the activity pill shows only the pulse and the count of running tasks (still a
-    link to **Tasks**), the settings navigation becomes a scrolling strip of sections above the
+    the top bar, the activity pill shows only the pulse and the count of running tasks (still
+    opens the short task list), the settings navigation becomes a scrolling strip of sections above the
     content, and **VMs** hides its filter sidebar behind a **Filters** button. Below about
     600 px a slide-over panel takes the full width. The rail stays visible at every width.
 
@@ -168,10 +170,10 @@ lists and **Overview** show, and every VM and host opens in a panel over its lis
 the list. Phase-gated screens and controls say which phase brings them and never show invented
 figures.
 
-The theme, the chosen scope, the last time **Events** was opened, the hidden VM columns and the
-collapsed **Overview** sections are stored in this browser only. They are conveniences: they are not Controller state, other browsers
+The theme, the chosen scope, the last time **Events** was opened, the hidden VM columns, the
+collapsed **Overview** sections and the slide-over panel width are stored in this browser only. They are conveniences: they are not Controller state, other browsers
 and administrators do not see them, and a replacement Controller does not need them. Clearing site
-data resets them to the defaults (system theme, first site, every column shown, every section expanded).
+data resets them to the defaults (system theme, first site, every column shown, every section expanded, default panel width).
 
 ## Troubleshooting
 
@@ -192,6 +194,8 @@ data resets them to the defaults (system theme, first site, every column shown, 
 ## Verification
 
 Written for the Controller console redesign against the development source (development build
-0.4.8); the walkthrough is recorded in the
+0.4.9); the walkthrough is recorded in the
 [console redesign checks](../qa/controller-console-redesign/checks.md). This page was written from
-the source code and was not walked through separately by its author.
+the source code and was not walked through separately by its author. Slide-over resize was checked
+against the Panel implementation and unit tests; a live browser drag walkthrough was not repeated
+for this page.

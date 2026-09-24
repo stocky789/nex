@@ -1,0 +1,42 @@
+{
+  "summary": "Top-bar activity pill opens a short task popdown instead of navigating to Tasks; Open Tasks keeps the full page. API impact: none.",
+  "paths": [
+    "web/src/activity.tsx",
+    "web/src/activity.test.mjs",
+    "web/src/main.tsx",
+    "web/src/style.css",
+    "docs/design/controller-console/README.md",
+    "docs/design/controller-console/reference.html",
+    "docs/guide/navigate-the-controller-console.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-24-activity-task-popdown.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators open a short task list from the activity pill; navigate guide documents the popdown and Open Tasks.",
+    "pages": [
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Controller presentation only; task data already comes from inventory and existing operations.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Console interaction polish; no phase gate moves."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state; the popdown reads the same host-reported operations the Tasks page shows."
+  },
+  "verification": {
+    "method": "npm --prefix web test (activity.test.mjs); npm --prefix web run typecheck; python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Live browser click-through of the popdown not run in this change.",
+    "evidence": [
+      "web/src/activity.test.mjs",
+      "web/src/activity.tsx",
+      "web/src/style.css"
+    ]
+  }
+}

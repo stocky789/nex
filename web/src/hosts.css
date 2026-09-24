@@ -3,7 +3,7 @@
 /* Seven tabs: the host panel is wide enough to hold them on one line, and on a phone they wrap
    rather than scroll sideways. */
 .slideover:has(.host-panel) .tabs { flex-wrap: wrap; gap: 0 14px; overflow: visible; }
-@media (min-width: 601px) { .slideover:has(.host-panel):not(.wide) { width: 540px; } }
+@media (min-width: 601px) { .slideover:has(.host-panel):not(.wide) { width: var(--slideover-width, 540px); } }
 .host-card { margin-bottom: 10px; padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); font-variant-numeric: tabular-nums; }
 .host-card h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 10px; font-size: 13px; }
 .host-card h3 .muted { font-weight: 400; }

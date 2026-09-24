@@ -7,6 +7,7 @@ import { VMEditor, editBlocker } from "./vm-edit";
 import { StorageRepositories, discardConfirmText, registrationDiscardable, storageOwnerFresh, storageServesData } from "./storage";
 import { About, AccessLights, Badge, Menu, Section, type HostAccess } from "./ui";
 import { capitalize } from "./labels";
+import { UploadProgress, type Upload } from "./rail-screens";
 
 export type Registration = { id: string; pool_id: string; host_id: string; name: string; operation_id: string; status: string; error?: string };
 export type StorageSource = { nfs?: { server: string; export: string; directory?: string }; zfs?: { pool: string; dataset: string; mount_path: string }; smb?: { server: string; share: string; directory?: string }; iscsi?: { portal: string; target_iqn: string; lun: number; wwid: string; filesystem_uuid: string; exclusive_target: boolean; mode?: "exclusive" | "clustered_gfs2"; cluster_id?: string; lock_table?: string; eligible_host_ids?: string[] } };
@@ -32,7 +33,7 @@ type NIC = { name: string; mac: string; kind?: string; master?: string; parent?:
 // carry the last state the host reported for each VM.
 export type Host = { id: string; pool_id: string; hostname: string; connection: string; revoked: boolean; capabilities?: string[]; inventory: { observed_at?: string; cpu_count: number; cpu_models?: string[] | null; cpu_baseline?: { model: string; features: CPUFeature[] | null; machine: string; generation: number; member_count: number; observed_at: string; error?: string } | null; memory_bytes: number; nics?: NIC[] | null; vms?: { id: string; state: string }[] | null } | null };
 type API = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
-type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; uploading: boolean; startIsoUpload: <T>(path: string, file: File) => Promise<T>; creating: boolean; onCloseCreate: () => void; onNotice?: (text: string, operationID?: string) => void };
+type Props = { account: string; poolID: string; poolName: string; masterHostID: string; tab: string; hosts: Host[]; storage: Storage[]; networks: Network[]; media: Media[]; vms: VM[]; api: API; reload: () => Promise<void>; setTab: (tab: string) => void; unavailable: boolean; upload: Upload | null; onCancelUpload: () => void; startIsoUpload: <T>(path: string, file: File) => Promise<T>; creating: boolean; onCloseCreate: () => void; onNotice?: (text: string, operationID?: string) => void };
 const GiB = 1024 ** 3;
 // sentence ends a message with a full stop when it has no terminal punctuation of its own.
 export const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`;
@@ -192,7 +193,8 @@ function pendingRequests(key: string): Pending {
   return {};
 }
 
-export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, uploading, startIsoUpload, creating, onCloseCreate, onNotice }: Props) {
+export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts: allHosts, storage: allStorage, networks: allNetworks, media: allMedia, vms: allVMs, api, reload, setTab, unavailable, upload, onCancelUpload, startIsoUpload, creating, onCloseCreate, onNotice }: Props) {
+  const uploading = upload?.state === "uploading";
   const hosts = allHosts.filter(h => h.pool_id === poolID);
   const hostIDs = hosts.map(host => host.id).join(",");
   const storage = allStorage.filter(s => s.pool_id === poolID);
@@ -497,7 +499,15 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
           <p className="help">Drop one .iso image here or use the file picker. The Controller and host validate its content and available space.</p>
           {file && <p className="iso-filename">{file.name} · {(file.size / GiB).toFixed(2)} GiB</p>}
         </div>}
-        {uploading && <p className="help" role="status">Upload running · see Tasks</p>}
+        {upload && showForm && <div className="iso-upload-status" role="status" aria-label="ISO upload to Controller">
+          <div>
+            <strong>Upload ISO</strong>
+            <small>{upload.name}</small>
+            {upload.message && <p className="task-error">{upload.message}</p>}
+          </div>
+          <Badge value={upload.state} />
+          <UploadProgress upload={upload} onCancel={onCancelUpload} />
+        </div>}
         {!isoReadyStorage.length && <p className="help">Register storage and wait for its assigned Core to report current ISO access first.</p>}
         <button className="primary" disabled={busy || uploading || unavailable || !isoReadyStorage.some(s => s.id === uploadStorage) || (isoSource === "url" ? !canDownload || !isoURL.trim() || !isoName.trim() : !file)}>{busy ? "Submitting…" : uploading ? "Uploading…" : isoSource === "url" ? "Download ISO" : "Upload and transfer ISO"}</button>
       </form>
@@ -515,12 +525,22 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       </div> : <small>Managed on {hostName(n.host_id)}</small>}</td></tr>;
     })}</tbody></table></div> : <p className="empty">No networks reported yet.</p>}<About title="About changing networks"><p>Only pool VLAN networks are renamed or removed here; the pool master applies the change on every host and each member reports its own convergence. Changing a VLAN tag or uplink NIC means removing the network and adding it again. A registration the master refused is only a request record and is discarded instead.</p></About></Section>}
     {shows("Storage") && <StorageRepositories poolID={poolID} masterHostID={masterHostID} hosts={hosts} storage={storage} api={api} reload={reload} unavailable={unavailable} onNotice={setNotice} />}
-    {shows("Storage") && <Section icon="storage" title="ISO library" count={media.length} actions={<button type="button" className="sm primary" disabled={busy || unavailable} onClick={() => open("iso")}>Upload ISO</button>}>{media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
+    {shows("Storage") && <Section icon="storage" title="ISO library" count={media.length + (upload ? 1 : 0)} actions={<button type="button" className="sm primary" disabled={busy || unavailable || uploading} onClick={() => open("iso")}>Upload ISO</button>}>
+      {upload && !(form === "iso" && showForm) && <div className="iso-upload-status" role="status" aria-label="ISO upload to Controller">
+        <div>
+          <strong>Upload ISO</strong>
+          <small>{upload.name} · to Controller</small>
+          {upload.message && <p className="task-error">{upload.message}</p>}
+        </div>
+        <Badge value={upload.state} />
+        <UploadProgress upload={upload} onCancel={onCancelUpload} />
+      </div>}
+      {media.length ? <div className="table-scroll"><table><thead><tr><th>ISO</th><th>Host / storage</th><th>Size</th><th>Transfer task</th><th>Actions</th></tr></thead><tbody>{media.map(m => {
       const scope = `media:${m.id || m.operation_id}:remove`;
       const blocker = lifecycleState(m.host_id, m.id, m.status, scope);
       const users = vms.filter(v => v.spec?.media_id === m.id || v.spec?.drivers_media_id === m.id).length;
       return <tr key={m.id || `op:${m.operation_id}`}><td>{m.name}<small className="mono">SHA-256: {m.sha256 || "Pending verification"}</small></td><td>{hostName(m.host_id)}<small>{storage.find(s => s.id === m.storage_id)?.name || m.storage_id}</small></td><td>{m.size_bytes > 0 ? `${(m.size_bytes / GiB).toFixed(2)} GiB` : "Unknown until downloaded"}</td><td>{task(m)}</td><td>{mediaDiscardable(m) && <button type="button" className="sm" disabled={busy || unavailable} onClick={() => discardMedia(m)}>Discard failed import</button>}{mediaRemovable(m) && <button type="button" className="sm danger" title={blocker || "Delete this ISO file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive."} disabled={busy || Boolean(blocker)} onClick={e => beginLifecycle(e, { scope, resource: "media", action: "remove", id: m.id, name: m.name, base: {}, note: users ? `${users} VM definition${users === 1 ? "" : "s"} in this pool still have this ISO in a CD drive, so Nex Core will refuse the removal. Eject it in each VM first.` : "" })}>Remove ISO</button>}</td></tr>;
-    })}</tbody></table></div> : <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p>}<About title="About removing ISOs"><p>Removing an ISO deletes the file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive; a failed import is only a request record and is discarded instead.</p></About></Section>}
+    })}</tbody></table></div> : !upload ? <p className="empty">No ISO images uploaded. Select validated storage and upload installation media.</p> : null}<About title="About removing ISOs"><p>Removing an ISO deletes the file from its storage on the host. Nex Core refuses while the ISO is in any VM's CD drive; a failed import is only a request record and is discarded instead.</p></About></Section>}
     <dialog ref={lifecycleDialog} className="confirm-dialog" aria-labelledby="pool-lifecycle-title" onClose={() => { setLifecycle(null); setConfirmText(""); setRenameText(""); setLifecycleError(""); lifecycleOpener.current?.focus(); }}>
       {lifecycle && (lifecycle.action === "rename"
         ? <form onSubmit={e => { e.preventDefault(); void submitLifecycle(); }}>

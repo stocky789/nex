@@ -9,9 +9,10 @@ The complete license text is available at
 
 This license applies to the artwork in these source assets and identical copies:
 
-- `docs/brand/nex-brand.png`
-- `web/public/nex-brand.png`
-- `website/static/nex-brand.png`
+- `docs/brand/logo/` (all SVG and PNG files)
+- `web/public/nex-*.svg`
+- `website/static/nex-symbol-small.svg`
+- `website/static/nex-wordmark.svg`
 - `installer/assets/nex-core-lockup.png`
 - `installer/assets/boot-splash.svg`
 - `installer/assets/boot-splash.png`

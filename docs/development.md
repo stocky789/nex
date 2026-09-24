@@ -27,7 +27,7 @@ For quick edit/test cycles, `make binaries`, `make ui`, and `make typecheck` use
 working tree. Before making a build available to users, rerun `make build` so the
 served source matches the binaries and UI. `make source` refreshes only the source
 archive; it must not replace the archive accompanying an older running build.
-The archive includes the UI's approved `nex-brand.png` and its separate artwork
+The archive includes the UI's approved logo SVGs and their separate artwork
 terms and uses an explicit source-path/type allowlist. When adding build inputs,
 update `scripts/build-source.py` in the same change.
 

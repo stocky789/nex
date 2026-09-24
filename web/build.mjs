@@ -14,7 +14,7 @@ const options = {
   target: "es2022",
   format: "esm",
   legalComments: "external",
-  external: ["/nex-brand.png"],
+  external: ["/nex-*.svg"],
 };
 if (process.argv.includes("--watch")) {
   await (await context(options)).watch();

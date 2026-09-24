@@ -13,7 +13,7 @@ import tempfile
 
 source = Path(os.environ.get('NEX_DISK_VALIDATOR_SOURCE', 'installer/gui/nex-config.c')).read_text()
 wizard = Path('installer/gui/nex-wizard.c').read_text()
-assert 'Tick one disk, or two or more to mirror.' in wizard
+assert 'Tick one disk for a single install, or two or more for RAID1 copies of one system disk.' in wizard
 assert 'Ticked disks are erased; others are left alone.' in wizard
 # Nested page+tree scrollbars and unwrapped summaries clipped BMC consoles; pin wrap width
 # and keep the disk list in its own scrolled window with ellipsized columns.
@@ -27,9 +27,10 @@ assert 'GDK_space' in wizard and 'GDK_Return' in wizard, 'the tick list must be 
 for column in ('"Use"', '"Device"', '"Capacity"', '"Type"', '"Model"', '"Serial"', '"Contents"'):
     assert column in wizard, column
 assert 'queue/rotational' in wizard and 'has_partitions' in wizard
-assert 'RAID1 mirror, smallest disk %.1f GiB, keeps running if one disk fails.' in wizard
-assert '1 disk: single disk, ext4, no redundancy.' in wizard
-assert 'Tip: tick two disks of similar size' in wizard
+assert 'What you get: one %.1f GiB system disk on all %u drives' in wizard
+assert 'RAID1 copies — not pooled storage' in wizard
+assert 'What you get: one system disk, no redundancy.' in wizard
+assert 'Tip: two or more similar-sized disks give RAID1 copies' in wizard
 assert "foreground='#B3261E'" in wizard, 'selection problems must be reported as the operator ticks'
 assert 'if (disks->len == 1)' in wizard, 'a single eligible disk is preselected; a mirror never is'
 assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in wizard, 'GTK discover must skip disks below 16 GiB like the text frontend'
@@ -143,17 +144,19 @@ int main(void) {
     text = disk_summary_text(0, 1, 0, 0, FALSE);
     assert(!strcmp(text, "No disk selected.")); g_free(text);
     text = disk_summary_text(0, 2, 0, 0, TRUE);
-    assert(strstr(text, "Tip: tick two disks of similar size")); g_free(text);
+    assert(strstr(text, "Tip: two or more similar-sized disks give RAID1 copies")); g_free(text);
     text = disk_summary_text(1, 2, 128 * gib, 128 * gib, TRUE);
-    assert(!strcmp(text, "1 disk: single disk, ext4, no redundancy.")); g_free(text);
+    assert(!strcmp(text, "What you get: one system disk, no redundancy.")); g_free(text);
     text = disk_summary_text(2, 2, 128 * gib, 128 * gib, TRUE);
-    assert(strstr(text, "2 disks: RAID1 mirror, smallest disk 128.0 GiB")); g_free(text);
+    assert(strstr(text, "What you get: one 128.0 GiB system disk on all 2 drives (RAID1 copies — not pooled storage). Survives 1 disk failure.")); g_free(text);
     text = disk_summary_text(2, 2, 100 * gib, 105 * gib, TRUE);
-    assert(strstr(text, "smallest disk 100.0 GiB")); g_free(text);
+    assert(strstr(text, "one 100.0 GiB system disk on all 2 drives")); g_free(text);
     text = disk_summary_text(2, 2, 100 * gib, 112 * gib, TRUE);
     assert(strstr(text, "within 10% of the smallest selected disk")); g_free(text);
     text = disk_summary_text(3, 3, 50 * gib, 50 * gib, TRUE);
-    assert(strstr(text, "3 disks: RAID1 mirror, smallest disk 50.0 GiB")); g_free(text);
+    assert(strstr(text, "What you get: one 50.0 GiB system disk on all 3 drives (RAID1 copies — not pooled storage). Survives 2 disk failures.")); g_free(text);
+    text = disk_summary_text(5, 5, 128 * gib, 128 * gib, TRUE);
+    assert(strstr(text, "What you get: one 128.0 GiB system disk on all 5 drives (RAID1 copies — not pooled storage). Survives 4 disk failures.")); g_free(text);
     return 0;
 }
 '''

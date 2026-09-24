@@ -41,7 +41,7 @@ class SourceArchiveTests(unittest.TestCase):
     def test_allowlist_excludes_runtime_installer_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root, target = Path(directory) / 'root', Path(directory) / 'out'
-            for name in source.FILES + source.SCRIPTS + ('cmd/controller/main.go', 'internal/server.go',
+            for name in source.FILES + source.SCRIPTS + ('cmd/controller/main.go', 'internal/server.go', 'web/public/nex-symbol-small.svg',
                          'internal/server.key', 'installer/private.go', '.env', '.cache/password',
                          'appliance/firstboot.py', 'appliance/signing.key',
                          'packaging/core-local/build.py', 'packaging/core-local/nex-root-auth.c',
@@ -51,7 +51,7 @@ class SourceArchiveTests(unittest.TestCase):
                 path.write_text('source')
             source.copy_sources(root, target)
             self.assertTrue((target / 'cmd/controller/main.go').exists())
-            self.assertTrue((target / 'web/public/nex-brand.png').exists())
+            self.assertTrue((target / 'web/public/nex-symbol-small.svg').exists())
             self.assertTrue((target / 'ARTWORK-LICENSE.md').exists())
             self.assertTrue((target / 'web/public/third-party-notices.txt').exists())
             self.assertTrue((target / 'docs/brand/README.md').exists())

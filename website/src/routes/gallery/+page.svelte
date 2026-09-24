@@ -123,7 +123,7 @@
 </div>
 <header class="site-header wrap">
   <a class="brand" href="/" aria-label="Nex home">
-    <span class="wordmark" aria-hidden="true"></span>
+    <span class="wordmark" aria-hidden="true"><img src="/nex-symbol-small.svg" alt="" width="38" height="38" /><img src="/nex-wordmark.svg" alt="" width="81" height="28" /></span>
     <span class="brand-divider"></span>
     <span class="brand-caption">Virtualization,<br />built together.</span>
   </a>
@@ -192,7 +192,7 @@
 
 <footer class="wrap">
   <div class="footer-top">
-    <a class="brand" href="/" aria-label="Nex home"><span class="wordmark" aria-hidden="true"></span></a>
+    <a class="brand" href="/" aria-label="Nex home"><span class="wordmark" aria-hidden="true"><img src="/nex-symbol-small.svg" alt="" width="38" height="38" /><img src="/nex-wordmark.svg" alt="" width="81" height="28" /></span></a>
     <p>Community-driven.<br />Built together.</p>
     <a class="text-link" href="/">Back to the project <span aria-hidden="true">→</span></a>
   </div>
@@ -213,7 +213,7 @@
   .gallery-grid { display: grid; gap: 52px; padding-bottom: 72px; }
   .gallery-card { min-width: 0; }
   .screenshot-link { display: block; border: 1px solid var(--line); background: #fff; }
-  img { display: block; width: 100%; height: auto; }
+  .screenshot-link img { display: block; width: 100%; height: auto; }
   figcaption { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 22px 0 0; border-top: 0; font-family: inherit; color: #17233b; }
   figcaption h2 { margin-top: 10px; font-size: 28px; }
   .caption-description { margin-top: 10px; color: var(--muted); font-size: 14px; }

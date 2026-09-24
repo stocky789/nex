@@ -63,10 +63,20 @@ const rate = (bytes: number) =>
 // the ones still running, as the top bar's activity pill counts them.
 const progress: Record<string, string> = { pending: "Running on the host", dispatched: "Awaiting agent result" };
 const dot = (value: string) => <span className={`dot ${badgeTone(value)}`} aria-hidden="true" />;
+// Shared meter for the browser-to-Controller transfer: Tasks and the ISO library both show it.
+export function UploadProgress({ upload, onCancel }: { upload: Upload; onCancel?: () => void }) {
+  const running = upload.state === "uploading";
+  return (
+    <div className="upload-progress">
+      <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} />
+      <small className="mono">{upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}</small>
+      {running && onCancel && <button type="button" onClick={onCancel}>Cancel</button>}
+    </div>
+  );
+}
 // UploadRow covers only the browser-to-Controller transfer. The host import that follows it
 // is a durable task and stays in the task list and the ISO library.
 function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void }) {
-  const running = upload.state === "uploading";
   return (
     <tr aria-label="ISO upload to Controller">
       <td>
@@ -78,13 +88,7 @@ function UploadRow({ upload, onCancel }: { upload: Upload; onCancel: () => void 
       <td className="muted">{date(upload.updated_at)}</td>
       {/* Only the outcome is announced; percent changes far too often for a live region. */}
       <td><span role="status"><Badge value={upload.state} /></span></td>
-      <td>
-        <div className="upload-progress">
-          <progress max={100} value={upload.percent} aria-label={`Upload progress for ${upload.name}`} />
-          <small className="mono">{upload.percent}% · {running ? rate(upload.rate) : size(upload.total)}</small>
-          {running && <button onClick={onCancel}>Cancel</button>}
-        </div>
-      </td>
+      <td><UploadProgress upload={upload} onCancel={onCancel} /></td>
     </tr>
   );
 }
