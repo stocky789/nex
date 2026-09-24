@@ -45,7 +45,7 @@ All of these passed with real libvirt/QEMU:
 - Restoration of Core XML after benchmark fixtures and live removal of the last SCSI disk.
 
 Native hotplug caught an incorrectly named standalone SCSI controller fragment. It was fixed
-and rerun successfully; the Go regression now inspects the exact attachment XML. See BUG-0552
+and rerun successfully; the Go regression now inspects the exact attachment XML. See BUG-0569
 in the [bug ledger](../BUG_LEDGER.md). Independent review also caught libvirt's extra resolved
 bridge on network-backed NICs; logical network identity is now compared correctly.
 
@@ -100,11 +100,10 @@ samples were collected, so the two-channel alternative remains unmeasured.
 - `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'`: passed.
 - Native Python compilation, shell syntax and `git diff --check`: passed.
 - `python3 scripts/check_docs.py --worktree`: passed for all 16 changed paths, including retained trial data.
-- The broad Python discovery run executed 399 tests with three failures. The queue threshold
-  confused a CPU-ceiling source assertion; that assertion was corrected and all API contract
-  tests rerun successfully. The two remaining failures are existing workflow-string assertions
-  in `tests/test_ci_security.py`, expecting a literal shared concurrency group where workflows
-  now select by provider. Those tests and workflow files are unchanged from HEAD.
+- The original broad Python run executed 399 tests with three failures. The queue threshold
+  confused a CPU-ceiling source assertion and was corrected in this slice. Two stale workflow
+  assertions remained; the 2026-09-25 PR merge-readiness follow-up corrected them, then the
+  broad discovery suite passed all 399 tests. See BUG-0570 in the bug ledger.
 - Independent review found no remaining confirmed Core defect after corrections. Independent numeric evidence review verified all 72 CSV records against the saved JSON
   and recomputed every displayed median and range. No remote CI run or production deployment is claimed.
 

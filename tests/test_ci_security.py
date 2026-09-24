@@ -69,7 +69,8 @@ class BrowserArtifactTests(unittest.TestCase):
                 gallery = workflow.index('website_controller_captures.py')
                 self.assertLess(smoke, gallery, 'storage UI smoke must run before gallery in the browser lane')
                 self.assertIn('cancel-in-progress: true', workflow)
-                self.assertIn('group: nex-shared-runner', workflow)
+                group = "group: ${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}" if provider == '.github' else 'group: nex-shared-runner'
+                self.assertIn(group, workflow)
                 # Browser lane must be first and must not wait on Go.
                 browser_job = workflow.index('\n  controller-browser:')
                 go_job = workflow.index('\n  go:')
@@ -95,7 +96,8 @@ class BrowserArtifactTests(unittest.TestCase):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 release = (ROOT / provider / 'workflows/release.yml').read_text()
-                self.assertIn('group: nex-shared-runner', release)
+                group = "group: ${{ github.server_url == 'https://github.com' && github.workflow || 'nex-shared-runner' }}" if provider == '.github' else 'group: nex-shared-runner'
+                self.assertIn(group, release)
                 self.assertIn('cancel-in-progress: true', release)
 
     def test_forge_release_does_not_attach_standalone_debs(self):
