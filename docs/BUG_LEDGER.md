@@ -7727,3 +7727,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Assert that the master refuses the unreadable policy while other hosts remain safe; match the current withheld-fencing reason.
 - Regression: The updated tests retain the foreign-bound no-reset and pending-witness no-arm assertions. They compile in `go test ./internal/agent -run '^$'`; host-affecting broad execution remains suspended after BUG-0557.
 - Avoid: Weakening the policy read-back requirement to satisfy an outdated fixture.
+
+## BUG-0565 — Release source archive omitted appliance inputs and guest OS assets
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4454 failed while customizing the Controller appliance because `/build/appliance/qnetd-runtime-init` was missing. The same archive also omitted the qnetd service drop-in and 34 guest OS image, catalogue, and license files.
+- Root cause: `scripts/build-source.py` selects files by an explicit list and suffix allowlists; neither the extensionless helper nor `.conf`, `.png`, `.ico`, `.md`, `.txt`, and extensionless guest OS notices were included.
+- Fix: Retain the two appliance runtime inputs explicitly and the guest OS catalogue's missing file types in the source archive.
+- Regression: `test_appliance_and_guest_os_inputs_are_retained` failed before the fix with the missing qnetd helper, then passed. `python3 -m unittest tests.test_build_source` passed (9 tests), `python3 -m unittest tests.test_appliance_build` passed (12 tests), and a fresh source archive contained the missing inputs and sampled image/license files. The forge Python discovery job includes this regression; no full appliance image build or forge rerun is claimed.
+- Avoid: Adding a file consumed by the image build without checking its presence in the release's staged source archive.
