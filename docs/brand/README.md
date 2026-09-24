@@ -40,6 +40,10 @@ Below 24 px the ring falls under one pixel, so favicons and other small marks us
 | `nex-symbol-small.svg`, `nex-symbol-16/24/32.png` | Favicons and marks under 24 px, shared by both products |
 | `nex-symbol-mono.svg` | One-color mark in `currentColor` for print, installer, and console contexts |
 | `nex-wordmark.svg` (+ `-dark`) | Wordmark alone |
+| `pdf/*.pdf` | Vector PDF of every master, for print and design tools |
+| `png/*.png` | Transparent high-resolution renders (symbols 2048 px square, lockups and wordmark 4096 px wide, mono in black and white) for tools that cannot use SVG |
+
+Every shape is filled geometry: no strokes, masks or overlapping contours, so the masters scale, recolor, and cut (vinyl, engraving, embroidery) cleanly. Prefer the SVG or PDF; render a new PNG from them rather than upscaling an existing one.
 
 ## Primary palette
 

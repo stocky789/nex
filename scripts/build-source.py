@@ -29,7 +29,7 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
          'packaging/controller/apply-update', 'packaging/controller/postinst',
          'packaging/controller/prerm',
          'docs/API.md', 'docs/api/openapi.json', 'docs/api/index.html', 'docs/api/reference.css')
-TREES = {'docs/brand/logo': {'.svg', '.png'}, 'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
+TREES = {'docs/brand/logo': {'.svg', '.png', '.pdf'}, 'cmd': {'.go'}, 'internal': {'.go', '.sql'}, 'web/src': {'.tsx', '.ts', '.css'},
          'web/public': {'.html', '.svg'}, 'packaging/systemd': {'.service'},
          'appliance': {'.py', '.sh', '.service', '.md'},
          'packaging/core-local': {'.py', '.sh', '.service', '.md', '.c', '.pam', '.example', '.gpg',
