@@ -9,8 +9,10 @@ type GuestInfo struct {
 	// Agent is "connected" when the guest agent answered, "unresponsive" when the
 	// channel is attached but it did not, "disconnected" when nothing in the guest
 	// has opened the channel, or "no-channel" when the VM definition lacks it.
-	Agent     string         `json:"agent"`
-	OS        string         `json:"os,omitempty"`
+	Agent string `json:"agent"`
+	OS    string `json:"os,omitempty"`
+	// OSID is the guest-reported guest-get-osinfo ID (POSIX os-release ID or mswindows).
+	OSID      string         `json:"os_id,omitempty"`
 	Hostname  string         `json:"hostname,omitempty"`
 	Addresses []GuestAddress `json:"addresses,omitempty"`
 	// Clipboard is "ready" when the qemu-vdagent channel is connected and the guest-agent

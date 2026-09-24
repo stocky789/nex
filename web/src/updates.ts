@@ -3,23 +3,32 @@ export type UpdateStatus = { package: string; core_available_version?: string; i
 
 // Polls the update status once a second until the helper reports done or failed, for up to
 // ten minutes. The service restarts mid-apply, so a poll that cannot reach it is part of a
-// normal update, not a failure; an HTTP error (one with a status) still is.
+// normal update, not a failure. An uncertain submission also tolerates temporary server errors.
 export async function followUpdate(
   api: (path: string) => Promise<UpdateStatus>,
   onStatus: (st: UpdateStatus) => void,
   sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms)),
+  uncertain = false,
 ): Promise<UpdateStatus | undefined> {
+  let idleReads = 0;
+  let sawActivity = false;
   for (let i = 0; i < 600; i++) {
     await sleep(1000);
     let st: UpdateStatus;
     try {
       st = await api("updates");
     } catch (e) {
-      if ((e as { status?: number }).status) throw e;
+      const status = (e as { status?: number }).status;
+      if (status && (!uncertain || (status < 500 && status !== 408))) throw e;
       continue;
     }
     onStatus(st);
-    if (st.phase === "done" || st.phase === "failed") return st;
+    if (st.phase === "downloading" || st.phase === "installing" || st.phase === "restarting") sawActivity = true;
+    if (st.phase === "done" || st.phase === "failed") return uncertain && !sawActivity ? undefined : st;
+    if (uncertain) {
+      idleReads = !st.phase || st.phase === "idle" ? idleReads + 1 : 0;
+      if (idleReads >= 5) return st;
+    }
   }
   return undefined;
 }

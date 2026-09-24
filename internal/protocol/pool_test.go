@@ -46,6 +46,50 @@ func TestPoolJoinCommandRequiresTheWholeInvitation(t *testing.T) {
 	}
 }
 
+func TestPoolStorageLeaseRequiresStableDistinctHostIDsAndExactNFSIdentity(t *testing.T) {
+	identity := StorageIdentity{NFS: &NFSStorageIdentity{Server: "nfs.example.test", Export: "/exports/vms", FilesystemID: "0:42"}}
+	lease := &PoolStorageLeaseConfig{
+		Repositories: []PoolStorageLeaseRepository{{RepositoryID: "repo-1", RepositoryGeneration: 3, RepositoryIdentity: identity,
+			Lockspace: PoolStorageLeaseLockspaceName("pool-1", "repo-1")}},
+		AuthorityRepositoryID: "repo-1", IOTimeoutSeconds: 10, HostDeadSeconds: 60, FenceTimeoutSeconds: 120,
+	}
+	membership := PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 4,
+		StorageLease: lease,
+		Members: []PoolMember{
+			{HostID: "master-1", SanlockHostID: 1, CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready"},
+			{HostID: "member-1", SanlockHostID: 2, CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready"},
+		},
+	}
+	if err := membership.Valid(); err != nil {
+		t.Fatalf("valid lease membership rejected: %v", err)
+	}
+	for name, change := range map[string]func(*PoolMembership){
+		"duplicate host lease ID":    func(m *PoolMembership) { m.Members[1].SanlockHostID = 1 },
+		"out of range host lease ID": func(m *PoolMembership) { m.Members[1].SanlockHostID = PoolSanlockMaxHostID + 1 },
+		"missing host lease ID":      func(m *PoolMembership) { m.Members[1].SanlockHostID = 0 },
+		"non-NFS repository": func(m *PoolMembership) {
+			m.StorageLease.Repositories[0].RepositoryIdentity = StorageIdentity{SMB: &SMBStorageIdentity{Server: "files.example.test", Share: "vms", FilesystemID: "1"}}
+		},
+		"wrong lockspace": func(m *PoolMembership) { m.StorageLease.Repositories[0].Lockspace = "client-path" },
+		"unsorted repositories": func(m *PoolMembership) {
+			m.StorageLease.Repositories = append(m.StorageLease.Repositories,
+				PoolStorageLeaseRepository{RepositoryID: "repo-0", RepositoryGeneration: 1, RepositoryIdentity: identity, Lockspace: PoolStorageLeaseLockspaceName("pool-1", "repo-0")})
+		},
+		"bound shorter than dead interval": func(m *PoolMembership) { m.StorageLease.FenceTimeoutSeconds = 59 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := membership
+			bad.Members = append([]PoolMember(nil), membership.Members...)
+			copyLease := *lease
+			bad.StorageLease = &copyLease
+			change(&bad)
+			if bad.Valid() == nil {
+				t.Fatal("unsafe lease membership accepted")
+			}
+		})
+	}
+}
+
 // A caller must be able to tell "this Core says the authority is not handed off" from "this
 // Core is too old to say", so handed_off is on the wire even when false, like cancellable.
 func TestPoolTransferStatusAlwaysReportsHandedOff(t *testing.T) {

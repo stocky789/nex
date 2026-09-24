@@ -1,0 +1,31 @@
+{
+  "summary": "Disable staged qnetd with offline systemctl after package installation",
+  "paths": [
+    "appliance/package-service-policy.sh",
+    "tests/test_storage_packaging.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This repairs image-build package staging; operator installation and recovery steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The appliance build has no Controller/Core request, agent command, observed result or client-facing API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The release and native service lifecycle remain unverified, so no milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The packaging helper changes only native service enablement in the image; no pool or Controller application state is added."
+  },
+  "verification": {
+    "method": "The focused regression failed before the fix and passed after it with a temporary systemd root. All 23 storage packaging tests and the 21 source/appliance tests passed. A disposable appliance image build from the pinned Debian base completed through package installation and finalization using a temporary signing key. Boot and forge release remain unverified.",
+    "evidence": ["tests/test_storage_packaging.py", "tests/test_build_source.py", "tests/test_appliance_build.py"]
+  }
+}

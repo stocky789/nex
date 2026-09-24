@@ -1,0 +1,36 @@
+{
+  "summary": "Exclude the quorum-device vote from pool host membership",
+  "paths": [
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "internal/vmhost/pool_quorum.go",
+    "internal/vmhost/watchdog_arming_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The change corrects internal quorum parsing before the witness workflow exists; no operator step changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "LocalQuorum host membership now excludes native qdevice node ID 0; the existing pool fencing readiness/proof result keeps its shape and can no longer count the witness as a host.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The two-host witness design records the parser prerequisite; witness registration and proof remain unimplemented.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only native runtime quorum output parsing changes; no durable pool or Controller record is added."
+  },
+  "verification": {
+    "method": "The focused regression failed against the prior parser with Qdevice in Hosts and passed after the fix; go test ./internal/vmhost passed. Native qdevice partition evidence is in the separate lab record; no Nex witness proof ran.",
+    "evidence": [
+      "internal/vmhost/watchdog_arming_test.go",
+      "docs/qa/2026-09-24-two-host-witness-lab.md"
+    ]
+  }
+}

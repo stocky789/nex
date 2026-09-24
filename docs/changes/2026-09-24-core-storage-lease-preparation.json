@@ -1,0 +1,56 @@
+{
+  "summary": "Prepare Core-owned sanlock repository and VM lease paths behind an unverified-hardware gate",
+  "paths": [
+    "internal/agent/peer.go",
+    "internal/agent/pool_join_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_vm.go",
+    "internal/protocol/cluster.go",
+    "internal/protocol/cluster_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/sanlock.go",
+    "internal/vmhost/sanlock_authority.go",
+    "internal/vmhost/sanlock_layout.go",
+    "internal/vmhost/sanlock_layout_test.go",
+    "internal/vmhost/sanlock_native.go",
+    "internal/vmhost/sanlock_test.go",
+    "internal/vmhost/sanlock_vm.go",
+    "internal/vmhost/storage_cluster.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "docs/qa/2026-09-24-two-host-storage-lease-lab.md",
+    "docs/LICENSING.md",
+    "installer/packages.txt"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The guide explicitly states that storage-lease automatic takeover is not available while hardware reset verification and Core acceptance are open.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Additive Core membership and peer fields carry stable sanlock host IDs, exact NFS lease repository records and typed storage exclusion evidence. The native reset-verification gate remains false, so Controller does not offer storage-lease takeover; older Core omits the optional fields.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/peer-openapi.json", "docs/api/index.html", "docs/api/peer.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Storage lease remains unaccepted and the two-host plan retains partial status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The master owns stable sanlock host IDs and a monotonic allocator, exact repository lockspaces and a preparation generation. Native leases live on shared NFS; Controller stores no pool lease state.",
+    "record": "Core pool-peer.json PoolMembership member SanlockHostID/allocator and StorageLease configuration on the master, replicated in signed pool authority records; a fresh Controller recovers the same record from the master's authenticated membership inventory."
+  },
+  "verification": {
+    "method": "Before the workstation safety hold, a disposable Debian 13 native lab exercised per-repository libvirt leases and typed sanlock status reads; its limits are recorded in QA. After the hold, only static review, compile-only Go checks, API schema tests and repository privacy checks ran. The reset-verification status intentionally remains false, so no Core lockspace, authority holder, VM lease or promotion path has been activated end to end; physical watchdog and NFS timing evidence remain open.",
+    "evidence": ["docs/qa/2026-09-24-two-host-storage-lease-lab.md", "internal/vmhost/sanlock_layout_test.go", "internal/agent/pool_join_test.go", "docs/plans/2026-09-22-two-host-pool-fencing.md"]
+  }
+}

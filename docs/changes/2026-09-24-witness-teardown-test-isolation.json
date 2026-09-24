@@ -1,0 +1,35 @@
+{
+  "summary": "Skip native qdevice teardown when Nex has no service configuration to remove",
+  "paths": [
+    "internal/vmhost/pool_witness.go",
+    "internal/vmhost/pool_witness_test.go",
+    "internal/vmhost/pool_cluster.go",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The absent-witness path had no operator action or configured service; this prevents a stray service-manager call.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core or client-facing contract changes; only local qdevice teardown is guarded by Nex's owned drop-in.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Witness acceptance remains open and no milestone status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The fix adds no durable state; it checks the existing service drop-in before attempting teardown."
+  },
+  "verification": {
+    "method": "Run the focused vmhost regression test; inspect the workstation's service state and process list after terminating the stray test process. Broader agent tests remain suspended during incident containment.",
+    "evidence": [
+      "internal/vmhost/pool_witness_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

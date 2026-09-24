@@ -143,7 +143,7 @@ export function specFromRows(rows: Row[], management: string, dns: string): Spec
   };
 }
 
-function EditForm({ view, busy, onStage }: { view: HostNetworkView; busy: boolean; onStage: (spec: Spec, windowSeconds: number) => void }) {
+function EditForm({ view, busy, submitReady, onStage }: { view: HostNetworkView; busy: boolean; submitReady: boolean; onStage: (spec: Spec, windowSeconds: number) => void }) {
   const seed = editSeed(view.management_network);
   const [rows, setRows] = useState<Row[]>(() => rowsFromHost(view.nics, seed));
   const [management, setManagement] = useState(() => (seed?.interfaces || []).find(i => i.management)?.name || manageableNICs(view.nics)[0]?.name || "");
@@ -203,15 +203,15 @@ function EditForm({ view, busy, onStage }: { view: HostNetworkView; busy: boolea
     </fieldset>
     {showWindowError && windowProblem && <p className="alert" role="alert">{windowProblem}</p>}
     <div className="actions">
-      <button className="primary" disabled={busy}>{busy ? "Submitting…" : "Stage this configuration"}</button>
+      <button className="primary" disabled={busy || !submitReady}>{busy ? "Submitting…" : "Stage this configuration"}</button>
     </div>
   </form>;
 }
 
 // ---------------------------------------------------------------- apply confirmation
 
-export function ApplyDialog({ view, spec, minutes, busy, submitError, onConfirm, onClose }: {
-  view: HostNetworkView; spec: Spec; minutes: number | null; busy: boolean; submitError: string;
+export function ApplyDialog({ view, spec, minutes, busy, submitError, submitReady = true, readError = "", onConfirm, onClose }: {
+  view: HostNetworkView; spec: Spec; minutes: number | null; busy: boolean; submitError: string; submitReady?: boolean; readError?: string;
   onConfirm: (confirmation: string) => void; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -240,12 +240,13 @@ export function ApplyDialog({ view, spec, minutes, busy, submitError, onConfirm,
     </table></div>
     <p>DNS servers: {dns.length ? dns.join(", ") : management?.mode === "dhcp" ? "no override; DHCP supplies DNS" : "none configured"}</p>
     {submitError && <p className="alert" role="alert">{submitError}</p>}
+    {readError && <p className="alert" role="alert">The current host report could not be read: {readError}. Retry the report before submitting.</p>}
     <form onSubmit={event => { event.preventDefault(); if (matches && !busy) onConfirm(typed.trim()); }}>
       <label htmlFor="apply-network-name">Type the host name <strong>{name}</strong> to apply</label>
       <input id="apply-network-name" autoComplete="off" autoCapitalize="none" spellCheck={false} disabled={busy} value={typed} onChange={event => setTyped(event.target.value)} />
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || !matches}>{busy ? "Submitting…" : "Apply and start the countdown"}</button>
+        <button className="primary" disabled={busy || !submitReady || !matches}>{busy ? "Submitting…" : "Apply and start the countdown"}</button>
       </div>
     </form>
   </dialog>;
@@ -263,30 +264,45 @@ export function HostNetwork({ hostID, api, unavailable }: { hostID: string; api:
   const [applying, setApplying] = useState(false);
   const [remaining, setRemaining] = useState<number | null>(null);
   const held = useRef({ id: "", signature: "" });
+  const reportRequest = useRef(0);
+  const reportPending = useRef(0);
 
-  async function refresh() {
-    setLoading(true); setError("");
+  async function refresh(force = false) {
+    if (reportPending.current && !force) return;
+    const request = ++reportRequest.current;
+    reportPending.current = request;
+    setLoading(true);
     try {
       const next = await api<HostNetworkView>(`hosts/${encodeURIComponent(hostID)}/network`);
+      if (request !== reportRequest.current) return;
       setView(next);
+      setError("");
       // The countdown is re-synced from the host's own report on every poll, and is not run at
       // all when the host is not reporting: an invented countdown would be a guess about a host
       // that may already have rolled back.
       setRemaining(next.state === "applied" && next.connection === "fresh" ? next.management_network?.seconds_remaining ?? 0 : null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setLoading(false); }
+    } catch (e) { if (request === reportRequest.current) setError((e as Error).message); }
+    finally {
+      if (request === reportRequest.current) {
+        reportPending.current = 0;
+        setLoading(false);
+      }
+    }
   }
-  useEffect(() => { void refresh(); }, [hostID]);
-  const state = view?.state || "unknown";
-  // "state" is "unknown" for a host that is not reporting, but the record's own stage still says
-  // whether a change is in flight — which is exactly when this must keep asking.
-  const flow = state === "unknown" ? view?.management_network?.stage || "none" : state;
-  const watching = flow === "staged" || flow === "applied";
   useEffect(() => {
-    if (!watching || unavailable) return;
-    const timer = window.setInterval(() => void refresh(), 10_000);
-    return () => window.clearInterval(timer);
-  }, [watching, unavailable, hostID]);
+    const catchUp = () => { if (document.visibilityState === "visible") void refresh(); };
+    catchUp();
+    const timer = window.setInterval(catchUp, 10_000);
+    document.addEventListener("visibilitychange", catchUp);
+    window.addEventListener("online", catchUp);
+    return () => {
+      ++reportRequest.current;
+      reportPending.current = 0;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", catchUp);
+      window.removeEventListener("online", catchUp);
+    };
+  }, [hostID]);
   const ticking = remaining !== null;
   useEffect(() => {
     if (!ticking) return;
@@ -295,6 +311,7 @@ export function HostNetwork({ hostID, api, unavailable }: { hostID: string; api:
   }, [ticking]);
 
   async function step(action: string, extra: Record<string, unknown>, done: string) {
+    if ((unavailable || error) && action !== "cancel") return;
     setBusy(true); setSubmitError("");
     const record = view?.management_network;
     const request_id = heldRequestID(held.current, `${hostID}\n${action}\n${record?.revision ?? 0}\n${record?.operation_id || ""}\n${JSON.stringify(extra)}`);
@@ -306,15 +323,16 @@ export function HostNetwork({ hostID, api, unavailable }: { hostID: string; api:
       await api(`hosts/${encodeURIComponent(hostID)}/network`, "POST", { request_id, action, ...(change_id ? { change_id } : {}), ...extra });
       setApplying(false);
       setNotice(done);
-      await refresh();
+      await refresh(true);
     } catch (e) {
+      void refresh(true);
       setSubmitError(`${(e as Error).message} Submitting again repeats the same request; it never starts a second change.`);
     } finally { setBusy(false); }
   }
 
   return <HostNetworkPanel view={view} loading={loading} error={error} busy={busy} submitError={submitError} notice={notice}
     remaining={remaining} unavailable={unavailable} applying={applying}
-    onRefresh={() => void refresh()} onStep={(action, extra, done) => void step(action, extra, done)}
+    onRefresh={() => void refresh(true)} onStep={(action, extra, done) => void step(action, extra, done)}
     onApplyOpen={() => setApplying(true)} onApplyClose={() => { if (!busy) setApplying(false); }} />;
 }
 
@@ -326,9 +344,10 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
   onRefresh: () => void; onStep: (action: string, extra: Record<string, unknown>, done: string) => void;
   onApplyOpen: () => void; onApplyClose: () => void;
 }) {
-  const state = view?.state || "unknown";
+  const state = error ? "unknown" : view?.state || "unknown";
   const record = view?.management_network || null;
-  const fresh = view?.connection === "fresh";
+  const fresh = !error && view?.connection === "fresh";
+  const submitReady = !unavailable && !error;
   const stage = stageLabel(state, !!record?.requested_rollback);
   const last = view?.last_operation;
   // The step the record is in. "state" is "unknown" whenever the host is not reporting, so the
@@ -346,18 +365,19 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
       <span className="host-network-meta">
         <Badge value={stage.badge} label={stage.label} />
         {view && <span className="muted">revision {state === "unknown" ? "unknown" : record?.revision ?? 0}</span>}
-        <button type="button" className="sm" disabled={loading || unavailable} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>
+        <button type="button" className="sm" disabled={loading} onClick={onRefresh}>{loading ? "Refreshing…" : "Refresh"}</button>
       </span>
     </div>
     {notice && <p className="notice" role="status">{notice}</p>}
     {error && <p className="alert" role="alert">This host could not be asked for its management network: {error}</p>}
-    {!error && view && !view.supported && <p className="warning" role="status">This host does not support staged management network edits. They need management-network-v1 on this host; upgrade Nex Core. Its reported interfaces are still shown under Network interfaces.</p>}
-    {!error && view && view.supported && !fresh && <p className="warning" role="status">
+    {error && view && <p className="warning" role="status">This is the last reported configuration. Its current state and rollback countdown are unknown until a fresh report arrives.</p>}
+    {view && !view.supported && <p className="warning" role="status">This host does not support staged management network edits. They need management-network-v1 on this host; upgrade Nex Core. Its reported interfaces are still shown under Network interfaces.</p>}
+    {view && view.supported && !fresh && !error && <p className="warning" role="status">
       The host is {view.connection}, so its management network state is unknown. {record?.deadline
         ? `Its last report said a change was ${record.stage} with a rollback deadline of ${record.deadline}. Whether it has already rolled back cannot be known until the host reports again.`
         : "Nothing here is shown as current; the values from its last report are not repeated as if they still applied."}
     </p>}
-    {!error && view && view.supported && <>
+    {view && view.supported && <>
       {last?.conflict && <p className="alert" role="alert">{last.error} This host changed since you loaded it — reload.</p>}
       {!last?.conflict && last?.status === "failed" && <p className="alert" role="alert">Nex Core refused the last {last.action || "change"}: {last.error || "no message reported."}</p>}
       {fresh && flow === "rolled-back" && (record?.requested_rollback
@@ -373,12 +393,14 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
       </table></div>}
 
       {applied && <div className="host-network-countdown">
-        {fresh
+        {error
+          ? <p className="warning" role="status">The latest host report could not be read. Its rollback deadline cannot be confirmed; retry the report before acting.</p>
+          : fresh
           ? <p className="warning" role="status">{countdownText(remaining)} If you do nothing the host restores its previous configuration; it also restores it if it reboots before you confirm.</p>
           : <p className="warning" role="status">Waiting for the host to reconnect over the new configuration. It cannot be confirmed until it reaches this Controller again; until then it is still on course to roll back at {record?.deadline || "its recorded deadline"}.</p>}
         <div className="actions">
-          <button type="button" className="primary" disabled={busy || unavailable || !fresh} onClick={() => onStep("confirm", {}, "Nex Core kept the new configuration. The rollback timer is stopped.")}>Keep this configuration</button>
-          <button type="button" disabled={busy || unavailable} onClick={() => onStep("cancel", {}, "Nex Core was asked to restore the previous configuration. The host performs it and reports the result.")}>Roll back now</button>
+          <button type="button" className="primary" disabled={busy || !submitReady || !fresh} onClick={() => onStep("confirm", {}, "Nex Core kept the new configuration. The rollback timer is stopped.")}>Keep this configuration</button>
+          <button type="button" disabled={busy} onClick={() => onStep("cancel", {}, "Nex Core was asked to restore the previous configuration. The host performs it and reports the result.")}>Roll back now</button>
         </div>
       </div>}
 
@@ -395,16 +417,16 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
         <p>DNS servers: {(record.spec.dns || []).join(", ") || "none"}</p>
         <p className="help">{stagedWindowText(record.window_seconds)}</p>
         <div className="actions">
-          <button type="button" className="primary" disabled={busy || unavailable || !fresh} onClick={onApplyOpen}>Apply…</button>
-          <button type="button" disabled={busy || unavailable} onClick={() => onStep("cancel", {}, "The staged change was discarded. Nothing on the host was changed.")}>Discard staged change</button>
+          <button type="button" className="primary" disabled={busy || !submitReady || !fresh} onClick={onApplyOpen}>Apply…</button>
+          <button type="button" disabled={busy} onClick={() => onStep("cancel", {}, "The staged change was discarded. Nothing on the host was changed.")}>Discard staged change</button>
         </div>
         {!fresh && <p className="help">Applying needs a freshly connected host. Discarding does not: it is a durable command the host runs when it next reports.</p>}
       </div>}
 
-      {fresh && !staged && !applied && <EditForm key={`${view.host_id}:${record?.revision ?? 0}:${flow}`} view={view} busy={busy} onStage={(spec, windowSeconds) => onStep("stage", { spec, window_seconds: windowSeconds, expected_revision: record?.revision || 0 }, "The change is staged on the host. Review it below, then apply it.")} />}
+      {view.connection === "fresh" && !staged && !applied && <EditForm key={`${view.host_id}:${record?.revision ?? 0}:${flow}`} view={view} busy={busy} submitReady={submitReady} onStage={(spec, windowSeconds) => onStep("stage", { spec, window_seconds: windowSeconds, expected_revision: record?.revision || 0 }, "The change is staged on the host. Review it below, then apply it.")} />}
     </>}
     {loading && !view && <p className="empty" role="status">Asking the host for its management network…</p>}
-    {applying && view && record?.spec && <ApplyDialog view={view} spec={record.spec} minutes={windowMinutes} busy={busy} submitError={submitError}
+    {applying && view && record?.spec && <ApplyDialog view={view} spec={record.spec} minutes={windowMinutes} busy={busy} submitError={submitError} submitReady={submitReady} readError={error}
       onConfirm={confirmation => onStep("apply", { confirmation }, "The change is applied and the rollback countdown has started on the host. Confirm it once the host reaches this Controller again.")}
       onClose={onApplyClose} />}
   </section>;

@@ -24,7 +24,7 @@
     "reason": "Documentation and test assertions add no product state."
   },
   "verification": {
-    "method": "Prepared a ledger containing current main entries and renumbered PR entries; a forge-direction three-way preview still reports an append conflict until the project owner merges and resolves it. The focused CI tests passed (13 tests), and full Python discovery passed (399 tests).",
+    "method": "Merged current main into tweaks and resolved the ledger append conflict while retaining both branches' entries. Full Python discovery passed (411 tests), focused VM tests and Go package compilation passed, and API generation, documentation and privacy checks passed. Remote CI remains unverified.",
     "evidence": [
       "docs/BUG_LEDGER.md",
       "tests/test_ci_security.py"

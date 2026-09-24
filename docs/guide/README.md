@@ -37,9 +37,7 @@ verification limits that apply to its workflow.
    read each host's **Fencing** check, which says whether each host could be shut out and by
    which other hosts — the hosts check each other's controllers continuously and never power
    anything off; promote a surviving member when the pool master is lost; resume a master change whose target
-   died; what a restricted host is and how it clears. No automatic succession, a promotion may
-   power off more than one host, and fence-verified promotion needs a fence device, or an armed
-   watchdog in a pool of three or more hosts, in place before the master is lost).
+   died; what a restricted host is and how it clears. Core can automatically promote an eligible two-host pool only with Host fencing enabled and a recorded usable BMC fence profile; otherwise manual promotion remains available when its fence proof can be established. A promotion may power off more than one host. Watchdog-based promotion is supported only through the manual workflow in pools of three or more hosts; storage-lease takeover and witness-based promotion remain planned, while Controller-hosted witness registration and status are available in development).
 13. [Change a host's management network](change-management-network.md)
    (stage, apply and confirm a host's own addressing, with the timed rollback the host performs
    itself; console recovery and native verification limits apply).

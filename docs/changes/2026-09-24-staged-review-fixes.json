@@ -1,0 +1,59 @@
+{
+  "summary": "Correct staged witness, storage-lease, VM, packaging and UI review findings",
+  "paths": [
+    "appliance/package-service-policy.sh",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-24-two-host-witness-lab.json",
+    "docs/guide/README.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/qa/2026-09-24-two-host-witness-lab.md",
+    "internal/agent/pool_cluster_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_lease_selection_test.go",
+    "internal/agent/pool_witness_test.go",
+    "internal/controller/witness.go",
+    "internal/controller/witness_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_witness_test.go",
+    "internal/vmhost/pool_witness.go",
+    "internal/vmhost/pool_witness_test.go",
+    "internal/vmhost/sanlock_test.go",
+    "internal/vmhost/sanlock_vm.go",
+    "tests/test_storage_packaging.py",
+    "web/src/vms.css"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Clarifies available development witness registration and the untested witness-loss recovery path; internal fixes leave other operator steps unchanged.",
+    "pages": ["docs/guide/README.md", "docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "The deterministic witness cluster_name carried by Core registration and membership changes from a 32-bit to a 128-bit hash; both Core and Controller use it. The reference now also describes existing sealed witness credentials and storage-lease fields. No route or JSON shape changes.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "These corrections do not close witness or storage-lease acceptance gates or move a milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The corrected cluster name lives in the existing Core-owned witness registration, not Controller-only state; other fixes introduce no new durable state.",
+    "record": "Pool master's Core pool-peer.json PoolMembership.Witness.ClusterName and signed authority replicas; a fresh Controller recovers the name from the master's authenticated membership inventory."
+  },
+  "verification": {
+    "method": "Focused mocked Go regressions for lease selection, witness import, witness name and VM lease checks passed; packaging tests, UI tests/typecheck/build, privacy and documentation checks passed. Broad host-affecting Go suites and native witness/storage recovery were not run after BUG-0557.",
+    "evidence": [
+      "internal/agent/pool_storage_lease_selection_test.go",
+      "internal/controller/witness_test.go",
+      "internal/protocol/pool_witness_test.go",
+      "internal/vmhost/pool_witness_test.go",
+      "internal/vmhost/sanlock_test.go",
+      "tests/test_storage_packaging.py",
+      "web/src/tokens.test.mjs",
+      "docs/qa/2026-09-24-two-host-witness-lab.md"
+    ]
+  }
+}

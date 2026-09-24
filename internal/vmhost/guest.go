@@ -53,6 +53,7 @@ type guestDomainXML struct {
 // longer values, so a hostile guest cannot bloat reports.
 const (
 	guestOSLimit       = 4096
+	guestOSIDLimit     = 200
 	guestHostnameLimit = 200
 	guestNameLimit     = 200
 )
@@ -204,12 +205,12 @@ func guestFacts(ctx context.Context, virsh func(context.Context, ...string) ([]b
 	var osinfo struct {
 		Return struct {
 			PrettyName string `json:"pretty-name"`
-			ID         string `json:"name"`
+			Name       string `json:"name"`
 			Ver        string `json:"version"`
-			// Family is the agent's own OS family ("mswindows"), and Build is the guest
-			// kernel/build number: on Windows, the build that tells 11 apart from 10.
-			Family string `json:"id"`
-			Build  string `json:"kernel-release"`
+			// ID is the POSIX os-release identifier, or "mswindows" on Windows.
+			OSID string `json:"id"`
+			// Build is the guest's kernel/build number: on Windows, it distinguishes 11 from 10.
+			Build string `json:"kernel-release"`
 		} `json:"return"`
 	}
 	if !agent("guest-get-osinfo", &osinfo) {
@@ -218,9 +219,10 @@ func guestFacts(ctx context.Context, virsh func(context.Context, ...string) ([]b
 	g.Agent = "connected"
 	g.OS = bounded(osinfo.Return.PrettyName, guestOSLimit)
 	if g.OS == "" {
-		g.OS = bounded(osinfo.Return.ID+" "+osinfo.Return.Ver, guestOSLimit)
+		g.OS = bounded(osinfo.Return.Name+" "+osinfo.Return.Ver, guestOSLimit)
 	}
-	g.OS = correctWindowsName(g.OS, osinfo.Return.Family, osinfo.Return.Build)
+	g.OSID = bounded(osinfo.Return.OSID, guestOSIDLimit)
+	g.OS = correctWindowsName(g.OS, g.OSID, osinfo.Return.Build)
 	var host struct {
 		Return struct {
 			Name string `json:"host-name"`

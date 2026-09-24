@@ -6,6 +6,7 @@ ConditionPathExists=/etc/nex-controller/tls.key
 [Service]
 User=nex-controller
 Group=nex-controller
+SupplementaryGroups=coroqnetd
 StateDirectory=nex-controller
 StateDirectoryMode=0700
 UMask=0077
@@ -14,6 +15,7 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
+ReadWritePaths=/run/nex-witness/nssdb
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

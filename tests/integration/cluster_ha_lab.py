@@ -103,10 +103,7 @@ def seed(lab, name, address, public_key, packages):
         "systemctl daemon-reload; systemctl enable --now nex-cluster-lab-link; "
         "apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends " + packages + "; "
         "install -d -m 0755 /usr/lib/nex; printf '%s' '" + pristine + "' | base64 -d > /usr/lib/nex/corosync-pristine; "
-        "chmod 0755 /usr/lib/nex/corosync-pristine; "
-        # Fence agents are optional until this profile chooses a standard adapter.  A missing
-        # package must not conceal a failed base cluster prerequisite installation.
-        "if apt-cache show fence-agents >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends fence-agents; fi"
+        "chmod 0755 /usr/lib/nex/corosync-pristine"
     )
     user_data = "#cloud-config\n" + "\n".join((
         f"hostname: nex-cluster-{name}", "manage_etc_hosts: true", "ssh_pwauth: false", "disable_root: false",
@@ -221,7 +218,11 @@ def owned_process(metadata):
 
 
 def process_exists(pid):
-    return Path(f"/proc/{pid}").exists()
+    try:
+        # An exited child can remain in /proc as a zombie until its parent reaps it.
+        return bool(Path(f"/proc/{pid}/cmdline").read_bytes())
+    except FileNotFoundError:
+        return False
 
 
 def quit_owned(lab, name):

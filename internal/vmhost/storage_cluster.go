@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -455,7 +456,7 @@ type corosyncNode struct {
 // renderCorosyncConfig is the only rendering of /etc/corosync/corosync.conf in Nex Core.
 // marker is the owning consumer's extra header line, so a host can tell which of the two
 // wrote the file it already has and refuse to take it over.
-func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, waitForAll bool) string {
+func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, waitForAll bool, witnessAddress ...string) string {
 	var b strings.Builder
 	b.WriteString("# Managed by Nex Core; do not edit.\n" + marker)
 	b.WriteString("totem {\n  version: 2\n  cluster_name: " + clusterName + "\n  transport: knet\n  secauth: on\n  crypto_cipher: aes256\n  crypto_hash: sha256\n}\n")
@@ -482,6 +483,12 @@ func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, wait
 		// host's membership never-quorate, so it is load-bearing for the guarantee that
 		// nothing resets a host that boots with its peers still down.
 		b.WriteString("  wait_for_all: 1\n")
+	}
+	if len(witnessAddress) > 0 && witnessAddress[0] != "" {
+		host, port, _ := net.SplitHostPort(witnessAddress[0])
+		b.WriteString("  device {\n    model: net\n    votes: 1\n    net {\n")
+		fmt.Fprintf(&b, "      host: %s\n      port: %s\n", host, port)
+		b.WriteString("      algorithm: ffsplit\n      tie_breaker: lowest\n      tls: required\n    }\n  }\n")
 	}
 	b.WriteString("}\n")
 	return b.String()

@@ -3,8 +3,10 @@ package protocol
 
 import (
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,18 +14,31 @@ import (
 	"time"
 )
 
+// PoolWitnessClusterName is the stable Corosync cluster name used in qdevice CSRs.
+func PoolWitnessClusterName(poolID string) string {
+	digest := sha256.Sum256([]byte("nex-pool-cluster\x00" + poolID))
+	return "nexpool" + hex.EncodeToString(digest[:16])
+}
+
 // PoolMember is a Core-master-owned membership record.  The Controller mirrors it from
 // inventory; it must not infer membership from which hosts happen to be connected.
 // ObservedAt is when the master admitted the member, or created the pool for its founding
 // host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
-	HostID            string    `json:"host_id"`
-	CertificateSHA256 string    `json:"certificate_sha256"`
-	Generation        uint64    `json:"generation"`
-	Status            string    `json:"status"`
-	ObservedAt        time.Time `json:"observed_at"`
-	Error             string    `json:"error,omitempty"`
-	PeerOrigin        string    `json:"peer_origin,omitempty"`
+	HostID string `json:"host_id"`
+	// SanlockHostID is assigned once by the pool master and remains stable for this
+	// membership identity. Sanlock host IDs are 1..2000; zero means this legacy member
+	// cannot participate in storage leases.
+	SanlockHostID uint64 `json:"sanlock_host_id,omitempty"`
+	// SanlockHostGeneration is the last native sanlock generation this host itself
+	// observed while its exact lease ID was live. A later HOST_DEAD proof must match it.
+	SanlockHostGeneration uint64    `json:"sanlock_host_generation,omitempty"`
+	CertificateSHA256     string    `json:"certificate_sha256"`
+	Generation            uint64    `json:"generation"`
+	Status                string    `json:"status"`
+	ObservedAt            time.Time `json:"observed_at"`
+	Error                 string    `json:"error,omitempty"`
+	PeerOrigin            string    `json:"peer_origin,omitempty"`
 	// Maintenance is the master's durable drain intent for this host: it refuses new
 	// placements and new starts there and changes nothing that is already running.  It is
 	// deliberately outside the generation equality rule below, so draining a host never
@@ -116,6 +131,9 @@ type PoolMembership struct {
 	MasterHostID string       `json:"master_host_id"`
 	Generation   uint64       `json:"generation"`
 	Members      []PoolMember `json:"members"`
+	// NextSanlockHostID is a monotonic allocator watermark. It prevents a lease ID
+	// from being reused after an ejected membership row is replaced by a rejoin.
+	NextSanlockHostID uint64 `json:"next_sanlock_host_id,omitempty"`
 	// HostFencingDisabled is the pool's Host fencing setting, recorded the way it is
 	// decided: fencing is on for a pool that has never been told otherwise, so an absent
 	// field is "on" and a record written before the setting existed keeps the default
@@ -128,6 +146,64 @@ type PoolMembership struct {
 	// never part of the durable record: a master that has just restarted reports "not
 	// checked yet" until its next pass rather than keeping a store of it.
 	FenceSummary *PoolFenceSummary `json:"fence_summary,omitempty"`
+	// Witness is the master's durable qdevice selection and qnetd CA pin. Readiness is
+	// always re-established from the native Corosync/qdevice services after a restart.
+	Witness *PoolWitnessRecord `json:"witness,omitempty"`
+	// StorageLease is the master's durable choice of the exact shared NFS repository
+	// whose native sanlock lockspace protects pool authority.
+	StorageLease *PoolStorageLeaseConfig `json:"storage_lease,omitempty"`
+}
+
+const PoolSanlockMaxHostID uint64 = 2000
+
+// PoolStorageLeaseLockspaceName binds a short native sanlock name to exactly one pool
+// repository. The full IDs remain in the durable record; the digest avoids truncation.
+func PoolStorageLeaseLockspaceName(poolID, repositoryID string) string {
+	digest := sha256.Sum256([]byte("nex-storage-lease-v1\x00" + poolID + "\x00" + repositoryID))
+	return "nex" + hex.EncodeToString(digest[:22])
+}
+
+type PoolStorageLeaseRepository struct {
+	RepositoryID         string          `json:"repository_id"`
+	RepositoryGeneration uint64          `json:"repository_generation"`
+	RepositoryIdentity   StorageIdentity `json:"repository_identity"`
+	Lockspace            string          `json:"lockspace"`
+}
+
+type PoolStorageLeaseConfig struct {
+	Repositories          []PoolStorageLeaseRepository `json:"repositories"`
+	AuthorityRepositoryID string                       `json:"authority_repository_id"`
+	IOTimeoutSeconds      int                          `json:"io_timeout_seconds"`
+	HostDeadSeconds       int                          `json:"host_dead_seconds"`
+	FenceTimeoutSeconds   int                          `json:"fence_timeout_seconds"`
+	// PreparedGeneration is the authority generation whose exact lease config and
+	// host IDs every ready member acknowledged before the master enabled lease use.
+	PreparedGeneration uint64 `json:"prepared_generation,omitempty"`
+}
+
+func (c PoolStorageLeaseConfig) Valid(poolID string) error {
+	if len(c.Repositories) == 0 || len(c.Repositories) > 64 || c.IOTimeoutSeconds <= 0 || c.IOTimeoutSeconds > 600 || c.HostDeadSeconds <= 0 || c.FenceTimeoutSeconds < c.HostDeadSeconds ||
+		c.FenceTimeoutSeconds > 86400 {
+		return errors.New("pool storage-lease repository or timing record is invalid")
+	}
+	seen, authority := map[string]bool{}, false
+	previous := ""
+	for _, repository := range c.Repositories {
+		identity := repository.RepositoryIdentity.NFS
+		if !storageOpaqueID.MatchString(repository.RepositoryID) || repository.RepositoryGeneration == 0 ||
+			identity == nil || repository.RepositoryIdentity.count() != 1 || identity.Server == "" || identity.Export == "" || identity.FilesystemID == "" ||
+			repository.Lockspace != PoolStorageLeaseLockspaceName(poolID, repository.RepositoryID) || seen[repository.RepositoryID] ||
+			previous != "" && previous >= repository.RepositoryID {
+			return errors.New("pool storage-lease repository record is invalid")
+		}
+		seen[repository.RepositoryID] = true
+		previous = repository.RepositoryID
+		authority = authority || repository.RepositoryID == c.AuthorityRepositoryID
+	}
+	if !authority {
+		return errors.New("pool storage-lease authority repository is not configured")
+	}
+	return nil
 }
 
 // PoolJoinCapability gates the Controller-driven join: the brokered invitation envelope
@@ -156,6 +232,107 @@ const PoolAuthorityReplicaCapability = "pool-authority-replica-v1"
 // required on the master, on the target and on every ready member, because a member that
 // cannot re-point would keep following a host that is no longer the pool master.
 const PoolAuthorityTransferCapability = "pool-authority-transfer-v1"
+
+// PoolWitnessCapability gates Core's native Corosync qdevice witness enrollment and status.
+const PoolWitnessCapability = "pool-witness-v1"
+
+// PoolWitnessCandidate is a same-site qnetd CA advertised by the Controller. An empty
+// Address identifies the Controller itself; Core derives its qnetd endpoint from the
+// pinned Controller URL rather than trusting an HTTP Host header.
+type PoolWitnessCandidate struct {
+	Kind     string `json:"kind"`
+	PoolID   string `json:"pool_id,omitempty"`
+	HostID   string `json:"host_id,omitempty"`
+	Address  string `json:"address,omitempty"`
+	CAPEM    string `json:"ca_pem"`
+	CASHA256 string `json:"ca_sha256"`
+}
+
+func (c PoolWitnessCandidate) Valid() error {
+	if c.Kind == "pool-master" {
+		if c.PoolID == "" || c.HostID == "" || c.Address == "" || c.CAPEM != "" || c.CASHA256 != "" {
+			return errors.New("pool-master witness candidate is incomplete")
+		}
+		return nil
+	}
+	if c.Kind != "controller" || len(c.CAPEM) == 0 || len(c.CAPEM) > 1<<20 {
+		return errors.New("unsupported or incomplete witness candidate")
+	}
+	if !validSHA256(c.CASHA256) {
+		return errors.New("witness candidate CA fingerprint is invalid")
+	}
+	return nil
+}
+
+type PoolWitnessCandidates struct {
+	Candidates []PoolWitnessCandidate `json:"candidates"`
+}
+
+type PoolWitnessRegistrationRequest struct {
+	PoolID            string `json:"pool_id"`
+	ClusterName       string `json:"cluster_name"`
+	FencingGeneration uint64 `json:"fencing_generation"`
+	CSRPEM            string `json:"csr_pem"`
+}
+
+type PoolWitnessRegistration struct {
+	Address        string `json:"address"`
+	CertificatePEM string `json:"certificate_pem"`
+	CAPEM          string `json:"ca_pem"`
+	CASHA256       string `json:"ca_sha256"`
+}
+
+// PoolWitnessRecord is the master's durable selection and qnetd CA pin. It is replicated
+// with pool authority, so a promoted member can report the same registration and rotate it.
+type PoolWitnessRecord struct {
+	Kind              string `json:"kind"`
+	Address           string `json:"address"`
+	CAPEM             string `json:"ca_pem"`
+	CASHA256          string `json:"ca_sha256"`
+	FencingGeneration uint64 `json:"fencing_generation"`
+	ClusterName       string `json:"cluster_name"`
+	CredentialsReady  bool   `json:"credentials_ready,omitempty"`
+}
+
+func (w PoolWitnessRecord) Valid(poolID string) error {
+	if w.Kind != "controller" || w.Address == "" || len(w.Address) > 255 || w.CAPEM == "" || len(w.CAPEM) > 1<<20 || w.FencingGeneration == 0 || w.ClusterName != PoolWitnessClusterName(poolID) || !validSHA256(w.CASHA256) {
+		return errors.New("pool witness record is incomplete or invalid")
+	}
+	digest, err := poolWitnessCAFingerprint(w.CAPEM)
+	if err != nil {
+		return errors.New("pool witness CA certificate is invalid")
+	}
+	if w.CASHA256 != digest {
+		return errors.New("pool witness CA fingerprint does not match its certificate")
+	}
+	return nil
+}
+
+func poolWitnessCAFingerprint(certificatePEM string) (string, error) {
+	block, _ := pem.Decode([]byte(certificatePEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", errors.New("certificate PEM is missing")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !cert.IsCA {
+		return "", errors.New("certificate is not a CA")
+	}
+	digest := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func validSHA256(value string) bool {
+	b, err := hex.DecodeString(value)
+	return err == nil && len(b) == sha256.Size && strings.ToLower(value) == value
+}
+
+// PoolWrappedWitnessCredential is one host's private qdevice PKCS#12 bundle, sealed to
+// that host's replica key. The native PKCS#12 format contains the shared qdevice key.
+type PoolWrappedWitnessCredential struct {
+	HostID            string          `json:"host_id"`
+	FencingGeneration uint64          `json:"fencing_generation"`
+	Wrapped           *PoolWrappedKey `json:"wrapped"`
+}
 
 // PoolTransferLimit bounds one transfer body.  A notice carries one membership record and
 // nothing else, so it is far smaller than a replica.
@@ -429,6 +606,7 @@ type PoolPromotionStatus struct {
 	// fences the old master, so it is never true; it is reported rather than inferred so a
 	// caller reads one field for every kind of transfer.
 	Cancellable bool      `json:"cancellable"`
+	Automatic   bool      `json:"automatic,omitempty"`
 	ObservedAt  time.Time `json:"observed_at"`
 }
 
@@ -465,12 +643,18 @@ func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, member PoolMem
 		return errors.New("this promotion has no fence proof for the old pool master")
 	}
 	fence := member.Fence
-	if proof.Method == PoolFenceMethodWatchdogProof {
+	if proof.Method == PoolFenceMethodStorageLeaseProof {
+		return errors.New("storage-lease proof requires the durable pool lease record")
+	} else if proof.Method == PoolFenceMethodWatchdogProof {
 		if err := poolWatchdogProofVerified(proof, member); err != nil {
 			return err
 		}
-	} else if fence == nil || fence.Valid() != nil {
-		return errors.New("the old pool master has no usable fence profile")
+	} else if proof.Method == "" || proof.Method == "bmc" {
+		if fence == nil || fence.Valid() != nil {
+			return errors.New("the old pool master has no usable fence profile")
+		}
+	} else {
+		return errors.New("unsupported pool fence proof method")
 	}
 	if proof.Status != "passed" || !proof.ExclusionVerified {
 		reason := proof.Error
@@ -490,6 +674,48 @@ func PoolPromotionFenceVerified(proof *StorageClusterFenceStatus, member PoolMem
 	}
 	if !PoolPromotionFenceProofFresh(proof.ObservedAt, now) {
 		return errors.New("this fence proof is older than " + PoolPromotionFenceWindow.String() + "; fence the old pool master again")
+	}
+	return nil
+}
+
+// PoolPromotionStorageLeaseFenceVerified binds native HOST_DEAD evidence to the exact
+// durable repository, member ID/generation, hardware watchdog arming, and promotion.
+func PoolPromotionStorageLeaseFenceVerified(proof *StorageClusterFenceStatus, member PoolMember, lease *PoolStorageLeaseConfig, poolID, oldMasterHostID, operationID string, generation uint64, now time.Time) error {
+	if proof == nil || proof.Method != PoolFenceMethodStorageLeaseProof || proof.StorageLease == nil {
+		return errors.New("this promotion has no native storage-lease proof")
+	}
+	if lease == nil || lease.Valid(poolID) != nil {
+		return errors.New("the pool has no valid durable storage-lease record")
+	}
+	evidence := proof.StorageLease
+	if err := evidence.Valid(); err != nil {
+		return err
+	}
+	armed := member.WatchdogArmed
+	if evidence.HostLeaseID != member.SanlockHostID || evidence.BoundSeconds < lease.FenceTimeoutSeconds ||
+		armed == nil || !armed.Armed || armed.Kind != PoolWatchdogHardware || evidence.WatchdogKind != armed.Kind ||
+		evidence.WatchdogTimeoutSeconds != armed.TimeoutSeconds || evidence.ArmedGeneration != armed.FencingGeneration ||
+		armed.FencingGeneration != member.Generation || len(evidence.Repositories) != len(lease.Repositories) {
+		return errors.New("storage-lease proof does not match the pool repository, host generation or armed hardware watchdog")
+	}
+	for i, repository := range lease.Repositories {
+		observed := evidence.Repositories[i]
+		digest := sha256.Sum256([]byte(repository.RepositoryIdentity.String()))
+		if observed.RepositoryID != repository.RepositoryID || observed.RepositoryGeneration != repository.RepositoryGeneration ||
+			observed.RepositoryIdentityDigest != hex.EncodeToString(digest[:]) || observed.Lockspace != repository.Lockspace ||
+			observed.HostDeadSeconds != lease.HostDeadSeconds {
+			return errors.New("storage-lease proof does not match the configured repository lockspaces")
+		}
+		if repository.RepositoryID == lease.AuthorityRepositoryID &&
+			(member.SanlockHostGeneration == 0 || observed.HostGeneration != member.SanlockHostGeneration) {
+			return errors.New("storage-lease proof does not match the authority lease generation last reported by the host")
+		}
+	}
+	if proof.Status != "passed" || !proof.ExclusionVerified || proof.HostID != oldMasterHostID ||
+		proof.RequestID != operationID || proof.ConfigGeneration != generation ||
+		proof.ConfigDigest != PoolPromotionFenceDigest(poolID, oldMasterHostID, operationID, generation) ||
+		!PoolPromotionFenceProofFresh(proof.ObservedAt, now) {
+		return errors.New("storage-lease proof is not bound to this fresh promotion")
 	}
 	return nil
 }
@@ -557,6 +783,7 @@ type PoolTransferStatus struct {
 	// irreversible durable step: the signed hand-off of a master change, the membership
 	// written without the member of an eject, and never for a promotion, which fences.
 	Cancellable bool `json:"cancellable"`
+	Automatic   bool `json:"automatic,omitempty"`
 	// HandedOff is the source's own durable answer to "have I signed this pool's authority
 	// away?".  It is reported, like Cancellable, so a caller never infers the irreversible
 	// step from stage names or from a refusal sentence.  Only the outgoing master records
@@ -629,8 +856,10 @@ type PoolAuthorityReplica struct {
 	// ContentDigest, so the digest stays the same for every member of one generation; what
 	// makes new material advance the generation is the version in the membership above.
 	FenceCredentials []PoolWrappedFenceCredential `json:"fence_credentials,omitempty"`
-	Sections         []PoolReplicaSection         `json:"sections"`
-	Signature        string                       `json:"signature,omitempty"`
+	// WitnessCredentials contains a separately sealed native PKCS#12 bundle for each member.
+	WitnessCredentials []PoolWrappedWitnessCredential `json:"witness_credentials,omitempty"`
+	Sections           []PoolReplicaSection           `json:"sections"`
+	Signature          string                         `json:"signature,omitempty"`
 }
 
 // SigningBytes is everything but the signature: the per-member fields are deliberately
@@ -648,6 +877,7 @@ func (r PoolAuthorityReplica) SigningBytes() ([]byte, error) {
 func (r PoolAuthorityReplica) ContentDigest() (string, error) {
 	r.MemberHostID, r.CreatedAt, r.CAKeyWrapped, r.Signature, r.Generation = "", time.Time{}, nil, "", 0
 	r.FenceCredentials = nil
+	r.WitnessCredentials = nil
 	b, err := json.Marshal(r)
 	if err != nil {
 		return "", err
@@ -700,6 +930,21 @@ func (r PoolAuthorityReplica) Valid() error {
 	if r.Membership.PoolID != r.PoolID || r.Membership.MasterHostID != r.MasterHostID {
 		return errors.New("pool authority replica membership names another pool or master")
 	}
+	if len(r.WitnessCredentials) > 0 && (r.Membership.Witness == nil || !r.Membership.Witness.CredentialsReady) {
+		return errors.New("pool authority replica carries an unrequested qdevice credential")
+	}
+	seenWitness := map[string]bool{}
+	for _, credential := range r.WitnessCredentials {
+		if credential.HostID == "" || seenWitness[credential.HostID] || credential.Wrapped == nil || r.Membership.Witness == nil || credential.FencingGeneration != r.Membership.Witness.FencingGeneration {
+			return errors.New("pool authority replica qdevice credential is invalid")
+		}
+		seenWitness[credential.HostID] = true
+	}
+	if r.MemberHostID != "" && r.Membership.Witness != nil && r.Membership.Witness.CredentialsReady {
+		if len(r.WitnessCredentials) != 1 || !seenWitness[r.MemberHostID] {
+			return errors.New("pool authority replica omits its addressed qdevice credential")
+		}
+	}
 	if len(r.VMs) == 0 || !json.Valid(r.VMs) {
 		return errors.New("pool authority replica VM ownership record is invalid")
 	}
@@ -718,11 +963,12 @@ type PoolAuthorityRecord struct {
 // PoolReplicaAck is the member's answer to one push.  Re-pushing the same generation
 // returns the same acknowledgement; a refusal carries a bounded reason, never a drop.
 type PoolReplicaAck struct {
-	HostID     string `json:"host_id"`
-	Generation uint64 `json:"generation"`
-	Digest     string `json:"digest,omitempty"`
-	Verified   bool   `json:"verified"`
-	Error      string `json:"error,omitempty"`
+	HostID                string `json:"host_id"`
+	Generation            uint64 `json:"generation"`
+	Digest                string `json:"digest,omitempty"`
+	SanlockHostGeneration uint64 `json:"sanlock_host_generation,omitempty"`
+	Verified              bool   `json:"verified"`
+	Error                 string `json:"error,omitempty"`
 }
 
 // PoolReplicaStatus is observed state on both sides: what a host holds and how fresh that
@@ -1295,17 +1541,41 @@ func (m PoolMembership) Valid() error {
 	if m.PoolID == "" || m.MasterHostID == "" || m.Generation == 0 {
 		return errors.New("pool membership requires pool, master and generation")
 	}
-	seen, master := map[string]bool{}, false
+	if m.Witness != nil {
+		if err := m.Witness.Valid(m.PoolID); err != nil {
+			return err
+		}
+	}
+	if m.StorageLease != nil {
+		if err := m.StorageLease.Valid(m.PoolID); err != nil {
+			return err
+		}
+	}
+	seen, leaseIDs, master := map[string]bool{}, map[uint64]bool{}, false
+	maxLeaseID := uint64(0)
 	for _, member := range m.Members {
 		_, hexErr := hex.DecodeString(member.CertificateSHA256)
 		if member.HostID == "" || seen[member.HostID] || len(member.CertificateSHA256) != 64 || hexErr != nil || member.Generation != m.Generation || (member.Status != "ready" && member.Status != "pending" && member.Status != "failed" && member.Status != "ejected") {
 			return errors.New("invalid pool member record")
+		}
+		if member.SanlockHostID > PoolSanlockMaxHostID || member.SanlockHostID != 0 && leaseIDs[member.SanlockHostID] ||
+			m.StorageLease != nil && member.SanlockHostID == 0 {
+			return errors.New("pool member sanlock host IDs are missing, duplicated or out of range")
+		}
+		if member.SanlockHostID != 0 {
+			leaseIDs[member.SanlockHostID] = true
+			if member.SanlockHostID > maxLeaseID {
+				maxLeaseID = member.SanlockHostID
+			}
 		}
 		seen[member.HostID] = true
 		master = master || member.HostID == m.MasterHostID && member.Status == "ready"
 	}
 	if !master {
 		return errors.New("pool membership omits ready master")
+	}
+	if m.NextSanlockHostID != 0 && (m.NextSanlockHostID > PoolSanlockMaxHostID+1 || m.NextSanlockHostID <= maxLeaseID) {
+		return errors.New("pool sanlock host ID allocator watermark is invalid")
 	}
 	return nil
 }

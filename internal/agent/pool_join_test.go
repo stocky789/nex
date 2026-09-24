@@ -50,6 +50,30 @@ func poolJoinLab(t *testing.T) (*Store, *Store, *httptest.Server, protocol.PoolJ
 	return master, member, server, invitation
 }
 
+func TestPoolSanlockHostIDsAreAssignedOnceAndRemainUnique(t *testing.T) {
+	membership := protocol.PoolMembership{Members: []protocol.PoolMember{{HostID: "master"}, {HostID: "member"}}}
+	if err := ensurePoolSanlockHostIDs(&membership); err != nil {
+		t.Fatal(err)
+	}
+	if membership.Members[0].SanlockHostID != 1 || membership.Members[1].SanlockHostID != 2 {
+		t.Fatalf("sanlock host IDs = %d, %d", membership.Members[0].SanlockHostID, membership.Members[1].SanlockHostID)
+	}
+	if err := ensurePoolSanlockHostIDs(&membership); err != nil || membership.Members[0].SanlockHostID != 1 || membership.Members[1].SanlockHostID != 2 {
+		t.Fatalf("stable sanlock IDs changed: %+v (%v)", membership.Members, err)
+	}
+	if next, err := nextPoolSanlockHostID(&membership); err != nil || next != 3 {
+		t.Fatalf("next ID = %d (%v), want 3", next, err)
+	}
+	membership.Members[1].Status = "ejected"
+	if next, err := nextPoolSanlockHostID(&membership); err != nil || next != 4 {
+		t.Fatalf("rejoin ID = %d (%v), want a never-reused ID 4", next, err)
+	}
+	membership.Members[1].SanlockHostID = 1
+	if ensurePoolSanlockHostIDs(&membership) == nil {
+		t.Fatal("duplicate sanlock host IDs accepted")
+	}
+}
+
 func poolJoinCommand(operationID string, member *Store, invitation protocol.PoolJoinInvitation) protocol.Command {
 	return protocol.Command{OperationID: operationID, Kind: "pool-join", Pool: &protocol.PoolCommand{RequestID: "request-" + operationID, Action: "join", MemberHostID: member.State.HostID, MasterURL: invitation.MasterURL, PoolCAPEM: invitation.PoolCAPEM, Invitation: invitation.Invitation, PeerOrigin: testMemberOrigin}}
 }

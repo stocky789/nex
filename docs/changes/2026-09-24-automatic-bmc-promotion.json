@@ -1,0 +1,61 @@
+{
+  "summary": "Document Core-owned automatic BMC promotion for eligible two-host pools",
+  "paths": [
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-22-automatic-host-fencing.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "docs/qa/2026-09-24-automatic-bmc-promotion.md",
+    "web/src/pool-promotion.tsx",
+    "web/src/pool-promotion.test.mjs",
+    "internal/agent/pool_auto_promote_test.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/run.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Clarifies the supported automatic two-host BMC case, Host fencing opt-out, recovery behavior, UI status marker and limits; lease and witness are not available.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/README.md"
+    ],
+    "verification": "Focused Core and UI checks plus a real local Controller browser walkthrough with simulated Core replies are recorded in docs/qa/2026-09-24-automatic-bmc-promotion.md. Host-backed browser and physical hardware checks remain open."
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Additive optional Core report fields PoolPromotionStatus.automatic and PoolTransferStatus.automatic flow through existing POST /api/v1/agent/report inventory.managed.promotion and inventory.managed.transfer and existing GET /api/v1/pools/{id}/members promotion/transfer projections. No new route or request field; older Core omits the field and clients read omission as false. No API version or capability change.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/index.html",
+      "docs/api/peer.html"
+    ],
+    "verification": "python3 -m unittest tests.test_api_contract passed 74 tests; python3 scripts/generate_api.py --check reported current generated references. See docs/qa/2026-09-24-automatic-bmc-promotion.md."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The plan files record the BMC-only subset and open lease/witness gates; no published website roadmap page changes in this slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Core owns the durable poolTransferRecord in pool-peer.json, including its Automatic flag. Controller keeps no automatic decision or pool record; it projects current host reports, which a replacement Controller reads on subsequent reports.",
+    "record": "Nex Core durable poolTransferRecord in pool-peer.json on the candidate host, including the Automatic flag. A fresh Controller reconstructs its display from that host\u2019s subsequent inventory.managed.promotion report; the Controller stores no promotion state."
+  },
+  "verification": {
+    "method": "Focused Core and UI tests, real local Controller browser interaction with fixture Core replies, 74 API contract tests, generated reference check, repository privacy check and a passing combined worktree documentation gate are recorded in the QA note. No host-backed browser or physical hardware verification is claimed.",
+    "evidence": [
+      "docs/qa/2026-09-24-automatic-bmc-promotion.md",
+      "internal/agent/pool_auto_promote_test.go",
+      "web/src/pool-promotion.test.mjs"
+    ]
+  }
+}

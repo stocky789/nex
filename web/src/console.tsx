@@ -10,7 +10,7 @@ import "./console.css";
 // performs the authenticated request that yields the WebSocket URL for each attempt.
 // `guest` is the host's latest observation of the guest channels; it only decides which
 // hints the clipboard and display controls show, never whether input is allowed.
-export type Guest = { agent: string; os?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean; media?: string };
+export type Guest = { agent: string; os?: string; os_id?: string; hostname?: string; addresses?: { interface: string; address: string }[] | null; clipboard: string; resize: boolean; media?: string };
 // A VM can hold more than one CD drive, so a drivers disc sits beside the install disc. Each
 // drive is one control group in the toolbar, named by its `label`; a host that reports a single
 // drive keeps exactly the controls it had, labelled CD/DVD, with no drive choice to make.

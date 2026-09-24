@@ -79,8 +79,24 @@ the host ask the guest for information; it is not proof that the guest's applica
 
 ### Reported operating system
 
-The operating system is the guest's own answer, not something Nex detects. Nex corrects one
-known misreport: Windows 11 kept the internal product name Windows 10 wrote, so the QEMU
+The operating system is the guest's own answer, not something Nex detects. When available,
+the guest agent also reports a canonical OS ID from its `guest-get-osinfo` response: Linux
+uses the guest's `/etc/os-release` ID (for example `debian` or `ubuntu`) and Windows reports
+`mswindows`. Nex uses this ID for distro icons without guessing from the display name; the
+OS text remains visible, and a missing ID or one without a bundled icon uses the generic
+monitor icon. Before guest facts arrive, the configured Linux or Windows family
+uses its family icon; this does not establish a detected distribution or edition.
+Distro icons link to their official project websites in a new tab. Values are
+guest-reported and may be absent or customized.
+
+The bundled set covers mainstream Debian/Ubuntu, Red Hat, SUSE and Arch families,
+independent desktop/server distributions, gaming distributions, Windows client/Server
+and FreeBSD/OpenBSD/NetBSD. Ubuntu flavours sharing `ubuntu` receive the Ubuntu
+mark; Nex does not guess a flavour from the VM name. See the
+[complete icon catalogue](../../web/public/guest-os/README.md) and
+[guest OS icon and detection QA report](../qa/2026-09-24-guest-os-icons.md).
+
+Nex corrects one known misreport: Windows 11 kept the internal product name Windows 10 wrote, so the QEMU
 guest agent calls a Windows 11 guest "Windows 10 …". Nex reads the build number the same
 answer carries and reports **Windows 11** from build 22000 upwards. A guest that reports no
 build number, or one Nex cannot read, is shown exactly as it described itself.
@@ -176,4 +192,3 @@ during a guest reboot and with qemu-guest-agent stopped, and ready again after i
 delivery and resize in a signed-in desktop session were not exercised end to end (Ready was
 observed at the login greeter), a guest that never had qemu-guest-agent was not observed, and
 Windows guests have **not** been re-walked on a lab host since the change.
-

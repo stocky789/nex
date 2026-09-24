@@ -320,9 +320,9 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
     const payload: Record<string, unknown> = { ...values, pool_id: poolID };
     if (typeof values.vlan === "string") payload.vlan = Number(values.vlan);
     void run(kind, async () => {
-      const result = await api<Registration>(kind === "storage" ? "storage" : "networks", "POST", { ...payload, request_id: requestID(kind, payload) });
+      await api<Registration>(kind === "storage" ? "storage" : "networks", "POST", { ...payload, request_id: requestID(kind, payload) });
       clearRequest(kind);
-      setForm(""); await reload(); setNotice(`Registration ${result.status}. Follow host validation in Tasks; registration does not make local storage shared.`);
+      setForm(""); await reload(); setNotice(`Registration request submitted for ${values.name}. Follow host validation in Tasks; registration does not make local storage shared.`);
     });
   }
   async function create(payload: Record<string, unknown>) {
@@ -886,7 +886,7 @@ export function deleteBlocker(vm: VM, host?: Host): string {
 
 // VMDelete confirms by typing the VM name and optionally wiping disk files on the host.
 export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice }: {
-  vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string) => void;
+  vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [wipe, setWipe] = useState(false);
@@ -907,7 +907,7 @@ export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice }:
     // One identity per payload: a retry replays it, a changed wipe choice is a new request.
     request.current[String(wipe)] ||= crypto.randomUUID();
     try {
-      await api(`vms/${encodeURIComponent(vm.id)}`, "DELETE", { request_id: request.current[String(wipe)], delete_disks: wipe });
+      const result = await api<{ operation: { id: string } }>(`vms/${encodeURIComponent(vm.id)}`, "DELETE", { request_id: request.current[String(wipe)], delete_disks: wipe });
       request.current = {};
       setOpen(false);
       if (location.hash === `#/vms/${vm.id}` || location.hash.startsWith(`#/vms/${vm.id}/`) || location.hash.startsWith(`#/console/${vm.id}`)) {
@@ -915,7 +915,7 @@ export function VMDelete({ vm, host, api, reload, busy, unavailable, onNotice }:
       }
       // Navigating clears page notices on hashchange; the awaited reload lets that run first.
       await reload();
-      onNotice(`Delete queued for ${vm.name}. Follow its progress in Tasks.`);
+      onNotice(`Delete queued for ${vm.name}. Follow its progress in Tasks.`, result.operation.id);
     } catch (e) {
       setError((e as Error).message);
     } finally {

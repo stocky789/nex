@@ -43,7 +43,7 @@ func TestObserveGuest(t *testing.T) {
 dumpxml) printf '%s\n' "$GUEST_XML";;
 qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit 1; printf '%s\n' "$5 $7" >> "$GUEST_LOG"
   case "$7" in
-  *osinfo*) echo '{"return":{"pretty-name":"Debian GNU/Linux 13 (trixie)","name":"Debian GNU/Linux","version":"13"}}';;
+  *osinfo*) echo '{"return":{"id":"debian","pretty-name":"Debian GNU/Linux 13 (trixie)","name":"Debian GNU/Linux","version":"13"}}';;
   *host-name*) printf '{"return":{"host-name":"guest1%s"}}\n' "$GUEST_PAD";;
   *interfaces*) echo '{"return":[{"name":"lo","ip-addresses":[{"ip-address":"127.0.0.1","prefix":8}]},{"name":"enp1s0","ip-addresses":[{"ip-address":"192.168.122.10","prefix":24},{"ip-address":"fe80::1","prefix":64},{"ip-address":"2001:db8::10","prefix":64},{"ip-address":"bad","prefix":1}]}]}';;
   esac;;
@@ -67,7 +67,7 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 		{"vdagent ready without a VirtIO display", qxlDisplay, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Media: "no-drive"}},
 		{"attached without facts", full, "", false, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "no-drive"}},
 		{"agent not answering", full, "1", true, &protocol.GuestInfo{Agent: "unresponsive", Clipboard: "ready", Resize: true, Media: "no-drive"}},
-		{"agent facts", full, "", true, &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", Hostname: "guest1", Clipboard: "ready", Resize: true, Media: "no-drive",
+		{"agent facts", full, "", true, &protocol.GuestInfo{Agent: "connected", OS: "Debian GNU/Linux 13 (trixie)", OSID: "debian", Hostname: "guest1", Clipboard: "ready", Resize: true, Media: "no-drive",
 			Addresses: []protocol.GuestAddress{{Interface: "enp1s0", Address: "192.168.122.10/24"}, {Interface: "enp1s0", Address: "2001:db8::10/64"}}}},
 		// The live tray of a running VM, which a guest can open itself: the durable media_id
 		// stays as Nex recorded it, so only this observation can show the disc is gone.
@@ -122,7 +122,7 @@ qemu-agent-command) [ "$4" = --timeout ] || exit 3; [ -n "$GUEST_FAIL" ] && exit
 // the guest agent answers with, so only the build number tells a Windows 11 guest from a
 // Windows 10 one. Everything here is untrusted guest input: a build that is absent, not a
 // number or out of range leaves what the guest said alone.
-func TestGuestOSNameCorrectsWindows11(t *testing.T) {
+func TestGuestOSInfoIDsAndWindows11Name(t *testing.T) {
 	fakeCommand(t, "virsh", `case "$3" in
 dumpxml) printf '%s\n' "$GUEST_XML";;
 qemu-agent-command) case "$7" in
@@ -131,22 +131,34 @@ qemu-agent-command) case "$7" in
 *) exit 2;; esac`)
 	t.Setenv("GUEST_XML", `<domain><devices><channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0' state='connected'/></channel></devices></domain>`)
 	id := "12345678-1234-4234-8234-123456789012"
-	cases := []struct{ name, osinfo, want string }{
+	cases := []struct{ name, osinfo, wantOS, wantID string }{
 		{"Windows 11 reported as Windows 10", `{"return":{"id":"mswindows","name":"Microsoft Windows","pretty-name":"Windows 10 IoT Enterprise LTSC 2024","kernel-release":"26100","kernel-version":"10.0"}}`,
-			"Windows 11 IoT Enterprise LTSC 2024"},
-		{"first Windows 11 build", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"22000"}}`, "Windows 11 Pro"},
-		{"genuine Windows 10", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"19045"}}`, "Windows 10 Pro"},
-		{"build missing", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro"}}`, "Windows 10 Pro"},
-		{"build not a number", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"26100 or so"}}`, "Windows 10 Pro"},
-		{"build out of range", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"999999999999999999999"}}`, "Windows 10 Pro"},
-		{"Windows Server untouched", `{"return":{"id":"mswindows","pretty-name":"Windows Server 2022","kernel-release":"20348"}}`, "Windows Server 2022"},
-		{"Linux guest untouched", `{"return":{"id":"debian","pretty-name":"Debian GNU/Linux 13 (trixie)","kernel-release":"6.12.43"}}`, "Debian GNU/Linux 13 (trixie)"},
+			"Windows 11 IoT Enterprise LTSC 2024", "mswindows"},
+		{"first Windows 11 build", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"22000"}}`, "Windows 11 Pro", "mswindows"},
+		{"genuine Windows 10", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"19045"}}`, "Windows 10 Pro", "mswindows"},
+		{"build missing", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro"}}`, "Windows 10 Pro", "mswindows"},
+		{"build not a number", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"26100 or so"}}`, "Windows 10 Pro", "mswindows"},
+		{"build out of range", `{"return":{"id":"mswindows","pretty-name":"Windows 10 Pro","kernel-release":"999999999999999999999"}}`, "Windows 10 Pro", "mswindows"},
+		{"Windows Server untouched", `{"return":{"id":"mswindows","pretty-name":"Windows Server 2022","kernel-release":"20348"}}`, "Windows Server 2022", "mswindows"},
+		{"Debian", `{"return":{"id":"debian","pretty-name":"Debian GNU/Linux 13 (trixie)"}}`, "Debian GNU/Linux 13 (trixie)", "debian"},
+		{"Ubuntu", `{"return":{"id":"ubuntu","pretty-name":"Ubuntu 24.04 LTS"}}`, "Ubuntu 24.04 LTS", "ubuntu"},
+		{"Fedora", `{"return":{"id":"fedora","pretty-name":"Fedora Linux 43"}}`, "Fedora Linux 43", "fedora"},
+		{"Alpine", `{"return":{"id":"alpine","pretty-name":"Alpine Linux v3.22"}}`, "Alpine Linux v3.22", "alpine"},
+		{"Arch", `{"return":{"id":"arch","pretty-name":"Arch Linux"}}`, "Arch Linux", "arch"},
+		{"Rocky", `{"return":{"id":"rocky","pretty-name":"Rocky Linux 10"}}`, "Rocky Linux 10", "rocky"},
+		{"Alma", `{"return":{"id":"almalinux","pretty-name":"AlmaLinux 10"}}`, "AlmaLinux 10", "almalinux"},
+		{"SUSE", `{"return":{"id":"opensuse-tumbleweed","pretty-name":"openSUSE Tumbleweed"}}`, "openSUSE Tumbleweed", "opensuse-tumbleweed"},
+		{"Nix", `{"return":{"id":"nixos","pretty-name":"NixOS 25.05"}}`, "NixOS 25.05", "nixos"},
+		{"Mint", `{"return":{"id":"linuxmint","pretty-name":"Linux Mint 22.2"}}`, "Linux Mint 22.2", "linuxmint"},
+		{"Kali", `{"return":{"id":"kali","pretty-name":"Kali GNU/Linux Rolling"}}`, "Kali GNU/Linux Rolling", "kali"},
+		{"missing ID", `{"return":{"pretty-name":"Custom Linux"}}`, "Custom Linux", ""},
+		{"Linux guest untouched", `{"return":{"id":"debian","pretty-name":"Debian GNU/Linux 13 (trixie)","kernel-release":"6.12.43"}}`, "Debian GNU/Linux 13 (trixie)", "debian"},
 		// A guest that does not even claim to be Windows cannot borrow the correction.
-		{"non-Windows family claiming a Windows name", `{"return":{"id":"debian","pretty-name":"Windows 10 Pro","kernel-release":"26100"}}`, "Windows 10 Pro"},
+		{"non-Windows family claiming a Windows name", `{"return":{"id":"debian","pretty-name":"Windows 10 Pro","kernel-release":"26100"}}`, "Windows 10 Pro", "debian"},
 		// The correction rewrites one literal in a string the host already bounded; it never
 		// copies anything else the guest sent.
 		{"hostile product name is reported, not executed", `{"return":{"id":"mswindows","pretty-name":"Windows 10 <script>alert(1)</script>","kernel-release":"26100"}}`,
-			"Windows 11 <script>alert(1)</script>"},
+			"Windows 11 <script>alert(1)</script>", "mswindows"},
 	}
 	for _, c := range cases {
 		t.Setenv("GUEST_OSINFO", c.osinfo)
@@ -155,8 +167,8 @@ qemu-agent-command) case "$7" in
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		guestFacts(context.Background(), managedVirsh, id, g)
-		if g.Agent != "connected" || g.OS != c.want {
-			t.Errorf("%s: agent %q OS %q want %q", c.name, g.Agent, g.OS, c.want)
+		if g.Agent != "connected" || g.OS != c.wantOS || g.OSID != c.wantID {
+			t.Errorf("%s: agent %q OS %q ID %q want %q / %q", c.name, g.Agent, g.OS, g.OSID, c.wantOS, c.wantID)
 		}
 	}
 	// A product name longer than the limit stays bounded through the correction.

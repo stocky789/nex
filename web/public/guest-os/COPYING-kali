@@ -1,0 +1,31 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: kali-themes
+Source: https://gitlab.com/kalilinux/packages/kali-themes.git
+
+Files: *
+Copyright: 2015-2019 Offensive Security
+License: GPL-3.0+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this package; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License can be found in `/usr/share/common-licenses/GPL-3'.
+Comments: Beware some of the graphical elements are protected by the
+ trademark law. See: https://www.kali.org/trademark-policy/
+ .
+ The initial theme has been created by Jared Sot <ravefinity@gmail.com> for
+ Offensive Security.
+ .
+ The theme has been created by Daniel Ruiz de Alegría <daniel@drasite.com> for
+ Offensive Security.

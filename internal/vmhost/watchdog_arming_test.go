@@ -298,3 +298,26 @@ Membership information
 		t.Fatalf("a host with no quorum service claimed one: %#v %v", q, err)
 	}
 }
+
+func TestLocalQuorumDoesNotCountQdeviceAsPoolHost(t *testing.T) {
+	previous := clusterRun
+	t.Cleanup(func() { clusterRun = previous })
+	clusterRun = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`Quorate:          Yes
+
+Membership information
+----------------------
+    Nodeid Votes Qdevice Name
+         2     1 A,NV,NMW core-b (local)
+         0     0 Qdevice
+`), nil
+	}
+
+	q, err := LocalQuorum(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q.Hosts) != 1 || q.Hosts[0] != "core-b" {
+		t.Fatalf("qdevice was included in pool host membership: %#v", q.Hosts)
+	}
+}

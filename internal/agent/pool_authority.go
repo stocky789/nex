@@ -65,8 +65,8 @@ var poolReplicaObservations = map[string]map[string]protocol.PoolReplicaStatus{}
 var poolReplicaPostAcks = map[string]map[string]protocol.PoolReplicaStatus{}     // dir -> member -> last successful POST ack
 var poolReplicaRefusals = map[string]protocol.PoolReplicaStatus{}                // dir -> member's last refusal
 var poolReplicaPolls = map[string]time.Time{}                                    // dir -> master last confirmed
-var poolReplicaPushing = map[string]bool{}                                      // dir -> single flight
-var poolReplicaMembership = Membership                                   // test seam: one validated snapshot per check
+var poolReplicaPushing = map[string]bool{}                                       // dir -> single flight
+var poolReplicaMembership = Membership                                           // test seam: one validated snapshot per check
 
 // ClearPoolReplicaStateForTest drops the process-local replica observations for one store.
 func ClearPoolReplicaStateForTest(s *Store) {
@@ -524,6 +524,37 @@ func poolFenceCredentialContext(poolID, memberHostID string, generation uint64, 
 		strconv.FormatUint(generation, 10) + "\x00" + fencedHostID + "\x00" + ref
 }
 
+func poolWitnessCredentialContext(poolID, memberHostID string, generation uint64) string {
+	return "nex pool qdevice witness credential v1\x00" + poolID + "\x00" + memberHostID + "\x00" + strconv.FormatUint(generation, 10)
+}
+
+func wrapPoolWitnessCredential(bundle []byte, poolID, memberHostID string, generation uint64, member *ecdsa.PublicKey) (*protocol.PoolWrappedKey, error) {
+	if len(bundle) == 0 || len(bundle) > 1<<20 {
+		return nil, errors.New("qdevice witness credential is empty or too large")
+	}
+	return sealForMember(bundle, poolWitnessCredentialContext(poolID, memberHostID, generation), member)
+}
+
+func unwrapPoolWitnessCredential(keyPEM string, replica protocol.PoolAuthorityReplica, credential protocol.PoolWrappedWitnessCredential) ([]byte, error) {
+	if credential.Wrapped == nil || credential.HostID != replica.MemberHostID || credential.FencingGeneration == 0 || replica.Membership.Witness == nil || credential.FencingGeneration != replica.Membership.Witness.FencingGeneration {
+		return nil, errors.New("pool authority replica carries no matching qdevice witness credential")
+	}
+	opened, err := openForMember(keyPEM, *credential.Wrapped, poolWitnessCredentialContext(replica.PoolID, replica.MemberHostID, replica.Generation))
+	if err != nil || len(opened) == 0 {
+		return nil, errors.New("qdevice witness credential is not sealed for this host")
+	}
+	return opened, nil
+}
+
+func poolWitnessCredentialFor(replica protocol.PoolAuthorityReplica, hostID string) *protocol.PoolWrappedWitnessCredential {
+	for i, credential := range replica.WitnessCredentials {
+		if credential.HostID == hostID && credential.Wrapped != nil {
+			return &replica.WitnessCredentials[i]
+		}
+	}
+	return nil
+}
+
 // poolFenceCredentialFor finds the sealed material for one host in a replica.
 func poolFenceCredentialFor(replica protocol.PoolAuthorityReplica, hostID string) *protocol.PoolWrappedFenceCredential {
 	for i, credential := range replica.FenceCredentials {
@@ -614,6 +645,13 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {
 		return protocol.PoolReplicaAck{}, err
 	}
+	var localSanlockGeneration uint64
+	if replica.Membership.StorageLease != nil {
+		localSanlockGeneration, err = preparePoolStorageLeaseHost(context.Background(), s, replica.Membership, false)
+		if err != nil {
+			return protocol.PoolReplicaAck{}, err
+		}
+	}
 	digest, err := replica.ContentDigest()
 	if err != nil {
 		return protocol.PoolReplicaAck{}, err
@@ -632,13 +670,27 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 			return protocol.PoolReplicaAck{}, errors.New("pool authority replica generation was already stored with different contents")
 		}
 	}
+	if witness := replica.Membership.Witness; witness != nil && witness.CredentialsReady {
+		credential := poolWitnessCredentialFor(replica, s.State.HostID)
+		if credential == nil {
+			return protocol.PoolReplicaAck{}, errors.New("pool authority replica omitted the qdevice credential addressed to this member")
+		}
+		bundle, openErr := unwrapPoolWitnessCredential(state.KeyPEM, replica, *credential)
+		if openErr != nil {
+			return protocol.PoolReplicaAck{}, openErr
+		}
+		if err = poolWitnessImportMember(context.Background(), s.dir, replica.PoolID, *witness, bundle); err != nil {
+			return protocol.PoolReplicaAck{}, err
+		}
+	}
 	record := poolReplicaRecord{Replica: replica, Digest: digest, ReceivedAt: time.Now().UTC(), Verified: true}
 	if err = savePoolReplica(s, record); err != nil {
 		return protocol.PoolReplicaAck{}, errors.New("pool authority replica could not be stored")
 	}
 	delete(poolReplicaRefusals, s.dir)
 	poolReplicaPolls[s.dir] = record.ReceivedAt
-	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest, Verified: true}, nil
+	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest,
+		SanlockHostGeneration: localSanlockGeneration, Verified: true}, nil
 }
 
 // boundPoolPeerText bounds peer-facing text that crosses the wire or enters a check.
@@ -879,6 +931,18 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 		delete(poolReplicaPushing, s.dir)
 		poolReplicaMu.Unlock()
 	}()
+	if err := reconcilePoolStorageLeaseSelection(s); err != nil {
+		return err
+	}
+	membership, err := Membership(s)
+	if err != nil {
+		return err
+	}
+	if membership.StorageLease != nil {
+		if _, err = preparePoolStorageLeaseHost(ctx, s, membership, true); err != nil {
+			return err
+		}
+	}
 	replica, digest, err := buildPoolAuthorityReplica(s)
 	if err != nil {
 		return err
@@ -916,11 +980,128 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 			return ctx.Err()
 		}
 	}
+	if failed == nil {
+		if err = markPoolStorageLeasePrepared(s, generation, digest); err != nil {
+			failed = err
+		}
+	}
+	if failed == nil {
+		if err = holdPoolStorageAuthorityLease(ctx, s); err != nil {
+			failed = err
+		}
+	}
 	// Once every ready member holds a replica built after this host's own fence profile was
 	// cleared, no member can still fence-promote it, and its restart no longer has to wait
 	// for anyone.
 	ReleasePoolSelfFenceExposure(s)
 	return failed
+}
+
+// holdPoolStorageAuthorityLease acquires the single authority resource only after the
+// exact lockspaces and membership IDs have been acknowledged. Native watchdog readiness
+// is not reset proof; until that proof is independently available this path remains inert.
+func holdPoolStorageAuthorityLease(ctx context.Context, s *Store) error {
+	membership, err := Membership(s)
+	if err != nil || membership.MasterHostID != s.State.HostID || membership.StorageLease == nil || membership.StorageLease.PreparedGeneration == 0 {
+		return nil
+	}
+	lease := membership.StorageLease
+	self, ok := poolMemberByID(membership, s.State.HostID)
+	if !ok || self.Watchdog == nil {
+		return errors.New("pool storage authority watchdog configuration is unavailable")
+	}
+	watchdog, err := vmhost.CheckSanlockWatchdogReady(ctx, *self.Watchdog)
+	if err != nil || !watchdog.ResetVerified {
+		return errors.New("pool storage authority lease is gated on verified hardware reset")
+	}
+	var repository *protocol.PoolStorageLeaseRepository
+	for i := range lease.Repositories {
+		if lease.Repositories[i].RepositoryID == lease.AuthorityRepositoryID {
+			repository = &lease.Repositories[i]
+			break
+		}
+	}
+	if repository == nil {
+		return errors.New("pool storage authority repository is unavailable")
+	}
+	registrations, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
+	if !managedVMChecksReady(checks) {
+		return errors.New("pool storage authority repository state is unavailable")
+	}
+	for _, storage := range registrations {
+		if storage.ID != repository.RepositoryID || storage.Tombstone || storage.Generation != repository.RepositoryGeneration ||
+			storage.Identity.String() != repository.RepositoryIdentity.String() || !poolNFSIdentity(storage.Identity) || !protocol.IsPoolSharedStorage(storage) {
+			continue
+		}
+		storage, err = vmhost.ValidatePoolStorageAccess(ctx, storage)
+		if err != nil || storage.Identity.String() != repository.RepositoryIdentity.String() {
+			return errors.New("pool storage authority repository is not mounted with the recorded NFS identity")
+		}
+		resource, err := vmhost.SanlockAuthorityLease(membership.PoolID, repository.Lockspace, storage.Path)
+		if err != nil {
+			return errors.New("pool storage authority resource path is invalid")
+		}
+		initialize := false
+		if _, statErr := os.Lstat(resource.Path); os.IsNotExist(statErr) {
+			initialize = true
+		} else if statErr != nil {
+			return errors.New("pool storage authority resource state is unavailable")
+		}
+		if err = vmhost.EnsureSanlockResource(ctx, vmhost.SanlockResourceConfig{
+			SanlockResource: resource, Initialize: initialize, MasterAuthorized: initialize,
+		}); err != nil {
+			return err
+		}
+		status, err := vmhost.SetSanlockAuthorityLease(ctx, resource, true)
+		if err != nil || status.State != vmhost.SanlockAuthorityHeld {
+			return errors.New("pool storage authority lease is not confirmed held")
+		}
+		return nil
+	}
+	return errors.New("pool storage authority repository does not match this host's applied registration")
+}
+
+// markPoolStorageLeasePrepared enables the durable lease record only after every ready
+// member has acknowledged the exact authority replica containing its IDs and lockspace.
+func markPoolStorageLeasePrepared(s *Store, generation uint64, digest string) error {
+	_, currentDigest, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		return err
+	}
+	if currentDigest != digest {
+		// A member reported a new native host generation during this push. That
+		// durable observation advances authority; all ready members must ACK it first.
+		return nil
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil || state.Membership.Valid() != nil || state.Membership.MasterHostID != s.State.HostID {
+		return errors.New("pool membership is unavailable for storage-lease preparation")
+	}
+	lease := state.Membership.StorageLease
+	if lease == nil || lease.PreparedGeneration != 0 {
+		return nil
+	}
+	for _, member := range state.Membership.Members {
+		if member.Status != "ready" {
+			continue
+		}
+		if member.SanlockHostID == 0 || member.SanlockHostID > protocol.PoolSanlockMaxHostID {
+			return errors.New("storage-lease host IDs are not assigned to every ready member")
+		}
+		if member.HostID == s.State.HostID {
+			continue
+		}
+		if member.PeerOrigin == "" || !poolReplicaPostAckMatches(s, member.HostID, generation, digest) {
+			return errors.New("every ready member must acknowledge the storage-lease host IDs and lockspace before activation")
+		}
+	}
+	if err = poolAuthorityWritable(state); err != nil {
+		return err
+	}
+	lease.PreparedGeneration = generation
+	return savePoolPeer(s, state)
 }
 
 func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.PoolMember, replica protocol.PoolAuthorityReplica, digest, caKeyPEM string, material map[string]map[string][]byte, signer *ecdsa.PrivateKey, timeout time.Duration) error {
@@ -989,6 +1170,18 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 			Version: fenced.FenceCredentialVersion, Wrapped: wrapped,
 		})
 	}
+	addressed.WitnessCredentials = nil
+	if witness := replica.Membership.Witness; witness != nil && witness.CredentialsReady {
+		bundle, bundleErr := vmhost.PoolWitnessBundle(s.dir, witness.FencingGeneration)
+		if bundleErr != nil {
+			return bundleErr
+		}
+		wrapped, wrapErr := wrapPoolWitnessCredential(bundle, replica.PoolID, member.HostID, replica.Generation, key)
+		if wrapErr != nil {
+			return wrapErr
+		}
+		addressed.WitnessCredentials = []protocol.PoolWrappedWitnessCredential{{HostID: member.HostID, FencingGeneration: witness.FencingGeneration, Wrapped: wrapped}}
+	}
 	if err = signPoolAuthorityReplica(signer, &addressed); err != nil {
 		return err
 	}
@@ -1020,6 +1213,14 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		}
 		return refusal
 	}
+	if replica.Membership.StorageLease != nil {
+		if ack.SanlockHostGeneration == 0 {
+			return errors.New("pool member acknowledged the replica without joining the authority sanlock lockspace")
+		}
+		if err = recordPoolSanlockHostGeneration(s, member.HostID, ack.SanlockHostGeneration); err != nil {
+			return err
+		}
+	}
 	postAck := protocol.PoolReplicaStatus{
 		Generation: ack.Generation, Digest: ack.Digest, MasterHostID: s.State.HostID,
 		SignedAt: addressed.CreatedAt, Verified: true,
@@ -1027,4 +1228,34 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	recordPoolReplicaPostAck(s, member.HostID, postAck)
 	recordPoolReplicaAck(s, member.HostID, postAck)
 	return nil
+}
+
+func recordPoolSanlockHostGeneration(s *Store, hostID string, generation uint64) error {
+	if generation == 0 {
+		return errors.New("sanlock host generation is unavailable")
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil || state.Membership.MasterHostID != s.State.HostID {
+		return errors.New("pool master membership is unavailable")
+	}
+	for i := range state.Membership.Members {
+		member := &state.Membership.Members[i]
+		if member.HostID != hostID {
+			continue
+		}
+		if member.SanlockHostID == 0 || generation < member.SanlockHostGeneration {
+			return errors.New("pool member reported an invalid sanlock host generation")
+		}
+		if member.SanlockHostGeneration == generation {
+			return nil
+		}
+		if err = poolAuthorityWritable(state); err != nil {
+			return err
+		}
+		member.SanlockHostGeneration = generation
+		return savePoolPeer(s, state)
+	}
+	return errors.New("sanlock host generation names a nonmember")
 }

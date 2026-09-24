@@ -1,0 +1,33 @@
+{
+  "summary": "Record native sanlock and libvirt storage-lease checks in a disposable lab",
+  "paths": [
+    "docs/changes/2026-09-24-two-host-storage-lease-lab.json",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "docs/qa/2026-09-24-two-host-storage-lease-lab.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records contributor-run simulation results and adds no implemented operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Core, Controller, or client API implementation or contract changed; native engine results do not implement Nex storage-lease status or promotion proof.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The report records native simulation results and leaves Core integration and the planned storage-lease acceptance gate open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only a newly created disposable fixture was prepared and cleaned; no Nex pool or Controller record changed."
+  },
+  "verification": {
+    "method": "Prepared an owned three-Core nested-QEMU fixture; hotplugged and verified emulated watchdogs; confirmed SBD inactive; installed Debian Trixie sanlock/libvirt packages only in the guests; configured separate dedicated NFS lease and VM-image exports; exercised local VM lease, duplicate shared-disk start, isolated sanlock authority-resource contention, watchdog reset with exact HOST_FAIL-to-HOST_DEAD observation, HOST_FREE, and generation change on rejoin. In a fresh disposable fixture, installed sanlock 3.9.5-1, libvirt 11.3.0-3+deb13u3 and QEMU 10.0.13+ds-0+deb13u1; mounted two private NFSv4 exports; configured explicit XML leases for separate lockspaces `repoa` and `repob`; observed ordered two-resource acquisition, same-key cross-host refusal, second-resource contention with first-resource rollback, retry success, and concurrent distinct resource files for two VMs on Repository A. Used raw shareable test disks to bypass QEMU's independent NFS advisory lock and isolate sanlock. `ReadSanlockHostStatus` returned HOST_LIVE for `repoa/1`, `repob/1` and `repob/2` (generation 1, io_timeout 10). The fixture cleanup command rejected Core QEMU paths recorded by a repo-relative launch, so exact PID/start-time/process-group/command ownership was revalidated before stopping recorded QEMU and VDE processes; the fixture-labelled container was removed. Only ignored cache artifacts remain. These are nested simulations, not physical watchdog, production NFS, Core integration or API evidence.",
+    "evidence": [
+      "docs/qa/2026-09-24-two-host-storage-lease-lab.md"
+    ]
+  }
+}

@@ -2,11 +2,13 @@
 // The VMs screen: honest status for VMs on stale hosts, views, search, saved columns, bulk power
 // skips, and the panel's tag editor gate. run with: node src/vm-list.test.mjs
 import { bundleTestModule } from "./test-helpers.mjs";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const { VMList, statusOf, needsAttention, views, matches, hiddenColumns, bulkSkip } = await import(bundleTestModule(new URL("./vm-list.tsx", import.meta.url), "vm-list", true));
+assert.match(readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8"), /request submitted for \$\{total\} VM/);
 
 const host = { id: "h1", pool_id: "p1", hostname: "node-1", connection: "fresh", revoked: false, capabilities: ["vm-power-v1", "managed-vm-v1", "vm-update-v1", "console-v1"], inventory: null };
 const stale = { ...host, id: "h2", hostname: "node-2", connection: "stale" };

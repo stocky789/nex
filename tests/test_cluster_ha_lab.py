@@ -4,7 +4,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -54,6 +56,26 @@ class ClusterHALabTests(unittest.TestCase):
             with patch.object(lab, "CACHE", root / ".cache"):
                 with self.assertRaises(AssertionError):
                     lab.quit_owned(target, "core1")
+
+    def test_cleanup_treats_terminated_unreaped_guest_as_gone(self):
+        process = subprocess.Popen(["true"])
+        try:
+            for _ in range(100):
+                if os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None:
+                    break
+                time.sleep(.01)
+            else:
+                self.fail("disposable process did not exit")
+            self.assertFalse(lab.process_exists(process.pid))
+        finally:
+            process.wait()
+
+    def test_seed_does_not_install_unused_fence_agent_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            with patch.object(lab, "docker"), patch.object(lab.shutil, "rmtree"):
+                lab.seed(target, "core1", "198.18.90.11", "ssh-ed25519 example", "corosync")
+            self.assertNotIn("fence-agents", (target / "seed-core1/user-data").read_text())
 
     def test_start_budget_is_measured(self):
         with patch.object(lab, "memory_snapshot", return_value={"available": lab.MIN_START_AVAILABLE - 1, "pswpout": 0, "pswpin": 0, "swap_free": 0}):

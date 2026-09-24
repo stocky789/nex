@@ -59,6 +59,8 @@ jobs:
         run: .cache/phase1-qa-venv/bin/python tests/integration/zfs_provisioning_browser.py --evidence .cache/zfs-provisioning-browser
       - name: Verify clustered storage controls with simulated Core replies
         run: .cache/phase1-qa-venv/bin/python tests/integration/cluster_storage_browser.py
+      - name: Verify Controller action refresh without page reloads
+        run: .cache/phase1-qa-venv/bin/python tests/integration/controller_refresh_browser.py --evidence .cache/controller-refresh-browser
       - name: Capture Controller gallery with neutral demo inventory
         run: .cache/phase1-qa-venv/bin/python tests/integration/website_controller_captures.py --output .cache/website-controller-captures/images --evidence .cache/website-controller-captures/results.json
       - name: Verify enrollment, recovery and browser workflows

@@ -1,0 +1,31 @@
+{
+  "summary": "Fetch pinned Debian installer metadata from the archive with retries",
+  "paths": [
+    "installer/build.sh",
+    "tests/test_iso_payload_efficiency.py",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes only the release build's source for the same pinned Debian installer image; operator installation steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "ISO input download has no Controller/Core request, agent command, observed result or client-facing API change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No phase acceptance status changes from an unrerun forge release.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The build consumes signed Debian release metadata and adds no durable product state."
+  },
+  "verification": {
+    "method": "The focused regression failed before the fix and passed after it; all three ISO payload efficiency tests passed. A live fetch of the archived checksum and signature files verified Debian's signing key and the pinned ISO digest. A local disposable 0.4.11 installer build completed and produced the ISO, matching source bundle, compliance manifest and Core package with a temporary signing key. Installation and forge rerun have not run.",
+    "evidence": ["tests/test_iso_payload_efficiency.py"]
+  }
+}

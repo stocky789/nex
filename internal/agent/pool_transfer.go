@@ -86,6 +86,7 @@ type poolTransferRecord struct {
 	Stage, Status, LastError                string
 	AuthorityGeneration                     uint64
 	MembershipGeneration                    uint64
+	Automatic                               bool
 	// Frozen refuses authority writes on this host; HandedOff refuses them for good.
 	Frozen, HandedOff bool
 	// Notice is the signed hand-off this host issued (source) or activated on (target).
@@ -254,6 +255,7 @@ func poolTransferStatus(record *poolTransferRecord) protocol.PoolTransferStatus 
 		TargetHostID: record.TargetHostID, Stage: record.Stage, Error: record.LastError,
 		AuthorityGeneration: record.AuthorityGeneration, Frozen: record.Frozen,
 		Cancellable: poolTransferCancellable(record), HandedOff: record.HandedOff,
+		Automatic:  record.Automatic,
 		ObservedAt: time.Now().UTC(),
 	}
 	switch {
@@ -1767,6 +1769,12 @@ func AdvancePoolAuthorityTransfer(ctx context.Context, s *Store, timeout time.Du
 	defer poolTransferMu.Unlock()
 	record, err := loadPoolTransfer(s)
 	if err != nil || record == nil || poolTransferTerminal(record.Stage) || record.Role == "ejected" {
+		return
+	}
+	if err := automaticPoolPromotionFenceEnabled(s, record); err != nil {
+		record.Attempts++
+		record.LastError = err.Error()
+		_ = savePoolTransfer(s, record)
 		return
 	}
 	if record.Role == "source" && record.HandedOff && record.Stage != "done" {

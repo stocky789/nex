@@ -331,6 +331,7 @@ func TestReportRejectsInvalidInventory(t *testing.T) {
 		{NICs: []protocol.NIC{{Name: ""}}},
 		{Disks: []protocol.Disk{{Name: ""}}},
 		{VMs: []protocol.VM{{ID: "", Name: "guest"}}},
+		{VMs: []protocol.VM{{ID: "12345678-1234-4234-8234-123456789012", Name: "guest", Guest: &protocol.GuestInfo{Agent: "connected", Clipboard: "no-channel", OSID: strings.Repeat("x", 201)}}}},
 	} {
 		a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: 1, Sequence: 1, Inventory: inventory}, cert, 400)
 	}

@@ -493,3 +493,29 @@ vlan` were installed by hand. It has **not** been confirmed against a Debian 13 
 `apt-cache show` or `dpkg -L`; `tests/test_core_local_package.py` ties each declared
 dependency to the construct in Nex Core that needs it, which catches the dependency rotting
 but is not evidence about the Debian packages themselves.
+
+## Optional pool-fencing package staging — 2026-09-24
+
+The Core ISO package manifest stages Debian Trixie `sanlock` and
+`python3-sanlock` 3.9.5-1 (including `wdmd`), `libvirt-daemon-plugin-sanlock` 11.3.0-3+deb13u3, and
+`corosync-qdevice` and `corosync-qnetd` 3.0.3-2. The Controller appliance also stages
+`corosync-qnetd`. These remain separately executed Debian programs; none
+is a dependency or recommendation of the Nex Core or Controller Debian package,
+and no third-party code is copied into Nex. `sanlock` and its Python binding are
+GPL-2-or-later with
+selected library/API files under LGPL-2.1-or-later. The libvirt locking plugin
+is built from the libvirt source package, whose main source is LGPL-2.1-or-later.
+The qdevice/qnetd source package is BSD-3-Clause, with two build helper scripts
+under GPL-3-or-later and Debian packaging under BSD-3-Clause. Exact Debian
+copyright files are retained in each installed package at
+`/usr/share/doc/<package>/copyright`; the ISO component/source manifest process
+continues to apply before external redistribution.
+
+Evidence: Debian Trixie package records for [`sanlock`](https://packages.debian.org/trixie/sanlock),
+[`python3-sanlock`](https://packages.debian.org/trixie/python3-sanlock),
+[`libvirt-daemon-plugin-sanlock`](https://packages.debian.org/trixie/libvirt-daemon-plugin-sanlock),
+[`corosync-qdevice`](https://packages.debian.org/trixie/corosync-qdevice), and
+[`corosync-qnetd`](https://packages.debian.org/trixie/corosync-qnetd); exact
+source copyright files for [sanlock](https://metadata.ftp-master.debian.org/changelogs/main/s/sanlock/sanlock_3.9.5-1_copyright),
+[libvirt](https://sources.debian.org/src/libvirt/11.3.0-3%2Bdeb13u3/debian/copyright),
+and [corosync-qdevice](https://sources.debian.org/src/corosync-qdevice/3.0.3-2/debian/copyright).

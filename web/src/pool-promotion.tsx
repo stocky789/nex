@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// S6 "Fence-verified manual promotion and safe rejoin". Everything here is a host's own
+// Pool promotion and safe rejoin. Everything here is a host's own
 // report. Nex Core on the candidate proves the promotion and performs it — it powers the old
 // pool master off through its recorded fence device and observes the power-off itself — so
 // this file renders the verdict, collects the two confirmations the route requires, and shows
@@ -49,7 +49,7 @@ export type PromotionVerdict = {
 // records no candidate and no stage of its own.
 export type Promotion = {
   host_id: string; operation_id?: string; stage?: string;
-  status?: "pending" | "succeeded" | "failed" | "needs_attention"; error?: string;
+  status?: "pending" | "succeeded" | "failed" | "needs_attention"; error?: string; automatic?: boolean;
   verdict?: PromotionVerdict | null; observed_at?: string;
   // Always false: a promotion has fenced the old master, so it can only go forward.
   cancellable?: boolean;
@@ -559,10 +559,10 @@ export function PromotionVerdictView({ report, verdict }: { report: PromotionRep
 
 // ------------------------------------------------------------------ the promotion dialog
 
-export function PromotionDialog({ report, member, verdict, verdictError, verdictBusy, onPreflight, busy, submitError, onConfirm, onClose }: {
+export function PromotionDialog({ report, member, verdict, verdictError, verdictBusy, onPreflight, busy, submitError, readError = "", onConfirm, onClose }: {
   report: PromotionReport; member: PromotionMember; verdict: PromotionVerdict | null;
   verdictError: string; verdictBusy: boolean; onPreflight: () => void;
-  busy: boolean; submitError: string; onConfirm: (confirmation: string, fenceHostIDs: string[]) => void; onClose: () => void;
+  busy: boolean; submitError: string; readError?: string; onConfirm: (confirmation: string, fenceHostIDs: string[]) => void; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -583,7 +583,7 @@ export function PromotionDialog({ report, member, verdict, verdictError, verdict
   const fenceKey = fenceIDs.join("\n");
   useEffect(() => { setAcknowledged(false); }, [fenceKey]);
   const fenceNames = fenceIDs.map(id => hostName(report, id)).join(", ");
-  const ready = runnable && fenceIDs.length > 0 && confirmMatches(typed, report.pool_name) && acknowledged;
+  const ready = !readError && runnable && fenceIDs.length > 0 && confirmMatches(typed, report.pool_name) && acknowledged;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!ready) return;
@@ -595,6 +595,7 @@ export function PromotionDialog({ report, member, verdict, verdictError, verdict
     <div className="section-heading"><h2 id="promotion-title" ref={heading} tabIndex={-1}>Promote {name} to pool master of {report.pool_name}</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
 
     <h3>Step 1 — what Nex Core reports</h3>
+    {readError && <p className="alert" role="alert">The current pool report could not be read: {readError}. Retry the report before submitting.</p>}
     {verdictError && <p className="alert" role="alert">{verdictError}</p>}
     {verdict
       ? <PromotionVerdictView report={report} verdict={verdict} />
@@ -677,7 +678,7 @@ export function PromotionStrip({ report }: { report: PromotionReport }) {
       <p>
         Candidate <strong>{hostName(report, promotion.host_id)}</strong> ·
         stage <strong>{promotionStageText(promotion)}</strong> ·
-        status <strong>{(promotion.status || "unknown").replace("_", " ")}</strong>
+        status <strong>{(promotion.status || "unknown").replace("_", " ")}</strong>{promotion.automatic ? " · automatic" : ""}
         {promotion.observed_at ? <small>Reported by {hostName(report, promotion.host_id)} at {promotion.observed_at}</small> : null}
       </p>
       {promotion.error && <p className="task-error">{promotion.error}</p>}
@@ -717,8 +718,8 @@ export function bmcProbePrefill(view: BMCProbeView): { kind: BMCKind; targetID: 
 // The virsh device below it is for a Nex Core running as a virtual machine in a disposable
 // lab, where there is no controller to ask. It stays reachable, behind a disclosure, because
 // it is not how a real pool is protected.
-export function FenceProfileDialog({ report, member, busy, submitError, onConfirm, onClear, onClose, onDetect }: {
-  report: PromotionReport; member: PromotionMember; busy: boolean; submitError: string;
+export function FenceProfileDialog({ report, member, busy, submitError, readError = "", onConfirm, onClear, onClose, onDetect }: {
+  report: PromotionReport; member: PromotionMember; busy: boolean; submitError: string; readError?: string;
   onConfirm: (fence: FenceProfileInput, credential: FenceCredentialInput) => void;
   onClear: () => void; onClose: () => void;
   onDetect?: (endpoint: string, username: string, secret: string) => Promise<BMCProbeView>;
@@ -766,7 +767,7 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!complete || busy) return;
+    if (!complete || busy || readError) return;
     if (lab) {
       onConfirm(
         { kind: "virsh", endpoint: endpoint.trim(), target_id: targetID.trim(), virsh_uri: "qemu:///system", ssh_login: login.trim(), ssh_port: Number(port) },
@@ -792,6 +793,7 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
     <p className="help">The pool master keeps this record, and every member receives it in its copy of the pool records. The password is delivered to Nex Core once, over its own encrypted handoff; this Controller never stores it and never shows it again.</p>
     <p>{fenceText(member, report.authoritative)}</p>
     {submitError && <p className="alert" role="alert">{submitError}</p>}
+    {readError && <p className="alert" role="alert">The current pool report could not be read: {readError}. Retry the report before submitting.</p>}
     {provisioned && <p className="help">
       <button type="button" className="link" disabled={busy} aria-expanded={manual} onClick={() => setManual(!manual)}>
         {manual ? "Keep the device Nex Core configured" : "Set BMC access by hand instead…"}
@@ -860,7 +862,7 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
       </>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy || detecting || !complete}>{busy ? "Submitting…" : lab ? "Record virsh fence device" : "Set BMC access"}</button>
+        <button className="primary" disabled={busy || Boolean(readError) || detecting || !complete}>{busy ? "Submitting…" : lab ? "Record virsh fence device" : "Set BMC access"}</button>
       </div>
     </form>}
     {manual && <p className="help pool-fence-lab">
@@ -873,7 +875,7 @@ export function FenceProfileDialog({ report, member, busy, submitError, onConfir
         ? <>
           <p className="warning" role="status">Clearing the fence device means no surviving member can be promoted over {name} if it is lost. Virtual machines are not affected.{member.fence.provisioned_by_core ? ` Nex Core configured this controller itself, so it also removes the ${member.fence.username || "Nex"} account from it and stops configuring it until you say otherwise.` : ""}</p>
           <button type="button" disabled={busy} onClick={() => setClearing(false)}>Keep it</button>
-          <button type="button" className="danger" disabled={busy} onClick={onClear}>{busy ? "Submitting…" : `Clear the fence device for ${name}`}</button>
+          <button type="button" className="danger" disabled={busy || Boolean(readError)} onClick={onClear}>{busy ? "Submitting…" : `Clear the fence device for ${name}`}</button>
         </>
         : <button type="button" className="danger" disabled={busy} onClick={() => setClearing(true)}>Clear fence device…</button>}
     </div>}

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -530,6 +531,10 @@ func isPoolSharedStorage(s protocol.StorageRegistration) bool {
 // never from the client command. ValidateClusteredISCSIAt is also a live native
 // readiness gate before a start permit is written.
 func poolVMExecutionContext(ctx context.Context, s *Store, v protocol.VMCreateSpec) (context.Context, error) {
+	return poolVMExecutionContextWithLeaseResources(ctx, s, v, false)
+}
+
+func poolVMExecutionContextWithLeaseResources(ctx context.Context, s *Store, v protocol.VMCreateSpec, initializeVMResources bool) (context.Context, error) {
 	storage, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).AppliedStorage()
 	if !managedVMChecksReady(checks) {
 		return nil, errors.New("managed storage state is unavailable")
@@ -561,9 +566,102 @@ func poolVMExecutionContext(ctx context.Context, s *Store, v protocol.VMCreateSp
 		selected = config
 	}
 	if selected.RepositoryID != "" {
-		return vmhost.WithStorageClusterStateDir(vmhost.WithStorageClusterConfig(ctx, selected), s.dir), nil
+		ctx = vmhost.WithStorageClusterStateDir(vmhost.WithStorageClusterConfig(ctx, selected), s.dir)
+	}
+	leaseCtx, err := poolVMStorageLeaseContext(ctx, s, v, storage, initializeVMResources)
+	if err != nil {
+		return nil, err
+	}
+	if leaseCtx != nil {
+		ctx = leaseCtx
 	}
 	return ctx, nil
+}
+
+func poolVMStorageLeaseContext(ctx context.Context, s *Store, vm protocol.VMCreateSpec, applied []protocol.StorageRegistration, initializeVMResources bool) (context.Context, error) {
+	usesNFS := false
+	byID := make(map[string]protocol.StorageRegistration, len(applied))
+	for _, registration := range applied {
+		byID[registration.ID] = registration
+	}
+	for _, disk := range vm.Disks {
+		registration, ok := byID[disk.StorageID]
+		if ok && registration.Kind == protocol.StorageKindNFS && protocol.IsPoolSharedStorage(registration) {
+			usesNFS = true
+		}
+	}
+	if !usesNFS {
+		return nil, nil
+	}
+	local, err := Membership(s)
+	if err != nil {
+		return nil, err
+	}
+	membership := local
+	if local.MasterHostID != s.State.HostID {
+		replica, replicaErr := loadPoolReplica(s)
+		if replicaErr != nil || replica == nil || replica.Replica.PoolID != local.PoolID || replica.Replica.MemberHostID != s.State.HostID {
+			return nil, errors.New("pool storage-lease authority replica is unavailable")
+		}
+		membership = replica.Replica.Membership
+	}
+	lease := membership.StorageLease
+	if lease == nil {
+		return nil, nil
+	}
+	if lease.PreparedGeneration == 0 || lease.Valid(membership.PoolID) != nil {
+		return nil, errors.New("shared NFS VM storage has not completed pool lease preparation")
+	}
+	self, ok := poolMemberByID(membership, s.State.HostID)
+	if !ok || self.Status != "ready" || self.SanlockHostID == 0 {
+		return nil, errors.New("this host has no prepared sanlock membership identity")
+	}
+	if err := requirePoolStorageLeaseReset(ctx, self); err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(membership.Members))
+	for _, member := range membership.Members {
+		if member.Status == "ready" {
+			if member.SanlockHostID == 0 {
+				return nil, errors.New("a ready pool member has no stable sanlock host ID")
+			}
+			ids = append(ids, member.SanlockHostID)
+		}
+	}
+	slices.Sort(ids)
+	joinCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := preparePoolStorageLeaseHost(joinCtx, s, membership, false); err != nil {
+		return nil, err
+	}
+	joined := make([]vmhost.SanlockJoinedRepository, 0, len(lease.Repositories))
+	for _, repository := range lease.Repositories {
+		storage, ok := byID[repository.RepositoryID]
+		if !ok || storage.Tombstone || storage.Generation != repository.RepositoryGeneration ||
+			storage.Identity.String() != repository.RepositoryIdentity.String() || !poolNFSIdentity(storage.Identity) || !protocol.IsPoolSharedStorage(storage) {
+			return nil, errors.New("shared NFS VM storage does not match the prepared repository identity")
+		}
+		storage, err = vmhost.ValidatePoolStorageAccess(joinCtx, storage)
+		if err != nil || storage.Identity.String() != repository.RepositoryIdentity.String() {
+			return nil, errors.New("shared NFS VM repository is not mounted with the prepared identity")
+		}
+		path, err := vmhost.SanlockLockspacePath(storage.Path)
+		if err != nil {
+			return nil, errors.New("shared NFS VM repository has no safe sanlock path")
+		}
+		status, err := vmhost.EnsureSanlockLockspace(joinCtx, vmhost.SanlockLockspaceConfig{
+			Lockspace: repository.Lockspace, LeasePath: path, LocalHostID: self.SanlockHostID,
+			HostIDs: ids, IsMaster: membership.MasterHostID == s.State.HostID, IOTimeout: uint32(lease.IOTimeoutSeconds),
+		})
+		if err != nil || status.HostID != self.SanlockHostID || status.HostState != "HOST_LIVE" {
+			return nil, errors.New("this host has not joined every VM storage lockspace")
+		}
+		joined = append(joined, vmhost.SanlockJoinedRepository{
+			RepositoryID: repository.RepositoryID, Lockspace: repository.Lockspace,
+			HostID: status.HostID, Generation: status.Generation, HostState: status.HostState,
+		})
+	}
+	return vmhost.WithPoolStorageLeaseConfig(ctx, membership.PoolID, *lease, self.SanlockHostID, ids, joined, initializeVMResources), nil
 }
 
 // poolVMClusterOperationActivated distinguishes an initial, all-member Core
@@ -615,7 +713,7 @@ func poolVMCommandExecutionContext(ctx context.Context, s *Store, cmd protocol.C
 	} else if isPoolVMStopOnly(cmd) {
 		return ctx, err
 	}
-	return poolVMExecutionContext(ctx, s, v)
+	return poolVMExecutionContextWithLeaseResources(ctx, s, v, cmd.Kind == "vm-create" || cmd.Kind == "vm-update")
 }
 
 // isPoolVMStopOnly identifies the two reducing-only power requests.  Reboot and

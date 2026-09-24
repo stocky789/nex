@@ -61,6 +61,13 @@ table.list tbody tr.group:hover { background: none; }
 .vm-more > summary:hover, .vm-more[open] > summary { border-color: var(--accent); color: var(--accent); }
 .vm-more .menu-items button { display: flex; align-items: center; min-height: 30px; font-size: 13px; }
 /* Guest tools: one row per capability, its state in a word or two, the reason on demand. */
+.guest-os { display: inline-flex; align-items: center; gap: 7px; }
+.guest-os-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 18px; }
+.guest-os-icon img { width: 18px; height: 18px; object-fit: contain; }
+.guest-os-icon img[src="/guest-os/amazon-linux.svg"] { background: var(--rail-hi); border-radius: 2px; }
+:root[data-theme="dark"] .guest-os-icon img[src="/guest-os/windows.svg"],
+:root[data-theme="dark"] .guest-os-icon img[src="/guest-os/devuan.ico"],
+:root[data-theme="light"] .guest-os-icon img[src="/guest-os/nobara.svg"] { filter: invert(1); }
 .guest-caps { margin: 0 0 8px; padding: 0; list-style: none; }
 .guest-caps li { border-bottom: 1px solid var(--line-soft); }
 .guest-caps summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 56px; align-items: center; gap: 10px; padding: 6px 0; cursor: pointer; list-style: none; }

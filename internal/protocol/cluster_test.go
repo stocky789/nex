@@ -2,9 +2,40 @@
 package protocol
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPoolStorageLeaseExclusionRequiresExactDeadHostAndBound(t *testing.T) {
+	proof := PoolStorageLeaseExclusion{
+		Repositories: []PoolStorageLeaseLockspaceProof{{RepositoryID: "repo-1", RepositoryGeneration: 3,
+			RepositoryIdentityDigest: strings.Repeat("a", 64), Lockspace: "nexpool1234repo1",
+			HostGeneration: 4, HostState: PoolStorageLeaseHostDead, HostDeadSeconds: 60, HeldSeconds: 120}},
+		HostLeaseID: 101, BoundSeconds: 120,
+		WatchdogKind: PoolWatchdogHardware, WatchdogTimeoutSeconds: 60, ArmedGeneration: 2,
+	}
+	if err := proof.Valid(); err != nil {
+		t.Fatalf("valid exact HOST_DEAD evidence rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*PoolStorageLeaseExclusion){
+		"free is not dead":          func(p *PoolStorageLeaseExclusion) { p.Repositories[0].HostState = "HOST_FREE" },
+		"failure is not dead":       func(p *PoolStorageLeaseExclusion) { p.Repositories[0].HostState = "HOST_FAIL" },
+		"under host-dead interval":  func(p *PoolStorageLeaseExclusion) { p.Repositories[0].HostDeadSeconds = 121 },
+		"under watchdog bound":      func(p *PoolStorageLeaseExclusion) { p.BoundSeconds = 119 },
+		"not hardware":              func(p *PoolStorageLeaseExclusion) { p.WatchdogKind = PoolWatchdogEmulated },
+		"invalid repository digest": func(p *PoolStorageLeaseExclusion) { p.Repositories[0].RepositoryIdentityDigest = "path-only" },
+		"missing repo":              func(p *PoolStorageLeaseExclusion) { p.Repositories = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := proof
+			mutate(&bad)
+			if bad.Valid() == nil {
+				t.Fatal("unsafe evidence accepted")
+			}
+		})
+	}
+}
 
 func clusteredRegistration() StorageRegistration {
 	return StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "master-1", Generation: 2, Kind: StorageKindISCSI, Path: "/var/lib/nex-storage/repo-1", Source: StorageSource{ISCSI: &ISCSIStorageSource{Portal: "iscsi.example.test", TargetIQN: "iqn.2026-09.example:vms", LUN: 1, WWID: "3600508b400105e210000900000490000", FilesystemUUID: "11111111-2222-4333-8444-555555555555", MountPath: "/var/lib/nex-storage/repo-1", Mode: "clustered_gfs2", ClusterID: "pool-1", LockTable: "pool-1:repo-1", EligibleHostIDs: []string{"master-1", "member-2", "member-3"}}}}
