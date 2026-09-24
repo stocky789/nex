@@ -295,17 +295,14 @@ output=/work/dist/nex-core-${version}-amd64.iso
 mkdir -p "$cache" "$downloads" /work/dist
 trap 'chown -R "${BUILD_UID:-0}:${BUILD_GID:-0}" /work/dist "$cache"' EXIT
 # Explicit release + expected digest; update together only after Debian signature
-# verification. Archive fallback supports rebuilding after current advances.
+# verification. Use the archive because this release has left the current mirror.
 iso=debian-13.6.0-amd64-netinst.iso
 expected=65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7
-base=https://cdimage.debian.org/debian-cd/13.6.0/amd64/iso-cd
-if ! curl -fsSL "$base/SHA256SUMS" -o "$cache/SHA256SUMS.tmp"; then
-    base=https://cdimage.debian.org/mirror/cdimage/archive/13.6.0/amd64/iso-cd
-    curl -fsSL "$base/SHA256SUMS" -o "$cache/SHA256SUMS.tmp"
-fi
+base=https://cdimage.debian.org/cdimage/archive/13.6.0/amd64/iso-cd
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$base/SHA256SUMS" -o "$cache/SHA256SUMS.tmp"
 mv "$cache/SHA256SUMS.tmp" "$cache/SHA256SUMS"
-curl -fsSL "$base/SHA256SUMS.sign" -o "$cache/SHA256SUMS.sign"
-curl -fsSL https://www.debian.org/CD/key-DA87E80D6294BE9B.txt -o "$cache/cd-key.asc"
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "$base/SHA256SUMS.sign" -o "$cache/SHA256SUMS.sign"
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://www.debian.org/CD/key-DA87E80D6294BE9B.txt -o "$cache/cd-key.asc"
 mkdir -p "$cache/gnupg"
 chmod 700 "$cache/gnupg"
 export GNUPGHOME=$cache/gnupg

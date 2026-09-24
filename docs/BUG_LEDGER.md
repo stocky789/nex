@@ -7745,3 +7745,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: Use the existing offline `systemctl --root` disable and `is-enabled` readback. This removes the boot link without calling the dpkg-only helper; a later package upgrade sees the unit's missing link as disabled.
 - Regression: `test_package_disable_does_not_call_dpkg_maintainer_helper` failed before the fix with exit 17 from a refusing helper, then passed using real `systemctl --root` against a temporary service tree. `python3 -m unittest tests.test_storage_packaging` passed (23 tests). A disposable appliance image build from the pinned Debian base completed through package installation and image finalization using a temporary signing key; boot and forge rerun remain unverified. The forge Python discovery job includes the regression.
 - Avoid: Calling maintainer-script helpers from ordinary build or installer shell steps.
+
+## BUG-0567 — Release ISO build relied on a retired Debian mirror path
+
+- Date: 2026-09-24. Status: fixed in the working tree; forge rerun outstanding.
+- Symptom: Forge release run 4464 completed the appliance and Core package builds, then failed fetching Debian 13.6.0 ISO checksums: the current-release path returned 404 and a transient connection reset stopped the archive fallback.
+- Root cause: The pinned Debian release had moved to the archive, but checksum and signature downloads had no retry policy.
+- Fix: Fetch the pinned release directly from Debian's archive and retry checksum, signature and signing-key downloads. Keep signature verification and the pinned ISO digest check.
+- Regression: `test_pinned_debian_iso_metadata_uses_archive_with_retries` failed before the fix and passed after it. `python3 -m unittest tests.test_iso_payload_efficiency` passed (3 tests). A live fetch verified Debian's signature and the pinned ISO digest in `SHA256SUMS`. A local disposable `NEX_VERSION=0.4.11 bash installer/build.sh` build completed and produced the ISO, matching source bundle, compliance manifest and Core package using a temporary signing key; installation and forge rerun remain unverified.
+- Avoid: Using a current-release URL for immutable older media or leaving release metadata downloads without retries.
