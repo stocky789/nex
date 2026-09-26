@@ -118,22 +118,37 @@
       ]
     },
     {
-      status: "testing",
-      title: "Snapshots, backups and proven restores",
+      status: "shipped",
+      title: "VM snapshots and rollback",
       summary:
-        "Phase 5 is partially complete but not closed: stopped and running snapshot product paths have disposable-lab and browser evidence; native multi-backend snapshot lifecycle evidence also exists. Forge CI on a published push, independent checklist review and residual matrix honesty still keep the Phase 5 gate open. Phase 6 product backup and restore workflows are not implemented and must not start until that gate closes.",
+        "Phase 5 closed 2026-09-27 for disposable virtual-lab scope; Core-owned snapshots with Controller UI; permanent physical/production and product-on-every-backend limits remain documented.",
       done: [
-        "Bounded disposable-lab native feasibility for disk snapshots, paired firmware state and independent NFS backup/restore probes",
+        "Bounded disposable-lab native feasibility for disk snapshots and paired firmware state",
         "Core-owned stopped snapshot creation and catalog reporting, with bounded exact-retry, interruption, Controller replacement and pool promotion/rejoin evidence",
         "Corrected stopped revert recovery for a disposable two-disk UEFI guest: exact same-operation retry settled without a second native revert",
         "Stopped leaf delete with public no-delete blockcommit, catalog metadata rename and Controller Snapshots tab create/list/rename/revert/delete",
         "Running BIOS crash-consistent and quiesced create through Controller, with honest UEFI and missing-agent refusals",
         "Browser Snapshots walkthrough: crash create, rename, matching-disk revert and leaf delete",
         "VMs-list bulk Snapshot for selected shut-off guests with shared name and per-VM create tasks",
-        "Native multi-backend stopped snapshot lifecycle and midcommit consolidation on local, NFS, SMB and exclusive iSCSI (lab only; not product backup)"
+        "Native multi-backend stopped snapshot lifecycle and midcommit consolidation on local, NFS, SMB and exclusive iSCSI (lab only; not product backup)",
+        "Phase 5 gate closed on 2026-09-27 for disposable virtual-lab scope (forge CI on ac92f407; independent checklist and Core state-ownership review)"
       ],
       open: [
-        "Close Phase 5: forge CI on a published push, independent checklist and state-ownership review, residual matrix acceptance",
+        "Product Controller/Core snapshot paths not certified on every S0 backend (NFS/SMB/exclusive iSCSI); S0 native evidence is not product-on-all-backends certification",
+        "Physical and production storage and hardware fencing remain untested (disposable nested lab only)",
+        "Memory snapshots are later work, out of Phase 5 scope",
+        "Phase 6 product backups and proven restores are separate and not started"
+      ]
+    },
+    {
+      status: "next",
+      title: "Backups and proven restores",
+      summary:
+        "Phase 6 product backup and restore — not started. Phase 5 snapshots closed 2026-09-27; S4 may begin.",
+      done: [
+        "Bounded disposable-lab native feasibility for independent NFS backup/restore probes"
+      ],
+      open: [
         "Backup repositories on storage separate from the VMs they protect, with their own credentials",
         "Full backups of stopped guests first, then running guests through libvirt's backup support, each with checksums and a manifest that can stand on its own",
         "Core-owned schedules, jobs, history and retention that continue without Controller, with bandwidth limits, per-VM overrides and visible missed runs",

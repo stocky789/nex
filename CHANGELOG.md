@@ -25,6 +25,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Miscellaneous
 
+- Phase 5 (snapshots and rollback) closed for disposable virtual-lab scope.
 - Recorded a disposable multi-backend snapshot recovery lab pass on local disk, NFS, SMB and iSCSI (native lifecycle and midcommit consolidation).
 
 ### Minor Feature

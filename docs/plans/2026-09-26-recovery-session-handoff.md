@@ -1,7 +1,8 @@
 # Recovery implementation handoff
 
-Date: 2026-09-26 (evening checkpoint). **Phase 5 incomplete / gate open.
-Phase 6 / S4 not started.** Resume the
+Date: 2026-09-27. **Phase 5 closed for disposable virtual-lab scope (2026-09-27).**
+Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+**Phase 6 / S4–S8 not started.** Resume the
 [recovery plan](2026-09-25-recovery-snapshots-backups-restores.md).
 Agents never commit, push, tag or release; project owner owns Git remotes.
 
@@ -11,13 +12,10 @@ Agents never commit, push, tag or release; project owner owns Git remotes.
 |---|---|---|
 | S0 native feasibility | Accepted for recorded disposable-lab scope | Not product Controller/Core workflows |
 | S1 chain/authority | Accepted for recorded lab matrix (r8/r9 evidence) | Broader physical/multi-host residuals elsewhere |
-| S2 stopped lifecycle | Product paths + browser evidence recorded | Phase 5 checklist close still open |
-| S3 running create | Crash/quiesced BIOS lab + UEFI refusal + freeze/thaw | Same Phase 5 gate |
-| Phase 5 gate | **Open** | Forge CI on published push; independent review; checklist acceptance |
-| S4–S8 backup/restore | **Not started** | Blocked until Phase 5 gate closes |
-
-Do **not** start S4 (Core backup repositories / stopped full backup / restore UI)
-until Phase 5 is formally closed in the plans and published roadmap.
+| S2 stopped lifecycle | Product paths + browser evidence recorded | Accepted under Phase 5 close |
+| S3 running create | Crash/quiesced BIOS lab + UEFI refusal + freeze/thaw | Accepted under Phase 5 close |
+| Phase 5 gate | **Closed** (2026-09-27, disposable virtual-lab scope) | [Close record](../qa/2026-09-26-phase5-gate/CLOSED.md); accepted residuals in support matrix |
+| S4–S8 backup/restore | **Not started** | May begin; Phase 5 no longer blocks |
 
 ## What is already proven (do not re-litigate)
 
@@ -38,8 +36,7 @@ until Phase 5 is formally closed in the plans and published roadmap.
 
 - Phase 6 product backup repositories, jobs, schedules, restore-as-new/replace, catalog.
 - Product Controller/Core snapshot paths on every storage backend (S0 native ≠ S2/S3 product).
-- Forge CI results on a published push (local suite may be green; forge is the gate).
-- Independent phase-acceptance review and roadmap flip to Phase 5 closed.
+- Broader physical / production storage and multi-host replacement beyond recorded nested lab campaigns.
 
 ## Working tree / lab notes for the next agent
 
@@ -49,25 +46,22 @@ until Phase 5 is formally closed in the plans and published roadmap.
   from the 2026-09-26 multi-backend campaign; confirm with QEMU/SSH before creating another.
   Patched libvirt binaries may exist under ignored
   `.cache/recovery-libvirt-build/output/` (`+nex4`); builder containers are disposable.
-- Owner intends push that may also trigger the automatic release workflow; that is acceptable
-  forge evidence for packaging as well as required CI jobs. Agents still do not push.
+- Project owner owns all Git remotes; agents still do not push.
 
 ## Immediate resume order
 
-1. Project owner commits desired tree and pushes so forge CI (and any auto-release) runs.
-2. Next agent: inspect the **actual** forge run — record pass/fail/skip honestly; never claim
-   CI from the workflow file alone.
-3. If forge green: independent review of Phase 5 checklist + state ownership; then update
-   recovery plan checklist, this handoff, platform plan §5, and the published website roadmap
-   to **Phase 5 closed** only with owner acceptance.
-4. **Only after** that close: start S4 (Core NFS repository registration, stopped full backup,
-   restore-as-new, guide/UI). Do not expand into S5–S8 prematurely.
+1. Start S4 when ready (Core NFS repository registration, stopped full backup,
+   restore-as-new, guide/UI).
+2. Do not expand into S5–S8 prematurely; keep Phase 6 slices gated on their own prerequisites.
+3. Keep accepted Phase 5 residuals honest in the support matrix; do not re-open closed
+   Phase 5 checklist rows without new evidence that reverses them.
 
 ## Pointers
 
 | Doc | Role |
 |---|---|
 | [Recovery plan](2026-09-25-recovery-snapshots-backups-restores.md) | Slices, failure matrix, Phase 5/6 checklists |
+| [Phase 5 close record](../qa/2026-09-26-phase5-gate/CLOSED.md) | Gate close evidence |
 | [Platform plan §5–§6](2026-09-08-nex-platform.md#5-snapshots-and-rollback) | Parent gates |
 | [Support matrix](../qa/2026-09-26-phase5-snapshot-support-matrix.md) | Supported / refused / untested |
-| [Website roadmap](../../website/src/routes/roadmap/+page.svelte) | Public “testing” milestone — keep in sync on close |
+| [Website roadmap](../../website/src/routes/roadmap/+page.svelte) | Public milestone — keep in sync with close |

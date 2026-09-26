@@ -1,7 +1,9 @@
 # Phase 5 snapshot support matrix (disposable lab)
 
-Date: 2026-09-26. Consolidated record of **supported**, **refused**, and **untested**
-profiles for Phase 5 product snapshot work. This is not a Phase 5 gate close.
+Date: 2026-09-26; status updated 2026-09-27. Consolidated record of **supported**,
+**refused**, and **untested** profiles for Phase 5 product snapshot work.
+Phase 5 closed for disposable virtual-lab scope (2026-09-27);
+[close record](2026-09-26-phase5-gate/CLOSED.md).
 Private lab captures stay under ignored `.cache`; linked QA pages hold the detail.
 
 ## Product Controller/Core paths (S2/S3)
@@ -41,21 +43,16 @@ package set. Detail: [S0 native](2026-09-25-recovery-s0-native.md),
 These S0 backend rows do not by themselves prove Controller product paths on every
 backend; product S2/S3 evidence above is the Controller/Core path scope.
 
-## Residuals that keep Phase 5 open
+## Accepted residuals (Phase 5 closed)
 
-- Forge CI on a **published** push (local `go test`, Python suite, `check_docs`, privacy may
-  already pass; forge job results are the missing gate evidence). Owner push may also run the
-  automatic release workflow; packaging success there is useful but does not replace required
-  CI job inspection.
-- Independent phase-acceptance review of state ownership and the Phase 5 checklist, then an
-  explicit plan/roadmap status flip — lab evidence alone does not close the gate.
 - Broader physical / production storage and multi-host replacement coverage beyond recorded
   nested disposable-lab campaigns (remain honest `untested` until executed).
-- Checklist rows in the [recovery plan](../plans/2026-09-25-recovery-snapshots-backups-restores.md#phase-5)
-  that remain unchecked.
+- Product Controller/Core snapshot paths on every S0 storage backend (S0 native ≠ S2/S3 product;
+  remain honest until product evidence exists per backend).
+- Memory snapshots remain out of Phase 5 scope / untested.
 - Resume order and lab notes:
   [recovery handoff](../plans/2026-09-26-recovery-session-handoff.md).
 
 Native multi-backend S0 DR (2026-09-26) is recorded in
 [recovery-s0-multi-backend-dr](2026-09-26-recovery-s0-multi-backend-dr.md). It strengthens the
-S0 backend table above; it does **not** close product S2/S3 on every storage type or Phase 6.
+S0 backend table above; it does **not** claim product S2/S3 on every storage type or Phase 6.

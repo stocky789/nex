@@ -990,19 +990,16 @@ separate from both initial manual promotion and automatic VM restart acceptance.
 
 ### 5. Snapshots and rollback
 
-**Checkpoint, 2026-09-26 evening: in development / partially complete; gate open.**
-Native feasibility and bounded chain/authority safety have accepted lab evidence.
-Core stopped create/revert/leaf-delete/metadata, Controller relay, running BIOS
-crash/quiesced create (UEFI refused), freeze/thaw under Core kill, browser
-create/rename/revert/delete, VMs-list bulk stopped Snapshot, and focused Snapshots
-usability follow-up have disposable-lab evidence. S0 native lifecycle and midcommit
-consolidation also have a later multi-backend (local/NFS/SMB/iSCSI) lab record; that
-is not product backup/restore and does not alone close Phase 5. BUG-0647 exact-retry
-recovery is fixed. **Still open for Phase 5 close:** forge CI on a published push,
-independent checklist/state-ownership review, and honest residual matrix rows.
-**S4–S8 wait on Phase 5 close — do not start product backup work early.**
+**Checkpoint, 2026-09-27: closed for disposable virtual-lab scope.** S0 native and
+S1–S3 product snapshot paths, Core APIs, Controller UI, running BIOS crash/quiesced
+create (UEFI refused), freeze/thaw, bulk stopped Snapshot, and focused Snapshots
+usability follow-up have accepted disposable-lab evidence. S0 native lifecycle and
+midcommit consolidation also have a multi-backend (local/NFS/SMB/iSCSI) lab record;
+that is not product-on-every-backend certification or product backup/restore. BUG-0647 exact-retry recovery is fixed. Accepted residuals remain
+honest in the support matrix and do not reopen this gate. Close record:
+[docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
 See the [recovery plan](2026-09-25-recovery-snapshots-backups-restores.md) and
-[recovery handoff](2026-09-26-recovery-session-handoff.md) for resume order.
+[recovery handoff](2026-09-26-recovery-session-handoff.md).
 
 1. First run a disposable snapshot/backup API experiment on Debian's installed libvirt/QEMU versions; record supported create, revert, delete, backup, and firmware-state combinations with a runnable reproduction. Implement create, list, named description, revert, and delete for that validated backend. Start with gracefully stopped guests and disk-only snapshots.
 2. Capture all supported writable disks and corresponding VM configuration/firmware state. Reject unsupported disk, passthrough, or state combinations before modifying anything.
@@ -1025,11 +1022,12 @@ filesystems today does not enable that integration.
 
 ### 6. Backups, scheduling, and restoration
 
-**Checkpoint, 2026-09-26 evening: product implementation not started; gate open.**
+**Checkpoint, 2026-09-27: product implementation not started; gate open.**
 Native independent-NFS backup/restore feasibility and S0 snapshot destination probes
 exist, but Core repository/job/restore workflows, scheduling, retention, recovery
-APIs and Controller UI are **not delivered**. S4–S8 still depend on the Phase 5 gate;
-feasibility and native snapshot matrix results do not close them.
+APIs and Controller UI are **not delivered**. Phase 5 closed 2026-09-27 for disposable
+virtual-lab scope, so S4 may begin; S4–S8 remain open and not started.
+Feasibility and native snapshot matrix results do not close them.
 
 1. Add pool-level backup repositories, initially an external NFS-backed filesystem in a separate failure domain from primary VM storage. Separate repository credentials and permissions from guest access.
 2. Implement full backups of gracefully stopped VMs first. Include every supported disk, VM configuration, required firmware/NVRAM state, format versions, checksums, and a standalone recovery manifest. Preserve vTPM state if supported; otherwise block backup of that configuration explicitly.

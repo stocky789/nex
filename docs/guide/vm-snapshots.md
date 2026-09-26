@@ -202,7 +202,8 @@ leaf delete both settled successfully
 ([browser evidence](../qa/2026-09-26-recovery-snapshot-browser.md)). VMs-list bulk stopped
 Snapshot settled a shared name on two matching-disk shut-off guests in the same lab.
 Independent review of that bulk batch returned PASS WITH GAPS and the sticky-name retry
-gap was fixed; broader usability and forge CI still keep Phase 5 open. Multi-host
+gap was fixed. Phase 5 closed for disposable virtual-lab scope (2026-09-27);
+[close record](../qa/2026-09-26-phase5-gate/CLOSED.md). Multi-host
 replacement for running capture remains unverified beyond the earlier stopped campaigns.
 BUG-0647 (exact retry after libvirt rewrote snapshot heads) is fixed with native
 evidence; that failure mode is no longer an open revert blocker.

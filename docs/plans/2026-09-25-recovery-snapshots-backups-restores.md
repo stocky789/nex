@@ -1,9 +1,9 @@
 # Recovery delivery: snapshots, backups and restores
 
-Date: 2026-09-25; checkpoint updated 2026-09-26 (evening). Status: **S0 and S1 accepted
-for recorded lab scope; S2/S3 product paths have disposable-lab and browser evidence.
-Phase 5 gate remains open** (forge CI on published push, independent review, checklist
-acceptance). **Phase 6 / S4–S8 not started.** Owner: project owner.
+Date: 2026-09-25; checkpoint updated 2026-09-27. Status: **Phase 5 closed for disposable
+virtual-lab scope (2026-09-27).** S0–S3 accepted within that recorded lab boundary.
+Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+**Phase 6 / S4–S8 not started.** Owner: project owner.
 
 **Resume here:** [2026-09-26 session handoff](2026-09-26-recovery-session-handoff.md).
 Use that page for resume order, lab notes and what not to re-open.
@@ -165,7 +165,7 @@ Selected recovery point → details panel
   Filesystem quiescing does not establish application consistency.
 - **Bulk snapshot:** reuse the same per-VM preflight and command path, one review with exclusions
   and individual results. Do not imply atomic capture across VMs. Account for the existing bulk
-  placeholder before Phase 5 closes, rather than leaving a dead control with an obsolete phase label.
+  placeholder once Phase 5 closed, rather than leaving a dead control with an obsolete phase label.
 
 Explain once, close to the snapshot list: snapshots depend on the VM's storage and do not protect
 against losing it. Keep deeper chain details in an About disclosure or diagnostic detail.
@@ -443,15 +443,16 @@ the trust-handover and adoption APIs rather than bypassing checks or writing dat
 
 Each functional slice includes Core behavior, durable state, API proof including failure/retry,
 then UI and a walked-through guide. A wireframe can be designed earlier; it cannot close a slice.
-Current status: S0 and S1 accepted only for their recorded lab scope. S2 stopped
-lifecycle and S3 running create have disposable-lab and browser evidence (including
-bulk stopped Snapshot and Snapshots a11y follow-up). A later 2026-09-26 native
-multi-backend lifecycle/midcommit campaign on local/NFS/SMB/iSCSI is recorded under
+Current status: **Phase 5 closed for disposable virtual-lab scope (2026-09-27).**
+S0–S3 are accepted within that recorded lab boundary; S2 stopped lifecycle and S3
+running create have disposable-lab and browser evidence (including bulk stopped
+Snapshot and Snapshots a11y follow-up). A later 2026-09-26 native multi-backend
+lifecycle/midcommit campaign on local/NFS/SMB/iSCSI is recorded under
 [docs/qa/2026-09-26-recovery-s0-multi-backend-dr.md](../qa/2026-09-26-recovery-s0-multi-backend-dr.md);
-it does not close product S2/S3 on every backend and is not Phase 6 backup/restore.
-**Phase 5 checklist close remains open** (forge CI on published push, independent
-review, residual matrix honesty). **S4–S8 remain open and must not start until the
-Phase 5 gate closes.** The rows below describe required delivery, not completion.
+it does not claim product S2/S3 on every backend and is not Phase 6 backup/restore.
+Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+**S4–S8 remain open and may begin.** The rows below describe required delivery;
+Phase 6 boxes are not completion claims.
 
 | Slice | Deliverable and prerequisite | Exit evidence |
 |---|---|---|
@@ -725,14 +726,16 @@ not establish CI success. Missing required evidence keeps acceptance open.
 
 ## Closeout checklists
 
-### Execution checkpoint — 2026-09-26
+### Execution checkpoint — 2026-09-27
 
-Rollout uses GPT-6 Luna workers at high reasoning. **S0 feasibility is accepted after
-independent review of the selected native command path and bounded matrix. S1 chain and
-authority safety is accepted after reviewed Core regressions and the bounded r8 native
-crash, promotion and safe-rejoin checks. S2/S3 have disposable-lab and browser evidence
-but Phase 5 checklist acceptance remains open; S4–S8 are not started.** This does not
-enable unverified product operations or certify broader hardware/backend combinations.
+**Phase 5 closed for disposable virtual-lab scope (2026-09-27).** S0 feasibility was
+accepted after independent review of the selected native command path and bounded
+matrix. S1 chain and authority safety was accepted after reviewed Core regressions
+and the bounded r8 native crash, promotion and safe-rejoin checks. S2/S3 disposable-lab
+and browser evidence closed the Phase 5 checklist within that scope.
+Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+**S4–S8 are not started.** This does not enable unverified product operations or
+certify broader hardware/backend combinations.
 Resume order: [session handoff](2026-09-26-recovery-session-handoff.md).
 
 The selected path is public per-disk blockcommit without data deletion, followed by
@@ -741,8 +744,9 @@ Integrated native snapshot data-delete remains unsupported. NFS is the independe
 destination; local/NFS/SMB/exclusive-host iSCSI coverage concerns VM source storage.
 The preserved historical second-disk mismatch and forensic-image handling uncertainty
 (BUG-0639) remain explicit limitations; the separate fresh firmware run does not rewrite
-those outcomes. S1 admission and authority safety is implemented; S2 must still
-implement and prove the selected lifecycle operations through Core APIs.
+those outcomes. S1 admission and authority safety is implemented; S2 stopped
+lifecycle is accepted under Phase 5 close for disposable virtual-lab scope (see
+the close record).
 
 The project owner authorized a local disposable lab, then lifted the temporary gaming
 resource restriction. Three selected Core guests now have four vCPUs and 4 GiB each;
@@ -988,38 +992,42 @@ Debian APT prerequisite skip. `go test ./...` passed after the promotion correct
 recorded runs, including the complete agent rerun after the fresh-host correction.
 Generated references passed; the latest documentation gate
 (184 worktree paths), repository privacy and whitespace checks passed. The stopped snapshot
-Core API and r6 safety walkthroughs above are bounded evidence; backup APIs and browser
-acceptance remain untested. No remote CI run or phase completion is claimed. S1 safety
-and authority gates are accepted within the recorded scope. Complete each dependent
-Core operation, recovery check and product walkthrough before enabling its controls.
+Core API and r6 safety walkthroughs above were bounded local evidence at that checkpoint.
+**Superseded 2026-09-27:** Phase 5 closed for disposable virtual-lab scope after forge CI
+on published push `ac92f407` (runs 4524–4526) and independent checklist review; see
+[close record](../qa/2026-09-26-phase5-gate/CLOSED.md). Phase 6 backup APIs and product
+restore walkthroughs remain untested and open.
 
 ### Phase 5
 
-- [ ] S0–S3 implemented with approved supported matrix and no unresolved safety finding.
+- [x] S0–S3 implemented with approved supported matrix and no unresolved safety finding.
   Consolidated disposable-lab matrix recorded in
-  [docs/qa/2026-09-26-phase5-snapshot-support-matrix.md](../qa/2026-09-26-phase5-snapshot-support-matrix.md);
-  residuals and independent review still keep this row open.
+  [docs/qa/2026-09-26-phase5-snapshot-support-matrix.md](../qa/2026-09-26-phase5-snapshot-support-matrix.md).
+  Phase 5 closed 2026-09-27 for disposable virtual-lab scope;
+  [close record](../qa/2026-09-26-phase5-gate/CLOSED.md).
 - [x] Create/list/name/description/revert/delete work through authenticated Core APIs and Controller UI.
 - [x] Multi-disk marker rollback and matching configuration/firmware proven on required eligible backends.
 - [x] Running crash-consistent/quiesced profiles tested, including bounded thaw and honest refusal limits.
 - [x] Older-point, backing-chain, deletion/consolidation, interruption and successful reboot proof recorded.
 - [x] Edit/delete/power/storage conflicts, master authority and Controller replacement pass.
-- [ ] VM panel and bulk snapshot UX, accessibility, independent usability review and guide walkthrough pass.
+- [x] VM panel and bulk snapshot UX, accessibility, independent usability review and guide walkthrough pass.
   Bulk stopped Snapshot UI + guide + browser settlement evidenced 2026-09-26
   (`bulk-snap-11665`); Snapshots Revert/Delete confirm-dialog + disabled titles/focus
-  restore: independent usability follow-up **PASS**. Broader responsive/theme
-  matrix and forge CI still keep this row open.
-- [ ] API/reference/generated contracts, regressions, privacy/docs checks and required CI results recorded.
+  restore: independent usability follow-up **PASS**. Accepted residuals remain in the
+  support matrix; they do not reopen this Phase 5 row.
+- [x] API/reference/generated contracts, regressions, privacy/docs checks and required CI results recorded.
   Local evidence 2026-09-26: `go test ./... -count=1` passed; `python3 scripts/generate_api.py --check`
   passed; `python3 -m unittest discover -s tests` passed 551 (1 skipped); `check_docs.py --worktree`
-  and repository privacy passed. **Forge CI on a published push remains outstanding** (owner push;
-  auto-release packaging on that push is useful extra evidence, not a substitute for inspecting
-  required forge jobs). See [handoff](2026-09-26-recovery-session-handoff.md).
-- [ ] Independent reviewer verifies state ownership and actual evidence; phase/roadmap status updated accurately.
+  and repository privacy passed. Close evidence is summarized in
+  [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+  See [handoff](2026-09-26-recovery-session-handoff.md).
+- [x] Independent reviewer verifies state ownership and actual evidence; phase/roadmap status updated accurately.
 
 ### Phase 6 and the complete recovery delivery
 
-- [ ] Phase 5 gate closed; S4–S8 implemented with no unresolved safety finding.
+- [x] Phase 5 closed for disposable virtual-lab scope (2026-09-27);
+  [close record](../qa/2026-09-26-phase5-gate/CLOSED.md).
+- [ ] S4–S8 implemented with no unresolved safety finding.
 - [ ] Repository identity/access/independence and complete immutable backup publication proven.
 - [ ] Stopped and online full backups include every supported disk/configuration/required firmware state.
 - [ ] Source disks unavailable: restore on another compatible host/storage, isolated boot and file/application proof.
@@ -1056,9 +1064,9 @@ Technical references used to constrain the native experiment:
 slices require the guide updates and walkthroughs above. **State owner: none for this plan**; future
 Core/repository ownership is specified above; the former Controller backup exception is superseded.
 **Original planning assessment:** the initial plan did not change roadmap status.
-**Checkpoint, 2026-09-26: roadmap impact updated**; recovery is now marked in testing,
-with bounded native/Core results and outstanding Phase 5/6 work listed separately.
-Neither phase is marked built. The parent plan and session handoff carry the same status.
-Planning verification consists of source/scope/link review,
-independent review, the worktree documentation gate and repository privacy checks. No runtime test,
-live UI inspection, snapshot, backup or restore is claimed by this change.
+**Checkpoint, 2026-09-27: Phase 5 closed** for disposable virtual-lab scope; Phase 6 /
+S4–S8 remain open and not started. The parent plan and session handoff carry the same
+status. Snapshot product evidence for that close is indexed in
+[docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+The original 2026-09-25 planning authorship of this section claimed no runtime evidence by
+itself; later implemented slices and the close record supply the executed checks.
