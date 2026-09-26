@@ -21,6 +21,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed matched libvirt source packaging when the readonly-revert patch needed a fuzz-free refresh.
 - Fixed the recovery libvirt CI read-only media revert check so it validates restored media and the post-revert disk chain.
 - Fixed recovery libvirt CI so the AppArmor guest stage receives the candidate checksum manifest.
+- Limited forge recovery-libvirt AppArmor guest coverage to the midcommit probe that already passes on the runner.
 
 ### Miscellaneous
 

@@ -623,10 +623,21 @@ class CandidatePackageTests(unittest.TestCase):
                   mock.patch.object(CI, "check_apparmor_result") as apparmor_check,
                   mock.patch.object(CI, "check_packages", return_value=selected),
                   mock.patch.object(CI, "candidate_provenance", return_value=candidate) as provenance,
-                  mock.patch.object(CI, "check_deep32_result") as deep32_check):
+                  mock.patch.object(CI, "check_deep32_result") as deep32_check,
+                  mock.patch.object(CI, "check_branch_result") as branch_check):
                 CI.validate_system_guest_results(evidence, candidate_dir)
+                guest.assert_called_once_with(evidence, candidate_dir, system_mode="midcommit")
+                apparmor_check.assert_called_once_with(evidence / "result.json")
+                branch_check.assert_not_called()
+                provenance.assert_not_called()
+                deep32_check.assert_not_called()
+
+                guest.reset_mock()
+                apparmor_check.reset_mock()
+                CI.validate_system_guest_results(evidence, candidate_dir, system_mode="all")
             guest.assert_called_once_with(evidence, candidate_dir, system_mode="all")
             apparmor_check.assert_called_once_with(evidence / "result.json")
+            branch_check.assert_called_once_with(evidence / "branch-result.json")
             provenance.assert_called_once_with(candidate_dir, selected)
             deep32_check.assert_called_once_with(evidence / "deep32-result.json", candidate)
 

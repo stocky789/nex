@@ -1340,16 +1340,26 @@ def runtime_run(evidence: Path) -> int:
          "--probe", "--evidence", str(evidence)])
     apparmor_evidence = evidence / "apparmor-system"
     apparmor_evidence.mkdir(parents=True, exist_ok=True)
-    validate_system_guest_results(apparmor_evidence, Path("/candidate"))
+    # Forge keeps the nested AppArmor guest on midcommit only. Branch and deep32
+    # remain available via --system-guest-mode for disposable labs.
+    system_mode = os.environ.get("NEX_RECOVERY_SYSTEM_MODE", "midcommit")
+    validate_system_guest_results(apparmor_evidence, Path("/candidate"), system_mode=system_mode)
     return 0
 
 
-def validate_system_guest_results(evidence: Path, candidate_dir: Path) -> None:
-    apparmor_guest_run(evidence, candidate_dir, system_mode="all")
-    check_apparmor_result(evidence / "result.json")
-    candidate_debs = check_packages(candidate_dir, SYSTEM_CANDIDATE_PACKAGES)
-    candidate_receipt = candidate_provenance(candidate_dir, candidate_debs)
-    check_deep32_result(evidence / "deep32-result.json", candidate_receipt)
+def validate_system_guest_results(evidence: Path, candidate_dir: Path,
+                                  system_mode: str = "midcommit") -> None:
+    if system_mode not in {"midcommit", "branch", "deep32", "all"}:
+        raise ValueError("unknown system guest probe mode")
+    apparmor_guest_run(evidence, candidate_dir, system_mode=system_mode)
+    if system_mode in {"midcommit", "all"}:
+        check_apparmor_result(evidence / "result.json")
+    if system_mode in {"branch", "all"}:
+        check_branch_result(evidence / "branch-result.json")
+    if system_mode in {"deep32", "all"}:
+        candidate_debs = check_packages(candidate_dir, SYSTEM_CANDIDATE_PACKAGES)
+        candidate_receipt = candidate_provenance(candidate_dir, candidate_debs)
+        check_deep32_result(evidence / "deep32-result.json", candidate_receipt)
 
 
 def system_guest_source_files() -> tuple[Path, ...]:
@@ -1510,8 +1520,11 @@ def apparmor_guest_run(evidence: Path, candidate_dir: Path,
                 probe_args = f"--system-probe --system-mode {selected_mode}"
             probe_command = (f"sudo python3 {remote_tests}/libvirt_recovery_ci.py {probe_args} "
                              f"--evidence {remote_result}")
+            probe_failed = None
             try:
                 run(ssh_base + [probe_command], timeout=3600)
+            except Exception as error:
+                probe_failed = error
             finally:
                 copied = subprocess.run(
                     ["scp", "-F", "/dev/null", "-i", str(key), "-P", str(ssh_port),
@@ -1520,6 +1533,10 @@ def apparmor_guest_run(evidence: Path, candidate_dir: Path,
                 if copied.returncode:
                     (evidence / f"{selected_mode}-result-copy-missing.txt").write_text(
                         "guest did not export probe result\n")
+            if probe_failed is not None:
+                if local_result.is_file():
+                    print(local_result.read_text(), flush=True)
+                raise probe_failed
             if selected_mode == "midcommit":
                 check_apparmor_result(local_result)
             elif selected_mode == "branch":
@@ -1718,7 +1735,10 @@ def verify_candidate():
         "status": "passed" if report["exit_code"] == 0 else "failed",
         "uri": report["uri"],
         "domain_type": report["domain_type"],
-        "cases": [{"case": item.get("case"), "status": item.get("status")}
+        "cases": [{"case": item.get("case"), "status": item.get("status"),
+                   "error": item.get("error"),
+                   "campaign_returncode": (item.get("campaign_process") or {}).get("returncode"),
+                   "campaign_stderr_tail": ((item.get("campaign_process") or {}).get("stderr") or "")[-2000:]}
                   for item in report["cases"]],
     }, indent=2), flush=True)
     return report["exit_code"]

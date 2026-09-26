@@ -21,11 +21,12 @@ jobs:
         with:
           persist-credentials: false
       # Default host_run builds the candidate then runs helper, TCG lifecycle, and
-      # AppArmor system-guest probes with system_mode=all (midcommit + branch + deep32).
+      # the AppArmor system-guest midcommit probe. Branch and deep32 stay lab-only
+      # (NEX_RECOVERY_SYSTEM_MODE=all) until they are stable on the forge runner.
       # Leftover (not wired here — long disposable Core labs, not safe/cheap for forge):
       # recovery_s0_interrupt.py, recovery_s0_backup.py, recovery_s0_firmware.py,
       # core_local_snapshot_api.py, core_snapshot_controller_replacement.py.
-      - name: Build candidate and run helper, TCG lifecycle, and AppArmor guest regressions (system_mode=all)
+      - name: Build candidate and run helper, TCG lifecycle, and AppArmor midcommit guest
         run: |
           docker info >/dev/null
           python3 tests/integration/libvirt_recovery_ci.py
