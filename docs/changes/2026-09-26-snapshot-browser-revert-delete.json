@@ -1,0 +1,61 @@
+{
+  "summary": "Close S3 browser revert/delete on matching-disk guests; fix CDROM driver ownership, empty native description, revertDisks tip parse, defined-state revert eligibility, and Controller OpenAPI snapshot route coverage.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_revert.go",
+    "internal/vmhost/managed_snapshot_delete.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-snapshot-browser-revert-delete.json",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "internal/vmhost/managed_snapshot_test.go",
+    "web/src/vm-snapshots.tsx",
+    "docs/plans/2026-09-26-recovery-session-handoff.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Verification cites browser revert and leaf delete on a matching-disk never-started guest.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Documents already-implemented Controller snapshot list/create/revert/delete/metadata routes and adds snapshot-metadata to Command/Operation kind enums so OpenAPI matches runtime.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Phase 5 S3 browser revert/delete evidence recorded; checklist updated toward Phase 5 close.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-vms.json snapshot catalog, pending recovery reservations, and owner journals; browser only submits authenticated snapshot routes.",
+    "reason": "Controller remains a replaceable front end onto host-reported catalog and operations."
+  },
+  "verification": {
+    "method": "Playwright signed in to disposable Controller :36704; browser revert of s3-c5-base and browser delete of s3-c5-leaf2 both settled succeeded on s3-browser-clean5. Named aria-labels verified for Rename/Revert/Delete. go test agent/vmhost focused selections passed; defined-state revert reservation and revertDisks XML regressions added. API contract route and Command-kind tests pass after OpenAPI update. Independent review: PASS WITH GAPS; Phase 5 gate remains open.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+      "internal/agent/pool_vm_recovery_test.go",
+      "internal/vmhost/managed_test.go",
+      "tests/test_api_contract.py"
+    ]
+  }
+}

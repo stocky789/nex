@@ -357,6 +357,44 @@ than relying on a cloud-image kernel. A Debian 13 archive inspection found
 record the exact selected kernel and retain its required corresponding source;
 this one package inspection does not certify a built ISO or hardware support.
 
+## Recovery lab libvirt backport — 2026-09-25
+
+The S0 recovery experiment requires testing Debian libvirt `11.3.0-3+deb13u3`
+with upstream commit `7b889af2d235d3fadfc172f371f02df0b74e40f2`. Its two
+permission-flag changes let an independently granted AppArmor write rule take
+effect during external snapshot consolidation. The inspected Debian source
+package's `debian/copyright` identifies the affected helper under LGPL-2.1-or-later;
+the patch retains upstream attribution. A second, local patch assigns unique temporary
+overlay names during external snapshot revert. A third, local helper patch completes
+supported partial backing-chain metadata. A fourth local patch serializes per-disk
+external snapshot consolidation so one disk's cleanup cannot revoke another
+disk's temporary access. A fifth local patch bounds QMP reply parsing to the
+supported backing-chain depth while retaining the general JSON parser's limit.
+The stopped-deletion recovery candidate persists the native cancellation marker
+for temporarily started domains in the same libvirt snapshot source file.
+The local patches are explicitly LGPL-2.1-or-later,
+matching the modified libvirt source files. Libvirt remains a separate Debian program,
+not copied or linked into Nex's AGPL executable.
+
+The next candidate removes the two integrated snapshot-deletion patches: recovery
+uses public block-commit operations without data deletion, followed by metadata-only
+removal and reference-checked file cleanup. The four retained patches cover AppArmor
+permissions, unique revert overlays, partial backing chains and bounded QMP parsing.
+Historical six-patch binaries and their matching source remain separate artifacts;
+their validation does not certify the new package cohort.
+
+The subsequent `+nex4` candidate adds a local patch excluding read-only disks
+and non-disk devices from external-revert overlay creation (BUG-0647). It changes
+`src/qemu/qemu_snapshot.c` under LGPL-2.1-or-later and must be retained in the matched
+source package and build recipe. Its build and native validation have not started;
+the earlier four-patch evidence does not certify this additional change.
+
+The original Nex build recipe is AGPL-3.0-only. Retain the untouched Debian
+source inputs, complete matching patched source package, copyright notices, build
+inputs and checksums with every redistributed patched binary. A lab build or
+successful snapshot test does not establish installer integration, complete ISO
+source retention or release certification; those gates remain separate.
+
 ## Custom installer frontend — 2026-09-08
 
 The Nex GUI now combines original AGPL-3.0-only shell code with the pinned cdebconf

@@ -30,7 +30,7 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.4.12`, may publish its full offline ISO to the private
+  The current working version, `0.4.13`, may publish its full offline ISO to the private
   forge for internal labs. With deploy secrets unset, netinst downloads its Nex payloads
   from the forge release,
   which must allow anonymous HTTPS access; a private forge requiring login cannot serve

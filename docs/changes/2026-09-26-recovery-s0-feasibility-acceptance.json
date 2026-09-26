@@ -1,0 +1,39 @@
+{
+  "summary": "Accept the bounded S0 native recovery feasibility matrix after independent evidence review; product phases remain open. API impact: none.",
+  "paths": [
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Native feasibility acceptance enables no operator workflow; Core API and UI delivery and their guide walkthroughs remain separate gates.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This acceptance record changes no request, response, authorization or durable operation. It records the selected native boundary and clarifies the already-scoped NFS backup destination; API implementation remains in the relevant feature slices.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The internal feasibility gate is accepted, but Phase 5/6 availability and product milestone status remain unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The record documents reviewed experiments and introduces no product state."
+  },
+  "verification": {
+    "method": "Independent review checked the bounded native snapshot, paired firmware, chain, repository and backup results and their source/candidate provenance. The primary inspected the run5 receipt and full Go suite passed; Python discovery ran 548 tests with 547 passes and one Debian APT prerequisite skip. Focused later storage history tests passed separately. The preceding worktree documentation gate passed 178 paths; generated references and repository privacy checks passed. Acceptance excludes in-progress job-loss recovery, unresolved historical fixture uncertainty, product API/UI delivery and broader hardware certification. No remote CI success is claimed.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-s0-firmware-public-delete.md",
+      "docs/qa/2026-09-26-recovery-libvirt-deep32.md",
+      "docs/qa/2026-09-26-recovery-s0-branch-nex3.md",
+      "docs/qa/2026-09-26-recovery-libvirt-public-consolidation.md",
+      "docs/qa/2026-09-26-recovery-s0-backup-nex3-checkpoint.md",
+      "docs/qa/2026-09-26-recovery-backup-job-disappearance.md",
+      "docs/qa/2026-09-25-recovery-s0-repository.md",
+      "docs/qa/2026-09-25-recovery-s0-interruption.md"
+    ]
+  }
+}

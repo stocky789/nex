@@ -1,0 +1,42 @@
+{
+  "summary": "Make the local autostart regression portable by using temporary storage paths and separating Core dispatch from the vmhost storage-ready start check. API impact: none.",
+  "paths": [
+    "internal/agent/pool_vm_test.go",
+    "internal/vmhost/managed_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test fixture changes do not alter operator-visible behavior or workflows.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The changes exercise existing autostart and VM power behavior without changing any API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This fixes regression-test portability only; no recovery plan behavior or acceptance gate changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only test fixtures changed; no product state is introduced or moved."
+  },
+  "verification": {
+    "method": "The agent test now uses a t.TempDir repository and asserts Core claims and dispatches the local autostart once per boot while its untrusted test path is correctly refused by the storage guard. A vmhost test uses the existing private managedStorageReadyFn test seam to prove a disk-backed local VM start reaches virsh after storage readiness succeeds. No host-global storage path was created.",
+    "evidence": [
+      "internal/agent/pool_vm_test.go",
+      "internal/vmhost/managed_test.go",
+      "docs/BUG_LEDGER.md"
+    ],
+    "commands": [
+      "go test ./internal/agent -run '^TestAutostartPassAttemptsLocalStorageGuests$' -count=1",
+      "go test -race ./internal/agent -run '^TestAutostartPassAttemptsLocalStorageGuests$' -count=1",
+      "go test ./internal/vmhost -run '^TestManagedPowerStartAcceptsReadyLocalStorage$' -count=1",
+      "go test -race ./internal/vmhost -run '^TestManagedPowerStartAcceptsReadyLocalStorage$' -count=1",
+      "go test ./internal/agent -count=1",
+      "go test ./internal/vmhost -count=1"
+    ]
+  }
+}

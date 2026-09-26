@@ -1,0 +1,36 @@
+{
+  "summary": "Isolate the pool master's retained-snapshot storage-detach guard in a focused regression and record why a native snapshot-only fixture is not reachable through the supported VM lifecycle.",
+  "paths": [
+    "internal/agent/pool_vm_recovery_test.go",
+    "docs/qa/2026-09-26-snapshot-only-storage-detach-boundary.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor regression and acceptance-boundary note; it adds no operator action or released behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The test exercises the existing storage-detach master guard and retained snapshot dependency. No request, response, route or compatibility behavior changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records partial S1 evidence and leaves the broader native and shared-storage lease gates open; the project owner maintains the plan and roadmap status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state is added or changed; the test uses temporary in-memory and filesystem fixtures."
+  },
+  "verification": {
+    "method": "`go test ./internal/agent -run 'TestPoolStorageDetach(SnapshotHistoryBlocksOldRepositoryAfterCurrentDefinitionMoves|IsRefusedWhileVMRecoveryUsesRepository)' -count=1` passed. Source and prior QA were inspected read-only. No native lab operation was run because the current supported VM lifecycle retains removed disk files and cannot safely erase them while preserving the snapshot.",
+    "evidence": [
+      "internal/agent/pool_vm_recovery_test.go",
+      "docs/qa/2026-09-26-snapshot-only-storage-detach-boundary.md",
+      "docs/qa/2026-09-26-recovery-snapshot-resource-dependencies.md"
+    ]
+  }
+}

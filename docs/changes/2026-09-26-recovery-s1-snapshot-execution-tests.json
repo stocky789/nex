@@ -1,0 +1,33 @@
+{
+  "summary": "Add focused Core regressions for unrelated VM control during native snapshot capture and exact persisted-operation reconciliation after engine reconstruction.",
+  "paths": [
+    "internal/vmhost/managed_snapshot_test.go",
+    "docs/changes/2026-09-26-recovery-s1-snapshot-execution-tests.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "These tests validate existing Core execution and recovery behavior without changing operator workflows.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The tests exercise the existing managed snapshot journal and execution contract; no request or response behavior changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This adds focused S1 acceptance coverage without changing recovery scope or phase requirements.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The tests exercise the existing Core managed VM and snapshot journals; they add no durable record.",
+    "reason": "Snapshot execution and replay remain Core-owned state and behavior."
+  },
+  "verification": {
+    "method": "Both new tests passed with `go test ./internal/vmhost -run 'Test(BlockedSnapshotCaptureAllowsUnrelatedVMStart|PersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate)$' -count=1` and the same command with `-race -count=1`. The complete package passed with `go test ./internal/vmhost -count=1` (9.644s).",
+    "evidence": [
+      "internal/vmhost/managed_snapshot_test.go"
+    ]
+  }
+}

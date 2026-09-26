@@ -1,0 +1,48 @@
+{
+  "summary": "Keep libvirt native autostart disabled for managed pool VMs, fence VM and storage mutations while a Core snapshot intent awaits pool-owner settlement, and preserve snapshot catalog authority during pool rehome.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_recovery_test.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/pool.go",
+    "internal/vmhost/pool_test.go",
+    "internal/vmhost/storage_guard_maintenance_test.go",
+    "docs/guide/vm-power.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/API.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Managed pool VMs no longer use libvirt's native autostart flag; Core starts an autostart-requested VM through pool admission. The existing VM creation, editing, power, authority and maintenance guidance now describes that behavior.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/edit-virtual-machine.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Managed-pool native autostart suppression keeps the existing VM create/update request and result fields; Core enforces the existing desired-autostart field after pool admission. The API reference documents that behavior. Snapshot create and settlement contracts are assessed separately in the snapshot-dispatch change record.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This implements part of the planned S1 safety gate without changing milestone status or scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The Core managed VM journal stores preflight/local snapshot intent, the pool master's RecoveryReservation, native stage/outcome and settlement acknowledgement. Same-VM and dependent-storage mutations stay fenced until settlement; a replacement Controller re-adopts VM inventory from the pool master and does not own or reconstruct this host-local execution fence.",
+    "reason": "The reservation controls local native mutations for a Core-owned VM and remains durable with the host journal."
+  },
+  "verification": {
+    "method": "`go test ./internal/vmhost -count=1` and `go test -race -timeout 20m ./internal/vmhost` passed. Rehome takes the shared managed `operations.lock`, refuses unsettled snapshot operations, and on leaving refuses completed snapshots whose catalog remains owned by the old pool; tests cover fresh-host no-state behavior, lock serialization, unresolved-snapshot refusal, retained-catalog refusal, and no ownership changes on refusal (BUG-0598). Other tests cover managed autostart suppression, explicit disable observation, snapshot preflight/local-intent fencing, exact same-operation replay, VM definition lookup, partial recovery evidence refusal, and emergency shutdown/force-stop after a queued snapshot. Settlement evidence re-resolves every disk storage registration and requires the same normalized storage identity and generation from the immutable observation; a regression accepts the unchanged path/FSID and refuses lookalike disk chains after an FSID replacement or generation change. It also checks exact reservation/intent binding, pending public status, live disk-chain/XML/autostart state, firmware manifests and a verified native metadata descriptor. The native producer and host walkthrough remain open. No installed-Core reboot walkthrough has run; migration of pre-existing libvirt flags and an actual reboot/autostart result remain unverified. `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` passed (1 test). `python3 scripts/check_docs.py --worktree` currently fails only because the concurrent native files `internal/vmhost/managed_snapshot.go` and `internal/vmhost/managed_snapshot_test.go` are not yet covered by an assessment record; reported to their owner.",
+    "evidence": ["internal/vmhost/managed_test.go", "internal/vmhost/managed_chain.go"]
+  }
+}

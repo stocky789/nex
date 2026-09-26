@@ -721,10 +721,11 @@ var storageMountStale = func(path string) bool {
 // fixes while the mount unit is still active, so a recheck could only report the mountpoint
 // unavailable for ever. Cycling the generated unit re-resolves the handle.
 //
-// It is attempted only when nothing durable on this host uses the repository, so a VM disk or
-// an imported ISO is never pulled out from under a guest; when something does, the dependency
-// is named and the operator decides. Nothing else is repaired: any other cause leaves the
-// mount exactly as it was and the ordinary verification reports it.
+// It is attempted only when no current VM disk, imported ISO, or retained disk path uses the
+// repository. Historical snapshot references alone do not block re-establishing this same
+// registration; source changes and detach remain guarded separately. When a current reference
+// exists, it is named and the operator decides. Nothing else is repaired: any other cause
+// leaves the mount exactly as it was and ordinary verification reports it.
 func repairStaleRemoteMount(ctx context.Context, js []managedJournal, s protocol.StorageRegistration) error {
 	if k := s.StorageKind(); k != protocol.StorageKindNFS && k != protocol.StorageKindSMB {
 		return nil
@@ -732,7 +733,7 @@ func repairStaleRemoteMount(ctx context.Context, js []managedJournal, s protocol
 	if !storageMountStale(remoteMountPath(s)) {
 		return nil
 	}
-	if deps := storageDependencies(js, s.ID); len(deps) > 0 {
+	if deps := storageContentDependencies(js, s.ID); len(deps) > 0 {
 		return errors.New("storage has a stale file handle from a change on the file server and cannot be remounted while used by " + strings.Join(deps, ", ") + "; stop them and recheck again")
 	}
 	unit, unitPath := remoteUnitPath(s)

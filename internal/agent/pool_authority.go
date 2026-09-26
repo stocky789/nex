@@ -67,6 +67,7 @@ var poolReplicaRefusals = map[string]protocol.PoolReplicaStatus{}               
 var poolReplicaPolls = map[string]time.Time{}                                    // dir -> master last confirmed
 var poolReplicaPushing = map[string]bool{}                                       // dir -> single flight
 var poolReplicaMembership = Membership                                           // test seam: one validated snapshot per check
+var errPoolAuthorityReplicaBusy = errors.New("pool authority replica push already in progress")
 
 // ClearPoolReplicaStateForTest drops the process-local replica observations for one store.
 func ClearPoolReplicaStateForTest(s *Store) {
@@ -209,21 +210,70 @@ func poolReplicaVMs(s *Store) (json.RawMessage, error) {
 	return json.RawMessage(b), nil
 }
 
+func poolReplicaResourceMutations(s *Store) ([]protocol.PoolResourceMutation, error) {
+	poolStorageMu.Lock()
+	defer poolStorageMu.Unlock()
+	state, err := loadPoolStorage(s)
+	if err != nil {
+		return nil, err
+	}
+	return poolResourceMutationsFromStorage(state)
+}
+
+func poolResourceMutationsFromStorage(state poolStorageState) ([]protocol.PoolResourceMutation, error) {
+	out := make([]protocol.PoolResourceMutation, 0)
+	for key, operationID := range state.Mutations {
+		if !strings.HasPrefix(key, poolResourceMutationPrefix) {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(key, poolResourceMutationPrefix), "/")
+		if len(parts) != 2 {
+			return nil, errors.New("pool resource mutation key is invalid")
+		}
+		mutation := protocol.PoolResourceMutation{Resource: parts[0], ResourceID: parts[1], OperationID: operationID}
+		if mutation.Valid() != nil {
+			return nil, errors.New("pool resource mutation record is invalid")
+		}
+		out = append(out, mutation)
+	}
+	slices.SortFunc(out, func(a, b protocol.PoolResourceMutation) int {
+		if c := strings.Compare(a.Resource, b.Resource); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ResourceID, b.ResourceID)
+	})
+	return out, protocol.ValidatePoolResourceMutations(out)
+}
+
 // buildPoolAuthorityReplica assembles the master's current authority. It returns the
 // replica without its per-member fields, wrap or signature, plus the content digest that
 // identifies this authority regardless of which member it is later addressed to.
 func buildPoolAuthorityReplica(s *Store) (protocol.PoolAuthorityReplica, string, error) {
+	vmSection, err := poolReplicaVMs(s)
+	if err != nil {
+		return protocol.PoolAuthorityReplica{}, "", err
+	}
+	return buildPoolAuthorityReplicaWithVMs(s, vmSection)
+}
+
+// buildPoolAuthorityReplicaWithVMs builds the same authority projection with
+// a caller's prospective VM section, used to reject writes that would make the
+// signed replica unrepresentable before native work starts.
+func buildPoolAuthorityReplicaWithVMs(s *Store, vmSection json.RawMessage) (protocol.PoolAuthorityReplica, string, error) {
 	membership, err := Membership(s)
 	if err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
+	return buildPoolAuthorityReplicaForMembership(s, membership, vmSection)
+}
+
+func buildPoolAuthorityReplicaForMembership(s *Store, membership protocol.PoolMembership, vmSection json.RawMessage) (protocol.PoolAuthorityReplica, string, error) {
 	if membership.MasterHostID != s.State.HostID {
 		return protocol.PoolAuthorityReplica{}, "", errors.New("only the pool master builds an authority replica")
 	}
+	var err error
 	replica := protocol.PoolAuthorityReplica{PoolID: membership.PoolID, MasterHostID: membership.MasterHostID, Membership: membership}
-	if replica.VMs, err = poolReplicaVMs(s); err != nil {
-		return protocol.PoolAuthorityReplica{}, "", err
-	}
+	replica.VMs = vmSection
 	if replica.Storage, err = poolReplicaStorage(s); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
@@ -236,6 +286,9 @@ func buildPoolAuthorityReplica(s *Store) (protocol.PoolAuthorityReplica, string,
 	if replica.StorageClusters, err = poolReplicaClusters(s); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
+	if replica.ResourceMutations, err = poolReplicaResourceMutations(s); err != nil {
+		return protocol.PoolAuthorityReplica{}, "", err
+	}
 	if replica.Sections, err = replica.SectionDigests(); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
@@ -244,6 +297,70 @@ func buildPoolAuthorityReplica(s *Store) (protocol.PoolAuthorityReplica, string,
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
 	return replica, digest, nil
+}
+
+// poolAuthorityReplicaFitsAddressedBodies checks the exact JSON size shape sent
+// to every ready member. Wrapped ciphertext lengths are deterministic for a
+// plaintext, so dummy base64 values preserve the real encoded size; the maximum
+// P-256 ASN.1 signature length leaves the check conservative.
+func poolAuthorityReplicaFitsAddressedBodies(s *Store, replica protocol.PoolAuthorityReplica, caKeyPEM string) error {
+	baseBody, err := json.Marshal(replica)
+	if err != nil || len(baseBody) > protocol.PoolReplicaLimit {
+		return errors.New("pool authority replica would exceed the peer body limit")
+	}
+	material := poolFenceCredentialMaterial(s, replica.Membership)
+	var witnessBundle []byte
+	if witness := replica.Membership.Witness; witness != nil && witness.CredentialsReady {
+		witnessBundle, err = vmhost.PoolWitnessBundle(s.dir, witness.FencingGeneration)
+		if err != nil {
+			return errors.New("pool witness credential is unavailable for a bounded replica")
+		}
+	}
+	wrapped := func(plaintext []byte) *protocol.PoolWrappedKey {
+		return &protocol.PoolWrappedKey{
+			EphemeralPublicKey: strings.Repeat("A", base64.StdEncoding.EncodedLen(65)),
+			Nonce:              strings.Repeat("A", base64.StdEncoding.EncodedLen(12)),
+			Ciphertext:         strings.Repeat("A", base64.StdEncoding.EncodedLen(len(plaintext)+16)),
+		}
+	}
+	for _, member := range replica.Membership.Members {
+		if member.HostID == s.State.HostID || member.Status != "ready" || member.PeerOrigin == "" {
+			continue
+		}
+		addressed := replica
+		addressed.MemberHostID = member.HostID
+		addressed.Generation = ^uint64(0)
+		addressed.CreatedAt = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+		addressed.CAKeyWrapped = wrapped([]byte(caKeyPEM))
+		addressed.FenceCredentials = nil
+		for _, fenced := range replica.Membership.Members {
+			files, ok := material[fenced.HostID]
+			if !ok || fenced.Fence == nil {
+				continue
+			}
+			plaintext, err := json.Marshal(files)
+			if err != nil || len(plaintext) > protocol.PoolReplicaLimit/4 {
+				return errors.New("pool fence credential is too large for a bounded replica")
+			}
+			addressed.FenceCredentials = append(addressed.FenceCredentials, protocol.PoolWrappedFenceCredential{
+				HostID: fenced.HostID, CredentialRef: fenced.Fence.CredentialRef,
+				Version: fenced.FenceCredentialVersion, Wrapped: wrapped(plaintext),
+			})
+		}
+		addressed.WitnessCredentials = nil
+		if witness := replica.Membership.Witness; witness != nil && witness.CredentialsReady {
+			addressed.WitnessCredentials = []protocol.PoolWrappedWitnessCredential{{
+				HostID: member.HostID, FencingGeneration: witness.FencingGeneration, Wrapped: wrapped(witnessBundle),
+			}}
+		}
+		// P-256 ECDSA ASN.1 signatures are at most 72 bytes, or 96 base64 chars.
+		addressed.Signature = strings.Repeat("A", base64.StdEncoding.EncodedLen(72))
+		body, err := json.Marshal(addressed)
+		if err != nil || len(body) > protocol.PoolReplicaLimit {
+			return errors.New("pool authority replica would exceed the peer body limit")
+		}
+	}
+	return nil
 }
 
 // advancePoolAuthorityGeneration persists the generation before anything is pushed, so a
@@ -914,6 +1031,13 @@ func poolReplicaPostAckMatches(s *Store, host string, generation uint64, digest 
 	return ok && ack.Error == "" && ack.Verified && ack.Generation == generation && ack.Digest == digest
 }
 
+// poolAuthorityReplicaAckRequired applies to snapshot reservation/settlement and
+// ordinary replica-push failure aggregation. Destructive resource removal and
+// storage-lease preparation retain their stricter all-ready-host gates.
+func poolAuthorityReplicaAckRequired(member protocol.PoolMember) bool {
+	return member.Status == "ready" && !member.ReplicaAckExcluded
+}
+
 // PushPoolAuthorityReplicas advances and persists this master's authority generation, then
 // pushes the current replica to every ready member that is behind. It is single-flight per
 // store, safe to call from every probe tick, and safe to retry: a member acknowledges the
@@ -922,7 +1046,7 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 	poolReplicaMu.Lock()
 	if poolReplicaPushing[s.dir] {
 		poolReplicaMu.Unlock()
-		return nil
+		return errPoolAuthorityReplicaBusy
 	}
 	poolReplicaPushing[s.dir] = true
 	poolReplicaMu.Unlock()
@@ -974,7 +1098,9 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 		}
 		if err = pushPoolReplicaToMember(ctx, s, member, replica, digest, caKeyPEM, material, signer, timeout); err != nil {
 			recordPoolReplicaAck(s, member.HostID, protocol.PoolReplicaStatus{Error: poolReplicaError(err)})
-			failed = err
+			if poolAuthorityReplicaAckRequired(member) {
+				failed = err
+			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()

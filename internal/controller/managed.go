@@ -2,7 +2,9 @@
 package controller
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -85,7 +87,7 @@ func (c *Controller) saveResourceStatus(tx *sql.Tx, user, requestID, pool, host,
 		// Requests on an existing VM (vm-power, vm-media, vm-update, vm-delete) pass the VM ID
 		// as name and a per-request row id; audit the VM so its activity can be found by VM ID.
 		target := id
-		if strings.HasPrefix(cmd.Kind, "vm-") && cmd.Kind != "vm-create" {
+		if (strings.HasPrefix(cmd.Kind, "vm-") && cmd.Kind != "vm-create") || strings.HasPrefix(cmd.Kind, "snapshot-") {
 			target = name
 		}
 		err = c.audit(tx, user, cmd.Kind, target)
@@ -910,17 +912,22 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		return err
 	}
 	// The host's operation ID is the Controller's when this Controller issued it; only a
-	// replaced Controller lacks the row. Batch two placeholders per outcome below
-	// SQLite's variable limit; automatic-start results can outnumber journal entries.
+	// replaced Controller lacks the row. Snapshot IDs that exist only in Core history use a
+	// deterministic host-scoped Controller ID so two hosts cannot hide each other's rows.
 	known := map[string]bool{}
 	for start := 0; start < len(m.Outcomes); start += 10000 {
 		batch := m.Outcomes[start:min(start+10000, len(m.Outcomes))]
-		ids, requests := make([]any, 0, len(batch)), make([]any, 0, len(batch))
+		ids, requests := make([]any, 0, len(batch)*2), make([]any, 0, len(batch))
 		for _, o := range batch {
-			ids, requests = append(ids, o.OperationID), append(requests, "adopt-outcome:"+host+":"+o.OperationID)
+			ids = append(ids, o.OperationID)
+			if snapshotOutcomeKind(o.Kind) {
+				ids = append(ids, adoptedSnapshotOperationID(host, o.OperationID))
+			}
+			requests = append(requests, "adopt-outcome:"+host+":"+o.OperationID)
 		}
-		marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-		rows, err := tx.Query("SELECT id,request_id FROM operations WHERE id IN ("+marks+") OR request_id IN ("+marks+")", append(ids, requests...)...)
+		idMarks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		requestMarks := strings.TrimSuffix(strings.Repeat("?,", len(requests)), ",")
+		rows, err := tx.Query("SELECT id,request_id FROM operations WHERE id IN ("+idMarks+") OR request_id IN ("+requestMarks+")", append(ids, requests...)...)
 		if err != nil {
 			return err
 		}
@@ -936,11 +943,12 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	}
 	// An adopted needs_attention outcome the host no longer reports was settled there (an
 	// interrupted entry re-observed, or a pending command the restarted agent finished).
+	// Snapshot work requires explicit owner settlement; a missing observation proves nothing.
 	settled := []any{stamp(), host, "adopt-outcome:" + host + ":%"}
 	for _, o := range m.Outcomes {
 		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
 	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
 		return err
 	}
 	for _, o := range m.Outcomes {
@@ -948,34 +956,66 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		if !identifierValid(strings.TrimSuffix(o.OperationID, ":start")) || !managedKind(o.Kind) || (o.Status != "queued" && o.Status != "succeeded" && o.Status != "failed" && o.Status != "needs_attention") {
 			continue
 		}
+		requestID := "adopt-outcome:" + host + ":" + o.OperationID
+		knownOwnOperation := known[o.OperationID]
+		// Snapshot projection IDs are host-scoped digests and can equal a later Core
+		// operation ID. Only a row this Controller issued (with a managed_resources
+		// command payload) is settled as an own operation; adopt mirrors remap again.
+		if snapshotOutcomeKind(o.Kind) && knownOwnOperation {
+			var owned int
+			if err = tx.QueryRow("SELECT count(*) FROM managed_resources WHERE operation_id=?", o.OperationID).Scan(&owned); err != nil {
+				return err
+			}
+			knownOwnOperation = owned > 0
+		}
 		// A Core recovery outcome for this Controller's own operation is authoritative too.
 		// Restrict the update to its immutable id/kind/host and nonterminal states so a
-		// stale or cross-host report cannot alter a completed operation.
-		if known[o.OperationID] && o.Status != "queued" {
+		// stale or cross-host report cannot alter a completed operation. Snapshot kinds use
+		// the same path when this Controller issued the operation id.
+		if knownOwnOperation && o.Status != "queued" {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
 				return err
 			}
 		}
 		// Adopted tasks are passive mirrors: only Core moves them, and they are never
 		// dispatched by this Controller. Terminal history must not regress to queued.
-		if known["adopt-outcome:"+host+":"+o.OperationID] && o.Status != "queued" {
-			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, "adopt-outcome:"+host+":"+o.OperationID); err != nil {
+		if known[requestID] && o.Status != "queued" {
+			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE host_id=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), host, requestID); err != nil {
 				return err
 			}
 		}
-		if known[o.OperationID] || known["adopt-outcome:"+host+":"+o.OperationID] {
+		if knownOwnOperation || known[requestID] {
 			continue
 		}
-		known[o.OperationID] = true
+		controllerID := o.OperationID
+		if snapshotOutcomeKind(o.Kind) {
+			controllerID = adoptedSnapshotOperationID(host, o.OperationID)
+			if known[controllerID] {
+				if err = attention("snapshot", o.Kind, o.OperationID, o.Name, "adopted snapshot operation ID conflicts with existing history"); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		now := stamp()
-		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", o.OperationID, host, o.Kind, "adopt-outcome:"+host+":"+o.OperationID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
+		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
 			return err
 		}
+		known[controllerID], known[requestID] = true, true
 		if err = auditDetail(tx, "adopt.outcome", clip(o.ID, 200), clip(o.Kind+" "+o.Name+" "+o.Status+": "+o.Error, 4096)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func adoptedSnapshotOperationID(host, coreOperationID string) string {
+	digest := sha256.Sum256([]byte(host + "\x00" + coreOperationID))
+	return "snapshot-" + base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func snapshotOutcomeKind(kind string) bool {
+	return kind == "snapshot-create" || kind == "snapshot-revert" || kind == "snapshot-delete" || kind == "snapshot-metadata"
 }
 
 // adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
@@ -1051,7 +1091,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

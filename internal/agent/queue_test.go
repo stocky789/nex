@@ -49,7 +49,7 @@ func TestManagedQueueAdmissionReplayAndRestart(t *testing.T) {
 	defer reopened.Close()
 	for _, cmd := range commands {
 		for i := 0; i < 100; i++ {
-			if got := nextManagedCommand(reopened.State.Journal); got != cmd.OperationID {
+			if got := nextManagedCommand(reopened.State.Journal, ""); got != cmd.OperationID {
 				t.Fatalf("next %q, want %q", got, cmd.OperationID)
 			}
 		}
@@ -57,7 +57,7 @@ func TestManagedQueueAdmissionReplayAndRestart(t *testing.T) {
 		e.Status = "succeeded"
 		reopened.State.Journal[cmd.OperationID] = e
 	}
-	if nextManagedCommand(reopened.State.Journal) != "" {
+	if nextManagedCommand(reopened.State.Journal, "") != "" {
 		t.Fatal("terminal work dispatched")
 	}
 }
@@ -73,13 +73,13 @@ func TestManagedQueueLegacyOrderAndOverflow(t *testing.T) {
 	e.Order = 1
 	e.RequestedAt = now.Add(-time.Hour)
 	journal["c"] = e
-	if got := nextManagedCommand(journal); got != "a" {
+	if got := nextManagedCommand(journal, ""); got != "a" {
 		t.Fatalf("legacy stable tie-break: %q", got)
 	}
 	e = journal["b"]
 	e.RequestedAt = now.Add(-time.Minute)
 	journal["b"] = e
-	if got := nextManagedCommand(journal); got != "b" {
+	if got := nextManagedCommand(journal, ""); got != "b" {
 		t.Fatalf("legacy receipt order: %q", got)
 	}
 	s := testStore(t)
@@ -117,7 +117,7 @@ func TestManagedQueueSurvivesControllerReplacement(t *testing.T) {
 	if pending.Order != before.Order || pending.Status != "pending" || !pending.Acknowledged || !s.State.Journal["done"].Acknowledged {
 		t.Fatal("replacement lost queue or retained stale transport results")
 	}
-	if nextManagedCommand(s.State.Journal) != "pending" {
+	if nextManagedCommand(s.State.Journal, "") != "pending" {
 		t.Fatal("replacement lost runnable work")
 	}
 	outcomes := commandOutcomes(s.State.Journal, nil)
@@ -163,7 +163,7 @@ func TestManagedQueueLocalDependencyDoesNotChangeReplay(t *testing.T) {
 	if entry.AfterOperationID != "edit" || entry.Command.Power.AfterOperationID != "" {
 		t.Fatal("local dependency missing or transport input mutated")
 	}
-	dispatched := dispatchCommand(entry)
+	dispatched := dispatchCommand(entry, s.State.Journal)
 	if dispatched.Power.AfterOperationID != "edit" || entry.Command.Power.AfterOperationID != "" || start.Power.AfterOperationID != "" {
 		t.Fatal("dispatch lost dependency or mutated transport command")
 	}
@@ -175,7 +175,7 @@ func TestManagedQueueLocalDependencyDoesNotChangeReplay(t *testing.T) {
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{explicit}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := dispatchCommand(s.State.Journal["explicit"]).Power.AfterOperationID; got != "edit" {
+	if got := dispatchCommand(s.State.Journal["explicit"], s.State.Journal).Power.AfterOperationID; got != "edit" {
 		t.Fatalf("explicit prerequisite changed: %q", got)
 	}
 	other := queuedPower("other")

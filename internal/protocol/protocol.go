@@ -137,6 +137,17 @@ type ManagedState struct {
 	// generation is compared against: without it a replica that is one generation behind is
 	// indistinguishable from a current one.
 	Authority *PoolAuthorityRecord `json:"authority,omitempty"`
+	// RecoveryReservations is the pool master's durable set of unresolved snapshot
+	// reservations. Members do not report or adopt this state; a fresh Controller
+	// observes it from the master without storing an authoritative copy.
+	RecoveryReservations         []PoolVMRecoveryReservation `json:"recovery_reservations,omitempty"`
+	RecoveryReservationsReported bool                        `json:"recovery_reservations_reported,omitempty"`
+	// PoolVMSnapshots is the current master's complete compact snapshot catalog.
+	// Members leave it unreported; an empty slice with Reported=true is an
+	// authoritative empty catalog, while false means the Controller must not
+	// treat absence as deletion.
+	PoolVMSnapshots         []PoolVMSnapshot `json:"pool_vm_snapshots,omitempty"`
+	PoolVMSnapshotsReported bool             `json:"pool_vm_snapshots_reported,omitempty"`
 	// Promotion is a candidate's own fence-verified promotion: its durable stage and, when
 	// it has one, the structured verdict of the proof. The Controller displays it.
 	Promotion *PoolPromotionStatus `json:"promotion,omitempty"`
@@ -238,6 +249,7 @@ type Command struct {
 	Network           *NetworkRegistration            `json:"network,omitempty"`
 	Media             *Media                          `json:"media,omitempty"`
 	VM                *VMCreateSpec                   `json:"vm,omitempty"`
+	Snapshot          *VMSnapshotRequest              `json:"snapshot,omitempty"`
 	Power             *VMPowerRequest                 `json:"power,omitempty"`
 	Delete            *VMDeleteRequest                `json:"delete,omitempty"`
 	VMMedia           *VMMediaRequest                 `json:"vm_media,omitempty"`

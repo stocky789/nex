@@ -1,0 +1,68 @@
+{
+  "summary": "Implement Core stopped leaf snapshot delete with owner-local route, master catalog settlement, and public no-delete blockcommit plus metadata delete executor.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "internal/agent/snapshot.go",
+    "internal/agent/snapshot_test.go",
+    "internal/agent/managed.go",
+    "internal/localcore/snapshots.go",
+    "internal/localcore/snapshots_test.go",
+    "internal/localcore/service.go",
+    "internal/controller/managed.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_snapshot_delete.go",
+    "internal/vmhost/managed_snapshot_delete_test.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/guide/vm-snapshots.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/changes/2026-09-26-stopped-snapshot-delete.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Documents the owner-local stopped leaf-delete request, child refusal, exact retries and that Controller UI remains unfinished.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds authenticated owner-local POST .../snapshots/{snapshot_id}/delete and extends recovery reservation/evidence for snapshot-delete. Under integration for leaf delete; parent-with-children remains refused. Local and controller OpenAPI references updated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S2 leaf-delete implementation follows accepted S1 and in-progress S2 revert; phase status is unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Executing Core managed operation journals; pool master pool-vms.json pending recovery, catalog removal on completed delete, settled receipt, and signed authority replicas.",
+    "reason": "Controller only adopts host-reported outcomes; a fresh Controller reads authoritative VM/catalog and operation inventory through existing authenticated APIs."
+  },
+  "verification": {
+    "method": "Focused Go tests for protocol, agent snapshot/pool recovery, localcore snapshot routes, and vmhost delete executor with fake virsh. Documentation gate against the worktree. Native lab leaf-delete deferred until unit tests pass and a safe leaf fixture is available.",
+    "evidence": [
+      "internal/protocol/pool_test.go",
+      "internal/agent/pool_vm_recovery_test.go",
+      "internal/localcore/snapshots_test.go",
+      "internal/vmhost/managed_snapshot_delete_test.go"
+    ]
+  }
+}

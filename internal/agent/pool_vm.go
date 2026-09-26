@@ -8,6 +8,7 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,13 @@ import (
 
 const poolVMPath = "/api/v1/pool/vms/"
 
+var (
+	ErrSnapshotMetadataNotFound = errors.New("pool VM snapshot not found")
+	ErrSnapshotMetadataConflict = errors.New("snapshot catalog name is already in use")
+	ErrSnapshotMetadataPending  = errors.New("snapshot metadata cannot change while recovery is reserved")
+	errSnapshotMetadataOwner    = errors.New("snapshot metadata update does not match the authenticated VM owner")
+)
+
 type poolVMRecord struct {
 	PoolID    string `json:"pool_id"`
 	VMID      string `json:"vm_id"`
@@ -36,6 +44,9 @@ type poolVMRecord struct {
 	State     string `json:"state"` // defined, starting, running, stopped; never inferred from time.
 	Autostart bool   `json:"autostart"`
 	Epoch     uint64 `json:"epoch"`
+	// PendingStartOperationID binds the durable starting state to the exact
+	// admitted owner command until a fresh native observation settles it.
+	PendingStartOperationID string `json:"pending_start_operation_id,omitempty"`
 	// Spec is the master-owned inventory copy used to re-adopt a pool VM after a
 	// Controller replacement.  It is written only from a complete, generation
 	// matched host inventory or a validated new vm-create request.
@@ -45,10 +56,1244 @@ type poolVMRecord struct {
 	// managed journal succeeded; a timeout therefore blocks rather than adopts
 	// an arbitrary later inventory report.
 	PendingUpdate *poolVMPendingUpdate `json:"pending_update,omitempty"`
+	// PendingRecovery is the master-owned fence for one exact snapshot transition.
+	// Native chains and progress stay in the executing Core's managed journal.
+	PendingRecovery *protocol.PoolVMRecoveryReservation `json:"pending_recovery,omitempty"`
+	PendingSnapshot *protocol.PoolVMSnapshot            `json:"pending_snapshot,omitempty"`
+	// PendingRecoveryResultSpec is the master's independently derived next VM
+	// definition for a reserved revert. It exists only until exact settlement.
+	PendingRecoveryResultSpec *protocol.VMCreateSpec    `json:"pending_recovery_result_spec,omitempty"`
+	Snapshots                 []protocol.PoolVMSnapshot `json:"snapshots,omitempty"`
+	// LastSettledRecovery is one bounded exact replay receipt, like LastAbortedUpdate.
+	LastSettledRecovery *protocol.PoolVMRecoveryEvidence `json:"last_settled_recovery,omitempty"`
 	// LastAbortedUpdate is the single bounded replay receipt retained after an
 	// exact failed update-abort response was lost.
 	LastAbortedUpdate *poolVMPendingUpdate `json:"last_aborted_update,omitempty"`
 }
+
+func poolVMSnapshotUsesResource(vm poolVMRecord, resource, id string) bool {
+	snapshots := append([]protocol.PoolVMSnapshot(nil), vm.Snapshots...)
+	if vm.PendingSnapshot != nil {
+		snapshots = append(snapshots, *vm.PendingSnapshot)
+	}
+	// Pending revert/delete has no PendingSnapshot: gate on catalog (captured) deps
+	// plus current/result specs, not every resource in the pool.
+	if vm.PendingRecovery != nil && vm.PendingSnapshot == nil {
+		for _, spec := range []protocol.VMCreateSpec{vm.Spec} {
+			deps, err := protocol.PoolVMSnapshotDependenciesForSpec(spec)
+			if err != nil {
+				return true
+			}
+			snapshots = append(snapshots, protocol.PoolVMSnapshot{Dependencies: &deps})
+		}
+		if vm.PendingRecoveryResultSpec != nil {
+			deps, err := protocol.PoolVMSnapshotDependenciesForSpec(*vm.PendingRecoveryResultSpec)
+			if err != nil {
+				return true
+			}
+			snapshots = append(snapshots, protocol.PoolVMSnapshot{Dependencies: &deps})
+		}
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.Dependencies == nil {
+			return true
+		}
+		var ids []string
+		switch resource {
+		case "storage":
+			ids = snapshot.Dependencies.StorageIDs
+		case "network":
+			ids = snapshot.Dependencies.NetworkIDs
+		case "media":
+			ids = snapshot.Dependencies.MediaIDs
+		default:
+			return true
+		}
+		if slices.Contains(ids, id) {
+			return true
+		}
+	}
+	return false
+}
+
+var errPoolVMRecoverySettled = errors.New("snapshot recovery operation is already terminal")
+
+func poolVMRecoveryDigests(spec protocol.VMCreateSpec) (string, string, error) {
+	if err := protocol.ValidateVMSpec(spec); err != nil {
+		return "", "", err
+	}
+	specBytes, err := json.Marshal(spec)
+	if err != nil {
+		return "", "", err
+	}
+	diskBytes, err := json.Marshal(spec.Disks)
+	if err != nil {
+		return "", "", err
+	}
+	specDigest := sha256.Sum256(specBytes)
+	diskDigest := sha256.Sum256(diskBytes)
+	return hex.EncodeToString(specDigest[:]), hex.EncodeToString(diskDigest[:]), nil
+}
+
+func poolVMRecoveryReservationFor(record poolVMRecord, operationID, kind, intentSHA256 string, ownerOperationOrder uint64) (protocol.PoolVMRecoveryReservation, error) {
+	specDigest, diskDigest, err := poolVMRecoveryDigests(record.Spec)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("snapshot recovery VM definition is unavailable")
+	}
+	reservation := protocol.PoolVMRecoveryReservation{
+		OperationID: operationID, Kind: kind, OwnerOperationOrder: ownerOperationOrder, PoolID: record.PoolID, VMID: record.VMID,
+		OwnerHostID: record.HostID, Epoch: record.Epoch, SpecRevision: record.Spec.Revision,
+		SpecSHA256: specDigest, DiskIdentitySHA256: diskDigest, IntentSHA256: intentSHA256,
+	}
+	if kind != "snapshot-revert" && kind != "snapshot-delete" && err == nil {
+		err = reservation.Valid()
+	}
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	return reservation, nil
+}
+
+func reservePoolVMRecovery(record *poolVMRecord, reservation protocol.PoolVMRecoveryReservation) error {
+	if err := reservation.Valid(); err != nil || record == nil || record.PoolID != reservation.PoolID ||
+		record.VMID != reservation.VMID || record.HostID != reservation.OwnerHostID || record.Epoch != reservation.Epoch ||
+		record.Spec.Revision != reservation.SpecRevision {
+		return errors.New("snapshot recovery reservation does not match the durable pool VM owner")
+	}
+	want, err := poolVMRecoveryReservationFor(*record, reservation.OperationID, reservation.Kind, reservation.IntentSHA256, reservation.OwnerOperationOrder)
+	got := reservation
+	got.AdmissionRefusal = ""
+	if reservation.Kind == "snapshot-revert" || reservation.Kind == "snapshot-delete" {
+		got.TargetSnapshotID = ""
+		got.TargetSnapshotSHA256 = ""
+		got.ResultSpecSHA256 = ""
+	}
+	if err != nil || want != got {
+		return errors.New("snapshot recovery reservation does not match the durable VM definition")
+	}
+	if reservation.Kind == "snapshot-revert" {
+		if record.PendingSnapshot != nil || record.PendingRecoveryResultSpec == nil ||
+			poolVMResultSpecMatchesReservation(reservation, *record.PendingRecoveryResultSpec) != nil ||
+			!poolVMHasSnapshotDescriptor(record.Snapshots, reservation.TargetSnapshotID, reservation.TargetSnapshotSHA256) {
+			return errors.New("snapshot revert reservation does not match its target or derived definition")
+		}
+	} else if reservation.Kind == "snapshot-delete" {
+		if record.PendingSnapshot != nil || record.PendingRecoveryResultSpec != nil ||
+			!poolVMHasSnapshotDescriptor(record.Snapshots, reservation.TargetSnapshotID, reservation.TargetSnapshotSHA256) {
+			return errors.New("snapshot delete reservation does not match its target catalog descriptor")
+		}
+	} else if record.PendingRecoveryResultSpec != nil {
+		return errors.New("unexpected pending snapshot revert definition")
+	}
+	if record.PendingRecovery != nil {
+		if *record.PendingRecovery == reservation {
+			return nil
+		}
+		return errors.New("another snapshot recovery operation is pending")
+	}
+	if record.LastSettledRecovery != nil {
+		last := record.LastSettledRecovery.Reservation
+		if last.OperationID == reservation.OperationID {
+			last.AdmissionRefusal = ""
+			if last == got {
+				return errPoolVMRecoverySettled
+			}
+			return errors.New("snapshot recovery operation ID was already used for another intent")
+		}
+		if last.OwnerHostID == record.HostID && reservation.OwnerOperationOrder != 0 {
+			if record.Epoch < last.Epoch {
+				return errors.New("snapshot recovery owner epoch moved backwards")
+			}
+			if reservation.OwnerOperationOrder <= last.OwnerOperationOrder {
+				return errors.New("snapshot recovery operation order is stale")
+			}
+		}
+	}
+	for _, snapshot := range record.Snapshots {
+		if snapshot.ID == reservation.OperationID {
+			return errors.New("snapshot operation ID is already in the master catalog")
+		}
+	}
+	if record.PendingUpdate != nil {
+		return errors.New("VM definition update is pending reconciliation")
+	}
+	if record.State != "defined" && record.State != "stopped" && record.State != "running" {
+		return errors.New("VM execution state is not settled for snapshot recovery")
+	}
+	record.PendingRecovery = &reservation
+	record.LastSettledRecovery = nil
+	return nil
+}
+
+func poolVMResultSpecMatchesReservation(reservation protocol.PoolVMRecoveryReservation, spec protocol.VMCreateSpec) error {
+	specSHA, _, err := poolVMRecoveryDigests(spec)
+	if err != nil || reservation.Kind != "snapshot-revert" || spec.ID != reservation.VMID || spec.PoolID != reservation.PoolID ||
+		spec.HostID != reservation.OwnerHostID || spec.Revision != reservation.SpecRevision+1 || specSHA != reservation.ResultSpecSHA256 {
+		return errors.New("snapshot revert result definition does not match its reservation")
+	}
+	return nil
+}
+
+func poolVMRevertReservationMatchesTarget(reservation protocol.PoolVMRecoveryReservation, current, captured protocol.VMCreateSpec, target protocol.PoolVMSnapshot) (protocol.VMCreateSpec, error) {
+	if reservation.Kind != "snapshot-revert" || reservation.TargetSnapshotID != target.ID || target.VMID != reservation.VMID ||
+		!poolVMHasSnapshotDescriptor([]protocol.PoolVMSnapshot{target}, reservation.TargetSnapshotID, reservation.TargetSnapshotSHA256) {
+		return protocol.VMCreateSpec{}, errors.New("snapshot revert reservation target does not match its descriptor")
+	}
+	capturedSpecSHA, capturedDiskSHA, err := poolVMRecoveryDigests(captured)
+	dependencies, depErr := protocol.PoolVMSnapshotDependenciesForSpec(captured)
+	if err != nil || depErr != nil || captured.Revision != target.SpecRevision || capturedSpecSHA != target.SpecSHA256 || capturedDiskSHA != target.DiskIdentitySHA256 ||
+		target.Dependencies == nil || !reflect.DeepEqual(*target.Dependencies, dependencies) {
+		return protocol.VMCreateSpec{}, errors.New("snapshot revert captured VM definition differs from its catalog descriptor")
+	}
+	next, err := protocol.PoolVMSnapshotRevertSpec(captured, current)
+	if err != nil {
+		return protocol.VMCreateSpec{}, err
+	}
+	resultSHA, _, err := poolVMRecoveryDigests(next)
+	if err != nil || resultSHA != reservation.ResultSpecSHA256 {
+		return protocol.VMCreateSpec{}, errors.New("snapshot revert result definition differs from its reservation")
+	}
+	return next, nil
+}
+
+func poolVMHasSnapshotDescriptor(snapshots []protocol.PoolVMSnapshot, id, digest string) bool {
+	if id == "" || !lowerHexDigest(digest) {
+		return false
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.ID != id {
+			continue
+		}
+		actual, err := protocol.PoolVMSnapshotDescriptorSHA256(snapshot)
+		return err == nil && actual == digest
+	}
+	return false
+}
+
+func settlePoolVMRecovery(record *poolVMRecord, owner string, evidence protocol.PoolVMRecoveryEvidence) error {
+	if err := evidence.Valid(); err != nil || record == nil || evidence.Reservation.OwnerHostID != owner ||
+		record.PoolID != evidence.Reservation.PoolID || record.VMID != evidence.Reservation.VMID || record.HostID != owner {
+		return errors.New("snapshot recovery journal evidence does not match the durable pool VM owner")
+	}
+	if record.PendingRecovery == nil {
+		if record.LastSettledRecovery != nil && reflect.DeepEqual(*record.LastSettledRecovery, evidence) {
+			return nil
+		}
+		return errors.New("snapshot recovery journal evidence has no matching reservation")
+	}
+	if *record.PendingRecovery != evidence.Reservation {
+		return errors.New("snapshot recovery journal evidence does not match the pending intent")
+	}
+	var revertedSpec *protocol.VMCreateSpec
+	if evidence.Reservation.Kind == "snapshot-create" {
+		if evidence.Outcome == "completed" {
+			var dependencies *protocol.PoolVMSnapshotDependencies
+			if record.PendingSnapshot != nil && record.PendingSnapshot.Dependencies != nil {
+				derived, dependencyErr := protocol.PoolVMSnapshotDependenciesForSpec(record.Spec)
+				if dependencyErr != nil {
+					return errors.New("snapshot VM resource dependencies are invalid")
+				}
+				dependencies = &derived
+			}
+			if record.PendingSnapshot == nil || evidence.Snapshot == nil || evidence.Snapshot.VMID != record.VMID ||
+				evidence.Snapshot.ID != record.PendingSnapshot.ID || evidence.Snapshot.Name != record.PendingSnapshot.Name ||
+				evidence.Snapshot.Description != record.PendingSnapshot.Description || !evidence.Snapshot.CreatedAt.Equal(record.PendingSnapshot.CreatedAt) ||
+				evidence.Snapshot.SpecRevision != record.PendingSnapshot.SpecRevision || evidence.Snapshot.SpecSHA256 != record.PendingSnapshot.SpecSHA256 ||
+				evidence.Snapshot.DiskIdentitySHA256 != record.PendingSnapshot.DiskIdentitySHA256 ||
+				!reflect.DeepEqual(record.PendingSnapshot.Dependencies, dependencies) || !reflect.DeepEqual(evidence.Snapshot.Dependencies, dependencies) {
+				return errors.New("snapshot catalog descriptor does not match the durable reservation")
+			}
+			if len(record.Snapshots) >= poolVMSnapshotLimit || poolVMSnapshotNameExists(record.Snapshots, evidence.Snapshot.Name) {
+				return errors.New("snapshot catalog is full or name is already in use")
+			}
+			record.Snapshots = append(record.Snapshots, *evidence.Snapshot)
+		} else if evidence.Outcome != "failed-before-effects" || record.PendingSnapshot == nil {
+			return errors.New("snapshot failure evidence does not match a pending create")
+		}
+		record.PendingSnapshot = nil
+	} else if evidence.Reservation.Kind == "snapshot-revert" {
+		reservation := evidence.Reservation
+		if record.PendingSnapshot != nil || !poolVMHasSnapshotDescriptor(record.Snapshots, reservation.TargetSnapshotID, reservation.TargetSnapshotSHA256) {
+			return errors.New("snapshot revert target differs from the current master catalog")
+		}
+		if evidence.Outcome == "completed" {
+			if record.PendingRecoveryResultSpec == nil || evidence.ResultSpec == nil ||
+				!reflect.DeepEqual(*evidence.ResultSpec, *record.PendingRecoveryResultSpec) ||
+				poolVMResultSpecMatchesReservation(reservation, *evidence.ResultSpec) != nil {
+				return errors.New("snapshot revert result differs from the master's reserved VM definition")
+			}
+			revertedSpec = evidence.ResultSpec
+		} else if evidence.Outcome != "failed-before-effects" || evidence.ResultSpec != nil {
+			return errors.New("snapshot revert failure evidence is invalid")
+		}
+		record.PendingRecoveryResultSpec = nil
+	} else if evidence.Reservation.Kind == "snapshot-delete" {
+		reservation := evidence.Reservation
+		if record.PendingSnapshot != nil || record.PendingRecoveryResultSpec != nil ||
+			!poolVMHasSnapshotDescriptor(record.Snapshots, reservation.TargetSnapshotID, reservation.TargetSnapshotSHA256) {
+			return errors.New("snapshot delete target differs from the current master catalog")
+		}
+		if evidence.Outcome == "completed" {
+			if evidence.Snapshot != nil || evidence.ResultSpec != nil {
+				return errors.New("snapshot delete evidence must not carry catalog or VM definition payloads")
+			}
+			next := make([]protocol.PoolVMSnapshot, 0, len(record.Snapshots)-1)
+			for _, snapshot := range record.Snapshots {
+				if snapshot.ID == reservation.TargetSnapshotID {
+					continue
+				}
+				next = append(next, snapshot)
+			}
+			record.Snapshots = next
+		} else if evidence.Outcome != "failed-before-effects" || evidence.Snapshot != nil || evidence.ResultSpec != nil {
+			return errors.New("snapshot delete failure evidence is invalid")
+		}
+	} else if record.PendingRecoveryResultSpec != nil {
+		return errors.New("unexpected pending snapshot revert definition")
+	}
+	want, err := poolVMRecoveryReservationFor(*record, evidence.Reservation.OperationID, evidence.Reservation.Kind, evidence.Reservation.IntentSHA256, evidence.Reservation.OwnerOperationOrder)
+	got := evidence.Reservation
+	got.AdmissionRefusal = ""
+	got.TargetSnapshotID = ""
+	got.TargetSnapshotSHA256 = ""
+	got.ResultSpecSHA256 = ""
+	if err != nil || want != got {
+		return errors.New("snapshot recovery journal evidence does not match the current VM definition")
+	}
+	if revertedSpec != nil {
+		record.Spec = *revertedSpec
+		record.Autostart = revertedSpec.Autostart
+	}
+	record.LastSettledRecovery = &evidence
+	record.PendingRecovery = nil
+	return nil
+}
+
+const poolVMSnapshotLimit = 32
+
+func poolVMSnapshotNameExists(snapshots []protocol.PoolVMSnapshot, name string) bool {
+	for _, snapshot := range snapshots {
+		if strings.EqualFold(snapshot.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func ReservePoolVMSnapshot(ctx context.Context, s *Store, command protocol.Command, ownerOperationOrder uint64, intentSHA256 string, createdAt time.Time) (protocol.PoolVMRecoveryReservation, error) {
+	if command.Kind != "snapshot-create" || command.VM == nil || command.Snapshot == nil ||
+		!protocol.ValidSnapshotOperationID(command.OperationID) || command.Snapshot.Valid() != nil ||
+		!lowerHexDigest(intentSHA256) || createdAt.IsZero() || ownerOperationOrder == 0 || protocol.ValidateVMSpec(*command.VM) != nil {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("invalid stopped VM snapshot request")
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID == "" {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool snapshot authority is unavailable")
+	}
+	request := poolVMRequest{
+		VMID: command.VM.ID, Action: "snapshot-reserve", OperationID: command.OperationID,
+		VM: command.VM, Snapshot: command.Snapshot, SnapshotCreatedAt: createdAt.UTC(), IntentSHA256: intentSHA256, OwnerOperationOrder: ownerOperationOrder,
+	}
+	if membership.MasterHostID == s.State.HostID {
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		poolVMMu.Lock()
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			poolVMMu.Unlock()
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		ack, err := reservePoolVMSnapshotLocked(s, s.State.HostID, request)
+		poolVMMu.Unlock()
+		if err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		if !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot reservation")
+		}
+		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		return *ack.SnapshotReservation, nil
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer client.CloseIdleConnections()
+	body, _ := json.Marshal(request)
+	requestURL := strings.TrimRight(master, "/") + poolVMPath + command.VM.ID
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader(string(body)))
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot reservation")
+	}
+	var ack poolVMRequest
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot reservation acknowledgement")
+	}
+	return *ack.SnapshotReservation, nil
+}
+
+// ReservePoolVMSnapshotRevert reserves an exact catalog target and the master's
+// derived resulting VM definition before the owner applies native revert effects.
+func ReservePoolVMSnapshotRevert(ctx context.Context, s *Store, command protocol.Command, ownerOperationOrder uint64, intentSHA256 string, capturedSpec protocol.VMCreateSpec) (protocol.PoolVMRecoveryReservation, error) {
+	if command.Kind != "snapshot-revert" || command.VM == nil || command.Snapshot == nil || command.Snapshot.ValidFor(command.Kind) != nil ||
+		!protocol.ValidSnapshotOperationID(command.OperationID) || command.OperationID == command.Snapshot.SnapshotID || !lowerHexDigest(intentSHA256) || ownerOperationOrder == 0 ||
+		protocol.ValidateVMSpec(*command.VM) != nil || protocol.ValidateVMSpec(capturedSpec) != nil ||
+		capturedSpec.ID != command.VM.ID || capturedSpec.PoolID != command.VM.PoolID || capturedSpec.HostID != command.VM.HostID {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("invalid stopped VM snapshot revert request")
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID == "" {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool snapshot authority is unavailable")
+	}
+	request := poolVMRequest{
+		VMID: command.VM.ID, Action: "snapshot-reserve", RecoveryKind: "snapshot-revert", OperationID: command.OperationID,
+		VM: command.VM, Snapshot: command.Snapshot, CapturedSpec: &capturedSpec, IntentSHA256: intentSHA256, OwnerOperationOrder: ownerOperationOrder,
+	}
+	if membership.MasterHostID == s.State.HostID {
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		poolVMMu.Lock()
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			poolVMMu.Unlock()
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		ack, err := reservePoolVMSnapshotLocked(s, s.State.HostID, request)
+		poolVMMu.Unlock()
+		if err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		if !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot revert reservation")
+		}
+		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		return *ack.SnapshotReservation, nil
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer client.CloseIdleConnections()
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > 64<<10 {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("snapshot revert reservation exceeds the bounded peer request size")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+command.VM.ID, strings.NewReader(string(body)))
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot revert reservation")
+	}
+	var ack poolVMRequest
+	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot revert reservation acknowledgement")
+	}
+	return *ack.SnapshotReservation, nil
+}
+
+// ReservePoolVMSnapshotDelete reserves an exact catalog target before the owner
+// applies native leaf-delete effects. It does not change the VM definition.
+func ReservePoolVMSnapshotDelete(ctx context.Context, s *Store, command protocol.Command, ownerOperationOrder uint64, intentSHA256 string) (protocol.PoolVMRecoveryReservation, error) {
+	if command.Kind != "snapshot-delete" || command.VM == nil || command.Snapshot == nil || command.Snapshot.ValidFor(command.Kind) != nil ||
+		!protocol.ValidSnapshotOperationID(command.OperationID) || command.OperationID == command.Snapshot.SnapshotID || !lowerHexDigest(intentSHA256) || ownerOperationOrder == 0 ||
+		protocol.ValidateVMSpec(*command.VM) != nil {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("invalid stopped VM snapshot delete request")
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID == "" {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool snapshot authority is unavailable")
+	}
+	request := poolVMRequest{
+		VMID: command.VM.ID, Action: "snapshot-reserve", RecoveryKind: "snapshot-delete", OperationID: command.OperationID,
+		VM: command.VM, Snapshot: command.Snapshot, IntentSHA256: intentSHA256, OwnerOperationOrder: ownerOperationOrder,
+	}
+	if membership.MasterHostID == s.State.HostID {
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		poolVMMu.Lock()
+		if err := requirePoolVMAuthorityWritable(s, request.Action, false); err != nil {
+			poolVMMu.Unlock()
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		ack, err := reservePoolVMSnapshotLocked(s, s.State.HostID, request)
+		poolVMMu.Unlock()
+		if err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		if !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+			return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not confirm snapshot delete reservation")
+		}
+		if err := confirmPoolVMSnapshotReplica(ctx, s, &ack, nil); err != nil {
+			return protocol.PoolVMRecoveryReservation{}, err
+		}
+		return *ack.SnapshotReservation, nil
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer client.CloseIdleConnections()
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > 64<<10 {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("snapshot delete reservation exceeds the bounded peer request size")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+command.VM.ID, strings.NewReader(string(body)))
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master refused snapshot delete reservation")
+	}
+	var ack poolVMRequest
+	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&ack) != nil || !validPoolVMSnapshotReservationAck(ack, request, s.State.PoolID, s.State.HostID) {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("pool master did not return an exact snapshot delete reservation acknowledgement")
+	}
+	return *ack.SnapshotReservation, nil
+}
+
+func lowerHexDigest(value string) bool {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validPoolVMSnapshotReservationAck(ack, request poolVMRequest, poolID, owner string) bool {
+	if ack.VMID != request.VMID || ack.Action != "snapshot-reserve" || ack.OperationID != request.OperationID ||
+		ack.RecoveryKind != request.RecoveryKind || !reflect.DeepEqual(ack.Snapshot, request.Snapshot) ||
+		!reflect.DeepEqual(ack.CapturedSpec, request.CapturedSpec) ||
+		!ack.SnapshotCreatedAt.Equal(request.SnapshotCreatedAt) || ack.SnapshotReservation == nil {
+		return false
+	}
+	reservation := *ack.SnapshotReservation
+	kind := request.RecoveryKind
+	if kind == "" {
+		kind = "snapshot-create"
+	}
+	if reservation.Valid() != nil || reservation.OperationID != request.OperationID || reservation.Kind != kind || reservation.OwnerOperationOrder != request.OwnerOperationOrder ||
+		reservation.PoolID != poolID || reservation.VMID != request.VMID || reservation.OwnerHostID != owner || reservation.IntentSHA256 != request.IntentSHA256 {
+		return false
+	}
+	if ack.SnapshotAccepted != (reservation.AdmissionRefusal == "") {
+		return false
+	}
+	if request.VM == nil || reservation.SpecRevision != request.VM.Revision || !poolVMRecoverySpecMatches(reservation, *request.VM) {
+		return false
+	}
+	if kind == "snapshot-revert" {
+		if request.Snapshot == nil || request.Snapshot.ValidFor(kind) != nil || request.CapturedSpec == nil ||
+			reservation.TargetSnapshotID != request.Snapshot.SnapshotID {
+			return false
+		}
+		targetDigest, err := protocol.PoolVMSnapshotDescriptorSHA256(*request.Snapshot.Target)
+		expectedResult, resultErr := poolVMRevertReservationMatchesTarget(reservation, *request.VM, *request.CapturedSpec, *request.Snapshot.Target)
+		resultSpecSHA, _, expectedErr := poolVMRecoveryDigests(expectedResult)
+		return err == nil && resultErr == nil && expectedErr == nil && reservation.TargetSnapshotSHA256 == targetDigest && reservation.ResultSpecSHA256 == resultSpecSHA
+	}
+	if kind == "snapshot-delete" {
+		if request.Snapshot == nil || request.Snapshot.ValidFor(kind) != nil || request.CapturedSpec != nil ||
+			reservation.TargetSnapshotID != request.Snapshot.SnapshotID || reservation.ResultSpecSHA256 != "" {
+			return false
+		}
+		targetDigest, err := protocol.PoolVMSnapshotDescriptorSHA256(*request.Snapshot.Target)
+		return err == nil && reservation.TargetSnapshotSHA256 == targetDigest
+	}
+	return request.RecoveryKind == "" && request.Snapshot != nil && request.Snapshot.ValidFor(kind) == nil
+}
+
+func poolVMRecoverySpecMatches(reservation protocol.PoolVMRecoveryReservation, spec protocol.VMCreateSpec) bool {
+	specSHA, diskSHA, err := poolVMRecoveryDigests(spec)
+	return err == nil && reservation.SpecSHA256 == specSHA && reservation.DiskIdentitySHA256 == diskSHA
+}
+
+func reservePoolVMSnapshotLocked(s *Store, owner string, req poolVMRequest) (poolVMRequest, error) {
+	if req.RecoveryKind == "snapshot-revert" {
+		return reservePoolVMSnapshotRevertLocked(s, owner, req)
+	}
+	if req.RecoveryKind == "snapshot-delete" {
+		return reservePoolVMSnapshotDeleteLocked(s, owner, req)
+	}
+	if req.Action != "snapshot-reserve" || req.RecoveryKind != "" || req.CapturedSpec != nil || req.VM == nil || req.Snapshot == nil || req.Snapshot.Valid() != nil ||
+		!protocol.ValidSnapshotOperationID(req.OperationID) || !lowerHexDigest(req.IntentSHA256) || req.SnapshotCreatedAt.IsZero() ||
+		req.VMID != req.VM.ID || req.VM.HostID != owner || req.VM.PoolID != s.State.PoolID || protocol.ValidateVMSpec(*req.VM) != nil {
+		return poolVMRequest{}, errors.New("invalid snapshot reservation request")
+	}
+	// Keep the authority record locked from the writable check through the durable
+	// reservation. Otherwise a concurrent transfer could freeze a replica digest
+	// that omits a reservation accepted just after its replica was built.
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.PoolID != s.State.PoolID ||
+		peer.Membership.MasterHostID != s.State.HostID || owner == "" {
+		return poolVMRequest{}, errors.New("pool snapshot authority is unavailable")
+	}
+	if err := poolAuthorityWritable(peer); err != nil {
+		return poolVMRequest{}, err
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		return poolVMRequest{}, errors.New("pool VM recovery state is unavailable")
+	}
+	record, ok := state.VMs[req.VMID]
+	if !ok || record.HostID != owner || record.PoolID != s.State.PoolID || !poolVMRecordMatchesSpec(record, *req.VM) {
+		return poolVMRequest{}, errors.New("snapshot request does not match the durable pool VM owner")
+	}
+	if record.PendingRecovery != nil {
+		pending := record.PendingSnapshot
+		if record.PendingRecovery.OperationID == req.OperationID && record.PendingSnapshot != nil &&
+			record.PendingRecovery.Kind == "snapshot-create" && record.PendingRecovery.IntentSHA256 == req.IntentSHA256 &&
+			record.PendingRecovery.OwnerOperationOrder == req.OwnerOperationOrder &&
+			pending.Name == req.Snapshot.Name && pending.Description == req.Snapshot.Description && pending.CreatedAt.Equal(req.SnapshotCreatedAt) {
+			return snapshotReservationAck(req, *record.PendingRecovery), nil
+		}
+		return poolVMRequest{}, errors.New("another snapshot recovery operation is pending")
+	}
+	if record.LastSettledRecovery != nil && record.LastSettledRecovery.Reservation.OperationID == req.OperationID {
+		return poolVMRequest{}, errors.New("snapshot operation ID was already settled")
+	}
+	if last := record.LastSettledRecovery; last != nil && last.Reservation.OwnerHostID == owner {
+		if record.Epoch < last.Reservation.Epoch {
+			return poolVMRequest{}, errors.New("snapshot recovery owner epoch moved backwards")
+		}
+		if req.OwnerOperationOrder <= last.Reservation.OwnerOperationOrder {
+			return poolVMRequest{}, errors.New("snapshot operation order is stale")
+		}
+	}
+	if record.PendingStartOperationID != "" {
+		return poolVMRequest{}, errors.New("snapshot creation cannot start while a start is pending")
+	}
+	running := protocol.SnapshotModeRunning(req.Snapshot.Mode)
+	switch {
+	case running && record.State == "running":
+		// Running crash/quiesced capture is admitted here; native firmware limits are enforced on the owner.
+	case !running && (record.State == "defined" || record.State == "stopped"):
+	default:
+		if running {
+			return poolVMRequest{}, errors.New("running snapshot creation requires a running VM")
+		}
+		return poolVMRequest{}, errors.New("stopped snapshot creation requires a defined or stopped VM")
+	}
+	if err := validatePoolVMSnapshotCatalog(record); err != nil {
+		return poolVMRequest{}, errors.New("pool VM snapshot catalog is invalid")
+	}
+	if record.PendingUpdate != nil {
+		return poolVMRequest{}, errors.New("VM definition update is pending")
+	}
+	reservation, err := poolVMRecoveryReservationFor(record, req.OperationID, "snapshot-create", req.IntentSHA256, req.OwnerOperationOrder)
+	if err != nil {
+		return poolVMRequest{}, err
+	}
+	if len(record.Snapshots) >= poolVMSnapshotLimit {
+		reservation.AdmissionRefusal = "catalog-full"
+	} else if poolVMSnapshotNameExists(record.Snapshots, req.Snapshot.Name) {
+		reservation.AdmissionRefusal = "name-in-use"
+	}
+	descriptor := protocol.PoolVMSnapshot{
+		ID: req.OperationID, VMID: req.VMID, Name: req.Snapshot.Name, Description: req.Snapshot.Description,
+		CreatedAt: req.SnapshotCreatedAt.UTC(), SpecRevision: reservation.SpecRevision,
+		SpecSHA256: reservation.SpecSHA256, DiskIdentitySHA256: reservation.DiskIdentitySHA256,
+	}
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(record.Spec)
+	if err != nil {
+		return poolVMRequest{}, errors.New("snapshot VM resource dependencies are invalid")
+	}
+	descriptor.Dependencies = &dependencies
+	if descriptor.Valid() != nil {
+		return poolVMRequest{}, errors.New("snapshot descriptor is invalid")
+	}
+	// Recovery admission and storage-source mutation share VM → storage lock order.
+	// Once the reservation is saved, the mutation path sees it before changing a disk source.
+	poolStorageMu.Lock()
+	storage, err := loadPoolStorage(s)
+	if err != nil {
+		poolStorageMu.Unlock()
+		return poolVMRequest{}, errors.New("pool storage mutation state is unavailable")
+	}
+	for _, disk := range record.Spec.Disks {
+		if disk.StorageID != "" && storage.Mutations[disk.StorageID] != "" {
+			poolStorageMu.Unlock()
+			return poolVMRequest{}, errors.New("snapshot storage source has a mutation pending")
+		}
+	}
+	if poolResourceMutationForSpec(storage, record.Spec) != "" {
+		poolStorageMu.Unlock()
+		return poolVMRequest{}, errors.New("snapshot network or media source has a removal pending")
+	}
+	poolStorageMu.Unlock()
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		return poolVMRequest{}, err
+	}
+	record.PendingSnapshot = &descriptor
+	state.VMs[record.VMID] = record
+	if err := poolVMReplicaFits(s, peer.Membership, state.VMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	// Reserve enough space for the largest terminal record before native effects
+	// begin. pool-vms.json is replicated as one bounded authority section; a
+	// successful capture must not outgrow the section needed to settle its receipt.
+	prospective := record
+	prospective.Snapshots = append([]protocol.PoolVMSnapshot(nil), record.Snapshots...)
+	completion := protocol.PoolVMRecoveryEvidence{Reservation: reservation, Outcome: "completed", JournalSHA256: strings.Repeat("0", 64), Snapshot: &descriptor}
+	if reservation.AdmissionRefusal != "" {
+		completion.Outcome, completion.Snapshot = "failed-before-effects", nil
+	}
+	if err := settlePoolVMRecovery(&prospective, owner, completion); err != nil {
+		return poolVMRequest{}, errors.New("snapshot catalog cannot reserve its terminal receipt")
+	}
+	state.VMs[record.VMID] = prospective
+	if err := poolVMReplicaFits(s, peer.Membership, state.VMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	state.VMs[record.VMID] = record
+	if err := savePoolVMs(s, state); err != nil {
+		return poolVMRequest{}, err
+	}
+	return snapshotReservationAck(req, reservation), nil
+}
+
+func poolVMReplicaFits(s *Store, membership protocol.PoolMembership, vms map[string]poolVMRecord) error {
+	vmBytes, err := json.Marshal(vms)
+	if err != nil || len(vmBytes) > protocol.PoolReplicaLimit {
+		return errors.New("snapshot transition would exceed the pool authority limit")
+	}
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Generation != membership.Generation {
+		return errors.New("snapshot transition membership changed during replica sizing")
+	}
+	replica, _, err := buildPoolAuthorityReplicaForMembership(s, membership, vmBytes)
+	if err != nil || poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM) != nil {
+		return errors.New("snapshot transition would exceed the pool replica limit")
+	}
+	return nil
+}
+
+func poolVMRevertReservationFor(record poolVMRecord, operationID, intentSHA256 string, ownerOrder uint64, target protocol.PoolVMSnapshot, captured protocol.VMCreateSpec) (protocol.PoolVMRecoveryReservation, protocol.VMCreateSpec, error) {
+	reservation, err := poolVMRecoveryReservationFor(record, operationID, "snapshot-revert", intentSHA256, ownerOrder)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, err
+	}
+	capturedSpecSHA, capturedDiskSHA, err := poolVMRecoveryDigests(captured)
+	if err != nil || target.VMID != record.VMID || target.SpecRevision != captured.Revision || target.SpecSHA256 != capturedSpecSHA || target.DiskIdentitySHA256 != capturedDiskSHA {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, errors.New("captured VM definition does not match the snapshot target")
+	}
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(captured)
+	if err != nil || target.Dependencies == nil || !reflect.DeepEqual(*target.Dependencies, dependencies) {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, errors.New("snapshot target resource dependencies do not match its captured VM")
+	}
+	targetSHA, err := protocol.PoolVMSnapshotDescriptorSHA256(target)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, err
+	}
+	result, err := protocol.PoolVMSnapshotRevertSpec(captured, record.Spec)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, err
+	}
+	resultSHA, _, err := poolVMRecoveryDigests(result)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, err
+	}
+	reservation.TargetSnapshotID = target.ID
+	reservation.TargetSnapshotSHA256 = targetSHA
+	reservation.ResultSpecSHA256 = resultSHA
+	if err = reservation.Valid(); err != nil {
+		return protocol.PoolVMRecoveryReservation{}, protocol.VMCreateSpec{}, err
+	}
+	return reservation, result, nil
+}
+
+func reservePoolVMSnapshotRevertLocked(s *Store, owner string, req poolVMRequest) (poolVMRequest, error) {
+	if req.Action != "snapshot-reserve" || req.RecoveryKind != "snapshot-revert" || req.VM == nil || req.Snapshot == nil ||
+		req.Snapshot.ValidFor("snapshot-revert") != nil || req.CapturedSpec == nil || !protocol.ValidSnapshotOperationID(req.OperationID) || req.OperationID == req.Snapshot.SnapshotID ||
+		!lowerHexDigest(req.IntentSHA256) || req.OwnerOperationOrder == 0 || req.VMID != req.VM.ID || req.VM.HostID != owner ||
+		req.VM.PoolID != s.State.PoolID || protocol.ValidateVMSpec(*req.VM) != nil || protocol.ValidateVMSpec(*req.CapturedSpec) != nil {
+		return poolVMRequest{}, errors.New("invalid snapshot revert reservation request")
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.PoolID != s.State.PoolID || peer.Membership.MasterHostID != s.State.HostID || owner == "" {
+		return poolVMRequest{}, errors.New("pool snapshot authority is unavailable")
+	}
+	if err := poolAuthorityWritable(peer); err != nil {
+		return poolVMRequest{}, err
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		return poolVMRequest{}, errors.New("pool VM recovery state is unavailable")
+	}
+	record, ok := state.VMs[req.VMID]
+	if !ok || record.HostID != owner || record.PoolID != s.State.PoolID || !poolVMRecordMatchesSpec(record, *req.VM) {
+		return poolVMRequest{}, errors.New("snapshot revert request does not match the durable pool VM owner")
+	}
+	if record.PendingRecovery == nil && (record.PendingSnapshot != nil || record.PendingRecoveryResultSpec != nil) {
+		return poolVMRequest{}, errors.New("pool VM has inconsistent pending snapshot recovery state")
+	}
+	if err := validatePoolVMSnapshotCatalog(record); err != nil {
+		return poolVMRequest{}, errors.New("pool VM snapshot catalog is invalid")
+	}
+	var target *protocol.PoolVMSnapshot
+	for i := range record.Snapshots {
+		if record.Snapshots[i].ID == req.Snapshot.SnapshotID {
+			target = &record.Snapshots[i]
+			break
+		}
+	}
+	if target == nil || !reflect.DeepEqual(*target, *req.Snapshot.Target) {
+		return poolVMRequest{}, errors.New("snapshot revert target differs from the current master catalog")
+	}
+	if target.Dependencies == nil {
+		return poolVMRequest{}, errors.New("snapshot revert target does not record complete resource dependencies")
+	}
+	reservation, resultSpec, err := poolVMRevertReservationFor(record, req.OperationID, req.IntentSHA256, req.OwnerOperationOrder, *target, *req.CapturedSpec)
+	if err != nil {
+		return poolVMRequest{}, err
+	}
+	if record.PendingRecovery != nil {
+		if *record.PendingRecovery == reservation && record.PendingRecoveryResultSpec != nil && reflect.DeepEqual(*record.PendingRecoveryResultSpec, resultSpec) {
+			return snapshotReservationAck(req, reservation), nil
+		}
+		return poolVMRequest{}, errors.New("another snapshot recovery operation is pending")
+	}
+	if record.LastSettledRecovery != nil && record.LastSettledRecovery.Reservation.OperationID == req.OperationID {
+		return poolVMRequest{}, errors.New("snapshot operation ID was already settled")
+	}
+	if last := record.LastSettledRecovery; last != nil && last.Reservation.OwnerHostID == owner {
+		if record.Epoch < last.Reservation.Epoch || req.OwnerOperationOrder <= last.Reservation.OwnerOperationOrder {
+			return poolVMRequest{}, errors.New("snapshot operation order is stale")
+		}
+	}
+	if (record.State != "defined" && record.State != "stopped") || record.PendingUpdate != nil || record.PendingStartOperationID != "" {
+		return poolVMRequest{}, errors.New("snapshot revert is not eligible for the durable pool VM")
+	}
+	poolStorageMu.Lock()
+	storage, err := loadPoolStorage(s)
+	if err != nil {
+		poolStorageMu.Unlock()
+		return poolVMRequest{}, errors.New("snapshot storage mutation state is unavailable")
+	}
+	for _, spec := range []protocol.VMCreateSpec{record.Spec, resultSpec} {
+		for _, disk := range spec.Disks {
+			if disk.StorageID != "" && storage.Mutations[disk.StorageID] != "" {
+				poolStorageMu.Unlock()
+				return poolVMRequest{}, errors.New("snapshot revert storage source has a mutation pending")
+			}
+		}
+		if poolResourceMutationForSpec(storage, spec) != "" {
+			poolStorageMu.Unlock()
+			return poolVMRequest{}, errors.New("snapshot revert network or media source has a removal pending")
+		}
+	}
+	poolStorageMu.Unlock()
+	record.PendingRecoveryResultSpec = &resultSpec
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		return poolVMRequest{}, err
+	}
+	state.VMs[record.VMID] = record
+	if err := poolVMReplicaFits(s, peer.Membership, state.VMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	prospective := record
+	resultCopy := resultSpec
+	if err := settlePoolVMRecovery(&prospective, owner, protocol.PoolVMRecoveryEvidence{
+		Reservation: reservation, Outcome: "completed", JournalSHA256: strings.Repeat("0", 64), ResultSpec: &resultCopy,
+	}); err != nil {
+		return poolVMRequest{}, errors.New("snapshot revert cannot reserve its terminal receipt")
+	}
+	prospectiveVMs := make(map[string]poolVMRecord, len(state.VMs))
+	for id, vm := range state.VMs {
+		prospectiveVMs[id] = vm
+	}
+	prospectiveVMs[record.VMID] = prospective
+	if err := poolVMReplicaFits(s, peer.Membership, prospectiveVMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	if err := savePoolVMs(s, state); err != nil {
+		return poolVMRequest{}, err
+	}
+	return snapshotReservationAck(req, reservation), nil
+}
+
+func poolVMDeleteReservationFor(record poolVMRecord, operationID, intentSHA256 string, ownerOrder uint64, target protocol.PoolVMSnapshot) (protocol.PoolVMRecoveryReservation, error) {
+	reservation, err := poolVMRecoveryReservationFor(record, operationID, "snapshot-delete", intentSHA256, ownerOrder)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	if target.VMID != record.VMID {
+		return protocol.PoolVMRecoveryReservation{}, errors.New("snapshot delete target does not belong to this VM")
+	}
+	targetSHA, err := protocol.PoolVMSnapshotDescriptorSHA256(target)
+	if err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	reservation.TargetSnapshotID = target.ID
+	reservation.TargetSnapshotSHA256 = targetSHA
+	if err = reservation.Valid(); err != nil {
+		return protocol.PoolVMRecoveryReservation{}, err
+	}
+	return reservation, nil
+}
+
+func reservePoolVMSnapshotDeleteLocked(s *Store, owner string, req poolVMRequest) (poolVMRequest, error) {
+	if req.Action != "snapshot-reserve" || req.RecoveryKind != "snapshot-delete" || req.VM == nil || req.Snapshot == nil ||
+		req.Snapshot.ValidFor("snapshot-delete") != nil || req.CapturedSpec != nil || !protocol.ValidSnapshotOperationID(req.OperationID) || req.OperationID == req.Snapshot.SnapshotID ||
+		!lowerHexDigest(req.IntentSHA256) || req.OwnerOperationOrder == 0 || req.VMID != req.VM.ID || req.VM.HostID != owner ||
+		req.VM.PoolID != s.State.PoolID || protocol.ValidateVMSpec(*req.VM) != nil {
+		return poolVMRequest{}, errors.New("invalid snapshot delete reservation request")
+	}
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.PoolID != s.State.PoolID || peer.Membership.MasterHostID != s.State.HostID || owner == "" {
+		return poolVMRequest{}, errors.New("pool snapshot authority is unavailable")
+	}
+	if err := poolAuthorityWritable(peer); err != nil {
+		return poolVMRequest{}, err
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		return poolVMRequest{}, errors.New("pool VM recovery state is unavailable")
+	}
+	record, ok := state.VMs[req.VMID]
+	if !ok || record.HostID != owner || record.PoolID != s.State.PoolID || !poolVMRecordMatchesSpec(record, *req.VM) {
+		return poolVMRequest{}, errors.New("snapshot delete request does not match the durable pool VM owner")
+	}
+	if record.PendingRecovery == nil && (record.PendingSnapshot != nil || record.PendingRecoveryResultSpec != nil) {
+		return poolVMRequest{}, errors.New("pool VM has inconsistent pending snapshot recovery state")
+	}
+	if err := validatePoolVMSnapshotCatalog(record); err != nil {
+		return poolVMRequest{}, errors.New("pool VM snapshot catalog is invalid")
+	}
+	var target *protocol.PoolVMSnapshot
+	for i := range record.Snapshots {
+		if record.Snapshots[i].ID == req.Snapshot.SnapshotID {
+			target = &record.Snapshots[i]
+			break
+		}
+	}
+	if target == nil || !reflect.DeepEqual(*target, *req.Snapshot.Target) {
+		return poolVMRequest{}, errors.New("snapshot delete target differs from the current master catalog")
+	}
+	reservation, err := poolVMDeleteReservationFor(record, req.OperationID, req.IntentSHA256, req.OwnerOperationOrder, *target)
+	if err != nil {
+		return poolVMRequest{}, err
+	}
+	if record.PendingRecovery != nil {
+		if *record.PendingRecovery == reservation {
+			return snapshotReservationAck(req, reservation), nil
+		}
+		return poolVMRequest{}, errors.New("another snapshot recovery operation is pending")
+	}
+	if record.LastSettledRecovery != nil && record.LastSettledRecovery.Reservation.OperationID == req.OperationID {
+		return poolVMRequest{}, errors.New("snapshot operation ID was already settled")
+	}
+	if last := record.LastSettledRecovery; last != nil && last.Reservation.OwnerHostID == owner {
+		if record.Epoch < last.Reservation.Epoch || req.OwnerOperationOrder <= last.Reservation.OwnerOperationOrder {
+			return poolVMRequest{}, errors.New("snapshot operation order is stale")
+		}
+	}
+	if (record.State != "defined" && record.State != "stopped") || record.PendingUpdate != nil || record.PendingStartOperationID != "" {
+		return poolVMRequest{}, errors.New("snapshot delete is not eligible for the durable pool VM")
+	}
+	poolStorageMu.Lock()
+	storage, err := loadPoolStorage(s)
+	if err != nil {
+		poolStorageMu.Unlock()
+		return poolVMRequest{}, errors.New("snapshot storage mutation state is unavailable")
+	}
+	for _, disk := range record.Spec.Disks {
+		if disk.StorageID != "" && storage.Mutations[disk.StorageID] != "" {
+			poolStorageMu.Unlock()
+			return poolVMRequest{}, errors.New("snapshot delete storage source has a mutation pending")
+		}
+	}
+	if poolResourceMutationForSpec(storage, record.Spec) != "" {
+		poolStorageMu.Unlock()
+		return poolVMRequest{}, errors.New("snapshot delete network or media source has a removal pending")
+	}
+	poolStorageMu.Unlock()
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		return poolVMRequest{}, err
+	}
+	state.VMs[record.VMID] = record
+	if err := poolVMReplicaFits(s, peer.Membership, state.VMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	prospective := record
+	if err := settlePoolVMRecovery(&prospective, owner, protocol.PoolVMRecoveryEvidence{
+		Reservation: reservation, Outcome: "completed", JournalSHA256: strings.Repeat("0", 64),
+	}); err != nil {
+		return poolVMRequest{}, errors.New("snapshot delete cannot reserve its terminal receipt")
+	}
+	prospectiveVMs := make(map[string]poolVMRecord, len(state.VMs))
+	for id, vm := range state.VMs {
+		prospectiveVMs[id] = vm
+	}
+	prospectiveVMs[record.VMID] = prospective
+	if err := poolVMReplicaFits(s, peer.Membership, prospectiveVMs); err != nil {
+		return poolVMRequest{}, err
+	}
+	if err := savePoolVMs(s, state); err != nil {
+		return poolVMRequest{}, err
+	}
+	return snapshotReservationAck(req, reservation), nil
+}
+
+func snapshotReservationAck(request poolVMRequest, reservation protocol.PoolVMRecoveryReservation) poolVMRequest {
+	request.SnapshotAccepted = reservation.AdmissionRefusal == ""
+	request.SnapshotReservation = &reservation
+	return request
+}
+
+type poolVMSnapshotCatalog struct {
+	VMID      string                    `json:"vm_id"`
+	Snapshots []protocol.PoolVMSnapshot `json:"snapshots"`
+}
+
+func validatePoolVMSnapshotCatalog(record poolVMRecord) error {
+	if len(record.Snapshots) > poolVMSnapshotLimit {
+		return errors.New("snapshot catalog exceeds its bounded size")
+	}
+	ids := make(map[string]bool, len(record.Snapshots))
+	names := make([]protocol.PoolVMSnapshot, 0, len(record.Snapshots))
+	for _, snapshot := range record.Snapshots {
+		if snapshot.Valid() != nil || snapshot.VMID != record.VMID || ids[snapshot.ID] || poolVMSnapshotNameExists(names, snapshot.Name) {
+			return errors.New("snapshot catalog contains an invalid or duplicate descriptor")
+		}
+		ids[snapshot.ID] = true
+		names = append(names, snapshot)
+	}
+	return nil
+}
+
+// ListPoolVMSnapshots reads the catalog from the current pool master. A member
+// never substitutes its local libvirt snapshot list for missing master authority.
+func ListPoolVMSnapshots(ctx context.Context, s *Store, vmID string) ([]protocol.PoolVMSnapshot, error) {
+	if !uuidLike(vmID) {
+		return nil, errors.New("invalid pool VM snapshot catalog request")
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID == "" {
+		return nil, errors.New("pool VM snapshot authority is unavailable")
+	}
+	if membership.MasterHostID == s.State.HostID {
+		poolVMMu.Lock()
+		state, loadErr := loadPoolVMs(s)
+		poolVMMu.Unlock()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		record, ok := state.VMs[vmID]
+		if !ok || record.PoolID != membership.PoolID {
+			return nil, errors.New("pool VM snapshot catalog not found")
+		}
+		if err := validatePoolVMSnapshotCatalog(record); err != nil {
+			return nil, err
+		}
+		return append([]protocol.PoolVMSnapshot(nil), record.Snapshots...), nil
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return nil, err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(master, "/")+poolVMPath+vmID+"/snapshots", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New("pool master refused VM snapshot catalog")
+	}
+	var catalog poolVMSnapshotCatalog
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&catalog) != nil || catalog.VMID != vmID {
+		return nil, errors.New("pool master returned an invalid VM snapshot catalog")
+	}
+	record := poolVMRecord{VMID: vmID, Snapshots: catalog.Snapshots}
+	if err := validatePoolVMSnapshotCatalog(record); err != nil {
+		return nil, err
+	}
+	return append([]protocol.PoolVMSnapshot(nil), catalog.Snapshots...), nil
+}
+
+// UpdatePoolVMSnapshotMetadata renames or redescribes one settled catalog entry on
+// the current pool master. Identity, digests and capture time stay fixed; later
+// revert/delete bind the updated descriptor SHA.
+func UpdatePoolVMSnapshotMetadata(ctx context.Context, s *Store, vmID, snapshotID, name, description string) (protocol.PoolVMSnapshot, error) {
+	req := protocol.VMSnapshotRequest{SnapshotID: snapshotID, Name: name, Description: description}
+	if !uuidLike(vmID) || req.ValidFor("snapshot-metadata") != nil {
+		return protocol.PoolVMSnapshot{}, errors.New("invalid pool VM snapshot metadata update")
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID || membership.MasterHostID == "" {
+		return protocol.PoolVMSnapshot{}, errors.New("pool VM snapshot authority is unavailable")
+	}
+	if membership.MasterHostID == s.State.HostID {
+		return updatePoolVMSnapshotMetadataLocal(s, vmID, req)
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	defer client.CloseIdleConnections()
+	body, err := json.Marshal(poolVMRequest{VMID: vmID, Action: "snapshot-metadata", Snapshot: &req})
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+vmID, strings.NewReader(string(body)))
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(httpReq)
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return protocol.PoolVMSnapshot{}, errors.New("pool master refused VM snapshot metadata update")
+	}
+	var ack poolVMRequest
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&ack) != nil || ack.VMID != vmID || ack.Action != "snapshot-metadata" ||
+		ack.Snapshot == nil || ack.Snapshot.SnapshotID != snapshotID || ack.Snapshot.Name != name || ack.Snapshot.Description != description ||
+		ack.Snapshot.Target == nil || ack.Snapshot.Target.Valid() != nil || ack.Snapshot.Target.ID != snapshotID || ack.Snapshot.Target.VMID != vmID ||
+		ack.Snapshot.Target.Name != name || ack.Snapshot.Target.Description != description {
+		return protocol.PoolVMSnapshot{}, errors.New("pool master returned an invalid VM snapshot metadata update")
+	}
+	return *ack.Snapshot.Target, nil
+}
+
+func updatePoolVMSnapshotMetadataLocal(s *Store, vmID string, req protocol.VMSnapshotRequest) (protocol.PoolVMSnapshot, error) {
+	updated, err := func() (protocol.PoolVMSnapshot, error) {
+		poolVMMu.Lock()
+		defer poolVMMu.Unlock()
+		if err := requirePoolVMAuthorityWritable(s, "snapshot-metadata", false); err != nil {
+			return protocol.PoolVMSnapshot{}, err
+		}
+		membership, err := Membership(s)
+		if err != nil || membership.MasterHostID != s.State.HostID {
+			return protocol.PoolVMSnapshot{}, errors.New("pool VM snapshot authority is unavailable")
+		}
+		state, err := loadPoolVMs(s)
+		if err != nil {
+			return protocol.PoolVMSnapshot{}, err
+		}
+		record, ok := state.VMs[vmID]
+		if !ok || record.PoolID != membership.PoolID {
+			return protocol.PoolVMSnapshot{}, errors.New("pool VM snapshot catalog not found")
+		}
+		if record.HostID != s.State.HostID {
+			return protocol.PoolVMSnapshot{}, errors.New("snapshot metadata update does not address this Core host")
+		}
+		updated, err := applyPoolVMSnapshotMetadata(&record, req)
+		if err != nil {
+			return protocol.PoolVMSnapshot{}, err
+		}
+		state.VMs[vmID] = record
+		if err := savePoolVMs(s, state); err != nil {
+			return protocol.PoolVMSnapshot{}, err
+		}
+		return updated, nil
+	}()
+	if err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	if err := confirmPoolVMSnapshotMetadataReplica(context.Background(), s, vmID, updated); err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	return updated, nil
+}
+
+func applyPoolVMSnapshotMetadata(record *poolVMRecord, req protocol.VMSnapshotRequest) (protocol.PoolVMSnapshot, error) {
+	if record == nil || req.ValidFor("snapshot-metadata") != nil {
+		return protocol.PoolVMSnapshot{}, errors.New("invalid pool VM snapshot metadata update")
+	}
+	// Any pending recovery fences the catalog: renaming into a reserved create name
+	// would make a completed create unsettleable.
+	if record.PendingRecovery != nil {
+		return protocol.PoolVMSnapshot{}, ErrSnapshotMetadataPending
+	}
+	if err := validatePoolVMSnapshotCatalog(*record); err != nil {
+		return protocol.PoolVMSnapshot{}, err
+	}
+	index := -1
+	for i, snapshot := range record.Snapshots {
+		if snapshot.ID == req.SnapshotID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return protocol.PoolVMSnapshot{}, ErrSnapshotMetadataNotFound
+	}
+	others := append(append([]protocol.PoolVMSnapshot(nil), record.Snapshots[:index]...), record.Snapshots[index+1:]...)
+	if record.PendingSnapshot != nil {
+		others = append(others, *record.PendingSnapshot)
+	}
+	if poolVMSnapshotNameExists(others, req.Name) {
+		return protocol.PoolVMSnapshot{}, ErrSnapshotMetadataConflict
+	}
+	updated := record.Snapshots[index]
+	updated.Name, updated.Description = req.Name, req.Description
+	if updated.Valid() != nil {
+		return protocol.PoolVMSnapshot{}, errors.New("pool VM snapshot metadata update is invalid")
+	}
+	record.Snapshots[index] = updated
+	return updated, nil
+}
+
 type poolVMPendingUpdate struct {
 	OperationID string                `json:"operation_id"`
 	Next        protocol.VMCreateSpec `json:"next"`
@@ -58,11 +1303,19 @@ type poolVMState struct {
 	Inventory map[string]poolVMInventory `json:"inventory,omitempty"`
 }
 type poolVMRequest struct {
-	VMID   string                 `json:"vm_id,omitempty"`
-	Action string                 `json:"action,omitempty"`
-	Permit string                 `json:"permit,omitempty"`
-	Create bool                   `json:"create,omitempty"`
-	VM     *protocol.VMCreateSpec `json:"vm,omitempty"`
+	VMID                string                              `json:"vm_id,omitempty"`
+	Action              string                              `json:"action,omitempty"`
+	Permit              string                              `json:"permit,omitempty"`
+	Create              bool                                `json:"create,omitempty"`
+	VM                  *protocol.VMCreateSpec              `json:"vm,omitempty"`
+	Snapshot            *protocol.VMSnapshotRequest         `json:"snapshot,omitempty"`
+	RecoveryKind        string                              `json:"recovery_kind,omitempty"`
+	CapturedSpec        *protocol.VMCreateSpec              `json:"captured_spec,omitempty"`
+	SnapshotCreatedAt   time.Time                           `json:"snapshot_created_at,omitempty"`
+	IntentSHA256        string                              `json:"intent_sha256,omitempty"`
+	OwnerOperationOrder uint64                              `json:"owner_operation_order,omitempty"`
+	SnapshotReservation *protocol.PoolVMRecoveryReservation `json:"snapshot_reservation,omitempty"`
+	RecoveryEvidence    *protocol.PoolVMRecoveryEvidence    `json:"recovery_evidence,omitempty"`
 	// SpecMatch is an explicit master acknowledgement for recovery admission. It
 	// is deliberately absent from older peers, which a new recovery client must
 	// treat as unsafe rather than silently accepting a 200 response.
@@ -79,6 +1332,8 @@ type poolVMRequest struct {
 	// PlacementAccepted is an explicit acknowledgement from a current master
 	// after its fresh target-host preflight and durable definition reservation.
 	PlacementAccepted bool `json:"placement_accepted,omitempty"`
+	SnapshotAccepted  bool `json:"snapshot_accepted,omitempty"`
+	SnapshotSettled   bool `json:"snapshot_settled,omitempty"`
 }
 
 // poolVMRecordMatchesSpec binds an interrupted operation to the immutable
@@ -98,7 +1353,7 @@ func poolVMUpdateEvidenceMatches(record poolVMRecord, pending poolVMPendingUpdat
 }
 
 func reservePoolVMUpdate(record *poolVMRecord, owner, operationID string, next protocol.VMCreateSpec) error {
-	if record.PoolID == "" || record.HostID != owner || (record.State != "defined" && record.State != "stopped" && record.State != "running") || !validPoolVMUpdateOperation(operationID) || next.ID != record.VMID || next.PoolID != record.PoolID || next.HostID != owner || next.Revision != record.Spec.Revision+1 || protocol.ValidateVMSpec(next) != nil {
+	if record.PoolID == "" || record.HostID != owner || (record.State != "defined" && record.State != "stopped" && record.State != "running") || record.PendingRecovery != nil || record.PendingStartOperationID != "" || !validPoolVMUpdateOperation(operationID) || next.ID != record.VMID || next.PoolID != record.PoolID || next.HostID != owner || next.Revision != record.Spec.Revision+1 || protocol.ValidateVMSpec(next) != nil {
 		return errors.New("VM update is not eligible for the durable pool owner record")
 	}
 	if record.PendingUpdate != nil {
@@ -393,10 +1648,20 @@ func prunePoolVMOwners(state *poolVMState, observedHost string) []string {
 		if !exists || record.HostID != observedHost || defined[id] {
 			continue
 		}
+		// A tombstone cannot discard unresolved snapshot state. In particular,
+		// keep the catalog if an older/foreign delete reached libvirt before the
+		// owner check existed; inventory validation will report that conflict.
+		if poolVMHasSnapshotState(record) {
+			continue
+		}
 		delete(state.VMs, id)
 		pruned = append(pruned, id)
 	}
 	return pruned
+}
+
+func poolVMHasSnapshotState(record poolVMRecord) bool {
+	return record.PendingRecovery != nil || record.PendingSnapshot != nil || len(record.Snapshots) != 0
 }
 
 func poolVMFile(s *Store) string { return filepath.Join(s.dir, "pool-vms.json") }
@@ -418,11 +1683,81 @@ func loadPoolVMs(s *Store) (poolVMState, error) {
 	return out, nil
 }
 func savePoolVMs(s *Store, state poolVMState) error {
+	if err := poolVMRecoverySettlementHeadroom(s, state); err != nil {
+		return err
+	}
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
 	return vmhost.AtomicWrite(poolVMFile(s), b, 0600)
+}
+
+// poolVMRecoverySettlementHeadroom prevents later owner writes from consuming the
+// replica capacity already promised to a pending snapshot's terminal catalog entry.
+func poolVMRecoverySettlementHeadroom(s *Store, state poolVMState) error {
+	pending := false
+	for _, record := range state.VMs {
+		if record.PendingRecovery == nil && record.PendingRecoveryResultSpec != nil {
+			return errors.New("snapshot revert result definition has no pending reservation")
+		}
+		pending = pending || record.PendingRecovery != nil
+	}
+	if !pending {
+		return nil
+	}
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.PoolID != s.State.PoolID {
+		return errors.New("pool authority is unavailable while a snapshot reservation is pending")
+	}
+	if peer.Membership.MasterHostID != s.State.HostID {
+		return nil // Members do not write the master's pool-vms.json owner projection.
+	}
+	prospective := make(map[string]poolVMRecord, len(state.VMs))
+	for id, record := range state.VMs {
+		prospective[id] = record
+	}
+	for id, record := range prospective {
+		if record.PendingRecovery == nil {
+			continue
+		}
+		var descriptor *protocol.PoolVMSnapshot
+		var resultSpec *protocol.VMCreateSpec
+		outcome := "failed-before-effects"
+		if record.PendingRecovery.Kind == "snapshot-create" && record.PendingRecovery.AdmissionRefusal == "" {
+			if record.PendingSnapshot == nil {
+				return errors.New("pending snapshot create has no durable descriptor")
+			}
+			copy := *record.PendingSnapshot
+			descriptor = &copy
+			outcome = "completed"
+		} else if record.PendingRecovery.Kind == "snapshot-revert" {
+			if record.PendingRecoveryResultSpec == nil {
+				return errors.New("pending snapshot revert has no derived result definition")
+			}
+			copy := *record.PendingRecoveryResultSpec
+			resultSpec = &copy
+			outcome = "completed"
+		} else if record.PendingRecovery.Kind == "snapshot-delete" {
+			outcome = "completed"
+		}
+		evidence := protocol.PoolVMRecoveryEvidence{
+			Reservation: *record.PendingRecovery, Outcome: outcome, JournalSHA256: strings.Repeat("0", 64), Snapshot: descriptor, ResultSpec: resultSpec,
+		}
+		if err := settlePoolVMRecovery(&record, record.HostID, evidence); err != nil {
+			return errors.New("pending snapshot recovery has invalid terminal replica intent")
+		}
+		prospective[id] = record
+	}
+	vmBytes, err := json.Marshal(prospective)
+	if err != nil || len(vmBytes) > protocol.PoolReplicaLimit {
+		return errors.New("pending snapshots would exceed the pool authority limit when settled")
+	}
+	replica, _, err := buildPoolAuthorityReplicaForMembership(s, peer.Membership, vmBytes)
+	if err != nil || poolAuthorityReplicaFitsAddressedBodies(s, replica, peer.CAKeyPEM) != nil {
+		return errors.New("pending snapshots would exceed the pool replica limit when settled")
+	}
+	return nil
 }
 
 func poolSharedVM(ctx context.Context, s *Store, cmd protocol.Command) (protocol.VMCreateSpec, bool, error) {
@@ -436,6 +1771,17 @@ func poolSharedVM(ctx context.Context, s *Store, cmd protocol.Command) (protocol
 		}
 		for _, candidate := range state.VMs {
 			if candidate.ID == cmd.Power.VMID {
+				v = candidate
+				break
+			}
+		}
+	} else if cmd.Delete != nil {
+		state, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
+		if !managedVMChecksReady(checks) {
+			return v, false, errors.New("managed VM state is unavailable")
+		}
+		for _, candidate := range state.VMs {
+			if candidate.ID == cmd.Delete.VMID {
 				v = candidate
 				break
 			}
@@ -481,7 +1827,7 @@ func poolSharedVM(ctx context.Context, s *Store, cmd protocol.Command) (protocol
 	// remains pool-owned after an edit removes its final shared disk or after
 	// that repository is detached. The proof is read-only managed history, not
 	// a member policy cache.
-	if cmd.Kind == "vm-update" || cmd.Power != nil || cmd.VMMedia != nil {
+	if cmd.Kind == "vm-update" || cmd.Power != nil || cmd.Delete != nil || cmd.VMMedia != nil {
 		used, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).VMHasPoolSharedStorageHistory(ctx, v.ID)
 		if err != nil {
 			return v, false, errors.New("managed VM shared-storage history is unavailable")
@@ -791,6 +2137,10 @@ func PoolVMHandler(s *Store) http.Handler {
 				return
 			}
 			if err = recordPoolVMInventory(s, membership, inv); err != nil {
+				if errors.Is(err, errPoolVMSnapshotTombstone) {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
 				if errors.Is(err, errPoolVMInventoryIncomplete) || errors.Is(err, errPoolVMOwnersDeferred) {
 					// The snapshot is durable but cannot activate legacy owner
 					// adoption until every current ready member has reported.
@@ -806,7 +2156,36 @@ func PoolVMHandler(s *Store) http.Handler {
 				http.Error(w, "VM inventory refused", http.StatusConflict)
 				return
 			}
-			w.WriteHeader(http.StatusNoContent)
+			completePoolVMReplicaRejoin(r.Context(), s, inv.HostID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(poolVMInventoryReply{})
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, poolVMPath) && strings.HasSuffix(r.URL.Path, "/snapshots") {
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, poolVMPath), "/snapshots")
+			membership, membershipErr := Membership(s)
+			if !uuidLike(id) || membershipErr != nil || membership.MasterHostID != s.State.HostID {
+				http.Error(w, "snapshot catalog is unavailable on this host", http.StatusConflict)
+				return
+			}
+			poolVMMu.Lock()
+			state, stateErr := loadPoolVMs(s)
+			poolVMMu.Unlock()
+			if stateErr != nil {
+				http.Error(w, "snapshot catalog is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			record, ok := state.VMs[id]
+			if !ok || record.PoolID != membership.PoolID {
+				http.Error(w, "pool VM snapshot catalog not found", http.StatusNotFound)
+				return
+			}
+			if err := validatePoolVMSnapshotCatalog(record); err != nil {
+				http.Error(w, "pool VM snapshot catalog is invalid", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(poolVMSnapshotCatalog{VMID: id, Snapshots: record.Snapshots})
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, poolVMPath)
@@ -824,7 +2203,7 @@ func PoolVMHandler(s *Store) http.Handler {
 			http.Error(w, "invalid VM execution request", http.StatusBadRequest)
 			return
 		}
-		req.PlacementAccepted, req.UpdateAccepted, req.SpecMatch = false, false, false
+		req.PlacementAccepted, req.UpdateAccepted, req.SpecMatch, req.SnapshotAccepted, req.SnapshotSettled = false, false, false, false, false
 		// A definition placement is decided by the master for every VM, including
 		// local-storage guests.  Do the bounded target RPC before the durable VM
 		// lock; locks must never span a peer request.
@@ -850,7 +2229,12 @@ func PoolVMHandler(s *Store) http.Handler {
 			}
 		}
 		poolVMMu.Lock()
-		defer poolVMMu.Unlock()
+		poolVMLocked := true
+		defer func() {
+			if poolVMLocked {
+				poolVMMu.Unlock()
+			}
+		}()
 		// A frozen or handed-over pool authority refuses new ownership and new start
 		// permits here, inside the same lock section that would record them, which is what
 		// makes the freeze an ordering guarantee rather than a hint.
@@ -862,16 +2246,33 @@ func PoolVMHandler(s *Store) http.Handler {
 		// Keep the peer lock through savePoolVMs so membership cannot change between
 		// the authenticated preflight and durable owner/reservation record.
 		placementMutation := (req.Action == "define" && req.Create) || req.Action == "update-reserve"
+		recoveryMutation := req.Action == "snapshot-settle"
+		poolPeerLocked := false
+		defer func() {
+			if poolPeerLocked {
+				poolPeerMu.Unlock()
+			}
+		}()
 		var currentMembership protocol.PoolMembership
-		if placementMutation {
+		if placementMutation || recoveryMutation {
 			poolPeerMu.Lock()
-			defer poolPeerMu.Unlock()
+			poolPeerLocked = true
 			peer, peerErr := loadPoolPeer(s)
 			if peerErr != nil || peer.Membership.Valid() != nil {
 				http.Error(w, "VM placement membership is unavailable", http.StatusConflict)
 				return
 			}
 			currentMembership = peer.Membership
+			if recoveryMutation && !poolPeerMemberCurrent(currentMembership, member) {
+				http.Error(w, "snapshot settlement owner is no longer a current pool member", http.StatusConflict)
+				return
+			}
+			if recoveryMutation {
+				if refusal := poolAuthorityWritable(peer); refusal != nil {
+					http.Error(w, placementError(refusal), http.StatusConflict)
+					return
+				}
+			}
 		}
 		state, err := loadPoolVMs(s)
 		if err != nil {
@@ -888,8 +2289,63 @@ func PoolVMHandler(s *Store) http.Handler {
 			return
 		}
 		switch req.Action {
+		case "snapshot-reserve":
+			ack, reserveErr := reservePoolVMSnapshotLocked(s, member.HostID, req)
+			if reserveErr != nil {
+				http.Error(w, placementError(reserveErr), http.StatusConflict)
+				return
+			}
+			req = ack
+		case "snapshot-metadata":
+			if req.Snapshot == nil || req.Snapshot.ValidFor("snapshot-metadata") != nil {
+				http.Error(w, "invalid VM snapshot metadata update", http.StatusBadRequest)
+				return
+			}
+			if !ok || record.HostID != member.HostID {
+				http.Error(w, errSnapshotMetadataOwner.Error(), http.StatusConflict)
+				return
+			}
+			updated, metaErr := applyPoolVMSnapshotMetadata(&record, *req.Snapshot)
+			if metaErr != nil {
+				http.Error(w, placementError(metaErr), http.StatusConflict)
+				return
+			}
+			state.VMs[id] = record
+			if err = savePoolVMs(s, state); err != nil {
+				http.Error(w, "execution state unavailable", 500)
+				return
+			}
+			req.Snapshot = &protocol.VMSnapshotRequest{SnapshotID: updated.ID, Name: updated.Name, Description: updated.Description, Target: &updated}
+			req.Epoch = record.Epoch
+			if poolPeerLocked {
+				poolPeerMu.Unlock()
+				poolPeerLocked = false
+			}
+			poolVMMu.Unlock()
+			poolVMLocked = false
+			if ackErr := confirmPoolVMSnapshotMetadataReplica(r.Context(), s, id, updated); ackErr != nil {
+				http.Error(w, "snapshot metadata was saved but is not yet acknowledged by every ready member", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(req)
+			return
+		case "snapshot-settle":
+			if req.RecoveryEvidence == nil || req.RecoveryEvidence.Reservation.VMID != id || req.RecoveryEvidence.Reservation.OwnerHostID != member.HostID {
+				http.Error(w, "snapshot settlement does not match the authenticated VM owner", http.StatusConflict)
+				return
+			}
+			if err := settlePoolVMSnapshotStateLocked(s, &state, currentMembership, member.HostID, *req.RecoveryEvidence); err != nil {
+				http.Error(w, placementError(err), http.StatusConflict)
+				return
+			}
+			req.SnapshotSettled = true
 		case "update-reserve":
-			if req.VM == nil || !placementMutation || vmhost.ValidateManagedCommand(protocol.Command{OperationID: req.OperationID, Kind: "vm-update", VM: req.VM}) != nil || reserveOrSeedPoolVMUpdate(&state, currentMembership, &record, ok, member.HostID, req.OperationID, req.Previous, req.VM) != nil {
+			resourceErr := error(nil)
+			if req.VM != nil {
+				resourceErr = poolResourceMutationRefusal(s, *req.VM)
+			}
+			if req.VM == nil || !placementMutation || resourceErr != nil || vmhost.ValidateManagedCommand(protocol.Command{OperationID: req.OperationID, Kind: "vm-update", VM: req.VM}) != nil || reserveOrSeedPoolVMUpdate(&state, currentMembership, &record, ok, member.HostID, req.OperationID, req.Previous, req.VM) != nil {
 				http.Error(w, "VM update is not eligible for the durable pool owner record", http.StatusConflict)
 				return
 			}
@@ -923,6 +2379,10 @@ func PoolVMHandler(s *Store) http.Handler {
 				req.UpdateRevision = req.Update.Current.Revision
 			}
 		case "define":
+			if ok && record.PendingRecovery != nil {
+				http.Error(w, "VM snapshot recovery is pending reconciliation", http.StatusConflict)
+				return
+			}
 			if ok && (record.PendingUpdate != nil || record.PoolID != s.State.PoolID || record.HostID != member.HostID) {
 				http.Error(w, "VM is owned by another host", http.StatusConflict)
 				return
@@ -940,6 +2400,10 @@ func PoolVMHandler(s *Store) http.Handler {
 					http.Error(w, "invalid VM definition", http.StatusBadRequest)
 					return
 				}
+				if req.Create && poolResourceMutationRefusal(s, *req.VM) != nil {
+					http.Error(w, "VM definition uses a network or media resource with removal pending", http.StatusConflict)
+					return
+				}
 				record = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: member.HostID, State: "defined", Autostart: req.VM.Autostart, Epoch: 1, Spec: *req.VM}
 				state.VMs[id] = record
 				err = savePoolVMs(s, state)
@@ -950,6 +2414,21 @@ func PoolVMHandler(s *Store) http.Handler {
 					req.PlacementAccepted = true
 				}
 			}
+		case "delete-check":
+			if !ok || req.VM == nil || record.PendingUpdate != nil || record.PendingRecovery != nil || record.PendingStartOperationID != "" ||
+				record.PoolID != s.State.PoolID || record.HostID != member.HostID || !poolVMRecordMatchesSpec(record, *req.VM) {
+				http.Error(w, "VM delete does not match the durable pool owner record", http.StatusConflict)
+				return
+			}
+			if err := validatePoolVMSnapshotCatalog(record); err != nil {
+				http.Error(w, "VM snapshot catalog is invalid", http.StatusConflict)
+				return
+			}
+			if len(record.Snapshots) != 0 {
+				http.Error(w, "VM has retained snapshots; delete its snapshots before deleting the VM", http.StatusConflict)
+				return
+			}
+			req.SpecMatch = true
 		case "start":
 			// A drained host starts nothing new. Stop and the transitions that follow a
 			// start already under way are deliberately not refused here.
@@ -957,22 +2436,24 @@ func PoolVMHandler(s *Store) http.Handler {
 				http.Error(w, placementError(err), http.StatusConflict)
 				return
 			}
-			if !ok || record.PendingUpdate != nil || record.PoolID != s.State.PoolID || record.HostID != member.HostID || (record.State != "defined" && record.State != "stopped") {
+			if !ok || !validPoolVMUpdateOperation(req.OperationID) || record.PendingUpdate != nil || record.PendingRecovery != nil || record.PendingStartOperationID != "" || record.PoolID != s.State.PoolID || record.HostID != member.HostID || (record.State != "defined" && record.State != "stopped") {
 				http.Error(w, "VM execution is not eligible to start", http.StatusConflict)
 				return
 			}
 			record.State, record.Epoch = "starting", record.Epoch+1
+			record.PendingStartOperationID = req.OperationID
 			state.VMs[id] = record
 			err = savePoolVMs(s, state)
 			if err == nil {
 				req.Permit, err = randomPermit()
 			}
 		case "running":
-			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || record.State != "starting" {
+			if !ok || record.PendingUpdate != nil || record.PendingRecovery != nil || record.HostID != member.HostID || record.State != "starting" || record.PendingStartOperationID == "" || req.OperationID != record.PendingStartOperationID || req.Epoch == 0 || req.Epoch != record.Epoch {
 				http.Error(w, "VM execution transition refused", http.StatusConflict)
 				return
 			}
 			record.State = "running"
+			record.PendingStartOperationID = ""
 			state.VMs[id] = record
 			err = savePoolVMs(s, state)
 		case "stop":
@@ -987,7 +2468,17 @@ func PoolVMHandler(s *Store) http.Handler {
 				http.Error(w, "VM execution owner mismatch", http.StatusConflict)
 				return
 			}
+			if record.State == "starting" {
+				if record.PendingStartOperationID == "" || req.OperationID != record.PendingStartOperationID || req.Epoch == 0 || req.Epoch != record.Epoch || record.PendingRecovery != nil {
+					http.Error(w, "VM start outcome does not match the pending owner operation", http.StatusConflict)
+					return
+				}
+			} else if req.OperationID != "" || req.Epoch != 0 {
+				http.Error(w, "stale VM start outcome", http.StatusConflict)
+				return
+			}
 			record.State = "stopped"
+			record.PendingStartOperationID = ""
 			state.VMs[id] = record
 			err = savePoolVMs(s, state)
 		case "reboot", "force-reboot", "wake", "media":
@@ -1002,7 +2493,7 @@ func PoolVMHandler(s *Store) http.Handler {
 					return
 				}
 			}
-			if !ok || record.PendingUpdate != nil || record.HostID != member.HostID || (req.Action != "media" && record.State != "running") {
+			if !ok || record.PendingUpdate != nil || record.PendingRecovery != nil || record.PendingStartOperationID != "" || record.HostID != member.HostID || (req.Action != "media" && record.State != "running") {
 				http.Error(w, "VM execution is not eligible for this action", http.StatusConflict)
 				return
 			}
@@ -1013,6 +2504,24 @@ func PoolVMHandler(s *Store) http.Handler {
 		if err != nil {
 			http.Error(w, "execution state persistence failed", 500)
 			return
+		}
+		if req.Action == "snapshot-reserve" || req.Action == "snapshot-settle" {
+			if poolPeerLocked {
+				poolPeerMu.Unlock()
+				poolPeerLocked = false
+			}
+			poolVMMu.Unlock()
+			poolVMLocked = false
+			var ackErr error
+			if req.Action == "snapshot-reserve" {
+				ackErr = confirmPoolVMSnapshotReplica(r.Context(), s, &req, nil)
+			} else if req.RecoveryEvidence != nil {
+				ackErr = confirmPoolVMSnapshotReplica(r.Context(), s, nil, req.RecoveryEvidence)
+			}
+			if ackErr != nil {
+				http.Error(w, "snapshot state was saved but is not yet acknowledged by every ready member", http.StatusConflict)
+				return
+			}
 		}
 		req.Epoch = record.Epoch
 		w.Header().Set("Content-Type", "application/json")
@@ -1078,10 +2587,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 		}
 	}
 	// A drained host starts nothing new, for exactly the same reason and in exactly the
-	// same place: the early return below is where every local-storage-only guest leaves
-	// this function, before any master contact, so a maintenance guard downstream of that
-	// round trip never sees the most common guest shape. Reboots and every reducing power
-	// request are deliberately not refused here.
+	// same place. Reboots and every reducing power request are deliberately not refused here.
 	if poolVMStartsExecution(cmd) {
 		if err := poolHostInMaintenance(s, s.State.HostID); err != nil {
 			return nil, err
@@ -1092,9 +2598,29 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 		return nil, err
 	}
 	definition := cmd.Kind == "vm-create" || cmd.Kind == "vm-update"
+	ownerAdmission := shared || definition
+	if v.ID != "" && cmd.Kind == "vm-power" && cmd.Power != nil {
+		switch cmd.Power.Action {
+		case "start", "wake", "reboot", "force-reboot":
+			ownerAdmission = true
+		}
+	}
+	ownerAdmission = ownerAdmission || (v.ID != "" && cmd.Kind == "vm-media")
+	// Every pool VM deletion is durable master state. Keep the check independent
+	// of DeleteDisks: retaining or unlinking disks must not discard catalog points.
+	if cmd.Kind == "vm-delete" && v.ID != "" {
+		if cmd.Delete == nil || cmd.Delete.VMID != v.ID || cmd.Delete.PoolID != s.State.PoolID || cmd.Delete.HostID != s.State.HostID {
+			return nil, errors.New("VM delete does not match the local pool owner")
+		}
+		if err := poolVMRequestPeer(ctx, s, v.ID, "delete-check", nil, false, &v, nil); err != nil {
+			return nil, err
+		}
+	}
 	// Placement ownership covers every VM definition. The shared-storage fence
-	// below still covers only operations which could create a second writer.
-	if !shared && !definition {
+	// below still covers only operations which could create a second writer. Local
+	// execution-increasing and media operations still require owner admission so a
+	// pending recovery cannot be bypassed through local-only storage.
+	if !ownerAdmission {
 		return func(protocol.Result, error) error { return nil }, nil
 	}
 	stopErr := poolVMStopOnly(s, cmd, v)
@@ -1127,15 +2653,12 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	case "vm-power":
 		action = cmd.Power.Action
 	case "vm-media":
-		// recordVMMedia changes the durable VM definition (MediaID and, on eject,
-		// media boot order). A simple owner permit would let that new revision
-		// diverge from the master's immutable Spec, so a media change that rewrites
-		// the definition must arrive as the vm-update transition PoolVMMediaCommand
-		// produces, and is fail-closed here. What remains cannot change the master's
-		// Spec: it reconnects the tray to the ISO the definition already names, and
+		// A media change that rewrites the definition must arrive as the vm-update
+		// transition PoolVMMediaCommand produces. The remaining operation only
+		// reconnects the tray to the ISO the definition already names, and still
 		// needs the owner admission every other execution action takes.
 		if cmd.VMMedia == nil || poolVMMediaChangesDefinition(v, *cmd.VMMedia) {
-			return nil, errors.New("shared VM media changes require a durable pool definition transition")
+			return nil, errors.New("VM media changes require a durable pool definition transition")
 		}
 		action = "media"
 	default:
@@ -1161,6 +2684,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	}
 	permit := ""
 	epoch := uint64(0)
+	startAdmitted := false
 	if action == "update-reserve" {
 		previous, priorErr := poolVMUpdatePrevious(ctx, s, v.ID)
 		if cmd.VM == nil || priorErr != nil || vmhost.ValidateManagedCommand(cmd) != nil {
@@ -1178,16 +2702,18 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			return nil, err
 		}
 	}
-	if shared && cmd.Kind == "vm-create" && v.StartAfterCreate {
-		if err := poolVMRequestPeer(ctx, s, v.ID, "start", &permit, false, nil, &epoch); err != nil {
+	if cmd.Kind == "vm-create" && v.StartAfterCreate {
+		if err := poolVMRequestPeerBound(ctx, s, v.ID, "start", cmd.OperationID, 0, &permit, false, nil, &epoch); err != nil {
 			return nil, err
 		}
+		startAdmitted = true
 	} else if action == "start" {
-		if err := poolVMRequestPeer(ctx, s, v.ID, action, &permit, false, nil, &epoch); err != nil {
+		if err := poolVMRequestPeerBound(ctx, s, v.ID, action, cmd.OperationID, 0, &permit, false, nil, &epoch); err != nil {
 			return nil, err
 		}
+		startAdmitted = true
 	}
-	if permit != "" {
+	if permit != "" && shared {
 		if err := vmhost.WritePoolVMStartPermitAdmission(s.dir, s.State.PoolID, s.State.HostID, v.ID, epoch, permit); err != nil {
 			return nil, err
 		}
@@ -1206,6 +2732,21 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			if permit != "" {
 				_ = vmhost.RemovePoolVMStartPermit(s.dir, v.ID)
 			}
+			if startAdmitted && executeErr == nil && result.Status == "failed" {
+				if cmd.Kind == "vm-create" && v.StartAfterCreate {
+					// Creation failure is not evidence about a separately admitted
+					// automatic start. Keep its reservation until an exact start result
+					// or owner observation can reconcile it.
+					return nil
+				}
+				state, observeErr := vmhost.ManagedVMState(context.Background(), v.ID)
+				if observeErr == nil && state == "shut off" {
+					if err := poolVMRequestPeerBound(context.Background(), s, v.ID, "stopped", cmd.OperationID, epoch, nil, false, nil, nil); err == nil {
+						return nil
+					}
+				}
+				return errors.New("failed VM start remains pending durable reconciliation")
+			}
 			return nil
 		}
 		if cmd.Kind == "vm-update" {
@@ -1222,7 +2763,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			// reboot must not be translated into a placement transition.
 			return nil
 		}
-		if !shared || (cmd.Kind == "vm-create" && !v.StartAfterCreate) {
+		if !ownerAdmission || (cmd.Kind == "vm-create" && !v.StartAfterCreate) {
 			return nil
 		}
 		state, err := vmhost.ManagedVMState(context.Background(), v.ID)
@@ -1230,11 +2771,25 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 			return nil
 		}
 		if state == "running" {
-			_ = poolVMRequestPeer(context.Background(), s, v.ID, "running", nil, false, nil, nil)
+			if startAdmitted {
+				_ = poolVMRequestPeerBound(context.Background(), s, v.ID, "running", cmd.OperationID, epoch, nil, false, nil, nil)
+			} else {
+				_ = poolVMRequestPeer(context.Background(), s, v.ID, "running", nil, false, nil, nil)
+			}
 		}
 		if state == "shut off" {
 			_ = vmhost.RemovePoolVMStartPermit(s.dir, v.ID)
-			_ = poolVMRequestPeer(context.Background(), s, v.ID, "stopped", nil, false, nil, nil)
+			if startAdmitted {
+				if cmd.Kind == "vm-create" && v.StartAfterCreate {
+					start, found, startErr := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).CreateStartOutcome(context.Background(), cmd.OperationID)
+					if startErr != nil || !found || start.OperationID != cmd.OperationID+":start" || start.Status != "failed" {
+						return nil
+					}
+				}
+				_ = poolVMRequestPeerBound(context.Background(), s, v.ID, "stopped", cmd.OperationID, epoch, nil, false, nil, nil)
+			} else {
+				_ = poolVMRequestPeer(context.Background(), s, v.ID, "stopped", nil, false, nil, nil)
+			}
 		}
 		return nil
 	}, nil
@@ -1288,15 +2843,35 @@ func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreate
 }
 
 func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
+	return poolVMRequestPeerBound(ctx, s, id, action, "", 0, permit, create, vm, epoch)
+}
+
+func poolVMRequestPeerBound(ctx context.Context, s *Store, id, action, operationID string, expectedEpoch uint64, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
 	if create {
 		return errors.New("VM creation requires exact operation placement admission")
+	}
+	if action == "start" && !validPoolVMUpdateOperation(operationID) {
+		return errors.New("VM start requires an exact owner operation ID")
 	}
 	membership, err := Membership(s)
 	if err != nil {
 		return err
 	}
 	if membership.MasterHostID == s.State.HostID {
-		return poolVMLocal(s, id, action, permit, create, vm, epoch)
+		localPermit, localEpoch := "", uint64(0)
+		if err := poolVMLocalBound(s, id, action, operationID, expectedEpoch, &localPermit, create, vm, &localEpoch); err != nil {
+			return err
+		}
+		if action == "start" && (localPermit == "" || localEpoch == 0) {
+			return errors.New("pool master did not issue an exact VM start admission")
+		}
+		if permit != nil {
+			*permit = localPermit
+		}
+		if epoch != nil {
+			*epoch = localEpoch
+		}
+		return nil
 	}
 	master, err := PoolMasterURL(s)
 	if err != nil {
@@ -1307,7 +2882,7 @@ func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit 
 		return err
 	}
 	defer c.CloseIdleConnections()
-	body, _ := json.Marshal(poolVMRequest{VMID: id, Action: action, Create: create, VM: vm})
+	body, _ := json.Marshal(poolVMRequest{VMID: id, Action: action, OperationID: operationID, Epoch: expectedEpoch, Create: create, VM: vm})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+id, strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -1330,6 +2905,15 @@ func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit 
 	var result poolVMRequest
 	if json.NewDecoder(resp.Body).Decode(&result) != nil {
 		return errors.New("invalid pool VM execution response")
+	}
+	if action == "start" && (result.VMID != id || result.Action != action || result.OperationID != operationID || result.Permit == "" || result.Epoch == 0) {
+		return errors.New("pool master did not issue an exact VM start admission")
+	}
+	if (action == "running" || action == "stopped") && operationID != "" && (result.VMID != id || result.Action != action || result.OperationID != operationID || result.Epoch != expectedEpoch) {
+		return errors.New("pool master did not acknowledge the exact VM start outcome")
+	}
+	if action == "delete-check" && (result.VMID != id || result.Action != action || !result.SpecMatch) {
+		return errors.New("pool master did not authorize the exact VM delete")
 	}
 	if action == "define" && !create && vm != nil && !result.SpecMatch {
 		return errors.New("pool master did not confirm the durable VM definition")
@@ -1425,6 +3009,19 @@ func placementMembershipMatches(s *Store, membership protocol.PoolMembership, ge
 	return false
 }
 
+func poolPeerMemberCurrent(membership protocol.PoolMembership, selected protocol.PoolMember) bool {
+	if membership.Valid() != nil || membership.MasterHostID == "" || selected.HostID == "" {
+		return false
+	}
+	for _, member := range membership.Members {
+		if member.HostID == selected.HostID && member.Status == "ready" &&
+			member.CertificateSHA256 == selected.CertificateSHA256 && member.Generation <= membership.Generation {
+			return true
+		}
+	}
+	return false
+}
+
 func placementReservationMatches(record poolVMRecord, operationID string, next *protocol.VMCreateSpec) bool {
 	return next != nil && record.PendingUpdate != nil && record.PendingUpdate.OperationID == operationID && reflect.DeepEqual(record.PendingUpdate.Next, *next)
 }
@@ -1490,10 +3087,18 @@ func poolVMLocalUpdatePlacement(s *Store, id, action, operationID string, previo
 	return savePoolVMs(s, state)
 }
 func poolVMLocal(s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
-	return poolVMLocalPlacement(s, id, action, permit, create, vm, epoch, nil)
+	return poolVMLocalBound(s, id, action, "", 0, permit, create, vm, epoch)
+}
+
+func poolVMLocalBound(s *Store, id, action, operationID string, expectedEpoch uint64, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
+	return poolVMLocalPlacementBound(s, id, action, operationID, expectedEpoch, permit, create, vm, epoch, nil)
 }
 
 func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64, placement *poolPlacementReply) error {
+	return poolVMLocalPlacementBound(s, id, action, "", 0, permit, create, vm, epoch, placement)
+}
+
+func poolVMLocalPlacementBound(s *Store, id, action, operationID string, expectedEpoch uint64, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64, placement *poolPlacementReply) error {
 	// The master's own guests take this path instead of the peer handler. Read the drain
 	// flag before any lock: a placement already carries its own refusal from
 	// poolVMPlacement, and reading membership here would otherwise take the peer lock in
@@ -1527,6 +3132,9 @@ func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bo
 	}
 	switch action {
 	case "define":
+		if ok && r.PendingRecovery != nil {
+			return errors.New("VM snapshot recovery is pending reconciliation")
+		}
 		if ok && (r.PendingUpdate != nil || r.HostID != s.State.HostID) {
 			return errors.New("VM is owned by another host")
 		}
@@ -1542,11 +3150,23 @@ func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bo
 			}
 			r = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: s.State.HostID, State: "defined", Autostart: vm.Autostart, Epoch: 1, Spec: *vm}
 		}
+	case "delete-check":
+		if !ok || vm == nil || r.PendingUpdate != nil || r.PendingRecovery != nil || r.PendingStartOperationID != "" ||
+			r.PoolID != s.State.PoolID || r.HostID != s.State.HostID || !poolVMRecordMatchesSpec(r, *vm) {
+			return errors.New("VM delete does not match the durable pool owner record")
+		}
+		if err := validatePoolVMSnapshotCatalog(r); err != nil {
+			return errors.New("VM snapshot catalog is invalid")
+		}
+		if len(r.Snapshots) != 0 {
+			return errors.New("VM has retained snapshots; delete its snapshots before deleting the VM")
+		}
 	case "start":
-		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || (r.State != "defined" && r.State != "stopped") {
+		if !ok || !validPoolVMUpdateOperation(operationID) || r.PendingUpdate != nil || r.PendingRecovery != nil || r.PendingStartOperationID != "" || r.HostID != s.State.HostID || (r.State != "defined" && r.State != "stopped") {
 			return errors.New("VM execution is not eligible to start")
 		}
 		r.State, r.Epoch = "starting", r.Epoch+1
+		r.PendingStartOperationID = operationID
 		if permit != nil {
 			*permit, err = randomPermit()
 			if err != nil {
@@ -1554,10 +3174,11 @@ func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bo
 			}
 		}
 	case "running":
-		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || r.State != "starting" {
+		if !ok || r.PendingUpdate != nil || r.PendingRecovery != nil || r.HostID != s.State.HostID || r.State != "starting" || r.PendingStartOperationID == "" || operationID != r.PendingStartOperationID || expectedEpoch == 0 || expectedEpoch != r.Epoch {
 			return errors.New("VM execution transition refused")
 		}
 		r.State = "running"
+		r.PendingStartOperationID = ""
 	case "stop":
 		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID {
 			return errors.New("VM execution owner mismatch")
@@ -1566,9 +3187,17 @@ func poolVMLocalPlacement(s *Store, id, action string, permit *string, create bo
 		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID {
 			return errors.New("VM execution owner mismatch")
 		}
+		if r.State == "starting" {
+			if r.PendingStartOperationID == "" || operationID != r.PendingStartOperationID || expectedEpoch == 0 || expectedEpoch != r.Epoch || r.PendingRecovery != nil {
+				return errors.New("VM start outcome does not match the pending owner operation")
+			}
+		} else if operationID != "" || expectedEpoch != 0 {
+			return errors.New("stale VM start outcome")
+		}
 		r.State = "stopped"
+		r.PendingStartOperationID = ""
 	case "reboot", "force-reboot", "wake", "media":
-		if !ok || r.PendingUpdate != nil || r.HostID != s.State.HostID || (action != "media" && r.State != "running") {
+		if !ok || r.PendingUpdate != nil || r.PendingRecovery != nil || r.PendingStartOperationID != "" || r.HostID != s.State.HostID || (action != "media" && r.State != "running") {
 			return errors.New("VM execution is not eligible for this action")
 		}
 	default:
@@ -1598,19 +3227,18 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 	restricted := requirePoolStartPath(s)
 	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
 	managed, checks := engine.Applied(ctx)
-	// Neither refusal above can stop libvirt: it starts its autostart domains at boot,
-	// before this agent runs, and this pass is not on that path at all. So the drain has to
-	// reach libvirt's own flag. While this host is drained or restricted every managed
-	// domain's autostart is disabled, and it is restored from Nex's durable definition —
-	// the managed journal, which is where the operator's choice lives and stays — as soon
-	// as the host is neither. Nothing about the desired value is recorded here.
+	// libvirt starts enabled domains before this agent can confirm pool authority. Keep
+	// native autostart disabled for every managed VM; the durable Core Autostart setting
+	// below is the boot intent, and this pass starts it only after current master admission.
 	//
 	// The flag alone is not enough to bring a local-storage guest back, because libvirt's
 	// one attempt happens before this host has confirmed its pool authority and the startup
 	// hook refuses it then. The loop below is what actually starts those guests, once the
 	// two gates above have passed.
+	suppressionFailed := make(map[string]bool)
 	for _, vm := range managed.VMs {
-		if err := engine.SetManagedVMAutostart(ctx, vm, drained != nil || restricted != nil); err != nil {
+		if err := engine.SetManagedVMAutostart(ctx, vm); err != nil {
+			suppressionFailed[vm.ID] = true
 			log.Print("libvirt autostart could not be reconciled for a managed VM; inspect this host")
 		}
 	}
@@ -1626,7 +3254,7 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		return "pool VM autostart skipped: managed VM checks are not ready"
 	}
 	for _, vm := range managed.VMs {
-		if !vm.Autostart {
+		if !vm.Autostart || suppressionFailed[vm.ID] {
 			continue
 		}
 		shared := poolVMOnSharedStorage(managed, vm)
@@ -1641,48 +3269,56 @@ func ReconcilePoolVMAutostart(ctx context.Context, s *Store) string {
 		if err != nil || state != "shut off" {
 			continue
 		}
-		if !shared {
-			startLocalAutostartVM(ctx, s, engine, vm)
+		_ = vmhost.RemovePoolVMStartPermit(s.dir, vm.ID)
+		// Confirm the exact master-owned definition before either local or shared
+		// autostart can consume a start permit.
+		if poolVMRequestPeer(ctx, s, vm.ID, "define", nil, false, &vm, nil) != nil {
 			continue
 		}
-		_ = vmhost.RemovePoolVMStartPermit(s.dir, vm.ID)
-		// Older member definitions predate the master record.  The first owner to report
-		// one is recorded; a competing host is refused before libvirt receives a start.
 		if poolVMRequestPeer(ctx, s, vm.ID, "stopped", nil, false, nil, nil) != nil {
 			continue
 		}
 		permit := ""
 		epoch := uint64(0)
-		executionCtx, err := poolVMExecutionContext(ctx, s, vm)
-		if err != nil {
-			continue
-		}
-		if poolVMRequestPeer(ctx, s, vm.ID, "start", &permit, false, nil, &epoch) != nil {
-			continue
-		}
-		if vmhost.WritePoolVMStartPermitAdmission(s.dir, s.State.PoolID, s.State.HostID, vm.ID, epoch, permit) != nil {
-			continue
-		}
 		op, err := randomPermit()
 		if err != nil {
+			continue
+		}
+		executionCtx := ctx
+		if shared {
+			executionCtx, err = poolVMExecutionContext(ctx, s, vm)
+			if err != nil {
+				continue
+			}
+		}
+		if poolVMRequestPeerBound(ctx, s, vm.ID, "start", op, 0, &permit, false, nil, &epoch) != nil {
+			continue
+		}
+		if shared && vmhost.WritePoolVMStartPermitAdmission(s.dir, s.State.PoolID, s.State.HostID, vm.ID, epoch, permit) != nil {
 			continue
 		}
 		result, err := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Execute(executionCtx, protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}, nil)
 		if err != nil || result.Status != "succeeded" {
 			_ = vmhost.RemovePoolVMStartPermit(s.dir, vm.ID)
+			if err == nil && result.Status == "failed" {
+				if state, stateErr := vmhost.ManagedVMState(ctx, vm.ID); stateErr == nil && state == "shut off" {
+					_ = poolVMRequestPeerBound(ctx, s, vm.ID, "stopped", op, epoch, nil, false, nil, nil)
+				}
+			}
 			continue
 		}
 		if observed, err := vmhost.ManagedVMState(ctx, vm.ID); err == nil && observed == "running" {
-			_ = poolVMRequestPeer(ctx, s, vm.ID, "running", nil, false, nil, nil)
+			_ = poolVMRequestPeerBound(ctx, s, vm.ID, "running", op, epoch, nil, false, nil, nil)
+		} else if err == nil && observed == "shut off" {
+			_ = poolVMRequestPeerBound(ctx, s, vm.ID, "stopped", op, epoch, nil, false, nil, nil)
 		}
 	}
 	return ""
 }
 
 // poolVMOnSharedStorage answers whether any of this VM's disks sit on a repository the pool
-// shares. It decides which half of the autostart pass a guest belongs to: a shared-storage
-// guest needs the master's admission and a one-use execution permit, a local one cannot be
-// opened from another host and needs neither.
+// shares. Shared guests additionally need the repository execution context; every guest still
+// receives the master's owner admission before autostart.
 func poolVMOnSharedStorage(managed *protocol.ManagedState, vm protocol.VMCreateSpec) bool {
 	for _, disk := range vm.Disks {
 		for _, storage := range managed.Storage {
@@ -1692,32 +3328,4 @@ func poolVMOnSharedStorage(managed *protocol.ManagedState, vm protocol.VMCreateS
 		}
 	}
 	return false
-}
-
-// startLocalAutostartVM brings back a local-storage guest whose autostart flag libvirt owns.
-//
-// libvirt tries that flag exactly once, at boot, and on a pool master with other ready
-// members it tries it before this agent has confirmed this boot's pool authority — so the
-// startup hook refuses it, and nothing retries it for the rest of that boot. Without this the
-// guest simply never returns from a reboot, and an operator has to start it by hand.
-//
-// It is safe to start here for the same reason the hook could not be left to it: the gates
-// this pass already passed are the whole decision. The host is neither drained nor
-// restricted, and a local disk cannot be opened from another host, so no retry here can ever
-// produce a second writer. No master permit or ownership transition is involved either — an
-// API start of a local-storage guest takes exactly the same path (AdmitPoolVMExecution
-// returns before any master round trip for one).
-func startLocalAutostartVM(ctx context.Context, s *Store, engine *vmhost.ManagedEngine, vm protocol.VMCreateSpec) {
-	executionCtx, err := poolVMExecutionContext(ctx, s, vm)
-	if err != nil {
-		return
-	}
-	op, err := randomPermit()
-	if err != nil {
-		return
-	}
-	result, err := engine.Execute(executionCtx, protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}, nil)
-	if err != nil || result.Status != "succeeded" {
-		log.Print("pool VM autostart could not start a local-storage guest; inspect the VM on this host")
-	}
 }

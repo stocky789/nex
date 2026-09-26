@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.12. Maintenance mode is a drain flag the **pool master** records for one
+Development product 0.4.13. Maintenance mode is a drain flag the **pool master** records for one
 host in the pool: while it is set, the master places no new virtual machine on that host and
 refuses starting one there. Set it from Nex Controller: **Settings** → **Members** (with the
 pool chosen in the top-bar scope menu) → **Actions** on the host's row → **Enter maintenance**.
@@ -109,7 +109,7 @@ storage and while the master is unreachable:
 | Reboot or force-reboot a guest already running there | allowed — it is already running on the host, so this is not new work |
 | Stop, shut down or force-stop | allowed, always |
 | Change a guest's CD/DVD, with no definition change | allowed |
-| Host reboot: guests that would normally start themselves | **blocked** — the host suppresses libvirt's autostart flag while drained |
+| Host reboot: guests that would normally start themselves | **blocked** — Core refuses its autostart attempt while drained; the recovery development build keeps native libvirt autostart disabled for managed pool VMs |
 | Manual `virsh start` of a managed guest on any pool host | **refused** by Nex Core's libvirt hook |
 
 On a member the drain flag is read from the signed copy of the pool's records that the master

@@ -1,0 +1,39 @@
+{
+  "summary": "Record S3 browser Snapshots walkthrough and freeze/thaw host-owned recovery; include rebuilt UI assets used for the lab.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+    "docs/qa/2026-09-26-recovery-snapshot-running-mode.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/changes/2026-09-26-snapshot-s3-browser.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Verification section now cites browser and freeze/thaw host-owned recovery receipts.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API contract change; walkthrough used existing snapshot routes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 5 checklist still open for independent review and remaining interruption cases; board already updated in the prior S3 roadmap record.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-vms.json snapshot catalog and owner journals; browser only submits create requests.",
+    "reason": "Controller remains replaceable front end onto host-reported catalog and operations."
+  },
+  "verification": {
+    "method": "Playwright signed in to lab Controller, exercised Snapshots Mode UI and crash create; API confirmed catalog entry. Earlier freeze-while-Core-killed thaw and post-restart quiesced create recorded in running-mode QA.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+      "docs/qa/2026-09-26-recovery-snapshot-running-mode.md",
+      "docs/guide/vm-snapshots.md"
+    ]
+  }
+}

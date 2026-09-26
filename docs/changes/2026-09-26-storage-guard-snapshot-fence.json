@@ -1,0 +1,40 @@
+{
+  "summary": "Refuse libvirt-started managed VMs with unresolved Core snapshot recovery state. API impact: none.",
+  "paths": [
+    "internal/vmhost/storage_guard.go",
+    "internal/vmhost/storage_guard_test.go",
+    "docs/changes/2026-09-26-storage-guard-snapshot-fence.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This hardens the existing Core libvirt start hook and does not change an operator workflow or command.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The start hook reads the existing Core managed journal and reuses the existing recoveryVMReservationRefusal rule. No Controller/Core endpoint, request, response, or client-facing contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This closes a Core startup safety gap within the existing snapshot recovery scope and does not change phase acceptance or plan scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The existing Core managed-vms journal stores the local snapshot intent, recovery reservation, and settlement state. The libvirt start hook reads those records directly; the pool master's existing VM reservation remains its authoritative pool-side record.",
+    "reason": "The guard enforces Core-owned recovery state at the native start boundary without adding another durable record."
+  },
+  "verification": {
+    "method": "Added focused regressions for an unsettled local snapshot intent, a valid reserved snapshot journal with its master reservation attached, and settled state. Before the guard was added, StorageGuard returned a later repository-availability error instead of the required recovery refusal. The test also proves the existing local-storage startup validation accepts the same domain when its repository verifier reports healthy, then checks the actual StorageGuard refusal before host storage probes. The production guard reuses recoveryVMReservationRefusal for the managed VM identity. No production lab was operated.",
+    "evidence": [
+      "internal/vmhost/storage_guard.go",
+      "internal/vmhost/storage_guard_test.go"
+    ],
+    "checks": [
+      "go test ./internal/vmhost -run 'TestStorageGuard(RefusesUnresolvedSnapshotStateBeforeManagedVMStart|AllowsSettledSnapshotIntent)$' -count=1 \u2014 passed",
+      "go test ./internal/vmhost -count=1 \u2014 passed",
+      "git diff --check -- internal/vmhost/storage_guard.go internal/vmhost/storage_guard_test.go \u2014 passed"
+    ]
+  }
+}

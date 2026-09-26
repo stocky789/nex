@@ -1,0 +1,36 @@
+{
+  "summary": "Add a candidate-pinned checkpointed full-backup restore mode to the disposable S0 native harness.",
+  "paths": [
+    "tests/integration/recovery_s0_backup.py",
+    "tests/test_recovery_s0_backup.py",
+    "docs/qa/2026-09-26-recovery-s0-backup-nex3-checkpoint.md",
+    "docs/changes/2026-09-26-recovery-s0-backup-nex3-checkpoint.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The change extends a contributor-only disposable native probe and does not implement or alter an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe invokes native libvirt on an assigned disposable Core guest; no Nex Controller/Core or client-facing contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This prepares one bounded S0 evidence run and does not change the recovery plan or mark a gate complete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state changes. The runner creates isolated disposable guests and private backup outputs only."
+  },
+  "verification": {
+    "method": "The focused harness suite verifies candidate-manifest and selected-package hashes, amd64/all package architectures, exact package versions and installed runtime-file digests, checkpoint-present output/marker selection, exact checkpoint-name matching, QEMU ownership and mode-0600 output checks, domain-collision refusal, exact writable NFSv4.2 mount/destination validation, and skipping capacity/interruption probes in checkpoint-restore mode. `python3 -m unittest tests/test_recovery_s0_backup.py tests/test_recovery_s0_consolidate.py` passed 36 tests; `python3 -m py_compile tests/integration/recovery_s0_backup.py tests/test_recovery_s0_backup.py` passed. The native checkpoint-present backup and source-unavailable restore passed on the disposable +nex3 Core guest. The invocation also ran inherited capacity, NFS stall/cancel, and shutdown-during-backup probes; the scope deviation and cleanup checks are recorded in the QA report. The raw result SHA256 is 7d7a662bbba78aa3ece136b52c88571d23c95a710ee00636f90d7d6b3d25b815. Documentation and privacy gates passed.",
+    "evidence": [
+      "tests/integration/recovery_s0_backup.py",
+      "tests/test_recovery_s0_backup.py",
+      "docs/qa/2026-09-26-recovery-s0-backup-nex3-checkpoint.md"
+    ]
+  }
+}

@@ -80,7 +80,7 @@ func TestManagedLegacyDedicatedLiveEditRequiresStop(t *testing.T) {
 	t.Setenv("MEMORY_DOMAIN", path)
 	t.Setenv("MEMORY_CALLS", calls)
 	fakeCommand(t, "virsh", `echo "$3" >> "$MEMORY_CALLS"; case "$3" in domstate) echo running;; dumpxml) cat "$MEMORY_DOMAIN";; *) exit 1;; esac`)
-	e := NewManaged(dir)
+	e := managedTestEngine(dir)
 	cur := managedJournal{Command: protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}, Result: protocol.Result{Status: "succeeded"}, Domain: []byte(legacy), Disks: []string{"/disk"}}
 	next := v
 	next.Revision++

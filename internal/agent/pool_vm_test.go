@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,7 +237,7 @@ func autostartFixture(t *testing.T, s *Store, localAutostart, sharedAutostart bo
 			t.Fatal(err)
 		}
 	}
-	localRepo := protocol.StorageRegistration{ID: "local-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "local", Path: "/var/lib/nex-storage/local-1", Kind: protocol.StorageKindLocal, Generation: 1}
+	localRepo := protocol.StorageRegistration{ID: "local-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "local", Path: t.TempDir(), Kind: protocol.StorageKindLocal, Generation: 1}
 	sharedRepo := protocol.StorageRegistration{ID: "repo-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports", Directory: "guests"}}, Generation: 1}
 	for _, repo := range []protocol.StorageRegistration{localRepo, sharedRepo} {
 		write("register-"+repo.ID, map[string]any{
@@ -263,10 +265,14 @@ func autostartFixture(t *testing.T, s *Store, localAutostart, sharedAutostart bo
 // records each invocation without the leading --connect pair, so a test can read back exactly
 // which guest Core asked libvirt to start rather than which flag it set.
 func autostartVirsh(t *testing.T, ids ...string) func() []string {
+	return autostartVirshWithFlag(t, "Autostart: disable", ids...)
+}
+
+func autostartVirshWithFlag(t *testing.T, dominfo string, ids ...string) func() []string {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "virsh.log")
-	script := "#!/bin/sh\nshift 2\nprintf '%s\\n' \"$*\" >> " + log + "\ncase \"$1\" in\n  list) printf '%s\\n' " + strings.Join(ids, " ") + " ;;\n  domstate) printf 'shut off\\n' ;;\nesac\nexit 0\n"
+	script := "#!/bin/sh\nshift 2\nprintf '%s\\n' \"$*\" >> " + log + "\ncase \"$1\" in\n  list) printf '%s\\n' " + strings.Join(ids, " ") + " ;;\n  domstate) printf '%s\\n' \"${NEX_TEST_STATE:-shut off}\" ;;\n  dominfo) printf '%s\\n' '" + dominfo + "' ;;\nesac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(dir, "virsh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -289,15 +295,31 @@ func autostartAttempted(t *testing.T, s *Store, vmID, bootID string) bool {
 	return err == nil
 }
 
-// A local-storage guest's autostart is libvirt's flag, and libvirt tries it once at boot,
-// before this host has confirmed its pool authority — the startup hook refuses it there and
-// nothing retried it, so the guest never came back from a reboot. Core's own pass must take
-// that attempt once the drain and authority gates have passed.
-func TestAutostartPassAttemptsLocalStorageGuests(t *testing.T) {
+// Local-storage autostart must use the same durable owner admission as API starts;
+// a pending recovery blocks it before the native start reaches libvirt.
+func TestAutostartPassRequiresOwnerAdmissionForLocalStorageGuests(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
 	local, shared := autostartFixture(t, s, true, false)
 	virshLog := autostartVirsh(t, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	record := poolVMRecord{PoolID: s.State.PoolID, VMID: local.ID, HostID: s.State.HostID, State: "stopped", Epoch: 1, Spec: local}
+	reservation, err := poolVMRecoveryReservationFor(record, "recovery-1", "snapshot-create", strings.Repeat("d", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := snapshotDescriptorForTest(reservation, "before-upgrade", "")
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.Dependencies = &dependencies
+	record.PendingSnapshot = &descriptor
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
 	const boot = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	setPoolVMAutostartBootID(t, boot)
 
@@ -307,8 +329,8 @@ func TestAutostartPassAttemptsLocalStorageGuests(t *testing.T) {
 	if !autostartAttempted(t, s, local.ID, boot) {
 		t.Fatal("the pass skipped a local-storage autostart guest, so a reboot leaves it shut off")
 	}
-	if !slices.Contains(virshLog(), "start "+local.ID) {
-		t.Fatalf("Core never asked libvirt to start the local-storage autostart guest: %q", virshLog())
+	if slices.Contains(virshLog(), "start "+local.ID) {
+		t.Fatal("a local-storage autostart crossed pending recovery authority")
 	}
 	if autostartAttempted(t, s, shared.ID, boot) {
 		t.Fatal("the pass claimed a boot attempt for a guest that did not ask for autostart")
@@ -317,12 +339,82 @@ func TestAutostartPassAttemptsLocalStorageGuests(t *testing.T) {
 	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
 		t.Fatalf("the second pass did not run: %q", reason)
 	}
-	setPoolVMAutostartBootID(t, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
-	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
-		t.Fatalf("the pass after a reboot did not run: %q", reason)
+	if slices.Contains(virshLog(), "start "+local.ID) {
+		t.Fatal("a second autostart pass bypassed the owner recovery fence")
 	}
-	if !autostartAttempted(t, s, local.ID, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb") {
-		t.Fatal("the next boot did not attempt the local-storage autostart guest again")
+}
+
+func TestAutostartPassSkipsVMWhenNativeSuppressionIsUnconfirmed(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	local, shared := autostartFixture(t, s, true, false)
+	if err := poolVMLocal(s, local.ID, "define", nil, true, &local, nil); err != nil {
+		t.Fatal(err)
+	}
+	virshLog := autostartVirshWithFlag(t, "Autostart: enable", local.ID, shared.ID)
+	const boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	setPoolVMAutostartBootID(t, boot)
+	if reason := ReconcilePoolVMAutostart(context.Background(), s); reason != "" {
+		t.Fatalf("the autostart pass did not run: %q", reason)
+	}
+	if slices.Contains(virshLog(), "start "+local.ID) {
+		t.Fatal("Core started a VM whose native autostart suppression was not confirmed")
+	}
+	if autostartAttempted(t, s, local.ID, boot) {
+		t.Fatal("failed suppression spent the VM's boot attempt")
+	}
+}
+
+func TestPoolAdmissionDoesNotClassifyUnmanagedAppliancePowerAsPoolVM(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	command := protocol.Command{OperationID: "appliance-start", Kind: "vm-power", Power: &protocol.VMPowerRequest{
+		VMID: "33333333-3333-4333-8333-333333333333", PoolID: s.State.PoolID, HostID: s.State.HostID, Action: "start",
+	}}
+	if _, err := AdmitPoolVMExecution(context.Background(), s, command); err != nil {
+		t.Fatalf("unmanaged appliance power was sent through pool VM owner admission: %v", err)
+	}
+}
+
+func TestLocalStorageStartUsesRecoveryAdmissionWhileEmergencyStopSkipsMaster(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	local, shared := autostartFixture(t, s, false, false)
+	virshLog := autostartVirsh(t, local.ID, shared.ID)
+	record := poolVMRecord{PoolID: s.State.PoolID, VMID: local.ID, HostID: s.State.HostID, State: "stopped", Epoch: 2, Spec: local}
+	reservation, err := poolVMRecoveryReservationFor(record, "snapshot-1", "snapshot-create", strings.Repeat("d", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := snapshotDescriptorForTest(reservation, "before-upgrade", "")
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.Dependencies = &dependencies
+	record.PendingSnapshot = &descriptor
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	start := protocol.Command{OperationID: "start-1", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, Action: "start"}}
+	if _, err := AdmitPoolVMExecution(context.Background(), s, start); err == nil {
+		t.Fatalf("local-storage start bypassed pending recovery admission: %v", err)
+	}
+	if slices.Contains(virshLog(), "start "+local.ID) {
+		t.Fatal("pending recovery reached native VM start")
+	}
+	// The same host must still be able to reduce power when the master is gone.
+	maintenanceMembership(t, s, "host-b",
+		maintenanceMember("host-a", false),
+		protocol.PoolMember{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready", PeerOrigin: "https://127.0.0.1:1"},
+	)
+	stop := start
+	stop.OperationID, stop.Power.Action = "stop-1", "force-stop"
+	if _, err := AdmitPoolVMExecution(context.Background(), s, stop); err != nil {
+		t.Fatalf("emergency stop depended on an unreachable master: %v", err)
 	}
 }
 
@@ -397,13 +489,16 @@ func TestPoolVMExecutionRetainsOwnerAcrossStopAndRejectsSecondHost(t *testing.T)
 	}
 	permit := ""
 	epoch := uint64(0)
-	if err := poolVMLocal(s, vm, "start", &permit, false, nil, &epoch); err != nil || len(permit) != 64 || epoch != 2 {
+	if err := poolVMLocalBound(s, vm, "start", "start-1", 0, &permit, false, nil, &epoch); err != nil || len(permit) != 64 || epoch != 2 {
 		t.Fatalf("first start = %q epoch %d, %v", permit, epoch, err)
 	}
-	if err := poolVMLocal(s, vm, "start", nil, false, nil, nil); err == nil {
+	if err := poolVMLocalBound(s, vm, "start", "start-2", 0, nil, false, nil, nil); err == nil {
 		t.Fatal("second start admitted while first is unresolved")
 	}
-	if err := poolVMLocal(s, vm, "stopped", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm, "start", "start-1", 0, nil, false, nil, nil); err == nil {
+		t.Fatal("replayed start admission issued a second permit while the first outcome was unresolved")
+	}
+	if err := poolVMLocalBound(s, vm, "stopped", "start-1", epoch, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a stale second Core reaching the same durable master state.  A confirmed
@@ -412,7 +507,7 @@ func TestPoolVMExecutionRetainsOwnerAcrossStopAndRejectsSecondHost(t *testing.T)
 	if err := poolVMLocal(s, vm, "define", nil, true, poolVMTestSpec(vm, "host-b"), nil); err == nil {
 		t.Fatal("second host claimed stopped VM")
 	}
-	if err := poolVMLocal(s, vm, "start", nil, false, nil, nil); err == nil {
+	if err := poolVMLocalBound(s, vm, "start", "start-3", 0, nil, false, nil, nil); err == nil {
 		t.Fatal("second host started stopped VM")
 	}
 }
@@ -424,10 +519,10 @@ func TestPoolVMUpdateReservationCommitsOnlyExactJournalEvidence(t *testing.T) {
 	if err := poolVMLocal(s, vm, "define", nil, true, previous, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm, "start", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm, "start", "start-4", 0, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm, "running", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm, "running", "start-4", 2, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	next := *previous
@@ -934,6 +1029,522 @@ func TestPoolVMRecoveryPeerRefusesOldMasterWithoutSpecAck(t *testing.T) {
 	}
 }
 
+func TestPoolVMStartRejectsMalformedOrLegacyMasterAcknowledgement(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = CreatePoolJoinOffer(master, "https://master.example.test", member.State.HostID, csr); err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	var reply poolVMRequest
+	joinHandler := PoolPeerHandler(master)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, poolVMPath) {
+			if _, err := AuthenticatePoolPeer(master, r); err != nil {
+				http.Error(w, "peer rejected", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(reply)
+			return
+		}
+		joinHandler.ServeHTTP(w, r)
+	}))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	ca, offer, err := CreatePoolJoinOffer(master, server.URL, member.State.HostID, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
+		t.Fatal(err)
+	}
+
+	valid := poolVMRequest{VMID: vmID, Action: "start", OperationID: "start-remote", Permit: strings.Repeat("a", 64), Epoch: 4}
+	for _, tc := range []struct {
+		name  string
+		reply poolVMRequest
+	}{
+		{name: "legacy empty 200", reply: poolVMRequest{}},
+		{name: "wrong VM", reply: poolVMRequest{VMID: "22222222-2222-4222-8222-222222222222", Action: "start", Permit: valid.Permit, Epoch: valid.Epoch}},
+		{name: "wrong action", reply: poolVMRequest{VMID: vmID, Action: "wake", Permit: valid.Permit, Epoch: valid.Epoch}},
+		{name: "missing permit", reply: poolVMRequest{VMID: vmID, Action: "start", Epoch: valid.Epoch}},
+		{name: "zero epoch", reply: poolVMRequest{VMID: vmID, Action: "start", Permit: valid.Permit}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply = tc.reply
+			permit, epoch := "", uint64(0)
+			if err := poolVMRequestPeerBound(context.Background(), member, vmID, "start", "start-remote", 0, &permit, false, nil, &epoch); err == nil {
+				t.Fatalf("invalid start acknowledgement was accepted: %#v", tc.reply)
+			}
+		})
+	}
+	reply = valid
+	permit, epoch := "", uint64(0)
+	if err := poolVMRequestPeerBound(context.Background(), member, vmID, "start", "start-remote", 0, &permit, false, nil, &epoch); err != nil || permit != valid.Permit || epoch != valid.Epoch {
+		t.Fatalf("valid start acknowledgement = permit %q epoch %d err %v", permit, epoch, err)
+	}
+}
+
+func TestPoolVMDeleteAdmissionRefusesRetainedSnapshotsForLocalAndSharedVMs(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		for _, deleteDisks := range []bool{false, true} {
+			name := "local"
+			if shared {
+				name = "shared"
+			}
+			t.Run(name+"/delete_disks="+strconv.FormatBool(deleteDisks), func(t *testing.T) {
+				s := peerStore(t, "host-a", "pool-1")
+				maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+				local, sharedVM := autostartFixture(t, s, false, false)
+				autostartVirsh(t, local.ID, sharedVM.ID)
+				vm := local
+				if shared {
+					vm = sharedVM
+				}
+				if err := poolVMLocal(s, vm.ID, "define", nil, true, &vm, nil); err != nil {
+					t.Fatal(err)
+				}
+				state, err := loadPoolVMs(s)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reservation, err := poolVMRecoveryReservationFor(state.VMs[vm.ID], "retained-point", "snapshot-create", strings.Repeat("d", 64), 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record := state.VMs[vm.ID]
+				record.Snapshots = []protocol.PoolVMSnapshot{snapshotDescriptorForTest(reservation, "before-change", "")}
+				state.VMs[vm.ID] = record
+				wantCatalog := slices.Clone(record.Snapshots)
+				if err = savePoolVMs(s, state); err != nil {
+					t.Fatal(err)
+				}
+				command := protocol.Command{OperationID: "delete-retained", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{
+					VMID: vm.ID, PoolID: s.State.PoolID, HostID: s.State.HostID, DeleteDisks: deleteDisks,
+				}}
+				if _, err := AdmitPoolVMExecution(context.Background(), s, command); err == nil || !strings.Contains(err.Error(), "retained snapshots") {
+					t.Fatalf("delete passed the retained snapshot gate: %v", err)
+				}
+				state, err = loadPoolVMs(s)
+				if err != nil || !reflect.DeepEqual(state.VMs[vm.ID].Snapshots, wantCatalog) || state.VMs[vm.ID].PendingRecovery != nil {
+					t.Fatalf("refused delete changed the owner record or catalog: %#v (%v)", state.VMs[vm.ID], err)
+				}
+				if got := state.Inventory[s.State.HostID].Deleted; slices.Contains(got, vm.ID) {
+					t.Fatalf("refused delete published a tombstone: %v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestPoolVMDeleteAdmissionRefusesPendingSnapshotRecovery(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	local, shared := autostartFixture(t, s, false, false)
+	autostartVirsh(t, local.ID, shared.ID)
+	if err := poolVMLocal(s, local.ID, "define", nil, true, &local, nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := state.VMs[local.ID]
+	reservation, err := poolVMRecoveryReservationFor(record, "pending-snapshot", "snapshot-create", strings.Repeat("d", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := snapshotDescriptorForTest(reservation, "before-change", "")
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(record.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.Dependencies = &dependencies
+	record.PendingRecovery, record.PendingSnapshot = &reservation, &descriptor
+	state.VMs[local.ID] = record
+	if err = savePoolVMs(s, state); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{OperationID: "delete-pending", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{
+		VMID: local.ID, PoolID: s.State.PoolID, HostID: s.State.HostID,
+	}}
+	if _, err = AdmitPoolVMExecution(context.Background(), s, command); err == nil {
+		t.Fatal("delete was admitted while snapshot recovery remained pending")
+	}
+	state, err = loadPoolVMs(s)
+	if err != nil || state.VMs[local.ID].PendingRecovery == nil || *state.VMs[local.ID].PendingRecovery != reservation {
+		t.Fatalf("refused delete cleared pending recovery: %#v (%v)", state.VMs[local.ID], err)
+	}
+}
+
+func TestPoolVMDeleteCheckRejectsMalformedLegacyAndMismatchedAcknowledgements(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = CreatePoolJoinOffer(master, "https://master.example.test", member.State.HostID, csr); err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply poolVMRequest
+	joinHandler := PoolPeerHandler(master)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, poolVMPath) {
+			joinHandler.ServeHTTP(w, r)
+			return
+		}
+		if _, err := AuthenticatePoolPeer(master, r); err != nil {
+			http.Error(w, "peer rejected", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(reply)
+	}))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	ca, offer, err := CreatePoolJoinOffer(master, server.URL, member.State.HostID, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
+		t.Fatal(err)
+	}
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	vm := poolVMTestSpec(vmID, member.State.HostID)
+	for _, invalid := range []poolVMRequest{
+		{},
+		{VMID: vmID, Action: "define", SpecMatch: true},
+		{VMID: vmID, Action: "delete-check"},
+		{VMID: "22222222-2222-4222-8222-222222222222", Action: "delete-check", SpecMatch: true},
+	} {
+		reply = invalid
+		if err := poolVMRequestPeer(context.Background(), member, vmID, "delete-check", nil, false, vm, nil); err == nil {
+			t.Fatalf("invalid delete acknowledgement accepted: %#v", invalid)
+		}
+	}
+	reply = poolVMRequest{VMID: vmID, Action: "delete-check", SpecMatch: true}
+	if err := poolVMRequestPeer(context.Background(), member, vmID, "delete-check", nil, false, vm, nil); err != nil {
+		t.Fatalf("exact delete acknowledgement rejected: %v", err)
+	}
+}
+
+func TestAuthenticatedPoolMasterRefusesDeleteWithRetainedSnapshot(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	spec := *poolVMTestSpec(vmID, member.State.HostID)
+	state := poolVMState{VMs: map[string]poolVMRecord{}}
+	record := poolVMRecord{PoolID: master.State.PoolID, VMID: vmID, HostID: member.State.HostID, State: "stopped", Epoch: 1, Spec: spec}
+	reservation, err := poolVMRecoveryReservationFor(record, "snapshot-point-1", "snapshot-create", strings.Repeat("d", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Snapshots = []protocol.PoolVMSnapshot{snapshotDescriptorForTest(reservation, "before-change", "")}
+	state.VMs[vmID] = record
+	if err = savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	if err = poolVMRequestPeer(context.Background(), member, vmID, "delete-check", nil, false, &spec, nil); err == nil || !strings.Contains(err.Error(), "retained snapshots") {
+		t.Fatalf("authenticated master allowed delete with retained snapshot: %v", err)
+	}
+	state, err = loadPoolVMs(master)
+	if err != nil || !reflect.DeepEqual(state.VMs[vmID].Snapshots, record.Snapshots) {
+		t.Fatalf("master delete refusal changed the retained catalog: %#v (%v)", state.VMs[vmID], err)
+	}
+}
+
+func TestAuthenticatedPoolMasterAllowsDeleteCheckOnlyWithoutSnapshotCatalog(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	spec := *poolVMTestSpec(vmID, member.State.HostID)
+	record := poolVMRecord{PoolID: master.State.PoolID, VMID: vmID, HostID: member.State.HostID, State: "stopped", Epoch: 1, Spec: spec}
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vmID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := poolVMRequestPeer(context.Background(), member, vmID, "delete-check", nil, false, &spec, nil); err != nil {
+		t.Fatalf("authenticated master refused exact delete check with no snapshots: %v", err)
+	}
+}
+
+func TestPoolVMInventoryTombstoneCannotErasePendingOrRetainedSnapshotState(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		name := "retained-catalog"
+		if pending {
+			name = "pending-recovery"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := peerStore(t, "host-a", "pool-1")
+			membership := maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+			const vmID = "11111111-1111-4111-8111-111111111111"
+			spec := *poolVMTestSpec(vmID, s.State.HostID)
+			record := poolVMRecord{PoolID: s.State.PoolID, VMID: vmID, HostID: s.State.HostID, State: "stopped", Epoch: 1, Spec: spec}
+			reservation, err := poolVMRecoveryReservationFor(record, "snapshot-point-1", "snapshot-create", strings.Repeat("d", 64), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor := snapshotDescriptorForTest(reservation, "before-change", "")
+			if pending {
+				record.PendingRecovery = &reservation
+				record.PendingSnapshot = &descriptor
+			} else {
+				record.Snapshots = []protocol.PoolVMSnapshot{descriptor}
+			}
+			if err = savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{vmID: record}}); err != nil {
+				t.Fatal(err)
+			}
+			inv := poolVMInventory{HostID: s.State.HostID, Generation: membership.Generation, Deleted: []string{vmID}}
+			if err = recordPoolVMInventory(s, membership, inv); err == nil || !strings.Contains(err.Error(), "snapshot state") {
+				t.Fatalf("unsafe owner tombstone was accepted: %v", err)
+			}
+			state, loadErr := loadPoolVMs(s)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			got, ok := state.VMs[vmID]
+			if !ok || !reflect.DeepEqual(got.Snapshots, record.Snapshots) || !reflect.DeepEqual(got.PendingRecovery, record.PendingRecovery) || !reflect.DeepEqual(got.PendingSnapshot, record.PendingSnapshot) {
+				t.Fatalf("rejected tombstone erased snapshot state: %#v", got)
+			}
+			if accepted := state.Inventory[s.State.HostID]; slices.Contains(accepted.Deleted, vmID) {
+				t.Fatalf("rejected tombstone was persisted: %#v", accepted)
+			}
+		})
+	}
+}
+
+func TestPoolVMDeleteCheckRefusesFrozenAuthorityWithoutBlockingEmergencyStop(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", false))
+	poolPeerMu.Lock()
+	peer, err := loadPoolPeer(s)
+	if err != nil {
+		poolPeerMu.Unlock()
+		t.Fatal(err)
+	}
+	peer.Transfer = &poolTransferRecord{Frozen: true}
+	err = savePoolPeer(s, peer)
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requirePoolVMAuthorityWritable(s, "delete-check", false); err == nil {
+		t.Fatal("snapshot delete-check was allowed after authority freeze")
+	}
+	if err := requirePoolVMAuthorityWritable(s, "stop", false); err != nil {
+		t.Fatalf("emergency stop was blocked by authority freeze: %v", err)
+	}
+}
+
+func TestReservePoolVMSnapshotRequiresExactAuthenticatedMasterAcknowledgement(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	for _, store := range []*Store{master, member} {
+		if err := EnsurePoolMembership(store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	csr, err := PoolJoinCSR(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterHandler := PoolPeerHandler(master)
+	var loseSettlementReply atomic.Bool
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, poolVMPath) && loseSettlementReply.CompareAndSwap(true, false) {
+			recorded := httptest.NewRecorder()
+			masterHandler.ServeHTTP(recorded, r)
+			http.Error(w, "snapshot settlement acknowledgement was lost", http.StatusServiceUnavailable)
+			return
+		}
+		masterHandler.ServeHTTP(w, r)
+	}))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	ca, offer, err := CreatePoolJoinOffer(master, server.URL, member.State.HostID, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer); err != nil {
+		t.Fatal(err)
+	}
+	memberConfig, err := PoolPeerTLSConfig(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberHandler := PoolPeerHandler(member)
+	var loseReplicaReply atomic.Bool
+	memberServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == poolReplicaPath && loseReplicaReply.CompareAndSwap(true, false) {
+			recorded := httptest.NewRecorder()
+			memberHandler.ServeHTTP(recorded, r)
+			http.Error(w, "replica acknowledgement was lost", http.StatusServiceUnavailable)
+			return
+		}
+		memberHandler.ServeHTTP(w, r)
+	}))
+	memberServer.TLS = memberConfig
+	memberServer.StartTLS()
+	t.Cleanup(memberServer.Close)
+	setMemberPeerOrigin(t, master, member.State.HostID, memberServer.URL)
+	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", member.State.HostID)
+	record := poolVMRecord{PoolID: master.State.PoolID, VMID: spec.ID, HostID: member.State.HostID, Epoch: 7, State: "stopped", Spec: spec}
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{spec.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{OperationID: "snapshot_member_1", Kind: "snapshot-create", VM: &spec, Snapshot: &protocol.VMSnapshotRequest{Name: "before-upgrade"}}
+	createdAt := time.Date(2026, 9, 25, 13, 0, 0, 0, time.UTC)
+	loseReplicaReply.Store(true)
+	if _, err := ReservePoolVMSnapshot(context.Background(), member, command, 1, strings.Repeat("e", 64), createdAt); err == nil {
+		t.Fatal("snapshot reservation returned after the exact member commit acknowledgement was lost")
+	}
+	state, err := loadPoolVMs(master)
+	if err != nil || state.VMs[spec.ID].PendingRecovery == nil || state.VMs[spec.ID].PendingRecovery.OperationID != command.OperationID {
+		t.Fatalf("lost reservation ACK did not retain the exact durable master reservation: %#v (%v)", state.VMs[spec.ID], err)
+	}
+	reservation, err := ReservePoolVMSnapshot(context.Background(), member, command, 1, strings.Repeat("e", 64), createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservedReplica := storedReplica(t, member)
+	var reservedVMs map[string]poolVMRecord
+	if reservedReplica == nil || json.Unmarshal(reservedReplica.Replica.VMs, &reservedVMs) != nil ||
+		reservedVMs[spec.ID].PendingRecovery == nil || reservedVMs[spec.ID].PendingRecovery.OperationID != command.OperationID {
+		t.Fatalf("snapshot reservation returned before its exact authority replica was stored by the owner: replica=%+v vmstate=%+v", reservedReplica, reservedVMs)
+	}
+	if reservation.OwnerHostID != member.State.HostID || reservation.PoolID != master.State.PoolID || reservation.IntentSHA256 != strings.Repeat("e", 64) {
+		t.Fatalf("member received a mismatched master reservation: %#v", reservation)
+	}
+	state, err = loadPoolVMs(master)
+	if err != nil || state.VMs[spec.ID].PendingRecovery == nil || *state.VMs[spec.ID].PendingRecovery != reservation {
+		t.Fatalf("master did not persist member reservation: %#v (%v)", state.VMs[spec.ID], err)
+	}
+	record = state.VMs[spec.ID]
+	descriptor := *record.PendingSnapshot
+	evidence := protocol.PoolVMRecoveryEvidence{Reservation: reservation, Outcome: "completed", JournalSHA256: strings.Repeat("f", 64), Snapshot: &descriptor}
+	masterPeer, err := loadPoolPeer(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterPeer.Transfer = &poolTransferRecord{Frozen: true}
+	if err := savePoolPeer(master, masterPeer); err != nil {
+		t.Fatal(err)
+	}
+	if err := poolVMSnapshotSettlementPeer(context.Background(), member, evidence); err == nil {
+		t.Fatal("snapshot settlement mutated a frozen pool authority")
+	}
+	state, err = loadPoolVMs(master)
+	if err != nil || state.VMs[spec.ID].PendingRecovery == nil {
+		t.Fatalf("frozen settlement did not retain its pending reservation: %#v (%v)", state.VMs[spec.ID], err)
+	}
+	masterPeer.Transfer = nil
+	if err := savePoolPeer(master, masterPeer); err != nil {
+		t.Fatal(err)
+	}
+	changed := evidence
+	changedDescriptor := descriptor
+	changedDescriptor.Name = "different-name"
+	changed.Snapshot = &changedDescriptor
+	if err := poolVMSnapshotSettlementPeer(context.Background(), member, changed); err == nil {
+		t.Fatal("master accepted terminal evidence for a different snapshot descriptor")
+	}
+	loseSettlementReply.Store(true)
+	if err := poolVMSnapshotSettlementPeer(context.Background(), member, evidence); err == nil {
+		t.Fatal("owner observed a settlement success after the HTTP acknowledgement was lost")
+	}
+	settledReplica := storedReplica(t, member)
+	var settledVMs map[string]poolVMRecord
+	if settledReplica == nil || json.Unmarshal(settledReplica.Replica.VMs, &settledVMs) != nil ||
+		settledVMs[spec.ID].LastSettledRecovery == nil || !reflect.DeepEqual(*settledVMs[spec.ID].LastSettledRecovery, evidence) {
+		t.Fatal("lost settlement response preceded exact replica acknowledgement")
+	}
+	if err := poolVMSnapshotSettlementPeer(context.Background(), member, evidence); err != nil {
+		t.Fatalf("master did not acknowledge the exact terminal evidence: %v", err)
+	}
+	if err := poolVMSnapshotSettlementPeer(context.Background(), member, evidence); err != nil {
+		t.Fatalf("exact settlement replay after a lost acknowledgement was not idempotent: %v", err)
+	}
+	settledReplica = storedReplica(t, member)
+	settledVMs = nil
+	if settledReplica == nil || json.Unmarshal(settledReplica.Replica.VMs, &settledVMs) != nil ||
+		settledVMs[spec.ID].LastSettledRecovery == nil || !reflect.DeepEqual(*settledVMs[spec.ID].LastSettledRecovery, evidence) {
+		t.Fatal("snapshot settlement returned before its exact terminal receipt was stored by the owner")
+	}
+	state, err = loadPoolVMs(master)
+	if err != nil || state.VMs[spec.ID].LastSettledRecovery == nil || !reflect.DeepEqual(*state.VMs[spec.ID].LastSettledRecovery, evidence) {
+		t.Fatalf("master did not durably store the exact settlement: %#v (%v)", state.VMs[spec.ID], err)
+	}
+	listed, err := ListPoolVMSnapshots(context.Background(), member, spec.ID)
+	if err != nil || len(listed) != 1 || !reflect.DeepEqual(listed[0], descriptor) {
+		t.Fatalf("member list did not read the master catalog: %#v (%v)", listed, err)
+	}
+}
+
+func TestSnapshotReservationAcknowledgementBindsOwnerOrderAndDenial(t *testing.T) {
+	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
+	request := poolVMRequest{
+		VMID: spec.ID, Action: "snapshot-reserve", OperationID: "snapshot_ack_1", VM: &spec,
+		Snapshot:          &protocol.VMSnapshotRequest{Name: "before-upgrade"},
+		SnapshotCreatedAt: time.Date(2026, 9, 25, 13, 0, 0, 0, time.UTC),
+		IntentSHA256:      strings.Repeat("a", 64), OwnerOperationOrder: 9,
+	}
+	record := poolVMRecord{PoolID: "pool-1", VMID: spec.ID, HostID: "host-a", Epoch: 4, Spec: spec}
+	accepted, err := poolVMRecoveryReservationFor(record, request.OperationID, "snapshot-create", request.IntentSHA256, request.OwnerOperationOrder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack := snapshotReservationAck(request, accepted)
+	if !validPoolVMSnapshotReservationAck(ack, request, "pool-1", "host-a") {
+		t.Fatal("exact accepted reservation acknowledgement was rejected")
+	}
+
+	changed := ack
+	changedReservation := *ack.SnapshotReservation
+	changedReservation.OwnerOperationOrder++
+	changed.SnapshotReservation = &changedReservation
+	if validPoolVMSnapshotReservationAck(changed, request, "pool-1", "host-a") {
+		t.Fatal("acknowledgement with a different owner journal order was accepted")
+	}
+
+	denied := accepted
+	denied.AdmissionRefusal = "name-in-use"
+	denialAck := snapshotReservationAck(request, denied)
+	if !validPoolVMSnapshotReservationAck(denialAck, request, "pool-1", "host-a") {
+		t.Fatal("exact definitive denial acknowledgement was rejected")
+	}
+	denialAck.SnapshotAccepted = true
+	if validPoolVMSnapshotReservationAck(denialAck, request, "pool-1", "host-a") {
+		t.Fatal("denial acknowledgement also authorized snapshot creation")
+	}
+	denied.AdmissionRefusal = "storage-unavailable"
+	denialAck = snapshotReservationAck(request, denied)
+	if validPoolVMSnapshotReservationAck(denialAck, request, "pool-1", "host-a") {
+		t.Fatal("unsupported refusal code was accepted")
+	}
+
+	zeroOrder := request
+	zeroOrder.OwnerOperationOrder = 0
+	if validPoolVMSnapshotReservationAck(ack, zeroOrder, "pool-1", "host-a") {
+		t.Fatal("snapshot acknowledgement without an owner order was accepted")
+	}
+}
+
 func TestSingleHostPoolVMLocalFenceUsesDurableOwnerAndPermit(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	if err := EnsurePoolMembership(s); err != nil {
@@ -944,7 +1555,7 @@ func TestSingleHostPoolVMLocalFenceUsesDurableOwnerAndPermit(t *testing.T) {
 		t.Fatal(err)
 	}
 	permit := ""
-	if err := poolVMRequestPeer(context.Background(), s, vm, "start", &permit, false, nil, nil); err != nil || len(permit) != 64 {
+	if err := poolVMRequestPeerBound(context.Background(), s, vm, "start", "single-host-start", 0, &permit, false, nil, nil); err != nil || len(permit) != 64 {
 		t.Fatalf("single-host start permit = %q, %v", permit, err)
 	}
 	if err := vmhost.WritePoolVMStartPermit(s.dir, vm, permit); err != nil {
@@ -1016,10 +1627,10 @@ func TestClusteredVMStopOnlyBypassesLostQuorumWithoutPermitOrOwnerChange(t *test
 	if err := poolVMLocal(s, vm.ID, "define", nil, true, vm, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm.ID, "start", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm.ID, "start", "start-before-update", 0, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm.ID, "running", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm.ID, "running", "start-before-update", 2, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	before, err := loadPoolVMs(s)
@@ -1496,10 +2107,10 @@ func TestSharedVMAsleepIsAdmittedAsWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	permit, epoch := "", uint64(0)
-	if err := poolVMLocal(s, vm.ID, "start", &permit, false, nil, &epoch); err != nil {
+	if err := poolVMLocalBound(s, vm.ID, "start", "wake-setup", 0, &permit, false, nil, &epoch); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm.ID, "running", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm.ID, "running", "wake-setup", epoch, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NEX_TEST_STATE", "pmsuspended")
@@ -1522,6 +2133,143 @@ func TestSharedVMAsleepIsAdmittedAsWake(t *testing.T) {
 	}
 	if record := mustLoadPoolVMs(t, s).VMs[vm.ID]; record.State != "running" || record.Epoch != epoch {
 		t.Fatalf("wake completion changed the durable owner record: %+v", record)
+	}
+}
+
+func TestFailedStartPreflightReleasesExactPoolAdmission(t *testing.T) {
+	ctx := context.Background()
+	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	local, _ := autostartFixture(t, s, false, false)
+	autostartVirsh(t, local.ID, "22222222-2222-4222-8222-222222222222")
+	if err := poolVMLocal(s, local.ID, "define", nil, true, &local, nil); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{OperationID: "start-memory-preflight", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: local.PoolID, HostID: local.HostID, Action: "start"}}
+	if applied, checks := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx); !managedVMChecksReady(checks) {
+		t.Fatalf("fixture managed state unavailable: %#v %#v", applied, checks)
+	}
+	finish, err := AdmitPoolVMExecution(ctx, s, command)
+	if err != nil || finish == nil {
+		t.Fatalf("start admission failed: %v", err)
+	}
+	if record := mustLoadPoolVMs(t, s).VMs[local.ID]; record.State != "starting" {
+		t.Fatalf("start admission state = %+v", record)
+	}
+	if err := finish(protocol.Result{OperationID: command.OperationID, Status: "failed", Error: "insufficient available memory"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if record := mustLoadPoolVMs(t, s).VMs[local.ID]; record.State != "stopped" || record.PendingStartOperationID != "" {
+		t.Fatalf("definite preflight failure left a shutoff VM reserved as starting: %+v", record)
+	}
+}
+
+func TestAutomaticCreateStartCompletionRequiresDefinitiveFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		start     string
+		outcome   string
+		observed  string
+		wantState string
+		pending   bool
+	}{
+		{name: "preflight failure", start: "insufficient available memory to start this VM including 2 GiB host reserve", outcome: "failed-before-request", observed: "shut off", wantState: "stopped"},
+		{name: "request outcome uncertain", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: true},
+		{name: "interrupted start", start: "interrupted before the automatic start completed", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: true},
+		{name: "legacy reason", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: true},
+		{name: "uncertain but currently running", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "running", wantState: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := peerStore(t, "host-a", "pool-1")
+			if err := EnsurePoolMembership(s); err != nil {
+				t.Fatal(err)
+			}
+			local, shared := autostartFixture(t, s, false, false)
+			local.StartAfterCreate = true
+			t.Setenv("NEX_TEST_STATE", tc.observed)
+			autostartVirsh(t, local.ID, shared.ID)
+			command := protocol.Command{OperationID: "create-" + local.ID, Kind: "vm-create", VM: &local}
+			journalPath := filepath.Join(s.dir, "managed-vms", command.OperationID+".json")
+			journal, err := json.Marshal(map[string]any{
+				"command":       command,
+				"result":        protocol.Result{OperationID: command.OperationID, Status: "succeeded"},
+				"stage":         "started",
+				"start":         "started",
+				"start_outcome": "started",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(journalPath, journal, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := poolVMLocal(s, local.ID, "define", nil, true, &local, nil); err != nil {
+				t.Fatal(err)
+			}
+			finish, err := AdmitPoolVMExecution(context.Background(), s, command)
+			if err != nil || finish == nil {
+				t.Fatalf("automatic create-start admission: %v", err)
+			}
+			journal, err = json.Marshal(map[string]any{
+				"command":       command,
+				"result":        protocol.Result{OperationID: command.OperationID, Status: "succeeded"},
+				"stage":         "started",
+				"start":         tc.start,
+				"start_outcome": tc.outcome,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(journalPath, journal, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish(protocol.Result{OperationID: command.OperationID, Status: "succeeded"}, nil); err != nil {
+				t.Fatalf("automatic create-start completion: %v", err)
+			}
+			record := mustLoadPoolVMs(t, s).VMs[local.ID]
+			if record.State != tc.wantState || (record.PendingStartOperationID != "") != tc.pending {
+				t.Fatalf("automatic start completion = %+v, want state %s pending=%v", record, tc.wantState, tc.pending)
+			}
+		})
+	}
+}
+
+func TestPoolVMStartTransitionRequiresExactCurrentOperationAndEpoch(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	if err := poolVMLocal(s, vmID, "define", nil, true, poolVMTestSpec(vmID, "host-a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	permit, epoch := "", uint64(0)
+	if err := poolVMLocalBound(s, vmID, "start", "start-current", 0, &permit, false, nil, &epoch); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		op    string
+		epoch uint64
+	}{
+		{name: "stale operation", op: "start-old", epoch: epoch},
+		{name: "stale epoch", op: "start-current", epoch: epoch - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := poolVMLocalBound(s, vmID, "stopped", tc.op, tc.epoch, nil, false, nil, nil); err == nil {
+				t.Fatal("stale start outcome cleared the current admission")
+			}
+			pending := mustLoadPoolVMs(t, s).VMs[vmID]
+			if pending.State != "starting" || pending.PendingStartOperationID != "start-current" || pending.Epoch != epoch {
+				t.Fatalf("stale outcome changed current start: %+v", pending)
+			}
+		})
+	}
+	if err := poolVMLocalBound(s, vmID, "running", "start-current", epoch, nil, false, nil, nil); err != nil {
+		t.Fatalf("exact successful start transition: %v", err)
+	}
+	settled := mustLoadPoolVMs(t, s).VMs[vmID]
+	if settled.State != "running" || settled.PendingStartOperationID != "" || settled.Epoch != epoch {
+		t.Fatalf("exact start completion did not clear the pending binding: %+v", settled)
 	}
 }
 

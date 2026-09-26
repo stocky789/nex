@@ -1,0 +1,44 @@
+{
+  "summary": "Add a bounded one-host walkthrough for adopting a successful Core-owned stopped snapshot into a fresh Controller. API impact: existing contract.",
+  "paths": [
+    "tests/integration/core_snapshot_controller_replacement.py",
+    "tests/test_core_snapshot_controller_replacement.py",
+    "docs/changes/2026-09-26-core-snapshot-controller-replacement.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This adds contributor-only disposable acceptance tooling and changes no operator behavior or user instructions.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The walkthrough uses the existing authenticated Core local enrollment, snapshot operation/catalog, and Controller site, enrollment, host inventory, pool, and operation APIs. It adds no API behavior or contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is one-host replacement evidence tooling within the existing recovery plan; it does not change acceptance scope or claim the multi-host replacement gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable lab state is changed by the opt-in runner. The original Controller database and CA are retained, and the fresh Controller owns a separate empty database before adoption."
+  },
+  "verification": {
+    "method": "The focused tests validate private Core success/restart evidence, parse the actual producer-shaped disk-marker readbacks and execute the exact remote qemu-io verification helper with those values, check the Controller operation API projection for host-scoped snapshot outcomes, exercise real local HTTP cookie round trips, execute the remote temporary-root-login helper with success and failure paths to prove relocking, and cover exact lab fingerprint, advertised versus loopback endpoints, preflight failure-file path, candidate hashes, A snapshot descriptor, and private A-state/TLS fingerprints. A disposable one-host replacement run enrolled Core into a separate fresh Controller B. An identity-bound read-only continuation confirmed the Core endpoint, active service, no unresolved snapshot journal, B fresh host/pool identity, exact snapshot catalog, explicitly reported empty reservation view, succeeded host-scoped operation, pinned B artifacts and qemu-io marker reads. Core journal and VM disk definition checks completed before the original harness failed while interpreting the marker evidence; the harness now handles the producer schema and regression tests cover that path. The original failure receipt did not persist the post-stop A fingerprint, so the continuation records the retained A files and current full state/TLS fingerprints but does not claim byte-for-byte equality with a missing baseline. Controller A remains stopped, B remains available for inspection, and the multi-host replacement campaign remains outside this scoped runner.",
+    "evidence": [
+      "tests/integration/core_snapshot_controller_replacement.py",
+      "tests/test_core_snapshot_controller_replacement.py",
+      "tests/integration/core_local_snapshot_api.py",
+      "docs/API.md"
+    ],
+    "checks": [
+      "python3 -m unittest tests.test_core_snapshot_controller_replacement \u2014 17 passed",
+      "python3 -m py_compile tests/integration/core_snapshot_controller_replacement.py tests/test_core_snapshot_controller_replacement.py \u2014 passed",
+      "python3 -m unittest discover -s tests -p 'test_repository_privacy.py' \u2014 1 passed",
+      "python3 scripts/check_docs.py --worktree \u2014 passed for the current shared worktree"
+    ]
+  }
+}

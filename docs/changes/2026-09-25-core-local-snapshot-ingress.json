@@ -1,0 +1,42 @@
+{
+  "summary": "Add authenticated Core-local managed VM snapshot create, catalog, and operation lookup routes through the agent Run owner",
+  "paths": [
+    "internal/localcore/service.go",
+    "internal/localcore/handoff.go",
+    "internal/localcore/snapshots.go",
+    "internal/localcore/snapshots_test.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Core-local operator API gains managed-pool snapshot create, catalog, and status routes; the development host API guide documents their request and recovery behavior.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds authenticated Core-local operator routes for managed-pool snapshot submission and observation. The Controller-to-Core contract is unchanged; the routes and their exact request/response behavior are documented in the API reference.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This ingress does not close the snapshot execution, outage, or native recovery acceptance gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The handler persists no separate state. Run owns the host agent journal and saves the exact snapshot command before returning 202; the pool master owns the compact snapshot catalog in pool-vms.json. A replacement Controller adopts pool snapshot descriptors from the master's managed recovery inventory.",
+    "reason": "Snapshot operations and catalog are pool state and must remain available through Controller replacement."
+  },
+  "verification": {
+    "method": "`go test ./internal/localcore` passed (8.006s), including the existing Handoff resume path after startup sequencing changed. New HTTP/channel tests cover session/CSRF/origin checks, input scope, known-empty `[]` output, typed conflict/not-found mapping and a disconnected caller's buffered reply. The route channel test uses a fake Run consumer; the documented disposable create/catalog/status walkthrough remains unrun, so native and phase acceptance are not claimed.",
+    "evidence": [
+      "internal/localcore/snapshots_test.go",
+      "internal/localcore/handoff_test.go",
+      "docs/API.md",
+      "docs/guide/vm-snapshots.md"
+    ]
+  }
+}

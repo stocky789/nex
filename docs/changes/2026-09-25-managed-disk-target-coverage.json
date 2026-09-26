@@ -1,0 +1,34 @@
+{
+  "summary": "Require managed disk-chain checks to match the VM's exact unique writable disk targets and sources (BUG-0595). API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_chain_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The change tightens a host-side refusal when a VM has unmanaged or duplicate writable disks; it adds no supported operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing VM mutations may now refuse an observed VM with extra, duplicate, or unsupported writable disks. Request and result shapes are unchanged; the refusal is returned through the existing managed-operation result contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is a host-side safety correction and does not change snapshot phase scope or acceptance status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The verifier reads existing VM definition and managed journal state; it adds no durable state."
+  },
+  "verification": {
+    "method": "Added regressions that failed before the fix because extra writable disk and LUN targets were accepted. The shared verifier now requires a one-to-one mapping from unique journal targets and sources to all native writable disk devices, rejects unrecognized writable device types, and ignores explicitly read-only media. Focused tests and the full vmhost race suite passed.",
+    "evidence": [
+      "internal/vmhost/managed_chain.go",
+      "internal/vmhost/managed_chain_test.go"
+    ]
+  }
+}

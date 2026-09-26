@@ -28,6 +28,7 @@ import (
 )
 
 const poolStoragePath = "/api/v1/pool/storage/"
+const poolResourceMutationPrefix = "@resource/"
 
 const (
 	poolProbeModeChallengeByte = "challenge-byte-v1"
@@ -499,6 +500,21 @@ func PoolStorageHandler(s *Store) http.Handler {
 				http.Error(w, "repository generation unavailable", http.StatusConflict)
 				return
 			}
+			poolVMMu.Lock()
+			owners, ownerErr := loadPoolVMs(s)
+			if ownerErr == nil {
+				for _, vm := range owners.VMs {
+					if poolVMRecoveryUsesStorage(vm, id) {
+						ownerErr = errors.New("repository has a VM snapshot recovery operation pending")
+						break
+					}
+				}
+			}
+			if ownerErr != nil {
+				poolVMMu.Unlock()
+				http.Error(w, "reservation refused", http.StatusConflict)
+				return
+			}
 			poolStorageMu.Lock()
 			state, e := loadPoolStorage(s)
 			if e == nil {
@@ -514,6 +530,7 @@ func PoolStorageHandler(s *Store) http.Handler {
 				}
 			}
 			poolStorageMu.Unlock()
+			poolVMMu.Unlock()
 			if e != nil {
 				http.Error(w, "reservation refused", http.StatusConflict)
 				return
@@ -1198,14 +1215,37 @@ func BeginPoolStorageMutation(ctx context.Context, s *Store, command protocol.Co
 	id := command.StorageLifecycle.RepositoryID
 	managed, _ := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).Applied(ctx)
 	remote := false
+	var current *protocol.StorageRegistration
 	for _, storage := range managed.Storage {
 		if storage.ID == id && !storage.Tombstone && protocol.IsPoolSharedStorage(storage) {
 			remote = true
+			copy := storage
+			current = &copy
 			break
 		}
 	}
 	if !remote {
 		return func(bool) {}, nil
+	}
+	sourceMutation := command.Kind == "storage-detach" || current == nil || command.StorageLifecycle.Registration == nil ||
+		current.Path != command.StorageLifecycle.Registration.Path || current.Kind != command.StorageLifecycle.Registration.Kind ||
+		!reflect.DeepEqual(current.Source, command.StorageLifecycle.Registration.Source) ||
+		!reflect.DeepEqual(current.Identity, command.StorageLifecycle.Registration.Identity)
+	poolVMMu.Lock()
+	owners, ownerErr := loadPoolVMs(s)
+	if ownerErr != nil {
+		poolVMMu.Unlock()
+		return nil, errors.New("pool VM recovery state is unavailable")
+	}
+	for _, vm := range owners.VMs {
+		if poolVMRecoveryUsesStorage(vm, id) {
+			poolVMMu.Unlock()
+			return nil, errors.New("pool repository has a VM snapshot recovery operation pending")
+		}
+		if sourceMutation && poolVMSnapshotUsesResource(vm, "storage", id) {
+			poolVMMu.Unlock()
+			return nil, errors.New("pool repository is required by a retained VM snapshot")
+		}
 	}
 	poolStorageMu.Lock()
 	state, err := loadPoolStorage(s)
@@ -1213,6 +1253,7 @@ func BeginPoolStorageMutation(ctx context.Context, s *Store, command protocol.Co
 		// A restarted master may safely replay its own retained operation; another
 		// operation remains fenced until its outcome is made definite.
 		poolStorageMu.Unlock()
+		poolVMMu.Unlock()
 		return func(definitive bool) {
 			finishPoolStorageMutation(s, id, command.OperationID, definitive)
 		}, nil
@@ -1224,6 +1265,7 @@ func BeginPoolStorageMutation(ctx context.Context, s *Store, command protocol.Co
 		err = savePoolStorage(s, state)
 	}
 	poolStorageMu.Unlock()
+	poolVMMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1232,10 +1274,64 @@ func BeginPoolStorageMutation(ctx context.Context, s *Store, command protocol.Co
 	}, nil
 }
 
+func poolVMRecoveryUsesStorage(vm poolVMRecord, repositoryID string) bool {
+	if vm.PendingRecovery == nil || repositoryID == "" {
+		return false
+	}
+	for _, disk := range vm.Spec.Disks {
+		if disk.StorageID == repositoryID {
+			return true
+		}
+	}
+	return false
+}
+
 func finishPoolStorageMutation(s *Store, id, operation string, definitive bool) {
 	if definitive {
 		clearPoolStorageMutation(s, id, operation)
 	}
+}
+
+func poolResourceMutationKey(resource, id string) string {
+	return poolResourceMutationPrefix + resource + "/" + id
+}
+
+func poolResourceMutationPending(state poolStorageState) bool {
+	for key := range state.Mutations {
+		if strings.HasPrefix(key, poolResourceMutationPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func poolResourceMutationForSpec(state poolStorageState, spec protocol.VMCreateSpec) string {
+	for _, nic := range spec.NICs {
+		if operation := state.Mutations[poolResourceMutationKey("network", nic.NetworkID)]; operation != "" {
+			return operation
+		}
+	}
+	for _, id := range []string{spec.MediaID, spec.DriversMediaID} {
+		if id != "" {
+			if operation := state.Mutations[poolResourceMutationKey("media", id)]; operation != "" {
+				return operation
+			}
+		}
+	}
+	return ""
+}
+
+func poolResourceMutationRefusal(s *Store, spec protocol.VMCreateSpec) error {
+	poolStorageMu.Lock()
+	defer poolStorageMu.Unlock()
+	state, err := loadPoolStorage(s)
+	if err != nil {
+		return errors.New("pool resource mutation state is unavailable")
+	}
+	if poolResourceMutationForSpec(state, spec) != "" {
+		return errors.New("VM definition uses a network or media resource with removal pending")
+	}
+	return nil
 }
 
 func clearPoolStorageMutation(s *Store, id, operation string) {

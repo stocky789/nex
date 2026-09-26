@@ -22,6 +22,9 @@ Navigation on this page follows the development build 0.4.8 console layout; see
   whose creation task succeeded.
 - The VM's host freshly connected, running matching Nex Core components (the host reports
   the `vm-power-v1` capability), with a fresh libvirt observation of the VM.
+- In the recovery development build, the current pool master must also be reachable for a
+  managed VM's Start, wake, Reboot, Force reboot or media change, including VMs on local storage.
+  Shut down and Force stop remain available through the assigned host during master loss.
 
 ## Steps
 
@@ -62,7 +65,10 @@ Navigation on this page follows the development build 0.4.8 console layout; see
    every selected VM with *Will be requested* or the reason it is skipped (for example a VM
    already in that state, a stale host, or the Controller appliance, which is left to its own
    panel). Each VM gets its own request; confirming again after a failure retries only the
-   failed ones. **Snapshot** and **Migrate** on that bar are not available yet (Phases 5 and 7).
+   failed ones. **Snapshot** on that bar takes a stopped snapshot for every selected shut-off
+   VM that is eligible (enter one shared name; running guests, unknown/stale VM state, hosts
+   that are not freshly connected, and the Controller appliance are skipped — use each VM's
+   Snapshots tab for running capture). **Migrate** is not available yet (Phase 7).
 
 ## Expected result
 
@@ -81,6 +87,11 @@ change, the **Install ISO** row on the **Configuration** tab's **Definition** ca
 the next host report. The boot order is deliberately unchanged: the empty CD drive keeps its
 place, so the firmware skips it and boots the disk, and inserting an ISO again needs no edit.
 
+Managed pool autostart in the recovery development build follows the same ownership admission.
+Core retains the desired setting and makes one attempt per VM per host boot; native libvirt
+autostart stays disabled. If the attempt is refused, resolve the reported cause and use **Start**.
+The separately managed Controller appliance retains its own boot behavior.
+
 ## Troubleshooting
 
 - **Buttons are disabled with "Power controls need a freshly connected host":** the host
@@ -96,6 +107,12 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   not establish that the host has saved it.
 - **A prerequisite task failed or needs attention:** the queued power task fails without
   issuing power. Resolve the earlier task, then submit a new power request.
+- **The pool master cannot confirm ownership:** restore connectivity to the current master
+  before retrying Start, Reboot, Force reboot or a media change. An unreachable master does
+  not mean the VM stopped. Shut down and Force stop can still be requested on its assigned host.
+- **Snapshot recovery is pending:** conflicting changes remain blocked until the host confirms
+  the recovery outcome. A timeout does not release this protection; inspect the reported task
+  and VM state before retrying. Emergency Shut down and Force stop remain available.
 - **The VM is observed asleep and its console is black:** the guest put itself to sleep
   (Windows Sleep, for example) on a definition written before Nex disabled guest sleep. Select
   **Start** to wake it. **Shut down** and **Reboot** wake the guest first and then send the
@@ -112,6 +129,11 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   on that host, or edit this VM to a smaller memory size, then start it again.
   A pool autostart refused this way is not retried until the host boots again; start the VM
   yourself once memory is available.
+  In recovery development builds, reconciliation of this failed start is under integration.
+  If a later edit is refused because the VM is still reserved as starting, retain the failed
+  task and keep the VM stopped for investigation. Earlier development requests can lack
+  the evidence needed to release that reservation safely; Force stop succeeding does not
+  establish that the pool master has reconciled it.
 - **Task reports `needs_attention`:** the host was interrupted, or the libvirt call failed or timed out
   after the request could have taken effect, and the observed state cannot confirm the outcome (for example a reboot or force-reboot, or a shutdown of a VM
   still running). Check the VM's current state and submit a new request; Nex never
@@ -134,6 +156,11 @@ place, so the firmware skips it and boots the disk, and inserting an ISO again n
   request, not a second change.
 
 ## Verification
+
+The recovery development admission changes (2026-09-25) have focused agent checks for
+local-storage power, appliance exclusion, pending recovery, emergency stop and Core autostart;
+the protocol and agent race suites pass. These checks use simulated peers and do not establish
+a native master-outage or browser walkthrough of the new refusals; those remain open.
 
 The GUI navigation on this page was rewritten for the Controller console redesign (development
 build 0.4.8); the walkthrough is recorded in the

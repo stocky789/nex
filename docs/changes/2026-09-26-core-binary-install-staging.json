@@ -1,0 +1,40 @@
+{
+  "summary": "Test the disposable Core candidate staging and atomic replacement steps before the next r7 service swap. API impact: existing contract.",
+  "paths": [
+    "tests/integration/core_local_snapshot_api.py",
+    "tests/test_core_local_snapshot_api.py",
+    "docs/changes/2026-09-26-core-binary-install-staging.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes only the disposable acceptance harness; it does not change operator behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The surrounding acceptance flow uses the existing Core local API. This helper only prepares a candidate executable and atomically replaces a file in a disposable lab; it changes no API request or response.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is a bounded contributor-harness correction and does not change recovery scope or acceptance criteria.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The helper is test code and adds no product state or persistent lab record."
+  },
+  "verification": {
+    "method": "A real temporary-filesystem test stages a candidate beside the existing file, checks its executable mode and digest before replacement, atomically replaces only the expected old digest, and verifies the resulting digest and mode. A second test confirms that a changed destination is preserved and the staged candidate remains available. The private installer embeds these same helper definitions and stages the candidate before stopping the selected disposable Core service. The r7 replacement has not yet been retried.",
+    "evidence": [
+      "tests/integration/core_local_snapshot_api.py",
+      "tests/test_core_local_snapshot_api.py"
+    ],
+    "checks": [
+      "python3 -m unittest tests.test_core_local_snapshot_api -v — 16 passed",
+      "python3 -m py_compile tests/integration/core_local_snapshot_api.py tests/test_core_local_snapshot_api.py — passed"
+    ]
+  }
+}

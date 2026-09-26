@@ -1,0 +1,38 @@
+{
+  "summary": "Allow settled revert current projections to restore the published ISO after leaf snapshot delete so journals remain readable and delete finish/settle can complete.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/media_test.go",
+    "docs/changes/2026-09-26-snapshot-delete-projection-settle.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator delete workflow is unchanged; this only fixes Core journal validation after leaf-delete media restore.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No new endpoints. Settled leaf-delete finish/settle now succeeds when the revert projection advances same-MediaID CDROM from overlay back to the published ISO.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes the blocked lab leaf-delete settle inside in-progress S2; phase status unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Executing Core managed snapshot-delete journals and pool-master catalog/pending-recovery settlement; settled revert CurrentProjection may advance disk/media heads without rewriting the immutable revert receipt.",
+    "reason": "Controller only adopts host-reported outcomes."
+  },
+  "verification": {
+    "method": "Focused Go tests for settled projection media restore. Disposable lab redeployed Core and retried the preserved leaf-delete op until succeeded with empty catalog. Raw lab receipts under .cache were wiped after the session; browser/snapshot QA notes remain under docs/qa.",
+    "evidence": [
+      "internal/vmhost/media_test.go",
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md"
+    ]
+  }
+}

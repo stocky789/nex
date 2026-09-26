@@ -1,0 +1,42 @@
+{
+  "summary": "Record bounded r7 snapshot replication and fenced-promotion evidence, including an unresolved post-promotion acknowledgement blocker. API impact: none.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-r7-promotion.md",
+    "docs/changes/2026-09-26-recovery-snapshot-r7-promotion.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records disposable native QA results and changes no operator workflow or supported behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The walkthrough exercised the existing authenticated local Core snapshot API, existing pool mTLS reservation and settlement contracts, Controller pool-promotion APIs, and existing inventory adoption. No API implementation or contract changed in this evidence-only record.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The record documents bounded acceptance evidence and an existing post-promotion acknowledgement blocker without changing scope or acceptance criteria.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Core's managed-vms snapshot journal on the executing host and the pool master's pool-vms.json reservation, settlement receipt, and snapshot catalog, synchronously replicated to eligible members. A fresh Controller adopts the master-reported catalog and Core-reported snapshot operation from authenticated inventory.",
+    "reason": "The walkthrough verifies existing Core-owned state and records no Controller-owned pool data."
+  },
+  "verification": {
+    "method": "Used a package-based Debian 13 three-Core disposable lab running the r7 candidate and matched libvirt build. Submitted a stopped-snapshot request through the authenticated local Core API while Controller B was unavailable. Gated the exact native virsh command and captured the master's durable pending authority record plus both members' verified signed replicas before releasing native execution. The Core settlement path synchronously pushes and validates each ready-member acknowledgement before returning success; after success, read back the master's authority record and both verified member replicas to confirm the descriptor and settlement receipt. Stopped the old master's Core service, ran supported promotion preflight and virtual libvirt fencing, confirmed the old domain powered off and promotion succeeded, then read the catalog through the new master from the surviving member and checked Controller operation adoption. A later post-promotion request was preserved at local-intent after its master acknowledgement failed; no native command ran. The planned Core-crash-after-native-effects boundary was not reached. Exact private-receipt hashes are in the QA note.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-r7-promotion.md"
+    ],
+    "checks": [
+      "Authenticated local Core snapshot succeeded while Controller was unavailable; exact retry was idempotent and changed-intent retry was refused — passed",
+      "Exact pending reservation was present on the master and both ready-member replicas before the real native snapshot command — passed",
+      "Settlement ACK path returned success; subsequent readback showed the exact descriptor and receipt in the master authority record and both verified member replicas, with both markers readable and VM shut off — passed",
+      "Supported virtual fence powered off the old master and the exact accepted promotion reached succeeded — passed",
+      "New master returned both catalog descriptors through a surviving member's local Core API; Controller adopted the Core snapshot operation as succeeded — passed",
+      "Post-promotion reservation with the fenced former master still marked ready — refused before native effects and remains unresolved; not passed",
+      "Core crash after native snapshot effects and before settlement — not reached"
+    ]
+  }
+}

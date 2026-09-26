@@ -1,0 +1,56 @@
+{
+  "summary": "Bind each VM start admission to its exact operation and epoch, then reconcile terminal start outcomes from durable Core journals and fresh native state without clearing uncertain execution.",
+  "paths": [
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/agent/pool_maintenance_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/vm-power.md",
+    "internal/agent/pool_transfer_test.go",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "docs/guide/create-virtual-machine.md",
+    "internal/vmhost/memory_start_test.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explains confirmed preflight refusal versus uncertain automatic-start outcome, and why a shut-off observation or successful emergency stop does not by itself settle an uncertain master reservation; native verification remains pending.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/create-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Existing authenticated Core peer start/settlement requests bind operation ID and epoch; owner inventory carries exact definitive failed-start journal identities. Matching development Core versions are required. Controller displays adopted state and synthetic task outcomes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects current Core recovery behavior without closing or expanding a milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Pool master pool-vms.json pending_start_operation_id and existing epoch, replicated through signed authority records; executing Core managed operation journals record automatic start_outcome at the native-dispatch boundary.",
+    "reason": "A fresh Controller adopts the resulting VM state and outcomes through host inventory. Controller stores no pool start authority."
+  },
+  "verification": {
+    "method": "The disposable native r8 run reproduced a memory-preflight failure that left the master at starting. The corrected journal records failed-before-request, started or uncertain; missing legacy or unknown outcomes remain conservative. Focused callback, inventory, legacy and unknown-outcome regressions passed in independent review without privileged skips. Full `go test ./... -count=1` passed after the final correction (agent 14.839s, Controller 35.987s, localcore 8.034s, vmhost 9.941s). Native owner full vmhost and race tests passed (9.870s and 15.405s); final agent owner full and race tests passed (15.088s and 56.441s). The API/CI/documentation Python selection passed all 118 tests. These checks use journal/runtime fixtures. The corrected native failed-start walkthrough remains pending on the frozen next candidate; the original legacy lab reservation is preserved.",
+    "evidence": [
+      "internal/agent/pool_vm_test.go",
+      "internal/agent/pool_vm_inventory_test.go",
+      "internal/agent/pool_transfer_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

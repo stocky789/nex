@@ -1,0 +1,35 @@
+{
+  "summary": "Run snapshot recovery fixtures with their required root ownership and valid storage ancestry instead of silently skipping them on non-root CI runners.",
+  "paths": [
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "internal/vmhost/managed_snapshot_test.go",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Test-fixture permissions and forge execution change; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No runtime API change; the existing managed snapshot executor tests run with the ownership required by production storage validation.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects test execution evidence without closing a milestone.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Disposable test fixtures and local test binaries only; no product state."
+  },
+  "verification": {
+    "method": "The two concurrency/restart fixtures failed under sudo before correction and passed afterward without skips. The exact mirrored forge-step commands then passed all 34 selected Snapshot tests with race instrumentation and root ownership, without skips. Native commands are simulated by the unit fixtures; no remote CI run was triggered. Independent workflow review confirmed both copies match and the GitHub.com exclusion remains intact.",
+    "evidence": [
+      "internal/vmhost/managed_snapshot_test.go",
+      ".github/workflows/phase1.yml"
+    ]
+  }
+}

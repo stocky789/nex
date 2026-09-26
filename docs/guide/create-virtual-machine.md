@@ -298,8 +298,10 @@ Navigation on this page follows the development build 0.4.8 console layout; see
         creation task, after every disk exists and the definition is verified. The start is
         attempted once and is not retried; if it fails, creation still reports `succeeded` and a
         separate failed power task records why the created VM stayed stopped.
-      - **Start automatically when the host boots** — sets the VM's autostart property on the
-        host. It does not start the VM now.
+      - **Start automatically when the host boots** — records the desired boot behavior in
+        Core. In the recovery development build, Core makes one start attempt per host boot
+        after pool ownership admission; native libvirt autostart stays disabled. This option
+        does not start the VM now.
 6. Select **Create stopped VM** (or **Create and start VM**, when start after creation is
    selected) once. Controller returns to the **VMs** list and opens a **New VM** panel for this
    creation task. Until the host reports the VM, the panel shows **Creation** followed by the task
@@ -483,18 +485,21 @@ failed and uncertain transfers show their own status.
   a VM with a TPM. Nothing was created. Until then, choose **TPM → None** — but a non-IoT
   Windows 11 edition will refuse to install.
 - **The VM was created but did not start:** the creation task shows `succeeded` and a
-  separate failed power task, *VM created but not started* with the host's reason, appears on
-  **Tasks**. The VM exists with its disks, stopped, and is a normal managed VM; the
-  start is not retried by itself. Inspect the reason, then start it from the
-  [Power controls](vm-power.md). *interrupted before the automatic start completed* means the
-  host was interrupted at that step and did not find the VM running afterwards; start it the
-  same way. *insufficient available memory to start this VM including 2 GiB host reserve*
+  separate power task, *VM created but not started* with the host's reason, appears on
+  **Tasks**. The VM definition and disks remain; the start is not retried by itself.
+  A confirmed preflight refusal reports `failed`. Inspect the reason and current VM state,
+  correct the cause, then use the [Power controls](vm-power.md).
+  An interrupted or unconfirmed native start reports `needs_attention` in the recovery
+  development correction. Retain that task and inspect the VM on its host; a shut-off
+  observation alone does not release its unresolved start reservation. Do not submit
+  another start to bypass it. *insufficient available memory to start this VM including 2 GiB host reserve*
   means the host cannot currently give the VM its memory size plus 2 GiB for itself; free
   memory on that host or lower the VM's memory, then start it. A host running Nex Core from
   before this behaviour ignores the option and always
   leaves the VM stopped.
-- **Autostart could not be enabled:** the VM is defined but its autostart property was not
-  set. The task says so. Inspect the VM on its host; the VM itself is intact.
+- **Native autostart could not be disabled or is not confirmed disabled:** Core cannot
+  confirm that boot starts will pass through its ownership checks. Inspect the reported task
+  and VM on its host before retrying; do not enable native autostart to bypass the refusal.
 - **The guest does not boot from the ISO:** confirm **Install media** is first in the boot
   order on the VM's page and that the firmware matches the installer. UEFI and BIOS installs
   are not interchangeable; a VM created with the wrong firmware must be recreated.
@@ -558,8 +563,8 @@ multi-host outage and recovery acceptance remains open.
 
 The [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) separates native platform,
 backend and simulated-browser checks for this unreleased change. It does not certify every
-CPU/guest combination or live migration. Native libvirt host-boot autostart bypasses Nex's
-explicit CPU preflight; Core-mediated starts use it.
+CPU/guest combination or live migration. In the recovery development build, managed pool
+autostart uses Core's start admission and CPU preflight, with native libvirt autostart disabled.
 
 Recorded checks and their limits:
 

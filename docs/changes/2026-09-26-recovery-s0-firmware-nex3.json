@@ -1,0 +1,35 @@
+{
+  "summary": "Add a preserve-only mode to the firmware probe and record two +nex3 capture/revert results without snapshot deletion. API impact: none.",
+  "paths": [
+    "tests/integration/recovery_s0_firmware.py",
+    "docs/qa/2026-09-26-recovery-s0-firmware-nex3.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes a contributor-only disposable-lab probe. It does not implement or change an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe exercises libvirt and QEMU directly; no Controller/Core or client-facing API contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records two bounded S0 observations and explicitly leaves deletion and broader acceptance open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Product state was not changed. The probe's domains, snapshots, disks, and firmware files are isolated disposable-lab artifacts."
+  },
+  "verification": {
+    "method": "On a selected package-based Core candidate running the checksum-verified +nex3 libvirt package set, the BIOS QGA-quiesced and UEFI Secure Boot plus vTPM 2.0 profiles both passed capture/revert marker checks using --preserve-snapshot. The vTPM profile verified paired NVRAM/swtpm restoration, baseline secret unseal, Secure Boot, and rollback of the future EFI entry and TPM handle. Both probes intentionally skipped snapshot deletion and preserved their domains and files. The installed virt-aa-helper regression passed. The install owner reported a clean 15-package upgrade simulation and stopped-domain boundary; raw simulation and before/after inventory receipts were not retained, as detailed in the QA note. Python syntax compilation and CLI help for the updated probe passed.",
+    "evidence": [
+      "tests/integration/recovery_s0_firmware.py",
+      "tests/integration/libvirt_readonly_policy.py",
+      "docs/qa/2026-09-26-recovery-s0-firmware-nex3.md",
+      "internal/vmhost/firmware.go"
+    ]
+  }
+}

@@ -1403,3 +1403,60 @@ func TestPoolStoragePeerPeriodicHandlersUseStorageProjectionOnly(t *testing.T) {
 		t.Fatalf("periodic storage peer handler observed unrelated VM: %v", err)
 	}
 }
+
+func TestPoolStorageReservationIsRefusedDuringVMRecovery(t *testing.T) {
+	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
+	joinPeerMember(t, master, member)
+	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: master.State.HostID, Name: "shared", Path: t.TempDir(), Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}, Generation: 1}
+	writeAppliedPoolStorage(t, master, storage)
+	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", member.State.HostID)
+	spec.PoolID = master.State.PoolID
+	spec.Disks[0].StorageID = storage.ID
+	record := poolVMRecord{PoolID: master.State.PoolID, VMID: spec.ID, HostID: member.State.HostID, State: "stopped", Epoch: 4, Spec: spec}
+	reservation, err := poolVMRecoveryReservationFor(record, "snapshot-1", "snapshot-create", strings.Repeat("d", 64), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reservePoolVMRecovery(&record, reservation); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := snapshotDescriptorForTest(reservation, "before-upgrade", "")
+	record.PendingSnapshot = &descriptor
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{spec.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := PoolPeerTLSConfig(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(PoolPeerHandler(master))
+	server.TLS = config
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	client, err := PoolPeerClient(member, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	body, _ := json.Marshal(map[string]any{"operation_id": "vm-create-1", "generation": storage.Generation})
+	request, err := http.NewRequest(http.MethodPost, server.URL+poolStoragePath+storage.ID+"/reserve", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("storage reservation during snapshot recovery returned %d, want conflict", response.StatusCode)
+	}
+	state, err := loadPoolStorage(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Reservations[storage.ID][member.State.HostID] != "" {
+		t.Fatalf("refused reservation was recorded: %#v", state.Reservations[storage.ID])
+	}
+}

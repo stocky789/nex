@@ -110,9 +110,15 @@ earlier records stay valid, and a record without a date must answer.
 - `none` — persists nothing new. Omit `record` entirely; an empty `""` is rejected.
 - `core` — `record` names the durable host-side record on the pool master and the adoption path a
   fresh Controller uses to recover it with the same identity and name.
-- `controller` — `record` must name one of the closed Controller-scoped exceptions (the checker
-  matches sites, administrator accounts, roles, audit history, enrollment tokens, Controller CA or
-  backup/restore jobs, case-insensitively) and how it is backed up and restored.
+- `controller` — `record` must name one of the closed Controller-scoped responsibilities: sites,
+  administrator accounts and roles, audit history, enrollment tokens or the Controller CA,
+  and how it is backed up and restored. Pool backup/restore jobs, schedules, history and catalog
+  belong to Core (project owner, 2026-09-25, superseding the earlier exception).
+
+The checker no longer accepts backup/restore as a Controller ownership exception and rejects
+explicit recovery-job records even when they also mention a permitted responsibility. This is a
+wording check, not semantic proof: review historical and new records against their actual state,
+without rewriting history as if implementation had changed.
 
 The checker cannot judge whether the named record exists or the owner is honest; reviewers do.
 `state` is required on **every** record, merged ones included (`--all` validates the whole

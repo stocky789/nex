@@ -63,7 +63,7 @@ func TestRegisterDefaultsRegistersManagementVLANBridge(t *testing.T) {
 // startEngine is an engine whose state directory exists, as it would after any command.
 func startEngine(t *testing.T) *ManagedEngine {
 	t.Helper()
-	e := NewManaged(filepath.Join(t.TempDir(), "state"))
+	e := managedTestEngine(filepath.Join(t.TempDir(), "state"))
 	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
 		t.Fatal(err)
 	}

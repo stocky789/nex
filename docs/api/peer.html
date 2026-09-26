@@ -40,6 +40,7 @@
 <li><a href="#peerGetPoolAuthority">GET /api/v1/pool/authority</a></li>
 <li><a href="#peerReportFenceChecks">POST /api/v1/pool/fence-checks</a></li>
 <li><a href="#peerOfferProvisionedFence">POST /api/v1/pool/fence-provision</a></li>
+<li><a href="#peerListPoolVMSnapshots">GET /api/v1/pool/vms/{vm_id}/snapshots</a></li>
 </ul></nav>
 <section id="peerJoin"><h2>POST <code>/api/v1/pool/join</code></h2>
 <p>Redeem a pool join offer</p><p>Served by the pool master; the only peer route without a client certificate. Authority is the single-use offer created by the master Core local API: it binds pool, master host, member host ID and CSR SHA-256, and expires after 15 minutes. The master signs the CSR with the pool CA, appends the member as ready, increments the membership generation and persists before replying. A retry of the same offer, host ID and CSR after a lost response returns the same certificate and current membership; a different key or an already-admitted host is refused. The member pins the pool CA and master host ID from the offer, verifies the returned certificate against its pending key, then persists and completes a Core-owned rehome. Body at most 1 MiB.</p>
@@ -1276,12 +1277,12 @@
   }
 }</pre></details></section>
 <section id="peerPoolVMExecution"><h2>POST <code>/api/v1/pool/vms/{vm_id}</code></h2>
-<p>Admit a pool VM execution transition</p><p>Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.</p>
+<p>Admit a pool VM execution transition</p><p>Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition and refuses a pending snapshot recovery reservation), start (defined/stopped → starting, epoch+1, returns a random permit), running (starting → running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB. The snapshot-reserve action binds the exact snapshot request, native intent digest and timestamp to the owner epoch/spec, refuses running VMs and pending storage mutations, and persists a bounded catalog reservation under the same authority lock. Snapshot-create reservations also bind a nonzero monotonic owner_operation_order. The snapshot-metadata action updates only a settled catalog name and description for an existing snapshot ID owned by the caller; digests and creation time stay fixed. Duplicate-name and full-catalog denials are persisted as exact admission_refusal values and require matching failed-before-effects settlement; a delayed operation order at or below the same owner&#x27;s settled watermark is rejected, including after ordinary owner epoch changes.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerPoolVMExecution&quot;,
   &quot;summary&quot;: &quot;Admit a pool VM execution transition&quot;,
-  &quot;description&quot;: &quot;Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB.&quot;,
+  &quot;description&quot;: &quot;Served by the pool master, serialized per master. The owner member asks the master to durably record a VM definition or execution transition before acting locally; the master writes its record before replying. For define(create=true) and update-reserve, before taking the durable VM lock the master obtains the selected current member&#x27;s exact authenticated native placement preflight; no lock spans that RPC. It validates returned shared-storage observations and persists the definition or exact next revision before setting placement_accepted=true. Actions: define (create=true seeds a new record from a valid vm owned by the caller; otherwise spec_match reports whether vm matches the durable definition and refuses a pending snapshot recovery reservation), start (defined/stopped \u2192 starting, epoch+1, returns a random permit), running (starting \u2192 running), stop (owner check only), stopped (owner proves stop; placement retained), reboot (requires running) and media (owner check only), update-reserve (reserve one exact next revision), update-commit and update-abort (settle it with exact local journal evidence). Only the recorded owner may transition a VM; there is no expiry or timeout cleanup, so unknown execution stays fenced and an unreachable host is never treated as stopped. Retries after a lost reply reconcile the exact durable definition or reservation; a missing placement_accepted acknowledgement, preflight timeout or membership change fails closed. Body at most 1 MiB. The snapshot-reserve action binds the exact snapshot request, native intent digest and timestamp to the owner epoch/spec, refuses running VMs and pending storage mutations, and persists a bounded catalog reservation under the same authority lock. Snapshot-create reservations also bind a nonzero monotonic owner_operation_order. The snapshot-metadata action updates only a settled catalog name and description for an existing snapshot ID owned by the caller; digests and creation time stay fixed. Duplicate-name and full-catalog denials are persisted as exact admission_refusal values and require matching failed-before-effects settlement; a delayed operation order at or below the same owner&#x27;s settled watermark is rejected, including after ordinary owner epoch changes.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMemberCertificate&quot;: []
@@ -1341,7 +1342,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Not the recorded owner, pending update, ineligible state, or definition/evidence mismatch with the durable record.&quot;,
+      &quot;description&quot;: &quot;Not the recorded owner, pending update or snapshot recovery, ineligible state, or definition/evidence mismatch with the durable record.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -2362,6 +2363,94 @@
     }
   }
 }</pre></details></section>
+<section id="peerListPoolVMSnapshots"><h2>GET <code>/api/v1/pool/vms/{vm_id}/snapshots</code></h2>
+<p>Read one VM snapshot catalog from the current pool master</p><p>Served only by the current pool master to an authenticated current pool peer. Returns the durable compact catalog for one master-owned VM; it never enumerates local libvirt snapshots to invent entries. Members use this read path when the current master owns the pool catalog. The catalog is bounded to 32 descriptors and the response body is limited to 1 MiB.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerListPoolVMSnapshots&quot;,
+  &quot;summary&quot;: &quot;Read one VM snapshot catalog from the current pool master&quot;,
+  &quot;description&quot;: &quot;Served only by the current pool master to an authenticated current pool peer. Returns the durable compact catalog for one master-owned VM; it never enumerates local libvirt snapshots to invent entries. Members use this read path when the current master owns the pool catalog. The catalog is bounded to 32 descriptors and the response body is limited to 1 MiB.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMemberCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool member \u2192 current pool master&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;name&quot;: &quot;vm_id&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The current master catalog for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotCatalog&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or unverified peer certificate, or caller is not an admitted current pool peer.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;The current master has no owner record for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;405&quot;: {
+      &quot;description&quot;: &quot;Method other than GET; Allow: GET.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Catalog is unavailable on this host or current membership cannot be confirmed.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;The durable pool VM catalog could not be read or validated.&quot;,
+      &quot;content&quot;: {
+        &quot;text/plain&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="PoolMemberCertificate"><summary>PoolMemberCertificate</summary><pre>{
@@ -2859,6 +2948,10 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
     },
+    &quot;replica_ack_excluded&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core-owned exclusion from snapshot reservation/settlement replica acknowledgements and ordinary replica-push failure aggregation, recorded only by a supported promotion after validating fresh exact fence evidence. Omitted means false. The host remains a pool member and VM owner; delivery is still attempted. The master clears the exclusion only after accepted current-membership VM inventory and an exact current-generation/content replica POST acknowledgement. Covered by the signed authority content, without changing membership generation when cleared. It does not exempt destructive resource-removal acknowledgements, storage-lease preparation, restart authority confirmation or future promotion fencing. Use matching development Core builds; old promotions are not retroactively excluded.&quot;
+    },
     &quot;replica_generation&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
@@ -2871,7 +2964,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -3189,6 +3282,16 @@
       },
       &quot;description&quot;: &quot;Operation ID to journal proof that this exact next-revision vm-update failed while validating and was never applied, so the master can release a pending_update reservation whose reply it lost. An older member omits it, and the reservation stays blocked.&quot;
     },
+    &quot;recoveries&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryEvidence&quot;
+      },
+      &quot;description&quot;: &quot;VM ID to terminal evidence built by that VM owner&#x27;s exact managed-journal record. In-progress, partial, unknown and failed-after-effects operations are omitted and remain reserved at the master.&quot;
+    },
     &quot;observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
@@ -3202,6 +3305,16 @@
         &quot;type&quot;: &quot;string&quot;
       },
       &quot;description&quot;: &quot;VM IDs this member durably deleted: succeeded vm-delete tombstones from its own managed journal. Positive evidence of removal, which is what lets the master prune its pool-vms.json owner record for a VM; absence is never read as deletion.&quot;
+    },
+    &quot;start_outcomes&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMStartOutcome&quot;
+      },
+      &quot;description&quot;: &quot;Exact failed owner-local start outcomes. A matching pending_start_operation_id, current authenticated owner, fresh shut-off observation and no pending definition or recovery transition are required to release a stopped reservation. Missing, uncertain and unrelated evidence leaves it reserved. Fresh running observation can independently confirm current execution without changing the task outcome.&quot;
     }
   },
   &quot;required&quot;: [
@@ -3213,7 +3326,7 @@
     &quot;observed_at&quot;
   ],
   &quot;x-go-type&quot;: &quot;agent.poolVMInventory&quot;,
-  &quot;description&quot;: &quot;Complete, membership-generation-bound VM inventory of the reporting member. updates carries only exact successful local managed-journal evidence for a current revision; deleted carries this member&#x27;s own delete tombstones.&quot;
+  &quot;description&quot;: &quot;Complete, membership-generation-bound VM inventory of the reporting member. updates carries only exact successful local managed-journal evidence for a current revision; recoveries carries only exact terminal snapshot evidence from that VM&#x27;s local managed journal; deleted carries this member&#x27;s own delete tombstones.&quot;
 }</pre></details>
 <details id="PoolVMInventoryReply"><summary>PoolVMInventoryReply</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -3321,6 +3434,147 @@
   &quot;x-go-type&quot;: &quot;agent.poolPlacementReply&quot;,
   &quot;description&quot;: &quot;A read-only target-host observation. On 200, vm is an exact echo of the requested definition and accepted is true only when all native preflight checks passed. replay is present only when an identical existing target journal command was recognized; it cannot authorize a new master record. On 409, only error is emitted. The master must reject a missing, changed or false acknowledgement.&quot;
 }</pre></details>
+<details id="PoolVMRecoveryReservation"><summary>PoolVMRecoveryReservation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;snapshot-create&quot;,
+        &quot;snapshot-revert&quot;,
+        &quot;snapshot-delete&quot;
+      ]
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;owner_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;epoch&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1
+    },
+    &quot;spec_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;intent_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;owner_operation_order&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;description&quot;: &quot;Nonzero durable owner command order for create, revert and delete; exact reservations and last settled receipts reject delayed older requests.&quot;
+    },
+    &quot;admission_refusal&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;name-in-use&quot;,
+        &quot;catalog-full&quot;
+      ],
+      &quot;description&quot;: &quot;A definitive no-effect snapshot-create refusal. It must settle only as failed-before-effects and cannot authorize native creation.&quot;
+    },
+    &quot;target_snapshot_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Exact retained target ID; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;target_snapshot_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Canonical exact target descriptor hash; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;result_spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Master-derived expected restored VM specification hash; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;pool_id&quot;,
+    &quot;vm_id&quot;,
+    &quot;owner_host_id&quot;,
+    &quot;epoch&quot;,
+    &quot;spec_revision&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;,
+    &quot;intent_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMRecoveryReservation&quot;,
+  &quot;description&quot;: &quot;Master-owned pending snapshot intent bound to exact owner/epoch, current VM/disk definition, native intent and operation order. Revert additionally binds the retained target descriptor and master-derived next specification; the master persists that pending result beside the reservation. Create admission_refusal is a definitive no-effect duplicate-name/full-catalog decision. Matching development Core versions are required.&quot;
+}</pre></details>
+<details id="PoolVMRecoveryEvidence"><summary>PoolVMRecoveryEvidence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;reservation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryReservation&quot;
+    },
+    &quot;outcome&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;completed&quot;,
+        &quot;failed-before-effects&quot;
+      ]
+    },
+    &quot;journal_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;snapshot&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Required for completed snapshot-create evidence; absent on all other outcomes.&quot;
+    },
+    &quot;result_spec&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Required only for completed revert; exact observed resulting VM specification must match the master-derived reservation hash. Absent on create and failed-before-effects.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reservation&quot;,
+    &quot;outcome&quot;,
+    &quot;journal_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMRecoveryEvidence&quot;,
+  &quot;description&quot;: &quot;Owner-generated receipt for one exact terminal managed-journal record. Unknown, partial and failed-after-effects outcomes leave the reservation pending.&quot;
+}</pre></details>
 <details id="PoolVMRequest"><summary>PoolVMRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -3331,6 +3585,7 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
         &quot;define&quot;,
+        &quot;delete-check&quot;,
         &quot;start&quot;,
         &quot;running&quot;,
         &quot;stop&quot;,
@@ -3339,7 +3594,10 @@
         &quot;media&quot;,
         &quot;update-reserve&quot;,
         &quot;update-commit&quot;,
-        &quot;update-abort&quot;
+        &quot;update-abort&quot;,
+        &quot;snapshot-reserve&quot;,
+        &quot;snapshot-settle&quot;,
+        &quot;snapshot-metadata&quot;
       ]
     },
     &quot;permit&quot;: {
@@ -3363,10 +3621,12 @@
     },
     &quot;epoch&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Master execution generation. Start acknowledgement returns a nonzero epoch with the exact operation identity; completion of that start must echo both values. A stale epoch cannot settle a newer execution.&quot;
     },
     &quot;operation_id&quot;: {
-      &quot;type&quot;: &quot;string&quot;
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Exact durable operation identity. Required for start admission; starting-to-running or starting-to-stopped completion must match the stored pending start identity and epoch. Also binds definition and recovery operations as described for their actions.&quot;
     },
     &quot;previous&quot;: {
       &quot;anyOf&quot;: [
@@ -3396,11 +3656,79 @@
     },
     &quot;placement_accepted&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;snapshot&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;snapshot_created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;intent_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;snapshot_reservation&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryReservation&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;snapshot_accepted&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;recovery_evidence&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryEvidence&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;snapshot_settled&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;owner_operation_order&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;description&quot;: &quot;Required with snapshot-reserve; copied from the authenticated owner Core journal entry.&quot;
+    },
+    &quot;recovery_kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;&quot;,
+        &quot;snapshot-revert&quot;
+      ],
+      &quot;description&quot;: &quot;Selects revert semantics on snapshot-reserve; absent/empty preserves existing create behavior.&quot;
+    },
+    &quot;captured_spec&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Captured specification from the immutable owner journal, for revert only. Master verifies its canonical hashes/dependencies against the retained target before deriving the next VM revision.&quot;
     }
   },
   &quot;required&quot;: [],
   &quot;x-go-type&quot;: &quot;agent.poolVMRequest&quot;,
-  &quot;description&quot;: &quot;Request and response share this shape: the master echoes the request after setting epoch and, per action, permit, spec_match, update_accepted, update_revision and placement_accepted. placement_accepted is true only after the master has received a fresh exact target-host preflight and durably recorded the create definition or update reservation. Older masters omit acknowledgement fields; clients must treat a missing acknowledgement as unsafe.&quot;
+  &quot;description&quot;: &quot;Request and response share this shape: the master echoes the request after setting epoch and, per action, permit, spec_match, update_accepted, update_revision and placement_accepted. placement_accepted is true only after the master has received a fresh exact target-host preflight and durably recorded the create definition or update reservation. Older masters omit acknowledgement fields; clients must treat a missing acknowledgement as unsafe. delete-check requires the exact current VM definition and explicitly echoes vm_id, action, and spec_match=true only when the durable owner has no unresolved transition and no retained snapshot catalog entries; every VM delete must pass this check regardless of whether disk files will be retained or unlinked. Snapshot reservation echoes the exact durable reservation before native effects. Snapshot settlement is a bounded per-VM action: only an authenticated current owner can submit exact terminal evidence, and the owner clears its local reservation only after the master echoes the same evidence with snapshot_settled=true. Start admission durably records pending_start_operation_id with the incremented execution epoch. A member requires the exact echoed operation ID and nonzero epoch before starting; completion of that reservation requires both to match. Legacy starting records without the binding remain fenced.&quot;
 }</pre></details>
 <details id="SMBStorageIdentity"><summary>SMBStorageIdentity</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -5354,7 +5682,8 @@
         &quot;storage&quot;,
         &quot;networks&quot;,
         &quot;media&quot;,
-        &quot;storage_clusters&quot;
+        &quot;storage_clusters&quot;,
+        &quot;resource_mutations&quot;
       ]
     },
     &quot;sha256&quot;: {
@@ -5370,7 +5699,7 @@
 }</pre></details>
 <details id="PoolAuthorityReplica"><summary>PoolAuthorityReplica</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;The pool master&#x27;s signed, read-only copy of its own durable pool authority, pushed to one member. It is stored by every ready member and acted on by none of them: no membership, VM, storage, network or media record on the receiving host is read from or changed by a replica, and no health judgement is derived from one. The signature is made with the pool CA key over every field but signature, so a member verifies it against the pool CA it pinned at join, long after the master that signed it is gone. Bounded to 1 MiB on the wire and on disk.&quot;,
+  &quot;description&quot;: &quot;The pool master&#x27;s signed, read-only copy of its own durable pool authority, pushed to one member. It is stored by every ready member and acted on by none of them: no membership, VM, storage, network, media or in-progress resource mutation on the receiving host is read from or changed by a replica, and no health judgement is derived from one. The signature is made with the pool CA key over every field but signature, so a member verifies it against the pool CA it pinned at join, long after the master that signed it is gone. Bounded to 1 MiB on the wire and on disk.&quot;,
   &quot;properties&quot;: {
     &quot;pool_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -5471,7 +5800,7 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaSection&quot;
       },
-      &quot;description&quot;: &quot;Exactly the six sections above, in order.&quot;
+      &quot;description&quot;: &quot;Exactly the seven sections above, in order.&quot;
     },
     &quot;signature&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -5486,6 +5815,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedWitnessCredential&quot;
       },
       &quot;description&quot;: &quot;Per-member sealed native qdevice credentials. The shared qdevice key is wrapped separately to each member and bound to the fencing generation.&quot;
+    },
+    &quot;resource_mutations&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolResourceMutation&quot;
+      },
+      &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
     }
   },
   &quot;required&quot;: [
@@ -5500,7 +5839,8 @@
     &quot;networks&quot;,
     &quot;media&quot;,
     &quot;storage_clusters&quot;,
-    &quot;sections&quot;
+    &quot;sections&quot;,
+    &quot;resource_mutations&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityReplica&quot;
 }</pre></details>
@@ -7328,5 +7668,234 @@
     &quot;armed_generation&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolStorageLeaseExclusion&quot;
+}</pre></details>
+<details id="PoolVMSnapshot"><summary>PoolVMSnapshot</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$&quot;,
+      &quot;maxLength&quot;: 64
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;spec_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;dependencies&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotDependencies&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;vm_id&quot;,
+    &quot;name&quot;,
+    &quot;created_at&quot;,
+    &quot;spec_revision&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshot&quot;,
+  &quot;description&quot;: &quot;Compact master-owned snapshot descriptor. Disk paths, XML and native artifacts remain in the owning Core journal.&quot;
+}</pre></details>
+<details id="VMSnapshotRequest"><summary>VMSnapshotRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;snapshot_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
+      &quot;description&quot;: &quot;Retained target ID for revert, distinct from the command operation ID; absent on create.&quot;
+    },
+    &quot;target&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Exact master catalog descriptor resolved internally by Core for revert; absent on create and never supplied through the operator endpoint.&quot;
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ],
+      &quot;description&quot;: &quot;Create capture mode. Omitted or stopped requires a shut-off guest. crash and quiesced require a running guest; quiesced also requires a responding guest agent. UEFI running capture is refused in this development slice.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.VMSnapshotRequest&quot;,
+  &quot;description&quot;: &quot;Core snapshot command payload. Create requires nonempty name and optional description and mode (omitted/stopped, crash, or quiesced), with no target. Revert requires snapshot_id and the exact internally resolved target descriptor, with empty name and description.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotCatalog"><summary>PoolVMSnapshotCatalog</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;uuid&quot;
+    },
+    &quot;snapshots&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;maxItems&quot;: 32,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;snapshots&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;agent.poolVMSnapshotCatalog&quot;,
+  &quot;description&quot;: &quot;Compact durable catalog returned by the current pool master; contains no host paths or native XML.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotDependencies"><summary>PoolVMSnapshotDependencies</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;network_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;media_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 2,
+      &quot;uniqueItems&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;storage_ids&quot;,
+    &quot;network_ids&quot;,
+    &quot;media_ids&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshotDependencies&quot;,
+  &quot;description&quot;: &quot;Sorted resource IDs referenced by the captured VM definition. Omitted on legacy descriptors when the historical dependencies are unknown.&quot;
+}</pre></details>
+<details id="PoolResourceMutation"><summary>PoolResourceMutation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;resource&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;network&quot;,
+        &quot;media&quot;
+      ]
+    },
+    &quot;resource_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128,
+      &quot;pattern&quot;: &quot;^[^/\\\\\\u0000]+$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;resource&quot;,
+    &quot;resource_id&quot;,
+    &quot;operation_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolResourceMutation&quot;
+}</pre></details>
+<details id="PoolVMStartOutcome"><summary>PoolVMStartOutcome</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;failed&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;operation_id&quot;,
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;agent.poolVMStartOutcome&quot;,
+  &quot;description&quot;: &quot;Exact definitive failed start outcome from the executing Core journal, checked alongside fresh shut-off state. Start-after-create binds the base create operation ID, not the synthetic display outcome suffix; its journal must record failure before native dispatch.&quot;
 }</pre></details>
 </section></main></html>

@@ -23,12 +23,14 @@ implementation work keeps quietly breaking. It is not negotiable by convenience.
   design would lose anything, or make an operator re-enter anything, the design is wrong. Fix the
   design; do not add a recovery path, export, or migration to compensate.
 - **The only Controller-owned data** is Controller-scoped: sites, administrator accounts and roles,
-  audit history, enrollment tokens, the Controller CA, and backup/restore jobs, which are backed
-  up and restored separately. That list is closed. Adding to it is a product decision for project owner,
-  not an implementation choice. Decision: project owner, 2026-09-10 — backup and restore orchestration is
-  the one explicit exception to the no-jobs rule below: Nex Controller schedules and drives backup
-  and restore jobs and keeps their run history and catalog; backup repository registrations stay
-  pool-scoped on the master.
+  audit history, enrollment tokens, and the Controller CA, which are backed up and restored
+  separately. That list is closed. Adding to it is a product decision for project owner,
+  not an implementation choice. **Decision: project owner, 2026-09-25, superseding the 2026-09-10
+  backup exception:** Nex Core owns backup/restore execution, schedules, job definitions, run
+  history, verification results and repository inventory. Backups and restores work without
+  Controller. A fresh Controller connects to the pool master and adopts all pool members and
+  existing backup jobs/history through authenticated APIs, without the old Controller database
+  or export. See the [recovery plan](docs/plans/2026-09-25-recovery-snapshots-backups-restores.md).
 
 A change breaks the invariant if it:
 
@@ -37,7 +39,7 @@ A change breaks the invariant if it:
 - makes Nex Controller derive, remember, or reconcile state a host could report instead;
 - implements host behavior in Controller code because that is quicker than adding a Core API;
 - has Nex Controller schedule, poll, or drive a multi-step operation that a host should run and
-  report — any job the Controller must stay alive to finish (backup/restore jobs excepted, above);
+  report — any pool job the Controller must stay alive to finish;
 - gives a resource an identity, name, or relationship the host does not know, so a re-adopting
   Controller could not reproduce it;
 - keeps operator-visible data about pool resources (tags, notes, custom names, layouts of pool
@@ -54,7 +56,7 @@ Design and review each pool capability in this order: **Core behavior → durabl
 state → host API → outage/recovery checks → Controller UI**. Nex Core, the Debian host
 platform, owns validation, placement decisions, policy enforcement and durable operations;
 Controller authenticates operators, submits requests and presents host-reported results.
-The closed Controller-scoped responsibilities and backup/restore exception above still apply.
+The closed Controller-scoped responsibilities above still apply; pool backup/restore is Core-owned.
 
 Prove the capability through the host API, including interrupted requests, safe retries and
 Controller disconnection/replacement, before counting the slice as complete. Deliver the UI

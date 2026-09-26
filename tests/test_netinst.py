@@ -4,6 +4,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,19 +16,82 @@ spec.loader.exec_module(manifest)
 
 
 class NetinstTests(unittest.TestCase):
-    def test_manifest_pins_upstream_and_only_hosts_nex_payloads(self):
+    @staticmethod
+    def deb(directory, package, version='1', architecture='amd64', source=None):
+        package_root = directory / f'{package}-{version}'
+        control = package_root / 'DEBIAN'
+        control.mkdir(parents=True)
+        fields = [f'Package: {package}', f'Version: {version}', f'Architecture: {architecture}',
+                  'Maintainer: Test <test@example.org>', 'Description: test package']
+        if source:
+            fields.insert(3, f'Source: {source}')
+        (control / 'control').write_text('\n'.join(fields) + '\n')
+        output = directory / f'{package}_{version}_{architecture}.deb'
+        subprocess.run(['dpkg-deb', '--build', str(package_root), str(output)],
+                       check=True, capture_output=True)
+        return output
+
+    def test_matched_libvirt_builder_uses_init_and_pinned_apt_cache(self):
+        build = (ROOT / 'installer/build.sh').read_text()
+        command = build.split('build_matched_libvirt() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('"$docker_bin" run --rm --init --platform linux/amd64', command)
+        self.assertIn('-v nex-build-cache:/apt-cache', command)
+
+    @unittest.skipUnless(shutil.which('dpkg-deb'), 'requires dpkg-deb')
+    def test_installer_replaces_only_matching_libvirt_source_package_slots(self):
+        build = (ROOT / 'installer/build.sh').read_text()
+        helper = build.split('python3 - "$repository" "$build_output" "$third_party" <<\'PYLIBVIRT\'\n', 1)[1].split(
+            '\nPYLIBVIRT\n', 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / 'repo'
+            repo.mkdir()
+            output = root / 'output'
+            for name in ('source', 'notices', 'recipe'):
+                (output / name).mkdir(parents=True, exist_ok=True)
+                (output / name / 'retained.txt').write_text(name)
+            for name in ('binary-packages.txt', 'build-inputs.txt', 'build.log'):
+                (output / name).write_text(name)
+            third_party = root / 'third-party/libvirt'
+            old = self.deb(root, 'libvirt0', '11.3.0-3+deb13u3', source='libvirt (11.3.0-3+deb13u3)')
+            old.rename(repo / old.name)
+            upstream = self.deb(root, 'unrelated', '1', source='other-source (1)')
+            upstream.rename(repo / upstream.name)
+            candidate = self.deb(root, 'libvirt0', '11.3.0-3+deb13u3+nex4', source='libvirt (11.3.0-3+deb13u3+nex4)')
+            candidate.rename(output / candidate.name)
+            unused = self.deb(root, 'libvirt-daemon-driver-xen', '11.3.0-3+deb13u3+nex4',
+                              source='libvirt (11.3.0-3+deb13u3+nex4)')
+            unused.rename(output / unused.name)
+
+            subprocess.run([sys.executable, '-c', helper, str(repo), str(output), str(third_party)], check=True)
+            self.assertEqual({path.name for path in repo.glob('*.deb')},
+                             {upstream.name, candidate.name})
+            self.assertFalse((third_party / candidate.name).exists())
+            self.assertEqual((third_party / 'replaced-packages.tsv').read_text().splitlines()[1].split('\t')[:2],
+                             ['libvirt0', 'amd64'])
+            checks = subprocess.run(['sha256sum', '--check', 'SHA256SUMS'], cwd=third_party,
+                                    capture_output=True, text=True)
+            self.assertEqual(checks.returncode, 0, checks.stdout + checks.stderr)
+
+    def test_manifest_pins_upstream_and_hosts_hash_pinned_release_payloads(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo = root / 'stage/nex/repo'
             repo.mkdir(parents=True)
-            for name in ('example_1_all.deb', 'nex-core-local_1_amd64.deb', 'dlm-controld_1_amd64.deb'):
-                (repo / name).write_bytes(name.encode())
+            for package, arch, source in (('example', 'all', None),
+                                          ('nex-core-local', 'amd64', None),
+                                          ('dlm-controld', 'amd64', 'dlm (4.3.0-3+nex1)'),
+                                          ('libvirt0', 'amd64', 'libvirt (11.3.0-3+deb13u3+nex4)')):
+                built = self.deb(root, package, architecture=arch, source=source)
+                built.rename(repo / built.name)
             uris = root / 'uris'
             uris.write_text("'https://snapshot.debian.org/archive/debian/20260920T000000Z/pool/example.deb' example_1_all.deb 17 SHA256:unused\n")
             manifest.build_manifest(root / 'stage', uris, 'https://downloads.example.org/1', root / 'out')
             rows = (repo.parent / 'netinst.tsv').read_text().splitlines()
-            self.assertEqual(len(rows), 4)
-            self.assertEqual(len(list((root / 'out').glob('*.deb'))), 2)
+            self.assertEqual(len(rows), 5)
+            payloads = list((root / 'out').glob('*.deb'))
+            self.assertEqual(len(payloads), 3)
+            self.assertTrue(any(path.name.startswith('libvirt0-') for path in payloads))
             for row in rows[:-1]:
                 checksum, name, url = row.split('\t')
                 self.assertEqual(checksum, hashlib.sha256((repo.parent / name).read_bytes()).hexdigest())

@@ -6,12 +6,60 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.12` →
-> Debian `0.4.12`).
+> development software. Builds use the newest numbered changelog heading (`0.4.13` →
+> Debian `0.4.13`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.13] — 2026-09-26
+
+### Miscellaneous
+
+- Recorded a disposable multi-backend snapshot recovery lab pass on local disk, NFS, SMB and iSCSI (native lifecycle and midcommit consolidation).
+
+### Minor Feature
+
+- VMs list **Snapshot** bulk action takes a stopped snapshot for selected shut-off guests.
+- Snapshot Revert and Delete use in-console confirmation dialogs instead of browser prompts.
+- Controller snapshot list, create, rename, revert and delete routes for stopped guests, with
+  the VM Snapshots tab using those routes.
+- Running snapshot create modes (`crash` / `quiesced`) for supported BIOS guests; UEFI running
+  capture is refused, and quiesced create fails honestly without a guest agent.
+- Snapshots tab offers crash/quiesced Mode for running guests and can submit create through
+  Controller.
+- Owner-local stopped leaf snapshot delete with master catalog settlement.
+- Owner-local snapshot name and description updates on the pool master's catalog.
+
+### Bug Fixes
+
+- Fixed snapshot recovery so interrupted create, revert and delete can settle safely without
+  dropping a master reservation or replaying unsafe native work.
+- Fixed Controller adoption of snapshot tasks so in-flight work no longer wedges host reports
+  or marks unfinished metadata updates as succeeded.
+- Fixed snapshot rename so it cannot collide with an in-flight create and is acknowledged by
+  pool members before success returns.
+- Fixed the Snapshots tab so retries reuse the same request id, failed creates keep the form,
+  confirm dialogs stay isolated, and the Controller appliance stays out of snapshot actions.
+- Fixed network-installer release publish when multiple matched libvirt packages are present.
+- Fixed Debian snapshot URL checks so build sources cannot be injected through whitespace.
+- Fixed stopped snapshot revert validation so an exact retry can settle after libvirt
+  rewrites snapshot disk heads and read-only ISO overlays, without repeating native revert.
+- Fixed leaf snapshot delete settlement after media restore so Core can finish when the
+  settled revert projection returns the same ISO without rewriting the revert receipt.
+- Fixed snapshot ownership checks so CDROM driver type drift (qcow2 vs raw on the same
+  ISO path) no longer blocks revert or delete.
+- Never-started guests (`defined`) can reserve stopped snapshot revert the same way as
+  shut-off guests.
+- Empty snapshot descriptions validate and round-trip through native metadata.
+- Snapshots tab browser revert and leaf delete work on matching-disk stopped guests.
+- Snapshots Rename/Revert/Delete actions name the target snapshot for assistive tech.
+
+### Miscellaneous
+
+- Matched libvirt packaging and recovery CI cover AppArmor guest consolidation checks used by
+  snapshot safety work.
 
 ## [0.4.12] — 2026-09-24
 

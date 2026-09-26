@@ -212,6 +212,24 @@ func TestManagedWorkerBackgroundCompletionPreservesForeground(t *testing.T) {
 	}
 }
 
+func TestManagedWorkerAcceptsRecoveryReplayNeedsAttention(t *testing.T) {
+	s := &Store{dir: t.TempDir(), State: State{Journal: map[string]JournalEntry{
+		"snapshot-op": {Command: &protocol.Command{OperationID: "snapshot-op", Kind: "vm-snapshot-create"}, Status: "pending"},
+	}}}
+	done := managedCompletion{result: protocol.Result{
+		OperationID: "snapshot-op", Status: "needs_attention", Error: "snapshot recovery reservation is unresolved",
+		ObservedAt: time.Now().UTC(),
+	}}
+	active, err := completeManagedCommand(s, "snapshot-op", done, nil)
+	if err != nil || active != "" {
+		t.Fatalf("needs_attention replay was rejected: active=%q err=%v", active, err)
+	}
+	entry := s.State.Journal["snapshot-op"]
+	if entry.Status != "needs_attention" || entry.Error != done.result.Error {
+		t.Fatalf("recovery replay result was not preserved: %+v", entry)
+	}
+}
+
 func TestMemberSuccessfulEjectAndDiskRemovalReleaseUnusedReservations(t *testing.T) {
 	membership := protocol.PoolMembership{MasterHostID: "master-1"}
 	for _, command := range []protocol.Command{

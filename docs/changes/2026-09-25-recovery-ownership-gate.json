@@ -1,0 +1,38 @@
+{
+  "summary": "Reject Controller ownership of pool backup and restore records in the documentation gate",
+  "paths": [
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py",
+    "docs/DOCUMENTATION.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes contributor validation and planning history; no operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The documentation checker has no Nex Controller/Core or client-facing API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone status or published built/outstanding items change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The checker and its records persist no product state."
+  },
+  "verification": {
+    "method": "The regression failed on the original matcher and passed after correction. A later independent review found omitted execution, verification, repository inventory and run-history wording; the added mixed-exception cases failed before the same matcher was extended. The reviewer independently reran all 29 test_check_docs.py tests and check_docs.py --all successfully and found no further issue in the correction. The repository privacy suite passed one test, and git diff --check passed. The initial scoped worktree documentation gate passed nine paths; the final combined rollout gate is assessed separately as other workers finish their records. Historical Controller-owned records were inspected without rewriting their implementation claims. No native recovery or remote CI result is claimed by this tooling change.",
+    "evidence": [
+      "scripts/check_docs.py",
+      "tests/test_check_docs.py",
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md"
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "summary": "Record matched-candidate BIOS, UEFI, Secure Boot and vTPM rollback results; product recovery and S0 remain open. API impact: none.",
+  "paths": [
+    "tests/integration/recovery_s0_firmware.py",
+    "docs/qa/2026-09-25-recovery-s0-firmware.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The change is a contributor-only feasibility probe. No operator recovery workflow is implemented or changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe exercises native libvirt, QEMU, OVMF and swtpm in one selected disposable Core candidate. No Controller/Core or client-facing API contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The probe records an S0 gate result. It does not implement recovery or declare firmware/TPM snapshot support.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Product state was not changed. Generated guest disks, domain definitions and firmware state are isolated disposable lab artifacts, not Nex durable state."
+  },
+  "verification": {
+    "method": "The selected 15-package libvirt candidate passed SHA256SUMS validation, apt simulation (15 upgrades, 0 new installs, 0 removals), installation at a stopped boundary, post-install version/service checks, and the patched virt-aa-helper policy test. On the matched package-based Debian-cloud Core candidate, BIOS stopped snapshot/revert/delete/reopen passed. BIOS live quiesced capture reported guest-fsfreeze-status thawed; snapshot-revert --paused left the guest paused; the probe stopped it, verified shutoff before guest commands, then verified baseline marker, deletion, and reopen. UEFI Secure Boot-off passed with guest EFI presence and exact secure-boot=no/enrolled-keys=no XML; the guest SecureBoot EFI variable was absent and mokutil explicitly reported unsupported Secure Boot. Paired NVRAM restore matched content and metadata; deletion and reopen passed. UEFI Secure Boot-on without TPM passed guest EFI variable value 1 plus mokutil enabled checks before rollback, after rollback, and after snapshot deletion/reboot; paired NVRAM restore, delete, and reopen passed. UEFI Secure Boot-on with vTPM 2.0 passed after a fixture-only ownership correction to the configured swtpm CA runtime files. Guest SecureBoot checks passed; a sealed test secret unsealed after paired rollback; the future EFI entry and persistent TPM handle were absent after rollback; exact NVRAM/swtpm data and metadata matched baseline; deletion and reopen passed. No PCR policy was tested. The CA files were not a product change. S0 remains open.",
+    "evidence": [
+      "tests/integration/recovery_s0_firmware.py",
+      "docs/qa/2026-09-25-recovery-s0-firmware.md",
+      "internal/vmhost/firmware.go",
+      "installer/build.sh",
+      "installer/packages.txt"
+    ]
+  }
+}

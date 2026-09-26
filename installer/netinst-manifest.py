@@ -4,6 +4,7 @@
 import hashlib
 import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,6 +13,17 @@ from urllib.parse import urlsplit
 def digest(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def is_release_payload(deb):
+    fields = {}
+    for line in subprocess.check_output(['dpkg-deb', '-f', str(deb)], text=True).splitlines():
+        if ': ' in line:
+            key, value = line.split(': ', 1)
+            fields[key] = value
+    package = fields.get('Package', '')
+    source = fields.get('Source', package).split(' ', 1)[0]
+    return package in ('nex-core-local', 'dlm-controld') or source == 'libvirt'
 
 
 def build_manifest(stage, uris, base, output):
@@ -29,7 +41,7 @@ def build_manifest(stage, uris, base, output):
     rows = []
     for deb in sorted((stage / 'nex/repo').glob('*.deb')):
         checksum = digest(deb)
-        if deb.name.startswith(('nex-core-local_', 'dlm-controld_')):
+        if is_release_payload(deb):
             name = f'{deb.name.split("_")[0]}-{checksum}.deb'
             shutil.copyfile(deb, output / name)
             url = f'{base.rstrip("/")}/{name}'

@@ -1,0 +1,39 @@
+{
+  "summary": "Extend the bounded native external-snapshot probe and record canonical local, NFS, SMB, iSCSI, partial-delete, and chain-depth evidence; API impact: none.",
+  "paths": [
+    "tests/integration/recovery_s0.py",
+    "tests/test_recovery_s0.py",
+    "docs/qa/2026-09-25-recovery-s0-native.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The change adds contributor-only native lab tooling and evidence; no operator workflow or product behavior is available or changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe invokes existing libvirt and QEMU commands in a disposable Core candidate; it adds no Nex Controller/Core or client API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The report explicitly leaves S0 open and does not change the roadmap board status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only ephemeral, uniquely named disposable lab domains and files are created; no product state or durable repository metadata is added."
+  },
+  "verification": {
+    "method": "Ran canonical patched-libvirt local, NFS, authenticated SMB 3.1.1, and exclusive ext4 iSCSI native snapshot lifecycle probes on package-based disposable Debian 13 Core candidates. Four one-/two-disk rapid/paced cases passed per backend, including marker restore, UUID overlay uniqueness, C/B/A delete, and QEMU chain reopen. Reconciled and retried three preserved distro-baseline delete failures without metadata edits. Re-ran the atomic two-disk create failure and confirmed unchanged heads, chains, markers and snapshot metadata. The earlier two-patch oldest-parent control passed with one disk but failed with a two-disk monitor reset and partial chain advancement. The verified four-patch candidate was installed from exactly its selected 15-package closure on Core A; libvirtd restarted and the helper policy check passed. New one-/two-disk three-point parent-delete controls passed the parent merge with an exact enforcing QEMU-process observation, deleted both descendants with per-step marker/flag reconciliation, and reopened each synthetic domain. The full local one-/two-disk rapid/paced lifecycle suite also passed on the four-patch candidate with UUID-unique revert overlays, C/B/A deletion, clear flags, and QEMU reopen. The QEMU process watcher records optional observations for cleanup deletes; an early overbroad gated run is preserved as incomplete because no PID was observable during point B even though deletion succeeded and point/current markers reconciled. The two-disk 32-point stress returned JSON nesting errors for older-parent and leaf deletion; markers/labels were reconciled. Source inspection traced the error to QMP `query-block` backing-image parsing at json-c's default depth 32; QEMU 10.0.13 does not support the later flat option. A scoped parser-depth fix bounded to backing-chain traversal remains under review and is untested. The final local cases ran on a 1-vCPU/3-GiB Core guest plus 1-vCPU/1-GiB storage guest under a one-CPU aggregate quota and low CPU/I/O weights; no performance claim is made. Updated harness compiles and `python3 -m unittest tests.test_recovery_s0` passes (11 tests); `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` passes (1 test). The full docs worktree gate was not rerun because separately owned changed files were still missing assessments at the last attempt. Deep-chain fix, interruption recovery and full API-backed backup/restore gates remain open.",
+    "evidence": [
+      "docs/qa/2026-09-25-recovery-s0-native.md",
+      "tests/integration/recovery_s0.py",
+      "tests/test_recovery_s0.py",
+      "docs/qa/2026-09-25-recovery-libvirt-backport.md",
+      "tests/integration/libvirt_readonly_policy.py",
+      "tests/integration/cluster_ha_lab.py",
+      "docs/qa/2026-09-25-recovery-s0-core-lab.md"
+    ]
+  }
+}

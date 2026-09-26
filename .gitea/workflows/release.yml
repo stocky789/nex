@@ -172,6 +172,22 @@ jobs:
             [ "$actual" = "$NEX_VERSION" ] || {
               echo "$deb declares $actual, expected $NEX_VERSION" >&2; exit 1; }
           done
+          for payload in dist/netinst/*.deb; do
+            package=$(dpkg-deb -f "$payload" Package)
+            payload_hash=$(sha256sum "$payload" | cut -d' ' -f1)
+            [ "${payload##*/}" = "$package-$payload_hash.deb" ] || {
+              echo "netinst payload filename is not bound to its package hash: $payload" >&2; exit 1; }
+            case "$package" in
+              nex-core-local)
+                [ "$(dpkg-deb -f "$payload" Version)" = "$NEX_VERSION" ] || exit 1 ;;
+              dlm-controld)
+                [ "$(dpkg-deb -f "$payload" Version)" = '4.3.0-3+nex1' ] || exit 1 ;;
+              libvirt*|libnss-libvirt)
+                [ "$(dpkg-deb -f "$payload" Source | cut -d' ' -f1)" = libvirt ] || exit 1
+                [ "$(dpkg-deb -f "$payload" Version)" = '11.3.0-3+deb13u3+nex4' ] || exit 1 ;;
+              *) echo "unexpected netinst payload package: $package" >&2; exit 1 ;;
+            esac
+          done
           ( cd dist && for artifact in \
               "nex-core-${NEX_VERSION}-amd64.iso" \
               "nex-core-${NEX_VERSION}-source.tar.gz" \
@@ -327,6 +343,12 @@ jobs:
             scripts/release-publish.py \
             "$target:$staging/"
 
+          # Expand every staged netinst .deb into its own --netinst-payload, matching the
+          # local validation loop. Unquoted libvirt*-*.deb would pass one literal glob.
+          payload_args=()
+          for payload in dist/netinst/*.deb; do
+            payload_args+=(--netinst-payload "'$staging/${payload##*/}'")
+          done
           # Reuse the transferred Core bytes under APT's required package filename.
           # Packages first: the signing key never leaves the host, and nex-apt-publish
           # is the one command the publishing user may run as root without a password.
@@ -334,7 +356,7 @@ jobs:
           ssh $ssh_opts "$target" "set -eu
             ln '$staging'/nex-core-local-*.deb '$staging/nex-core-local_${NEX_VERSION}_amd64.deb'
             sudo -n /usr/local/sbin/nex-apt-publish '$staging/nex-core-local_${NEX_VERSION}_amd64.deb' '$staging/nex-controller_${NEX_VERSION}_amd64.deb'
-            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' --netinst-payload '$staging'/nex-core-local-*.deb --netinst-payload '$staging'/dlm-controld-*.deb --keep 3
+            python3 '$staging/release-publish.py' --iso '$staging/nex-core-${NEX_VERSION}-amd64.iso' --source '$staging/nex-core-${NEX_VERSION}-source.tar.gz' --compliance-manifest '$staging/nex-core-${NEX_VERSION}-compliance-manifest.json' --netinst-iso '$staging/nex-core-${NEX_VERSION}-amd64-netinst.iso' --netinst-manifest '$staging/nex-core-${NEX_VERSION}-netinst-compliance-manifest.json' ${payload_args[*]} --keep 3
             rm -rf '$staging'"
 
           # Static pages last: same host, same secrets, one Release run.

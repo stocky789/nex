@@ -64,8 +64,26 @@ func validateInventory(v *protocol.Inventory) error {
 		}
 	}
 	if m := v.Managed; m != nil {
-		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 {
+		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 || len(m.PoolVMSnapshots) > 10000 || len(m.RecoveryReservations) > 10000 {
 			return errors.New("managed state limits exceeded")
+		}
+		if len(m.PoolVMSnapshots) != 0 && !m.PoolVMSnapshotsReported || len(m.RecoveryReservations) != 0 && !m.RecoveryReservationsReported {
+			return errors.New("snapshot authority observation is incomplete")
+		}
+		seenSnapshots := map[string]bool{}
+		for _, snapshot := range m.PoolVMSnapshots {
+			key := snapshot.VMID + "/" + snapshot.ID
+			if snapshot.Valid() != nil || seenSnapshots[key] {
+				return errors.New("invalid or duplicate snapshot descriptor")
+			}
+			seenSnapshots[key] = true
+		}
+		seenReservations := map[string]bool{}
+		for _, reservation := range m.RecoveryReservations {
+			if reservation.Valid() != nil || seenReservations[reservation.VMID] {
+				return errors.New("invalid or duplicate snapshot reservation")
+			}
+			seenReservations[reservation.VMID] = true
 		}
 		var fields []string
 		for _, s := range m.Storage {

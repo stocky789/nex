@@ -132,6 +132,7 @@ func zfsPoolObservationForController(managed *protocol.ManagedState, ready bool)
 
 type RunConfig struct {
 	Heartbeat, ProbeInterval, ProbeTimeout time.Duration
+	SnapshotRequests                       <-chan SnapshotRequest
 	history                                *usageHistory // set by Run; answers stats channels
 }
 
@@ -194,6 +195,12 @@ func applyResponse(s *Store, r protocol.ReportResponse) error {
 			} else if cmd.Kind != "refresh-inventory" {
 				return errors.New("controller reused legacy command ID")
 			}
+			// Exact Controller replay of a snapshot that needs attention re-enters
+			// observation/settle without requiring the snapshot HTTP path forever.
+			if old.Status == "needs_attention" && old.Command != nil && snapshotCommand(old.Command.Kind) {
+				old.Status, old.Error = "pending", ""
+				s.State.Journal[cmd.OperationID] = old
+			}
 			continue
 		}
 		// ponytail: retain command IDs for this identity; compact only with a negotiated replay horizon.
@@ -205,8 +212,29 @@ func applyResponse(s *Store, r protocol.ReportResponse) error {
 		}
 		order++
 		e := JournalEntry{Order: order, Status: "pending", RequestedAt: time.Now(), Command: &cmd}
-		if cmd.Power != nil && cmd.Power.AfterOperationID == "" {
-			e.AfterOperationID = pendingVMCommand(s.State.Journal, cmd.Power.VMID)
+		if cmd.Power != nil {
+			unsettledSnapshot := hasUnsettledSnapshot(s.State.Journal, cmd.Power.VMID)
+			emergency := cmd.Power.Action == "shutdown" || cmd.Power.Action == "force-stop"
+			if emergency && unsettledSnapshot {
+				// Clear snapshot After-predecessors only. Keep a pending definition/delete
+				// fence so emergency stop cannot race a same-VM vm-update.
+				pred := cmd.Power.AfterOperationID
+				if pred == "" {
+					pred = pendingVMDefinitionCommand(s.State.Journal, cmd.Power.VMID)
+				}
+				if pred != "" {
+					before := s.State.Journal[pred]
+					if before.Command != nil && snapshotCommand(before.Command.Kind) {
+						e.AfterOperationID = ""
+					} else if before.Command != nil && vmDefinitionCommand(before.Command.Kind) {
+						e.AfterOperationID = pred
+					}
+				}
+			} else if cmd.Power.AfterOperationID != "" {
+				e.AfterOperationID = cmd.Power.AfterOperationID
+			} else {
+				e.AfterOperationID = pendingVMCommand(s.State.Journal, cmd.Power.VMID)
+			}
 		}
 		if cmd.Kind != "refresh-inventory" && !managedCommand(cmd.Kind) {
 			e.Status = "failed"
@@ -264,6 +292,20 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// member's reported replica generation has nothing to be compared against, and a
 	// lagging replica reads as a current one.
 	managed.Authority = PoolAuthorityReport(s)
+	if membership, membershipErr := Membership(s); membershipErr == nil && membership.MasterHostID == s.State.HostID {
+		if reservations, reported, recoveryErr := PoolVMRecoveryInventory(s); recoveryErr != nil {
+			checks = append(checks, protocol.Check{Name: "pool-vm-recovery", Status: "failed", Error: "pool snapshot recovery reservations are unavailable", ObservedAt: time.Now().UTC()})
+		} else if reported {
+			managed.RecoveryReservations = reservations
+			managed.RecoveryReservationsReported = true
+		}
+		if snapshots, reported, snapshotErr := PoolVMSnapshotInventory(s); snapshotErr != nil {
+			checks = append(checks, protocol.Check{Name: "pool-vm-snapshots", Status: "failed", Error: "pool snapshot catalog is unavailable", ObservedAt: time.Now().UTC()})
+		} else if reported {
+			managed.PoolVMSnapshots = snapshots
+			managed.PoolVMSnapshotsReported = true
+		}
+	}
 	// This host's own part of a master change or an eject, from every participant, so the
 	// Controller assembles one honest picture instead of keeping a job of its own.
 	managed.Transfer = PoolTransferReport(s)
@@ -1046,15 +1088,30 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}
 	}
 	active := ""
+	// ponytail: one background snapshot per host; add bounded per-VM concurrency
+	// only if snapshot throughput requires it. Ordinary VM control stays available.
+	activeSnapshot := ""
 	ticker := time.NewTicker(cfg.Heartbeat)
 	defer ticker.Stop()
 	disconnected := false
 	for {
 		joined := false
 		if active == "" {
-			if id := nextManagedCommand(s.State.Journal); id != "" {
+			if id := nextManagedCommand(s.State.Journal, activeSnapshot); id != "" {
 				// applyResponse already persisted the full command and admission order.
-				if cmd := dispatchCommand(s.State.Journal[id]); cmd.Kind == "pool-join" {
+				if cmd := dispatchCommand(s.State.Journal[id], s.State.Journal); snapshotCommand(cmd.Kind) {
+					activeSnapshot = id
+					identity := copyState(s.State)
+					runWork.Add(1)
+					go func() {
+						defer runWork.Done()
+						result, workErr := executeStoppedSnapshot(probeCtx, s.dir, identity, cmd)
+						select {
+						case completed <- managedCompletion{result: result, err: workErr, background: true}:
+						case <-probeCtx.Done():
+						}
+					}()
+				} else if cmd.Kind == "pool-join" {
 					if err = joinPool(id, cmd); err != nil {
 						return err
 					}
@@ -1067,7 +1124,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}
 		// Re-attempt a persisted staged join after a restart, a reboot or a Controller
 		// outage: the join finishes with no Controller connection at all.
-		if !joined {
+		if !joined && !hasUnsettledSnapshot(s.State.Journal, "") && activeSnapshot == "" {
 			resumePoolJoin()
 		}
 		if disconnected {
@@ -1091,11 +1148,29 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		case <-ctx.Done():
 			return nil
 		case done := <-completed:
+			wasSnapshot := done.background && done.result.OperationID == activeSnapshot
 			active, err = completeManagedCommand(s, active, done, cfg.history)
 			if err != nil {
 				return err
 			}
+			if wasSnapshot {
+				entry := s.State.Journal[done.result.OperationID]
+				if entry.Status != "pending" && entry.Status != "needs_attention" {
+					activeSnapshot = ""
+				}
+			}
 			m.Tick(probeCtx)
+		case request := <-cfg.SnapshotRequests:
+			response := acceptSnapshotRequest(ctx, s, request)
+			var diskError persistenceError
+			if errors.As(response.Err, &diskError) {
+				return diskError
+			}
+			select {
+			case request.Reply <- response:
+			case <-ctx.Done():
+				return nil
+			}
 		case <-ticker.C:
 		}
 	}
@@ -1158,10 +1233,65 @@ func resultError(detail string) string {
 
 // Admission order survives restarts and wall-clock adjustments. Older entries have no
 // order, so drain those first using their original receipt time and a stable tie-break.
-func nextManagedCommand(journal map[string]JournalEntry) string {
+func nextManagedCommand(journal map[string]JournalEntry, activeSnapshot string) string {
 	oldest := ""
+	oldestSnapshotHeal := ""
+	blockJoin := activeSnapshot != "" || hasUnsettledSnapshot(journal, "")
 	for id, entry := range journal {
-		if entry.Status != "pending" || entry.Command == nil || !managedCommand(entry.Command.Kind) {
+		if entry.Command == nil || !managedCommand(entry.Command.Kind) {
+			continue
+		}
+		snapshotHeal := entry.Status == "needs_attention" && snapshotCommand(entry.Command.Kind)
+		if snapshotHeal {
+			if activeSnapshot != "" && id != activeSnapshot {
+				continue
+			}
+		} else if entry.Status != "pending" {
+			continue
+		}
+		if snapshotCommand(entry.Command.Kind) && activeSnapshot != "" {
+			// Keep the in-flight snapshot exclusive; only re-enter it when it needs attention.
+			if id != activeSnapshot || entry.Status != "needs_attention" {
+				continue
+			}
+		}
+		if entry.Command.Kind == "pool-join" && blockJoin {
+			continue
+		}
+		if vmID := managedCommandVMID(entry.Command); vmID != "" {
+			emergency := entry.Command.Power != nil && (entry.Command.Power.Action == "shutdown" || entry.Command.Power.Action == "force-stop")
+			if !emergency && !snapshotCommand(entry.Command.Kind) && hasUnsettledSnapshot(journal, vmID) {
+				continue
+			}
+		}
+		if entry.Command.Power != nil {
+			power := entry.Command.Power
+			emergency := power.Action == "shutdown" || power.Action == "force-stop"
+			blocked := false
+			for _, predecessorID := range []string{entry.AfterOperationID, power.AfterOperationID} {
+				if predecessorID == "" {
+					continue
+				}
+				before := journal[predecessorID]
+				if before.Command == nil || before.Status != "pending" && before.Status != "needs_attention" {
+					continue
+				}
+				if emergency && snapshotCommand(before.Command.Kind) {
+					continue
+				}
+				blocked = true
+				break
+			}
+			if blocked {
+				continue
+			}
+		}
+		if snapshotHeal {
+			old := journal[oldestSnapshotHeal]
+			if oldestSnapshotHeal == "" || entry.Order < old.Order || entry.Order == old.Order &&
+				(entry.RequestedAt.Before(old.RequestedAt) || entry.RequestedAt.Equal(old.RequestedAt) && id < oldestSnapshotHeal) {
+				oldestSnapshotHeal = id
+			}
 			continue
 		}
 		old := journal[oldest]
@@ -1170,7 +1300,28 @@ func nextManagedCommand(journal map[string]JournalEntry) string {
 			oldest = id
 		}
 	}
-	return oldest
+	if oldest != "" {
+		return oldest
+	}
+	return oldestSnapshotHeal
+}
+
+func managedCommandVMID(cmd *protocol.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	switch {
+	case cmd.VM != nil:
+		return cmd.VM.ID
+	case cmd.Power != nil:
+		return cmd.Power.VMID
+	case cmd.VMMedia != nil:
+		return cmd.VMMedia.VMID
+	case cmd.Delete != nil:
+		return cmd.Delete.VMID
+	default:
+		return ""
+	}
 }
 
 // The Core queue is inventory too: a replacement Controller can display accepted work
@@ -1229,19 +1380,10 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 func pendingVMCommand(journal map[string]JournalEntry, vmID string) string {
 	latest := ""
 	for id, entry := range journal {
-		if entry.Status != "pending" || entry.Command == nil {
+		if entry.Command == nil || (entry.Status != "pending" && !(entry.Status == "needs_attention" && snapshotCommand(entry.Command.Kind))) {
 			continue
 		}
-		cmd := entry.Command
-		target := ""
-		switch {
-		case cmd.VM != nil:
-			target = cmd.VM.ID
-		case cmd.Power != nil:
-			target = cmd.Power.VMID
-		case cmd.VMMedia != nil:
-			target = cmd.VMMedia.VMID
-		}
+		target := managedCommandVMID(entry.Command)
 		old := journal[latest]
 		if target == vmID && (latest == "" || entry.Order > old.Order || entry.Order == old.Order &&
 			(entry.RequestedAt.After(old.RequestedAt) || entry.RequestedAt.Equal(old.RequestedAt) && id > latest)) {
@@ -1251,11 +1393,39 @@ func pendingVMCommand(journal map[string]JournalEntry, vmID string) string {
 	return latest
 }
 
-func dispatchCommand(entry JournalEntry) protocol.Command {
+func pendingVMDefinitionCommand(journal map[string]JournalEntry, vmID string) string {
+	latest := ""
+	for id, entry := range journal {
+		if entry.Command == nil || entry.Status != "pending" || !vmDefinitionCommand(entry.Command.Kind) {
+			continue
+		}
+		if managedCommandVMID(entry.Command) != vmID {
+			continue
+		}
+		old := journal[latest]
+		if latest == "" || entry.Order > old.Order || entry.Order == old.Order &&
+			(entry.RequestedAt.After(old.RequestedAt) || entry.RequestedAt.Equal(old.RequestedAt) && id > latest) {
+			latest = id
+		}
+	}
+	return latest
+}
+
+func vmDefinitionCommand(kind string) bool {
+	return kind == "vm-update" || kind == "vm-delete" || kind == "vm-media" || kind == "vm-create"
+}
+
+func dispatchCommand(entry JournalEntry, journal map[string]JournalEntry) protocol.Command {
 	cmd := *entry.Command
-	if cmd.Power != nil && cmd.Power.AfterOperationID == "" && entry.AfterOperationID != "" {
+	if cmd.Power != nil {
 		power := *cmd.Power
-		power.AfterOperationID = entry.AfterOperationID
+		if power.AfterOperationID == "" {
+			power.AfterOperationID = entry.AfterOperationID
+		} else if power.Action == "shutdown" || power.Action == "force-stop" {
+			if before := journal[power.AfterOperationID]; before.Command != nil && snapshotCommand(before.Command.Kind) {
+				power.AfterOperationID = ""
+			}
+		}
 		cmd.Power = &power
 	}
 	return cmd

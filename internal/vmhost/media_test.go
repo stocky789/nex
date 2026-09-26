@@ -4,12 +4,177 @@ package vmhost
 import (
 	"context"
 	"encoding/json"
-	"nex.local/nex/internal/protocol"
+	"encoding/xml"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"nex.local/nex/internal/protocol"
 )
+
+func settledMediaProjectionFixture(t *testing.T) (*ManagedEngine, managedJournal, []byte) {
+	t.Helper()
+	e, completed, _ := managedSnapshotRevertFixture(t)
+	vm := completed.SnapshotRevert.ResultSpec
+	base, err := testDomainXML(vm, nil, completed.CurrentProjection.Disks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, mediaTarget, driversTarget := managedTargets(vm)
+	completed.SnapshotRevert.ObservedDomain = append([]byte(nil), base...)
+	completed.SnapshotRevert.ObservedAfter.DefinitionSHA256, err = snapshotDefinitionDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed.CurrentProjection.Domain = append([]byte(nil), base...)
+	completed.CurrentProjection.Targets = targets
+	completed.CurrentProjection.MediaTarget = mediaTarget
+	completed.CurrentProjection.DriversTarget = driversTarget
+	completed.Targets, completed.MediaTarget, completed.DriversTarget = targets, mediaTarget, driversTarget
+	completed.Domain = append([]byte(nil), base...)
+	completed.RecoverySettled = true
+	completed.Result.Status = "succeeded"
+	if err := e.saveSnapshotJournal(completed); err != nil {
+		t.Fatal(err)
+	}
+	return e, completed, base
+}
+
+func TestSettledSnapshotMediaProjectionTracksOnlyVerifiedPersistentChange(t *testing.T) {
+	body, media := managedTestISO()
+	for _, tc := range []struct {
+		name      string
+		fail      bool
+		wrongPath bool
+		wantOK    bool
+	}{
+		{name: "verified insert", wantOK: true},
+		{name: "native refusal", fail: true},
+		{name: "wrong persistent tray", wrongPath: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, completed, beforeXML := settledMediaProjectionFixture(t)
+			vm := completed.SnapshotRevert.ResultSpec
+			isoDir := t.TempDir()
+			isoPath := filepath.Join(isoDir, "media-1.iso")
+			if err := os.WriteFile(isoPath, body, 0444); err != nil {
+				t.Fatal(err)
+			}
+			media.PoolID, media.HostID = vm.PoolID, vm.HostID
+			for _, entry := range []managedJournal{
+				{Command: protocol.Command{OperationID: "media-storage", Kind: "storage-register", Storage: &protocol.StorageRegistration{ID: media.StorageID, PoolID: vm.PoolID, HostID: vm.HostID, Name: "ISO storage", Path: isoDir}}, Result: protocol.Result{OperationID: "media-storage", Status: "succeeded"}},
+				{Command: protocol.Command{OperationID: "media-import", Kind: "iso-import", Media: &media}, Result: protocol.Result{OperationID: "media-import", Status: "succeeded"}, MediaPath: isoPath},
+			} {
+				if err := e.save(entry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var afterDomain managedDomain
+			if err := xml.Unmarshal(beforeXML, &afterDomain); err != nil {
+				t.Fatal(err)
+			}
+			mediaTarget := completed.CurrentProjection.MediaTarget
+			for i := range afterDomain.Devices.Disks {
+				if afterDomain.Devices.Disks[i].Target.Dev == mediaTarget {
+					afterDomain.Devices.Disks[i].Source = &sourceXML{File: isoPath}
+				}
+			}
+			if tc.wrongPath {
+				for i := range afterDomain.Devices.Disks {
+					if afterDomain.Devices.Disks[i].Target.Dev == mediaTarget {
+						afterDomain.Devices.Disks[i].Source.File = filepath.Join(isoDir, "wrong.iso")
+					}
+				}
+			}
+			afterXML, err := xml.Marshal(afterDomain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeFile, afterFile, changedFile := filepath.Join(t.TempDir(), "before.xml"), filepath.Join(t.TempDir(), "after.xml"), filepath.Join(t.TempDir(), "changed")
+			for path, data := range map[string][]byte{beforeFile: beforeXML, afterFile: afterXML} {
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fakeCommand(t, "virsh", `case "$3" in
+domstate) echo 'shut off';;
+dumpxml) if [ -f "$VMHOST_MEDIA_CHANGED" ]; then cat "$VMHOST_MEDIA_AFTER"; else cat "$VMHOST_MEDIA_BEFORE"; fi;;
+change-media) [ "$VMHOST_MEDIA_FAIL" = 1 ] && exit 1; touch "$VMHOST_MEDIA_CHANGED";;
+*) exit 2;;
+esac`)
+			t.Setenv("VMHOST_MEDIA_BEFORE", beforeFile)
+			t.Setenv("VMHOST_MEDIA_AFTER", afterFile)
+			t.Setenv("VMHOST_MEDIA_CHANGED", changedFile)
+			if tc.fail {
+				t.Setenv("VMHOST_MEDIA_FAIL", "1")
+			}
+			command := protocol.Command{OperationID: "media-change", Kind: "vm-media", VMMedia: &protocol.VMMediaRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "insert", MediaID: media.ID}}
+			result, err := e.Execute(context.Background(), command, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.Status == "succeeded") != tc.wantOK {
+				t.Fatalf("media result=%+v", result)
+			}
+			js, err := e.journals()
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := managedCurrent(js, vm.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantOK {
+				// The immutable native receipt remains the original empty tray; only the
+				// current projection records the verified persistent ISO path.
+				if current.Command.VM.MediaID != media.ID || reflect.DeepEqual(completed.SnapshotRevert.ObservedDomain, current.Domain) {
+					t.Fatalf("current projection did not track media change: spec=%+v", current.Command.VM)
+				}
+				if err := validateManagedDefinition(current.Domain, current.Domain); err != nil {
+					t.Fatalf("next definition preflight rejects media projection: %v", err)
+				}
+				if !reflect.DeepEqual(completed.SnapshotRevert.ObservedDomain, beforeXML) {
+					t.Fatal("fixture receipt was unexpectedly mutated")
+				}
+				var nextDomain managedDomain
+				if err := xml.Unmarshal(current.Domain, &nextDomain); err != nil {
+					t.Fatal(err)
+				}
+				nextHead := filepath.Join(t.TempDir(), "next-snapshot-head.qcow2")
+				for i := range nextDomain.Devices.Disks {
+					if nextDomain.Devices.Disks[i].Target.Dev == current.Targets[0] {
+						nextDomain.Devices.Disks[i].Source.File = nextHead
+					}
+				}
+				nextXML, err := xml.Marshal(nextDomain)
+				if err != nil {
+					t.Fatal(err)
+				}
+				observed := managedSnapshotObservation{Disks: []managedSnapshotDiskObservation{{
+					Target: current.Targets[0], Source: nextHead, Layers: []string{nextHead, current.Disks[0]},
+				}}}
+				if err = e.updateSnapshotCurrentProjection(context.Background(), managedJournal{
+					Command:  protocol.Command{OperationID: "next-snapshot", Kind: "snapshot-create", VM: current.Command.VM},
+					Snapshot: &managedSnapshotRecord{ObservedAfter: &observed},
+				}, nextXML); err != nil {
+					t.Fatalf("next snapshot could not advance current projection: %v", err)
+				}
+				afterCapture, err := e.journals()
+				if err != nil {
+					t.Fatal(err)
+				}
+				advanced, err := managedCurrent(afterCapture, vm.ID)
+				if err != nil || advanced.Disks[0] != nextHead {
+					t.Fatalf("next snapshot projection was not readable: disk=%v err=%v", advanced.Disks, err)
+				}
+			} else if !reflect.DeepEqual(current.Domain, beforeXML) || !reflect.DeepEqual(*current.Command.VM, completed.SnapshotRevert.ResultSpec) {
+				t.Fatalf("failed media change altered current projection: %+v", current.Command.VM)
+			}
+		})
+	}
+}
 
 func TestManagedMediaChange(t *testing.T) {
 	dir := t.TempDir()
@@ -380,5 +545,71 @@ esac`)
 	got, _ := os.ReadFile(log)
 	if !strings.Contains(string(got), isoPath) {
 		t.Fatalf("insert must attach the library ISO path: %q", got)
+	}
+}
+
+func TestSettledSnapshotProjectionAllowsLeafDeleteMediaRestore(t *testing.T) {
+	e, completed, beforeXML := settledMediaProjectionFixture(t)
+	isoDir := t.TempDir()
+	isoPath := filepath.Join(isoDir, "6c7672d7a6ddf027cb5a7a17db70d16f7b70c16292be1284858a3eadea87d731.iso")
+	overlayPath := strings.TrimSuffix(isoPath, ".iso") + ".48d7f426-6e40-454d-b56d-54a91446c5d2"
+	mediaTarget := completed.CurrentProjection.MediaTarget
+
+	var observed managedDomain
+	if err := xml.Unmarshal(beforeXML, &observed); err != nil {
+		t.Fatal(err)
+	}
+	for i := range observed.Devices.Disks {
+		if observed.Devices.Disks[i].Target.Dev == mediaTarget {
+			observed.Devices.Disks[i].Driver.Type = "qcow2"
+			observed.Devices.Disks[i].Source = &sourceXML{File: overlayPath}
+		}
+	}
+	observedXML, err := xml.Marshal(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := observed
+	for i := range projected.Devices.Disks {
+		if projected.Devices.Disks[i].Target.Dev == mediaTarget {
+			projected.Devices.Disks[i].Driver.Type = "raw"
+			projected.Devices.Disks[i].Source = &sourceXML{File: isoPath}
+		}
+	}
+	projectedXML, err := xml.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed.SnapshotRevert.ObservedDomain = append([]byte(nil), observedXML...)
+	completed.CurrentProjection.Domain = append([]byte(nil), projectedXML...)
+	if err := e.saveSnapshotJournal(completed); err != nil {
+		t.Fatal(err)
+	}
+	if !validSettledSnapshotProjection(completed) {
+		t.Fatal("leaf-delete ISO restore must keep the settled revert projection readable")
+	}
+	if _, err := e.journals(); err != nil {
+		t.Fatalf("journals rejected leaf-delete media restore projection: %v", err)
+	}
+
+	wrong := completed
+	proj := *wrong.CurrentProjection
+	wrong.CurrentProjection = &proj
+	var broken managedDomain
+	if err := xml.Unmarshal(projectedXML, &broken); err != nil {
+		t.Fatal(err)
+	}
+	for i := range broken.Devices.Disks {
+		if broken.Devices.Disks[i].Target.Dev == mediaTarget {
+			broken.Devices.Disks[i].Source.File = filepath.Join(isoDir, "other.iso")
+		}
+	}
+	brokenXML, err := xml.Marshal(broken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong.CurrentProjection.Domain = brokenXML
+	if validSettledSnapshotProjection(wrong) {
+		t.Fatal("accepted an unrelated ISO path under an unchanged media id")
 	}
 }

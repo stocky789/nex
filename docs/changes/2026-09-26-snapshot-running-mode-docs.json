@@ -1,0 +1,47 @@
+{
+  "summary": "Document S3 running snapshot modes in API, OpenAPI semantics, guide and changelog after disposable lab crash/quiesced success plus UEFI and missing-agent refusals.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/guide/vm-snapshots.md",
+    "docs/guide/README.md",
+    "docs/qa/2026-09-26-recovery-snapshot-running-mode.md",
+    "docs/changes/2026-09-26-snapshot-running-mode-docs.json",
+    "CHANGELOG.md",
+    "docs/api/index.html"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Running create modes and refusal limits are now part of the operator snapshot workflow.",
+    "pages": [
+      "docs/guide/vm-snapshots.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Controller and host-local create bodies document optional mode; OpenAPI create semantics cover crash/quiesced and UEFI refusal.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S3 running create has crash and quiesced lab evidence plus UEFI refusal; Phase 5 checklist items (freeze/thaw interruption, browser walkthrough, independent review) remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Owner managed snapshot journals and master pool-vms.json catalog; mode remains part of the create request bound into the journalled command.",
+    "reason": "Controller only queues create requests and adopts host-reported outcomes."
+  },
+  "verification": {
+    "method": "Disposable lab Controller create: BIOS crash succeeded; UEFI running crash refused; quiesced failed without guest agent; managed BIOS quiesced succeeded with agent. Documentation gate passed for the worktree.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-running-mode.md",
+      "docs/API.md",
+      "docs/guide/vm-snapshots.md"
+    ]
+  }
+}

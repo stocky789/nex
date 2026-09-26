@@ -1,0 +1,62 @@
+{
+  "summary": "Reconcile Phase 5/6 status and preserve an honest session handoff, including incomplete BUG-0647 corrections; neither phase is complete.",
+  "paths": [
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/guide/vm-snapshots.md",
+    "docs/BUG_LEDGER.md",
+    "docs/LICENSING.md",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_revert.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/media_test.go",
+    "packaging/libvirt/preserve-readonly-revert-media.patch",
+    "packaging/libvirt/build-matched-libvirt.sh",
+    "installer/build.sh",
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py",
+    "tests/test_build_source.py",
+    "tests/test_netinst.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Clarifies stopped capture evidence and unresolved native revert; Controller controls and complete lifecycle remain unavailable.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Documents existing authenticated Core snapshot admission/status and reported results. Unfinished executor/media corrections use existing contracts and introduce no new client or Controller API. Native libvirt patch/build wiring has no Nex API change.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Recovery moves from Next to In testing; bounded lab results are separated from unfinished Phase 5 and unimplemented Phase 6 product workflows.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "record": "Existing executing-Core managed snapshot/revert journals and current VM projection, native libvirt metadata, and master pool-vms.json catalog/reservation with signed member replicas. A fresh Controller adopts authoritative inventory/results through authenticated host APIs.",
+    "reason": "The unfinished runtime corrections retain Core-owned recovery state. Documentation and roadmap add no durable product state or Controller-owned pool state."
+  },
+  "verification": {
+    "method": "Inspected recorded r9 evidence and obtained bounded worker checkpoints. Current vmhost compile-only command passes; existing revert tests passed in the owner checkpoint. Root reran focused media/projection tests: the new verified-insert subtest fails before intended behavior, so this batch is not accepted. Root reran Python libvirt/build/netinst selection: 35 tests, 34 passed and one existing skip. New native verifier remains unwired; no replay regression, +nex4 build/native run, deployment or full current-tree suite is claimed. Documentation/privacy/link and independent checkpoint review results are recorded in the handoff; website rendering was not run because dependencies are absent.",
+    "evidence": [
+      "docs/plans/2026-09-26-recovery-session-handoff.md",
+      "docs/qa/2026-09-26-stopped-revert-native-validation.md",
+      "docs/BUG_LEDGER.md",
+      "internal/vmhost/media_test.go",
+      "tests/test_libvirt_recovery_ci.py"
+    ]
+  }
+}

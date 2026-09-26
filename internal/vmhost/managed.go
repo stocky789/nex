@@ -37,6 +37,16 @@ type ManagedEngine struct {
 	// observe verifies an interrupted creation or edit in the given libvirt state; nil selects
 	// observeDefinition (tests stub it).
 	observe func(context.Context, managedJournal, string) error
+	// observeChains is injectable for lifecycle tests that deliberately model libvirt without
+	// qemu-img; production leaves it nil and reads the full native chain.
+	observeChains func(context.Context, []managedJournal, managedJournal) ([][]string, error)
+}
+
+func (e *ManagedEngine) diskChains(ctx context.Context, js []managedJournal, j managedJournal) ([][]string, error) {
+	if e.observeChains != nil {
+		return e.observeChains(ctx, js, j)
+	}
+	return verifyManagedDiskChains(ctx, js, j)
 }
 
 // VMUpdateEvidence is read-only proof that a particular successful vm-update
@@ -48,6 +58,14 @@ type VMUpdateEvidence struct {
 	Status      string
 	Previous    protocol.VMCreateSpec
 	Current     protocol.VMCreateSpec
+}
+
+// ResourceRemovalReconcile is the exact durable command selected for a safe
+// pool-authorized retry. It intentionally omits the journal's local error text.
+type ResourceRemovalReconcile struct {
+	Command protocol.Command
+	Result  protocol.Result
+	Stage   string
 }
 
 func NewManaged(stateDir string) *ManagedEngine {
@@ -72,6 +90,13 @@ func (e *ManagedEngine) observer() func(context.Context, managedJournal, string)
 // startInterrupted is the recorded start outcome when the process died between persisting
 // stage "starting" and recording libvirt's answer, and the domain is not running now.
 const startInterrupted = "interrupted before the automatic start completed"
+const startOutcomeUncertain = "libvirt did not confirm the start request; inspect the VM on its host"
+
+const (
+	startOutcomeStarted             = "started"
+	startOutcomeFailedBeforeRequest = "failed-before-request"
+	startOutcomeUncertainRequest    = "uncertain"
+)
 
 // errPowerRequestUncertain marks a failure after libvirt received a power request.
 // Preflight state validation stays terminal; after the request crosses the process
@@ -95,19 +120,33 @@ func (e powerRequestError) Error() string {
 func (e powerRequestError) Unwrap() []error { return []error{errPowerRequestUncertain, e.cause} }
 
 type managedJournal struct {
-	Command         protocol.Command `json:"command"`
-	Result          protocol.Result  `json:"result"`
-	Stage           string           `json:"stage"`
-	Disks           []string         `json:"disks,omitempty"`
-	MediaPath       string           `json:"media_path,omitempty"`
-	DownloadedMedia *protocol.Media  `json:"downloaded_media,omitempty"`
+	Command             protocol.Command                    `json:"command"`
+	Result              protocol.Result                     `json:"result"`
+	Stage               string                              `json:"stage"`
+	RecoveryReservation *protocol.PoolVMRecoveryReservation `json:"recovery_reservation,omitempty"`
+	RecoveryStage       string                              `json:"recovery_stage,omitempty"`
+	RecoveryOutcome     string                              `json:"recovery_outcome,omitempty"`
+	RecoverySettled     bool                                `json:"recovery_settled,omitempty"`
+	Snapshot            *managedSnapshotRecord              `json:"snapshot,omitempty"`
+	SnapshotRevert      *managedSnapshotRevertRecord        `json:"snapshot_revert,omitempty"`
+	SnapshotDelete      *managedSnapshotDeleteRecord        `json:"snapshot_delete,omitempty"`
+	CurrentProjection   *managedSnapshotCurrentProjection   `json:"current_projection,omitempty"`
+	projectionView      bool                                `json:"-"`
+	Disks               []string                            `json:"disks,omitempty"`
+	// DiskChains is ordered with Disks; each chain is its active head followed by every
+	// backing image. Paths stay in this host journal and never cross the Core API.
+	DiskChains      [][]string      `json:"disk_chains,omitempty"`
+	MediaPath       string          `json:"media_path,omitempty"`
+	DownloadedMedia *protocol.Media `json:"downloaded_media,omitempty"`
 	// AppliedStorage is Core's verified projection of a storage command. Command remains the
 	// original request so idempotent replay compares exactly what the caller sent.
 	AppliedStorage *protocol.StorageRegistration `json:"applied_storage,omitempty"`
 	Domain         []byte                        `json:"domain,omitempty"`
-	// Start records the outcome of start_after_create: "started", or why it did not start.
-	// It is recorded in the same entry so a retried or reconciled creation never starts twice.
-	Start string `json:"start,omitempty"`
+	// Start and StartOutcome record the automatic-start result. The enum preserves whether a
+	// failure happened before libvirt received the request; Start remains the operator-facing
+	// explanation and keeps older journal readers compatible.
+	Start        string `json:"start,omitempty"`
+	StartOutcome string `json:"start_outcome,omitempty"`
 	// Targets are the disks' libvirt target names, positional with Disks; they are assigned
 	// once and kept across edits so a guest never sees its disks renamed. MediaTarget and
 	// DriversTarget are the install and driver-disc CD drives every VM carries. An entry
@@ -164,11 +203,147 @@ type ejectCleanupReapply struct {
 }
 
 func (e *ManagedEngine) save(j managedJournal) error {
+	if j.projectionView {
+		path := filepath.Join(e.stateDir, j.Command.OperationID+".json")
+		current, err := e.readJournal(filepath.Base(path))
+		if err != nil || current.Command.Kind != "snapshot-revert" || !current.RecoverySettled || current.RecoveryStage != "completed" || current.SnapshotRevert == nil || j.Command.VM == nil {
+			return errors.New("snapshot revert current projection owner changed")
+		}
+		current.CurrentProjection = &managedSnapshotCurrentProjection{
+			Spec: *j.Command.VM, Disks: append([]string(nil), j.Disks...),
+			DiskChains: cloneDiskChains(j.DiskChains), Domain: append([]byte(nil), j.Domain...),
+			Targets: append([]string(nil), j.Targets...), MediaTarget: j.MediaTarget, DriversTarget: j.DriversTarget,
+		}
+		b, err := json.Marshal(current)
+		if err != nil {
+			return err
+		}
+		return atomicWrite(path, b)
+	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
 	return atomicWrite(filepath.Join(e.stateDir, j.Command.OperationID+".json"), b)
+}
+
+type managedSnapshotCurrentProjection struct {
+	Spec          protocol.VMCreateSpec `json:"spec"`
+	Disks         []string              `json:"disks"`
+	DiskChains    [][]string            `json:"disk_chains"`
+	Domain        []byte                `json:"domain"`
+	Targets       []string              `json:"targets"`
+	MediaTarget   string                `json:"media_target"`
+	DriversTarget string                `json:"drivers_target"`
+}
+
+// validSettledSnapshotProjection keeps the revert receipt immutable while allowing later
+// snapshot captures to advance writable disk heads and media operations to change CD sources.
+// Other VM settings and domain devices must still match the native revert observation.
+func validSettledSnapshotProjection(j managedJournal) bool {
+	if j.SnapshotRevert == nil || j.CurrentProjection == nil || j.RecoveryStage != "completed" {
+		return false
+	}
+	p := j.CurrentProjection
+	if !j.RecoverySettled {
+		return reflect.DeepEqual(p.Spec, j.SnapshotRevert.ResultSpec) && reflect.DeepEqual(p.Domain, j.SnapshotRevert.ObservedDomain)
+	}
+	want := j.SnapshotRevert.ResultSpec
+	want.MediaID, want.DriversMediaID = p.Spec.MediaID, p.Spec.DriversMediaID
+	if !reflect.DeepEqual(want, p.Spec) {
+		return false
+	}
+	var observed, projected managedDomain
+	if xml.Unmarshal(j.SnapshotRevert.ObservedDomain, &observed) != nil || xml.Unmarshal(p.Domain, &projected) != nil {
+		return false
+	}
+	if verifyManagedDiskHeads(projected, p.Targets, p.Disks) != nil {
+		return false
+	}
+	for _, disk := range observed.Devices.Disks {
+		if disk.Device != "cdrom" {
+			continue
+		}
+		mediaUnchanged := disk.Target.Dev == p.MediaTarget && p.Spec.MediaID == j.SnapshotRevert.ResultSpec.MediaID ||
+			disk.Target.Dev == p.DriversTarget && p.Spec.DriversMediaID == j.SnapshotRevert.ResultSpec.DriversMediaID ||
+			disk.Target.Dev != p.MediaTarget && disk.Target.Dev != p.DriversTarget
+		got := cdromMediaForTarget(projected.Devices.Disks, disk.Target.Dev)
+		want := cdromMedia(disk)
+		// Same MediaID may still advance from a libvirt-generated overlay back to the
+		// published ISO after a current-leaf snapshot delete consolidates media.
+		if mediaUnchanged && got != want && !cdromRestoredFromOverlay(want, got) {
+			return false
+		}
+	}
+	clearCurrentProjectionSources(observed.Devices.Disks)
+	clearCurrentProjectionSources(projected.Devices.Disks)
+	return reflect.DeepEqual(observed, projected)
+}
+
+func managedDiskMatchesOwnership(got, want managedDisk) bool {
+	if got.Type != want.Type || got.Device != want.Device || got.Driver.IOThread != want.Driver.IOThread ||
+		(got.Readonly != nil) != (want.Readonly != nil) || got.Shareable != nil ||
+		(got.Source != nil && (got.Source.Dev != "" || got.Source.Protocol != "")) ||
+		got.Target != want.Target || bootOrder(got.Boot) != bootOrder(want.Boot) {
+		return false
+	}
+	gotFile, wantFile := diskFile(got), diskFile(want)
+	if gotFile == wantFile {
+		// Libvirt may report raw for a published ISO while a retained projection still
+		// records qcow2 from a temporary media overlay (or the reverse after restore).
+		if got.Device == "cdrom" {
+			return true
+		}
+		return got.Driver.Type == want.Driver.Type
+	}
+	if got.Device == "cdrom" && want.Device == "cdrom" &&
+		(cdromRestoredFromOverlay(gotFile, wantFile) || cdromRestoredFromOverlay(wantFile, gotFile)) {
+		return true
+	}
+	return false
+}
+
+// cdromRestoredFromOverlay reports the published ISO path after a leaf delete restores
+// media from a temporary qcow2 overlay named <iso-stem>.<uuid>.
+func cdromRestoredFromOverlay(observed, projected string) bool {
+	if observed == "" || projected == "" || observed == projected || !strings.HasSuffix(projected, ".iso") {
+		return false
+	}
+	stem := strings.TrimSuffix(projected, ".iso")
+	return strings.HasPrefix(observed, stem+".") && !strings.HasSuffix(observed, ".iso")
+}
+
+func cdromMediaForTarget(disks []managedDisk, target string) string {
+	for _, disk := range disks {
+		if disk.Device == "cdrom" && disk.Target.Dev == target {
+			return cdromMedia(disk)
+		}
+	}
+	return ""
+}
+
+func clearCurrentProjectionSources(disks []managedDisk) {
+	for i := range disks {
+		if disks[i].Device == "cdrom" {
+			// Overlay restore may keep or rewrite driver type (qcow2 vs raw) for the same tray.
+			disks[i].Driver.Type = ""
+		}
+		if disks[i].Source == nil || disks[i].Device != "cdrom" && (disks[i].Device != "disk" || disks[i].Readonly != nil) {
+			continue
+		}
+		disks[i].Source.File = ""
+		if *disks[i].Source == (sourceXML{}) {
+			disks[i].Source = nil
+		}
+	}
+}
+
+func cloneDiskChains(chains [][]string) [][]string {
+	cloned := make([][]string, len(chains))
+	for i := range chains {
+		cloned[i] = append([]string(nil), chains[i]...)
+	}
+	return cloned
 }
 func (e *ManagedEngine) journals() ([]managedJournal, error) {
 	entries, err := os.ReadDir(e.stateDir)
@@ -342,6 +517,66 @@ func (e *ManagedEngine) JournaledCommand(operationID string) (protocol.Command, 
 	return protocol.Command{}, false
 }
 
+// CreateStartOutcome returns the exact automatic-start result recorded with a
+// successful vm-create. A missing or incomplete journal is not evidence that
+// the start failed, so callers must leave the owner transition unresolved.
+func (e *ManagedEngine) CreateStartOutcome(ctx context.Context, operationID string) (protocol.ManagedOutcome, bool, error) {
+	if !identifier.MatchString(operationID) {
+		return protocol.ManagedOutcome{}, false, errors.New("invalid VM create operation ID")
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return protocol.ManagedOutcome{}, false, err
+	}
+	defer unlock(lock)
+	j, err := e.readJournal(operationID + ".json")
+	if errors.Is(err, os.ErrNotExist) {
+		return protocol.ManagedOutcome{}, false, nil
+	}
+	if err != nil {
+		return protocol.ManagedOutcome{}, false, err
+	}
+	outcome, ok := managedCreateStartOutcome(j)
+	return outcome, ok, nil
+}
+
+func managedCreateStartOutcome(j managedJournal) (protocol.ManagedOutcome, bool) {
+	c := j.Command
+	if c.Kind != "vm-create" || c.VM == nil || !c.VM.StartAfterCreate ||
+		j.Result.Status != "succeeded" || j.Stage != "started" || j.Start == "" {
+		return protocol.ManagedOutcome{}, false
+	}
+	status := "needs_attention"
+	switch j.StartOutcome {
+	case startOutcomeStarted:
+		if j.Start == "started" {
+			status = "succeeded"
+		}
+	case startOutcomeFailedBeforeRequest:
+		status = "failed"
+	case startOutcomeUncertainRequest:
+		status = "needs_attention"
+	default:
+		// Older journals only stored operator-facing prose. Except for the exact
+		// success marker, that text cannot prove whether libvirt received the request.
+		if j.StartOutcome == "" && j.Start == "started" {
+			status = "succeeded"
+		}
+	}
+	errorText := ""
+	if status != "succeeded" {
+		errorText = "VM created but not started: " + j.Start
+	}
+	return protocol.ManagedOutcome{
+		OperationID: c.OperationID + ":start",
+		Kind:        "vm-power",
+		ID:          c.VM.ID,
+		Name:        c.VM.Name,
+		Status:      status,
+		Error:       errorText,
+	}, true
+}
+
 // RecordRefusal journals a command refused before it reached Execute as failed while still
 // validating, exactly as Execute records its own refusals. The entry is the durable proof a
 // pool master needs to release a reservation it took for this operation, and a redelivery of
@@ -468,6 +703,173 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 		cmd.Media = &resolved
 		if !reflect.DeepEqual(resolved, *j.DownloadedMedia) || validateManaged(cmd) != nil {
 			return j, errors.New("invalid downloaded ISO metadata")
+		}
+	}
+	if j.Command.Kind == "snapshot-create" {
+		if j.Snapshot == nil || j.SnapshotRevert != nil || j.SnapshotDelete != nil || j.Command.Snapshot == nil || j.Snapshot.SnapshotID != j.Command.OperationID ||
+			j.Snapshot.Name != j.Command.Snapshot.Name || j.Snapshot.Description != j.Command.Snapshot.Description ||
+			j.Snapshot.CreatedAt.IsZero() {
+			return j, errors.New("invalid managed snapshot record")
+		}
+		if j.RecoveryStage == "preflight" {
+			if j.RecoveryReservation != nil || j.RecoveryOutcome != "" || j.RecoverySettled || j.Result.Status != "pending" ||
+				!reflect.DeepEqual(j.Snapshot.Before, managedSnapshotObservation{}) || !reflect.DeepEqual(j.Snapshot.ExpectedAfter, managedSnapshotObservation{}) ||
+				j.Snapshot.ObservedAfter != nil || len(j.Snapshot.Firmware) != 0 || len(j.Snapshot.StorageDependencies) != 0 || j.Snapshot.Dependencies != nil {
+				return j, errors.New("managed snapshot preflight record contains execution state")
+			}
+		} else {
+			if validateManagedSnapshotRecord(j.Command.OperationID, *j.Snapshot) != nil {
+				return j, errors.New("invalid managed snapshot record")
+			}
+			digest, err := managedSnapshotIntentDigest(j.Command, *j.Snapshot)
+			if err != nil || j.RecoveryReservation != nil && j.RecoveryReservation.IntentSHA256 != digest {
+				return j, errors.New("managed snapshot intent differs from its recovery reservation")
+			}
+		}
+	} else if j.Command.Kind == "snapshot-revert" {
+		if j.Snapshot != nil || j.SnapshotDelete != nil || j.SnapshotRevert == nil {
+			return j, errors.New("invalid managed snapshot revert record")
+		}
+		if j.RecoveryStage == "preflight" {
+			if j.RecoveryReservation != nil || j.RecoveryOutcome != "" || j.RecoverySettled || j.Result.Status != "pending" ||
+				j.SnapshotRevert.TargetSnapshotID != j.Command.Snapshot.SnapshotID || j.SnapshotRevert.CreatedAt.IsZero() ||
+				len(j.SnapshotRevert.Before.Disks) != 0 || len(j.SnapshotRevert.Target.Disks) != 0 || len(j.SnapshotRevert.Firmware) != 0 ||
+				len(j.SnapshotRevert.BeforeDomain) != 0 || len(j.SnapshotRevert.TargetDomain) != 0 || j.SnapshotRevert.ObservedAfter != nil {
+				return j, errors.New("managed snapshot revert preflight contains execution state")
+			}
+		} else {
+			if j.SnapshotRevert.TargetSnapshotID != j.Command.Snapshot.SnapshotID || validateManagedSnapshotRevertRecord(j.Command, *j.SnapshotRevert) != nil {
+				return j, errors.New("invalid managed snapshot revert intent")
+			}
+		}
+		if j.RecoveryReservation != nil {
+			if err := validateManagedSnapshotRevertReservation(j.Command, *j.SnapshotRevert, *j.RecoveryReservation); err != nil {
+				return j, err
+			}
+			if j.RecoveryStage != "reserved" && j.RecoveryStage != "native" && j.RecoveryStage != "completed" && j.RecoveryStage != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot revert recovery stage")
+			}
+			if (j.RecoveryStage == "reserved" || j.RecoveryStage == "native") && j.RecoveryOutcome != "" ||
+				j.RecoveryStage == "completed" && j.RecoveryOutcome != "completed" ||
+				j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot revert recovery outcome")
+			}
+			if j.RecoveryStage == "completed" {
+				if j.SnapshotRevert.ObservedAfter == nil || len(j.SnapshotRevert.ObservedDomain) == 0 || j.CurrentProjection == nil ||
+					!validSettledSnapshotProjection(j) {
+					return j, errors.New("completed managed snapshot revert lacks its observed current projection")
+				}
+			} else if j.SnapshotRevert.ObservedAfter != nil || len(j.SnapshotRevert.ObservedDomain) != 0 || j.CurrentProjection != nil {
+				return j, errors.New("incomplete managed snapshot revert contains terminal observation")
+			}
+		} else if j.RecoveryStage != "local-intent" && j.RecoveryStage != "preflight" || j.RecoveryOutcome != "" || j.RecoverySettled {
+			return j, errors.New("managed snapshot revert local intent has invalid reservation state")
+		}
+		if j.RecoverySettled {
+			terminal := j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded" ||
+				j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome == "failed-before-effects" && j.Result.Status == "failed"
+			if j.RecoveryReservation == nil || !terminal {
+				return j, errors.New("managed snapshot revert settlement does not match a terminal outcome")
+			}
+		} else if j.Result.Status != "pending" && j.Result.Status != "needs_attention" {
+			return j, errors.New("unsettled managed snapshot revert has an invalid public result")
+		}
+	} else if j.Command.Kind == "snapshot-delete" {
+		if j.Snapshot != nil || j.SnapshotRevert != nil || j.SnapshotDelete == nil || j.CurrentProjection != nil {
+			return j, errors.New("invalid managed snapshot delete record")
+		}
+		if j.RecoveryStage == "preflight" {
+			if j.RecoveryReservation != nil || j.RecoveryOutcome != "" || j.RecoverySettled || j.Result.Status != "pending" ||
+				j.SnapshotDelete.TargetSnapshotID != j.Command.Snapshot.SnapshotID || j.SnapshotDelete.CreatedAt.IsZero() ||
+				len(j.SnapshotDelete.Before.Disks) != 0 || len(j.SnapshotDelete.TargetOverlays) != 0 || j.SnapshotDelete.ObservedAfter != nil {
+				return j, errors.New("managed snapshot delete preflight contains execution state")
+			}
+		} else {
+			if j.SnapshotDelete.TargetSnapshotID != j.Command.Snapshot.SnapshotID || validateManagedSnapshotDeleteRecord(j.Command, *j.SnapshotDelete) != nil {
+				return j, errors.New("invalid managed snapshot delete intent")
+			}
+		}
+		if j.RecoveryReservation != nil {
+			if err := validateManagedSnapshotDeleteReservation(j.Command, *j.SnapshotDelete, *j.RecoveryReservation); err != nil {
+				return j, err
+			}
+			if j.RecoveryStage != "reserved" && j.RecoveryStage != "native" && j.RecoveryStage != "completed" && j.RecoveryStage != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot delete recovery stage")
+			}
+			if (j.RecoveryStage == "reserved" || j.RecoveryStage == "native") && j.RecoveryOutcome != "" ||
+				j.RecoveryStage == "completed" && j.RecoveryOutcome != "completed" ||
+				j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot delete recovery outcome")
+			}
+			if j.RecoveryStage == "completed" {
+				if j.SnapshotDelete.ObservedAfter == nil || len(j.SnapshotDelete.ObservedDomain) == 0 || !j.SnapshotDelete.MetadataDeleted {
+					return j, errors.New("completed managed snapshot delete lacks its observed result")
+				}
+			} else if j.SnapshotDelete.ObservedAfter != nil || len(j.SnapshotDelete.ObservedDomain) != 0 {
+				return j, errors.New("incomplete managed snapshot delete contains terminal observation")
+			}
+		} else if j.RecoveryStage != "local-intent" && j.RecoveryStage != "preflight" || j.RecoveryOutcome != "" || j.RecoverySettled {
+			return j, errors.New("managed snapshot delete local intent has invalid reservation state")
+		}
+		if j.RecoverySettled {
+			terminal := j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded" ||
+				j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome == "failed-before-effects" && j.Result.Status == "failed"
+			if j.RecoveryReservation == nil || !terminal {
+				return j, errors.New("managed snapshot delete settlement does not match a terminal outcome")
+			}
+		} else if j.Result.Status != "pending" && j.Result.Status != "needs_attention" {
+			return j, errors.New("unsettled managed snapshot delete has an invalid public result")
+		}
+	} else if j.Snapshot != nil || j.SnapshotRevert != nil || j.SnapshotDelete != nil || j.CurrentProjection != nil || j.RecoverySettled {
+		return j, errors.New("unexpected managed snapshot journal fields")
+	}
+	if j.Command.Kind == "snapshot-create" || j.Command.Kind == "snapshot-revert" || j.Command.Kind == "snapshot-delete" {
+		if j.RecoveryStage == "preflight" {
+			// The preflight row is a short-lived same-VM/storage fence while expensive,
+			// read-only observations are gathered. It cannot produce settlement evidence.
+		} else if j.RecoveryReservation != nil {
+			if err := j.RecoveryReservation.Valid(); err != nil || j.Command.VM == nil || j.RecoveryReservation.OperationID != j.Command.OperationID ||
+				j.RecoveryReservation.VMID != j.Command.VM.ID || j.RecoveryReservation.PoolID != j.Command.VM.PoolID || j.RecoveryReservation.OwnerHostID != j.Command.VM.HostID ||
+				j.RecoveryReservation.SpecRevision != j.Command.VM.Revision {
+				return j, errors.New("invalid managed snapshot recovery reservation")
+			}
+			if j.RecoveryStage != "reserved" && j.RecoveryStage != "native" && j.RecoveryStage != "completed" && j.RecoveryStage != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot recovery stage")
+			}
+			if (j.RecoveryStage == "reserved" || j.RecoveryStage == "native") && j.RecoveryOutcome != "" ||
+				j.RecoveryStage == "completed" && j.RecoveryOutcome != "completed" ||
+				j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome != "failed-before-effects" {
+				return j, errors.New("invalid managed snapshot recovery outcome")
+			}
+		} else if j.RecoveryStage != "local-intent" || j.RecoveryOutcome != "" || j.RecoverySettled {
+			return j, errors.New("managed snapshot local intent has invalid reservation state")
+		}
+		if j.RecoverySettled {
+			terminal := (j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded") ||
+				(j.RecoveryStage == "failed-before-effects" && j.RecoveryOutcome == "failed-before-effects" && j.Result.Status == "failed")
+			if j.RecoveryReservation == nil || !terminal {
+				return j, errors.New("managed snapshot settlement does not match a terminal outcome")
+			}
+		} else if j.Result.Status != "pending" && j.Result.Status != "needs_attention" {
+			return j, errors.New("unsettled managed snapshot has an invalid public result")
+		}
+	} else if j.RecoveryReservation != nil || j.RecoveryStage != "" || j.RecoveryOutcome != "" {
+		return j, errors.New("unexpected managed recovery journal fields")
+	}
+	if j.CurrentProjection != nil {
+		p := j.CurrentProjection
+		if j.Command.Kind != "snapshot-revert" || j.RecoveryStage != "completed" || j.SnapshotRevert == nil ||
+			protocol.ValidateVMSpec(p.Spec) != nil || p.Spec.ID != j.Command.VM.ID || p.Spec.Revision != j.SnapshotRevert.ResultSpec.Revision ||
+			len(p.Disks) != len(p.Spec.Disks) || len(p.Targets) != len(p.Disks) || len(p.Domain) == 0 {
+			return j, errors.New("invalid managed snapshot revert current projection")
+		}
+		if _, err := managedDiskChains(managedJournal{Disks: p.Disks, DiskChains: p.DiskChains}); err != nil {
+			return j, err
+		}
+	}
+	if j.Command.Kind != "snapshot-create" && j.Command.Kind != "snapshot-revert" && j.Command.Kind != "snapshot-delete" {
+		if _, err := managedDiskChains(j); err != nil {
+			return j, err
 		}
 	}
 	switch j.Result.Status {
@@ -626,6 +1028,7 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 		}
 	}
 	want, _ := json.Marshal(c)
+	replayFence := recoveryReservationRefusal(js, c)
 	for _, old := range js {
 		if old.Command.OperationID == c.OperationID {
 			got, _ := json.Marshal(old.Command)
@@ -633,7 +1036,38 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 				result.Error = "operation ID already belongs to different input"
 				return result, nil
 			}
+			if replayFence != nil {
+				result.Status, result.Error = "needs_attention", replayFence.Error()
+				return result, nil
+			}
 			if old.Result.Status == "pending" || old.Result.Status == "needs_attention" {
+				if (old.Command.Kind == "snapshot-create" || old.Command.Kind == "snapshot-revert" || old.Command.Kind == "snapshot-delete") && !old.RecoverySettled {
+					result.Status = "needs_attention"
+					result.Error = "snapshot intent is unresolved; repeat its owner reservation before native work"
+					return result, nil
+				}
+				if old.RecoveryReservation != nil {
+					if old.Result.Status == "pending" {
+						result.Status, result.Error = "needs_attention", "snapshot recovery reservation is unresolved; native work remains held for reconciliation"
+						return result, nil
+					}
+					return old.Result, nil
+				}
+				if err := recoveryReservationRefusal(js, c); err != nil {
+					if old.Result.Status == "pending" {
+						result.Status = "needs_attention"
+					}
+					result.Error = err.Error()
+					return result, nil
+				}
+				return e.reconcile(ctx, old)
+			}
+			if old.Result.Status == "failed" && isResourceRemovalCommand(c) && old.Stage != "removal-refused" {
+				old.Result.Status, old.Result.Error = "needs_attention", "resource removal outcome requires reconciliation"
+				old.Stage = "validating"
+				if err := e.save(old); err != nil {
+					return result, err
+				}
 				return e.reconcile(ctx, old)
 			}
 			// A completed ZFS pool may need its non-destructive local registration
@@ -645,6 +1079,11 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 			}
 			return old.Result, nil
 		}
+	}
+	if err := replayFence; err != nil {
+		j := managedJournal{Command: c, Result: result, Stage: "validating", EjectCleanup: cleanup, EjectCleanupReapply: reapply}
+		j.Result.Error = err.Error()
+		return j.Result, e.save(j)
 	}
 	if len(js) >= 10000 {
 		return result, errors.New("managed journal full; manual recovery required")
@@ -703,12 +1142,86 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 		j.Result.Error = ""
 	} else {
 		j.Result.Status = "failed"
-		if errors.Is(err, ErrStorageRollbackUncertain) || errors.Is(err, errPowerRequestUncertain) || j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" || j.Stage == "undefining" || j.Stage == "wiping" {
+		if isResourceRemovalCommand(c) && j.Stage != "removing" {
+			j.Stage = "removal-refused"
+		}
+		if errors.Is(err, ErrStorageRollbackUncertain) || errors.Is(err, errPowerRequestUncertain) || j.Stage == "allocating" || j.Stage == "defining" || j.Stage == "starting" || j.Stage == "attaching" || j.Stage == "undefining" || j.Stage == "wiping" || j.Stage == "removing" {
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
 	}
 	return j.Result, e.save(j)
+}
+
+// recoveryReservationRefusal protects the exact VM definition and its disk
+// repositories while a snapshot reservation remains in the local journal. A
+// terminal native result is not the pool master's settlement acknowledgement,
+// so only an identical retry of the reserved operation is exempt. Operators
+// may still stop the VM to make recovery safer.
+func recoveryReservationRefusal(js []managedJournal, c protocol.Command) error {
+	vmID, _ := managedIdentity(c)
+	if vmID != "" {
+		if c.Kind == "vm-delete" {
+			if err := retainedSnapshotDeleteRefusal(js, vmID); err != nil {
+				return err
+			}
+		}
+		if err := recoveryVMReservationRefusal(js, vmID, c.OperationID); err != nil {
+			if c.Kind != "vm-power" || c.Power.Action != "shutdown" && c.Power.Action != "force-stop" {
+				return err
+			}
+		}
+	}
+	if c.StorageLifecycle != nil && c.StorageLifecycle.Action == "detach" {
+		return storageRecoveryReservationRefusal(js, c.StorageLifecycle.RepositoryID)
+	}
+	return nil
+}
+
+// retainedSnapshotDeleteRefusal keeps captured points attached to their VM.
+// The check runs under operations.lock, which serializes it with snapshot
+// intent persistence and native capture.
+func retainedSnapshotDeleteRefusal(js []managedJournal, vmID string) error {
+	for _, j := range js {
+		if j.Command.Kind == "snapshot-create" && j.Command.VM != nil && j.Command.VM.ID == vmID &&
+			j.RecoverySettled && j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded" {
+			return errors.New("VM has retained snapshots; delete those snapshots before deleting the VM")
+		}
+	}
+	return nil
+}
+
+// recoveryVMReservationRefusal is the lock-held VM-only gate used by managed
+// commands and by native snapshot execution in this package.
+func recoveryVMReservationRefusal(js []managedJournal, vmID, operationID string) error {
+	if vmID == "" {
+		return nil
+	}
+	for _, j := range js {
+		if (j.Command.Kind == "snapshot-create" || j.Command.Kind == "snapshot-revert" || j.Command.Kind == "snapshot-delete") && !j.RecoverySettled && j.Command.VM != nil && vmID == j.Command.VM.ID && operationID != j.Command.OperationID {
+			return errors.New("VM has an unresolved local snapshot intent")
+		}
+		reservation := j.RecoveryReservation
+		if reservation != nil && !j.RecoverySettled && operationID != reservation.OperationID && vmID == reservation.VMID {
+			return errors.New("VM has an unresolved snapshot recovery reservation")
+		}
+	}
+	return nil
+}
+
+func storageRecoveryReservationRefusal(js []managedJournal, storageID string) error {
+	if storageID == "" {
+		return nil
+	}
+	for _, j := range js {
+		if (j.Command.Kind != "snapshot-create" && j.Command.Kind != "snapshot-revert" && j.Command.Kind != "snapshot-delete") || j.RecoverySettled || j.Command.VM == nil {
+			continue
+		}
+		if slices.ContainsFunc(j.Command.VM.Disks, func(d protocol.VMDisk) bool { return d.StorageID == storageID }) {
+			return errors.New("storage is used by a VM with an unresolved snapshot recovery reservation")
+		}
+	}
+	return nil
 }
 
 type zfsRegistrationRetryContextKey struct{}
@@ -1176,6 +1689,12 @@ func managedResourceID(c protocol.Command) string {
 		return "media:" + c.Media.ID
 	case "vm-create":
 		return "vm:" + c.VM.ID
+	case "snapshot-create":
+		return "snapshot:" + c.OperationID
+	case "snapshot-revert":
+		return "snapshot-revert:" + c.OperationID
+	case "snapshot-delete":
+		return "snapshot-delete:" + c.OperationID
 	case "vm-update":
 		return fmt.Sprintf("vm-update:%s:%d", c.VM.ID, c.VM.Revision)
 	case "vm-power":
@@ -1195,13 +1714,17 @@ func validateManaged(c protocol.Command) error {
 		return errors.New("invalid operation ID")
 	}
 	count := 0
-	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.ResourceLifecycle != nil, c.CredentialRetire != nil, c.ZFSProvision != nil} {
+	for _, present := range []bool{c.Storage != nil, c.Network != nil, c.Media != nil, c.VM != nil, c.Snapshot != nil, c.Power != nil, c.Delete != nil, c.VMMedia != nil, c.StorageLifecycle != nil, c.ResourceLifecycle != nil, c.CredentialRetire != nil, c.ZFSProvision != nil} {
 		if present {
 			count++
 		}
 	}
-	if count != 1 {
-		return errors.New("exactly one command payload is required")
+	expectedPayloads := 1
+	if c.Kind == "snapshot-create" || c.Kind == "snapshot-revert" || c.Kind == "snapshot-delete" {
+		expectedPayloads = 2
+	}
+	if count != expectedPayloads {
+		return errors.New("command payload count does not match command kind")
 	}
 	var id, pool, host string
 	switch c.Kind {
@@ -1278,9 +1801,21 @@ func validateManaged(c protocol.Command) error {
 		if !identifier.MatchString(m.StorageID) || m.SizeBytes < 32774 || err != nil || len(h) != 32 || strings.ToLower(m.SHA256) != m.SHA256 {
 			return errors.New("invalid ISO storage, size or SHA-256")
 		}
-	case "vm-create", "vm-update":
+	case "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete":
 		if c.VM == nil {
 			return errors.New("VM payload required")
+		}
+		if c.Kind == "snapshot-create" && (c.Snapshot == nil || validateManagedSnapshotRequest(c) != nil) {
+			return errors.New("snapshot request payload required")
+		}
+		if c.Kind == "snapshot-revert" && validateManagedSnapshotRevertRequest(c) != nil {
+			return errors.New("snapshot revert request payload required")
+		}
+		if c.Kind == "snapshot-delete" && validateManagedSnapshotDeleteRequest(c) != nil {
+			return errors.New("snapshot delete request payload required")
+		}
+		if c.Kind != "snapshot-create" && c.Kind != "snapshot-revert" && c.Kind != "snapshot-delete" && c.Snapshot != nil {
+			return errors.New("unexpected snapshot request payload")
 		}
 		v := c.VM
 		id, pool, host = v.ID, v.PoolID, v.HostID
@@ -1912,9 +2447,10 @@ func storageCredentialAttached(js []managedJournal, receipt string) bool {
 	return false
 }
 
-// storageDependencies names durable references which make detach unsafe.  Retained disks
-// count too: an edit must never turn unregister into data loss by hiding an old disk.
-func storageDependencies(js []managedJournal, id string) []string {
+// storageContentDependencies names references in the current projection and in retained
+// content. It is also used by storage rechecks, which must not be blocked by historical VM
+// snapshots because rechecking does not change the registered resource.
+func storageContentDependencies(js []managedJournal, id string) []string {
 	var out []string
 	for vmID, v := range currentDefinitions(js) {
 		if slices.ContainsFunc(v.Disks, func(d protocol.VMDisk) bool { return d.StorageID == id }) {
@@ -1964,6 +2500,18 @@ func storageDependencies(js []managedJournal, id string) []string {
 			}
 		}
 	}
+	return out
+}
+
+// storageDependencies includes VM definitions retained by successful snapshots. Those
+// historical references prevent storage detach or source changes after a VM edit.
+func storageDependencies(js []managedJournal, id string) []string {
+	out := storageContentDependencies(js, id)
+	for _, dependency := range snapshotResourceDependencies(js, id, func(d protocol.PoolVMSnapshotDependencies) []string { return d.StorageIDs }) {
+		out = append(out, dependency)
+	}
+	slices.Sort(out)
+	out = slices.Compact(out)
 	return out
 }
 
@@ -2119,7 +2667,9 @@ func networkDependencies(js []managedJournal, id string) []string {
 			out = append(out, vmID)
 		}
 	}
+	out = append(out, snapshotResourceDependencies(js, id, func(d protocol.PoolVMSnapshotDependencies) []string { return d.NetworkIDs })...)
 	slices.Sort(out)
+	out = slices.Compact(out)
 	return out
 }
 
@@ -2131,7 +2681,47 @@ func mediaDependencies(js []managedJournal, id string) []string {
 			out = append(out, vmID)
 		}
 	}
+	out = append(out, snapshotResourceDependencies(js, id, func(d protocol.PoolVMSnapshotDependencies) []string { return d.MediaIDs })...)
 	slices.Sort(out)
+	out = slices.Compact(out)
+	return out
+}
+
+// snapshotResourceDependencies returns VM IDs whose retained or unresolved snapshot
+// command references id. A retained legacy snapshot with no dependency record is unknown,
+// so it conservatively blocks destructive changes to every resource of that kind.
+func snapshotResourceDependencies(js []managedJournal, id string, selectIDs func(protocol.PoolVMSnapshotDependencies) []string) []string {
+	var out []string
+	for _, j := range js {
+		if j.Command.Kind != "snapshot-create" {
+			continue
+		}
+		if j.Command.VM == nil {
+			out = append(out, "snapshot VM (dependencies unknown)")
+			continue
+		}
+		retained := j.RecoverySettled && j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded"
+		if j.RecoverySettled && !retained {
+			continue
+		}
+		var dependencies *protocol.PoolVMSnapshotDependencies
+		if j.Snapshot != nil {
+			dependencies = j.Snapshot.Dependencies
+		}
+		if dependencies == nil && !retained {
+			derived, err := protocol.PoolVMSnapshotDependenciesForSpec(*j.Command.VM)
+			if err == nil {
+				dependencies = &derived
+			}
+		}
+		if dependencies == nil {
+			out = append(out, j.Command.VM.ID+" (snapshot dependencies unknown)")
+			continue
+		}
+		if slices.Contains(selectIDs(*dependencies), id) {
+			out = append(out, j.Command.VM.ID)
+		}
+	}
 	return out
 }
 
@@ -2193,8 +2783,27 @@ func mediaRemovalRefusal(js []managedJournal, id string) error {
 // detach itself calls it and CheckStorageDetach calls it with no effect at all, so the dry
 // run and the real thing cannot drift.
 func storageDetachRefusal(js []managedJournal, id string) error {
+	if err := storageRecoveryReservationRefusal(js, id); err != nil {
+		return err
+	}
 	if deps := storageDependencies(js, id); len(deps) > 0 {
 		return errors.New("storage cannot detach while used by " + strings.Join(deps, ", "))
+	}
+	return nil
+}
+
+func (e *ManagedEngine) verifyStorageVMChains(ctx context.Context, js []managedJournal, storageID string) error {
+	for vmID, vm := range currentDefinitions(js) {
+		if !slices.ContainsFunc(vm.Disks, func(d protocol.VMDisk) bool { return d.StorageID == storageID }) {
+			continue
+		}
+		cur, err := managedCurrent(js, vmID)
+		if err != nil {
+			return err
+		}
+		if _, err := e.diskChains(ctx, js, cur); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2210,6 +2819,9 @@ func (e *ManagedEngine) CheckStorageDetach(ctx context.Context, id string) error
 	}
 	current, err := managedStorage(js, id)
 	if err != nil {
+		return err
+	}
+	if err := e.verifyStorageVMChains(ctx, js, current.ID); err != nil {
 		return err
 	}
 	return storageDetachRefusal(js, current.ID)
@@ -2317,9 +2929,9 @@ func qemuCreateArgs(path string, d protocol.VMDisk) []string {
 // Controller to mirror, with the checks that qualify it. Per-operation fields are cleared.
 // Terminal entries are reported as outcomes, as is a pending entry
 // no longer executing in this process (an earlier process died with it) and a creation whose
-// automatic start failed (outcome <operation>:start, kind vm-power, while the VM itself stays
-// a normal managed VM); interrupted creations are re-observed first (see promote); VMs
-// libvirt no longer defines are listed as missing.
+// automatic start did not complete (outcome <operation>:start, kind vm-power, while the VM
+// itself stays a normal managed VM); interrupted creations are re-observed first (see promote);
+// VMs libvirt no longer defines are listed as missing.
 func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []protocol.Check) {
 	out := &protocol.ManagedState{}
 	// Read and snapshot together: an entry pending on disk while its ID is in flight is
@@ -2347,13 +2959,18 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			continue
 		case "pending":
 			if !running[c.OperationID] {
-				outcome.Status, outcome.Error = "needs_attention", "interrupted before completion; retry from a new request"
+				outcome.Status = "needs_attention"
+				if c.Kind == "snapshot-create" || c.Kind == "snapshot-revert" || c.Kind == "snapshot-delete" {
+					outcome.Error = "snapshot operation is unresolved; retry or reconcile the same operation ID"
+				} else {
+					outcome.Error = "interrupted before completion; retry from a new request"
+				}
 				out.Outcomes = append(out.Outcomes, outcome)
 			}
 			continue
 		}
-		if c.Kind == "vm-create" && c.VM.StartAfterCreate && j.Start != "" && j.Start != "started" {
-			out.Outcomes = append(out.Outcomes, protocol.ManagedOutcome{OperationID: c.OperationID + ":start", Kind: "vm-power", ID: id, Name: name, Status: "failed", Error: "VM created but not started: " + j.Start})
+		if start, ok := managedCreateStartOutcome(j); ok && start.Status != "succeeded" {
+			out.Outcomes = append(out.Outcomes, start)
 		}
 		switch c.Kind {
 		// Storage, networks and media are projections: registrations folded with the
@@ -2377,6 +2994,29 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			}
 			if !replaced {
 				out.VMs = append(out.VMs, *c.VM)
+			}
+		case "snapshot-revert":
+			if !j.RecoverySettled || j.RecoveryStage != "completed" || j.RecoveryOutcome != "completed" || j.SnapshotRevert == nil {
+				continue
+			}
+			vm := j.SnapshotRevert.ResultSpec
+			if j.CurrentProjection != nil {
+				vm = j.CurrentProjection.Spec
+			}
+			if deleted[vm.ID] {
+				break
+			}
+			replaced := false
+			for i, existing := range out.VMs {
+				if existing.ID == vm.ID {
+					replaced = true
+					if vm.Revision > existing.Revision {
+						out.VMs[i] = vm
+					}
+				}
+			}
+			if !replaced {
+				out.VMs = append(out.VMs, vm)
 			}
 		case "vm-delete":
 			if j.Result.Status == "succeeded" && c.Delete != nil {
@@ -2443,6 +3083,98 @@ func (e *ManagedEngine) ReconcileStorage(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// PendingResourceRemoval returns one old unresolved network or media removal.
+// The caller must revalidate pool admission before executing the exact command.
+func (e *ManagedEngine) PendingResourceRemoval(ctx context.Context, poolID, hostID string) (*ResourceRemovalReconcile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if poolID == "" || hostID == "" {
+		return nil, errors.New("resource-removal reconciliation requires the current pool and host")
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return nil, err
+	}
+	due := nextResourceRemovalReconcile(js, time.Now().UTC(), poolID, hostID)
+	if due == nil {
+		return nil, nil
+	}
+	return &ResourceRemovalReconcile{
+		Command: due.Command,
+		Result:  due.Result,
+		Stage:   due.Stage,
+	}, nil
+}
+
+// ResourceRemovalOutcome returns a definitive terminal result for the exact
+// operation named by a durable pool removal marker. Ambiguous entries are never
+// returned, and the caller must still verify that the marker names this command.
+func (e *ManagedEngine) ResourceRemovalOutcome(ctx context.Context, operationID string) (*ResourceRemovalReconcile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !identifier.MatchString(operationID) {
+		return nil, errors.New("invalid resource removal operation ID")
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(lock)
+	js, err := e.journals()
+	if err != nil {
+		return nil, err
+	}
+	for i := range js {
+		j := &js[i]
+		if j.Command.OperationID != operationID || !isResourceRemovalCommand(j.Command) || j.Result.ObservedAt.IsZero() {
+			continue
+		}
+		if j.Result.Status != "succeeded" && !(j.Result.Status == "failed" && j.Stage == "removal-refused") {
+			return nil, nil
+		}
+		return &ResourceRemovalReconcile{
+			Command: j.Command,
+			Result:  j.Result,
+			Stage:   j.Stage,
+		}, nil
+	}
+	return nil, nil
+}
+
+func isResourceRemovalCommand(c protocol.Command) bool {
+	request := c.ResourceLifecycle
+	return request != nil && request.Action == "remove" &&
+		((c.Kind == "network-remove" && request.Resource == "network") ||
+			(c.Kind == "media-remove" && request.Resource == "media"))
+}
+
+func nextResourceRemovalReconcile(js []managedJournal, now time.Time, poolID, hostID string) *managedJournal {
+	var due *managedJournal
+	for i := range js {
+		j := &js[i]
+		request := j.Command.ResourceLifecycle
+		if !isResourceRemovalCommand(j.Command) ||
+			request.PoolID != poolID || request.HostID != hostID ||
+			(j.Result.Status != "pending" && j.Result.Status != "needs_attention" && !(j.Result.Status == "failed" && j.Stage != "removal-refused")) ||
+			j.Result.ObservedAt.IsZero() ||
+			now.Sub(j.Result.ObservedAt) < time.Minute {
+			continue
+		}
+		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) ||
+			(j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
+			due = j
+		}
+	}
+	return due
 }
 
 func nextStorageReconcile(js []managedJournal, now time.Time) *managedJournal {
@@ -2515,6 +3247,7 @@ func (e *ManagedEngine) ReconcileRemoteVMCreateStopped(ctx context.Context, vali
 		j.Result.Status, j.Result.Error, j.Stage = "succeeded", "", "defined"
 		if j.Command.VM.StartAfterCreate && j.Start == "" {
 			j.Start = startInterrupted
+			j.StartOutcome = startOutcomeUncertainRequest
 		}
 	} else {
 		j.Result.Status, j.Result.Error = "needs_attention", err.Error()
@@ -2527,7 +3260,7 @@ func nextRemoteVMCreateReconcile(js []managedJournal, now time.Time) *managedJou
 	var due *managedJournal
 	for i := range js {
 		j := &js[i]
-		if j.Command.Kind != "vm-create" || j.Command.VM == nil || (j.Stage != "defining" && j.Stage != "defined") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
+		if j.Command.Kind != "vm-create" || j.Command.VM == nil || recoveryVMReservationRefusal(js, j.Command.VM.ID, "") != nil || (j.Stage != "defining" && j.Stage != "defined") || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
 			continue
 		}
 		if due == nil || j.Result.ObservedAt.Before(due.Result.ObservedAt) || (j.Result.ObservedAt.Equal(due.Result.ObservedAt) && j.Command.OperationID < due.Command.OperationID) {
@@ -2602,7 +3335,7 @@ func nextRemoteVMUpdateReconcile(js []managedJournal, now time.Time) *managedJou
 	var due *managedJournal
 	for i := range js {
 		j := &js[i]
-		if j.Command.Kind != "vm-update" || j.Command.VM == nil || (!updateObservable(j.Stage) && j.Stage != "allocating" && j.Stage != "cleaning-nvram" && j.Stage != secureBootVariablesStage && j.Stage != secureBootDefiningStage) || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
+		if j.Command.Kind != "vm-update" || j.Command.VM == nil || recoveryVMReservationRefusal(js, j.Command.VM.ID, "") != nil || (!updateObservable(j.Stage) && j.Stage != "allocating" && j.Stage != "cleaning-nvram" && j.Stage != secureBootVariablesStage && j.Stage != secureBootDefiningStage) || (j.Result.Status != "pending" && j.Result.Status != "needs_attention") || !promotionUsesRemoteStorage(js, *j) || now.Sub(j.Result.ObservedAt) < time.Minute {
 			continue
 		}
 		// A later success of the same or a newer revision (for example an operator retry) owns
@@ -2677,6 +3410,8 @@ func managedIdentity(c protocol.Command) (string, string) {
 		return c.Media.ID, c.Media.Name
 	case "vm-create", "vm-update":
 		return c.VM.ID, c.VM.Name
+	case "snapshot-create", "snapshot-revert", "snapshot-delete":
+		return c.VM.ID, c.Snapshot.Name
 	case "vm-power":
 		return c.Power.VMID, ""
 	case "vm-delete":
@@ -2712,6 +3447,9 @@ func domains(ctx context.Context) map[string]bool {
 func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, running map[string]bool) []managedJournal {
 	var due []int
 	for i, j := range js {
+		if j.Command.VM != nil && recoveryVMReservationRefusal(js, j.Command.VM.ID, "") != nil {
+			continue
+		}
 		unallocatedCreate := j.Command.Kind == "vm-create" && j.Stage == "validating"
 		if promotionUsesRemoteStorage(js, j) && !unallocatedCreate {
 			continue
@@ -2732,10 +3470,17 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 	}
 	defer unlock(lock)
 	observe := e.observer()
+	lockedJournals, err := e.journals()
+	if err != nil {
+		return js
+	}
 	for _, i := range due {
 		// Re-read under the lock: the entry may have moved on since it was listed.
 		j, err := e.readJournal(js[i].Command.OperationID + ".json")
 		if err != nil || (j.Result.Status != "needs_attention" && j.Result.Status != "pending") {
+			continue
+		}
+		if j.Command.VM != nil && recoveryVMReservationRefusal(lockedJournals, j.Command.VM.ID, "") != nil {
 			continue
 		}
 		if j.Command.Kind == "vm-create" && j.Stage == "validating" {
@@ -2758,6 +3503,7 @@ func (e *ManagedEngine) promote(ctx context.Context, js []managedJournal, runnin
 			j.Stage = "defined"
 			if j.Command.Kind == "vm-create" && j.Command.VM.StartAfterCreate && j.Start == "" {
 				j.Start = startInterrupted
+				j.StartOutcome = startOutcomeUncertainRequest
 			}
 		}
 		if err == nil {
@@ -2814,6 +3560,13 @@ func updateState(j managedJournal) string {
 // outcome, started or the failure reason, is kept.
 func settleStart(ctx context.Context, j *managedJournal) error {
 	if j.Start != "" {
+		if j.StartOutcome == "" {
+			if j.Start == "started" {
+				j.StartOutcome = startOutcomeStarted
+			} else {
+				j.StartOutcome = startOutcomeUncertainRequest
+			}
+		}
 		j.Stage = "started"
 		return nil
 	}
@@ -2821,9 +3574,9 @@ func settleStart(ctx context.Context, j *managedJournal) error {
 	if err != nil {
 		return errors.New("VM state cannot be established after an interrupted start")
 	}
-	j.Start, j.Stage = startInterrupted, "started"
+	j.Start, j.StartOutcome, j.Stage = startInterrupted, startOutcomeUncertainRequest, "started"
 	if strings.TrimSpace(string(state)) == "running" {
-		j.Start = "started"
+		j.Start, j.StartOutcome = "started", startOutcomeStarted
 	}
 	return nil
 }
@@ -2947,6 +3700,18 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 						return fmt.Errorf("predecessor operation did not succeed (%s); inspect it before requesting power again", before.Result.Status)
 					}
 					ready = true
+				case "snapshot-create", "snapshot-revert", "snapshot-delete":
+					id, _ := managedIdentity(before.Command)
+					if id != c.Power.VMID {
+						return errors.New("predecessor operation belongs to another VM")
+					}
+					if c.Power.Action == "shutdown" || c.Power.Action == "force-stop" {
+						ready = true
+					} else if before.Result.Status == "succeeded" && before.RecoverySettled && before.RecoveryStage == "completed" && before.RecoveryOutcome == "completed" {
+						ready = true
+					} else {
+						return errors.New("snapshot predecessor is unresolved; only emergency shutdown or force-stop may proceed")
+					}
 				}
 				break
 			}
@@ -2972,6 +3737,13 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 					}
 				}
 				if err := ensureVMLeaseDefinition(ctx, js, *spec); err != nil {
+					return err
+				}
+			}
+		}
+		if c.Power.Action == "start" || c.Power.Action == "reboot" || c.Power.Action == "force-reboot" {
+			if cur, err := managedCurrent(js, c.Power.VMID); err == nil {
+				if _, err := e.diskChains(ctx, js, cur); err != nil {
 					return err
 				}
 			}
@@ -3009,6 +3781,9 @@ func (e *ManagedEngine) apply(ctx context.Context, j *managedJournal, js []manag
 			_, err := managedStorageReady(ctx, current, 0)
 			return err
 		case "detach":
+			if err := e.verifyStorageVMChains(ctx, js, current.ID); err != nil {
+				return err
+			}
 			if err := storageDetachRefusal(js, current.ID); err != nil {
 				return err
 			}
@@ -3796,14 +4571,29 @@ func currentDefinitions(js []managedJournal) map[string]protocol.VMCreateSpec {
 	out := map[string]protocol.VMCreateSpec{}
 	deleted := managedDeletedVMs(js)
 	for _, j := range js {
-		if (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") || j.Command.VM == nil || j.Result.Status == "failed" {
+		if j.Command.VM == nil || j.Result.Status == "failed" {
 			continue
 		}
 		if deleted[j.Command.VM.ID] {
 			continue
 		}
-		if cur, ok := out[j.Command.VM.ID]; !ok || j.Command.VM.Revision > cur.Revision {
-			out[j.Command.VM.ID] = *j.Command.VM
+		var candidate protocol.VMCreateSpec
+		switch j.Command.Kind {
+		case "vm-create", "vm-update":
+			candidate = *j.Command.VM
+		case "snapshot-revert":
+			if !j.RecoverySettled || j.Result.Status != "succeeded" || j.RecoveryStage != "completed" || j.RecoveryOutcome != "completed" || j.SnapshotRevert == nil {
+				continue
+			}
+			candidate = j.SnapshotRevert.ResultSpec
+			if j.CurrentProjection != nil {
+				candidate = j.CurrentProjection.Spec
+			}
+		default:
+			continue
+		}
+		if cur, ok := out[candidate.ID]; !ok || candidate.Revision > cur.Revision {
+			out[candidate.ID] = candidate
 		}
 	}
 	return out
@@ -4060,6 +4850,10 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 		return err
 	}
 	j.Disks = disks
+	j.DiskChains = make([][]string, len(disks))
+	for i, disk := range disks {
+		j.DiskChains[i] = []string{disk}
+	}
 	j.Targets, j.MediaTarget, j.DriversTarget = managedTargets(v)
 	j.MediaPath, j.DriversPath = mediaPath, driversPath
 	j.Domain, err = managedDomainXML(v, nets, disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath, leases)
@@ -4115,12 +4909,10 @@ func (e *ManagedEngine) create(ctx context.Context, j *managedJournal, js []mana
 	if _, err = managedVirsh(ctx, "define", domainPath); err != nil {
 		return errors.New("VM definition outcome uncertain; observation required before recovery")
 	}
-	// Shared storage autostart is Core-coordinated: libvirt's own boot replay cannot
-	// prove current pool ownership.  The member worker later requests a fresh permit.
-	if v.Autostart && !managedUsesPoolSharedStorage(js, v) {
-		if _, err = managedVirsh(ctx, "autostart", v.ID); err != nil {
-			return errors.New("VM defined but autostart could not be enabled; inspect the VM on its host")
-		}
+	// Every managed pool VM starts through Core after fresh owner admission. Libvirt's
+	// boot-time autostart runs before Core can honor a recovery reservation or owner fence.
+	if err = setAutostart(ctx, v.ID); err != nil {
+		return err
 	}
 	if err = e.observeCreated(ctx, *j); err != nil {
 		return err
@@ -4145,6 +4937,9 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 		return err
 	}
 	if len(j.Disks) > 0 {
+		if _, err = e.diskChains(ctx, js, *j); err != nil {
+			return err
+		}
 		if err = ensureVMStorage(ctx, js, *j.Command.VM); err != nil {
 			return err
 		}
@@ -4155,15 +4950,15 @@ func (e *ManagedEngine) startCreated(ctx context.Context, j *managedJournal) err
 	if err := e.save(*j); err != nil {
 		return err
 	}
-	j.Start, j.Stage = "started", "started"
+	j.Start, j.StartOutcome, j.Stage = "started", startOutcomeStarted, "started"
 	if err := powerVM(ctx, protocol.VMPowerRequest{VMID: j.Command.VM.ID, Action: "start"}, j.Command.VM); err != nil {
 		// The create journal has historically exposed a stable concise start outcome;
 		// direct vm-power results retain the bounded native diagnostic for recovery.
 		var powerErr powerRequestError
 		if errors.As(err, &powerErr) {
-			j.Start = "libvirt did not confirm the start request; inspect the VM on its host"
+			j.Start, j.StartOutcome = startOutcomeUncertain, startOutcomeUncertainRequest
 		} else {
-			j.Start = err.Error()
+			j.Start, j.StartOutcome = err.Error(), startOutcomeFailedBeforeRequest
 		}
 	}
 	return nil
@@ -4367,7 +5162,7 @@ func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal,
 		if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 {
 			return errors.New("created disk has hardlink aliases")
 		}
-		if err = checkImage(ctx, disk); err != nil {
+		if err = checkImageWithBacking(ctx, disk, true); err != nil {
 			return err
 		}
 		image, err := run(ctx, "qemu-img", "info", "--force-share", "--output=json", disk)
@@ -4380,14 +5175,13 @@ func (e *ManagedEngine) observeDefinition(ctx context.Context, j managedJournal,
 		if json.Unmarshal(image, &imageInfo) != nil || imageInfo.Size != int64(j.Command.VM.Disks[i].SizeGiB)<<30 {
 			return errors.New("VM virtual disk size changed")
 		}
-		if err = (&Engine{config: Config{VirshURI: "qemu:///system"}}).exclusiveDisk(ctx, journal{Operation: Operation{VMID: j.Command.VM.ID}, Disk: disk}); err != nil {
-			return err
-		}
+	}
+	if _, err := e.diskChains(ctx, js, j); err != nil {
+		return err
 	}
 	info, err := managedVirsh(ctx, "dominfo", j.Command.VM.ID)
-	wantAutostart := j.Command.VM.Autostart && !managedUsesPoolSharedStorage(js, *j.Command.VM)
-	if err != nil || autostartEnabled(info) != wantAutostart {
-		return errors.New("VM autostart is not confirmed as requested")
+	if err != nil || !autostartDisabled(info) {
+		return errors.New("managed VM native autostart is not confirmed disabled")
 	}
 	b, err := managedVirsh(ctx, "dumpxml", j.Command.VM.ID, "--inactive")
 	if err != nil {
@@ -4464,11 +5258,11 @@ func validateManagedLiveDevices(b, expected []byte) error {
 	return nil
 }
 
-// autostartEnabled reads the Autostart line of virsh dominfo; run sets LC_ALL=C.
-func autostartEnabled(b []byte) bool {
+// autostartDisabled requires an explicit disabled value from virsh dominfo.
+func autostartDisabled(b []byte) bool {
 	for _, line := range strings.Split(string(b), "\n") {
 		if f := strings.Fields(line); len(f) == 2 && f[0] == "Autostart:" {
-			return f[1] == "enable"
+			return f[1] == "disable"
 		}
 	}
 	return false
@@ -4479,16 +5273,32 @@ func bootOrder(b *managedBootOrder) int {
 	}
 	return b.Order
 }
+func managedMemoryKiB(memory memoryXML) (uint64, bool) {
+	if memory.Value < 0 {
+		return 0, false
+	}
+	unit := uint64(1)
+	switch memory.Unit {
+	case "", "KiB", "k": // libvirt defaults an omitted unit to KiB.
+	case "MiB":
+		unit = 1024
+	default:
+		return 0, false
+	}
+	value := uint64(memory.Value)
+	if value > ^uint64(0)/unit {
+		return 0, false
+	}
+	return value * unit, true
+}
 func validateManagedDefinition(b, expected []byte) error {
 	var got, want managedDomain
 	if xml.Unmarshal(b, &got) != nil || xml.Unmarshal(expected, &want) != nil {
 		return errors.New("invalid persistent VM definition")
 	}
-	memory := got.Memory.Value
-	if got.Memory.Unit == "KiB" || got.Memory.Unit == "k" {
-		memory /= 1024
-	}
-	if got.UUID != want.UUID || got.Name != want.Name || got.Type != "kvm" || got.VCPU != want.VCPU || got.IOThreads != want.IOThreads || memory != want.Memory.Value || len(got.Devices.Disks) != len(want.Devices.Disks) || len(got.Devices.Interfaces) != len(want.Devices.Interfaces) {
+	gotMemory, gotMemoryOK := managedMemoryKiB(got.Memory)
+	wantMemory, wantMemoryOK := managedMemoryKiB(want.Memory)
+	if got.UUID != want.UUID || got.Name != want.Name || got.Type != "kvm" || got.VCPU != want.VCPU || got.IOThreads != want.IOThreads || !gotMemoryOK || !wantMemoryOK || gotMemory != wantMemory || len(got.Devices.Disks) != len(want.Devices.Disks) || len(got.Devices.Interfaces) != len(want.Devices.Interfaces) {
 		return errors.New("VM definition differs from requested ownership or resources")
 	}
 	if want.IOThreadIDs != nil {
@@ -4509,7 +5319,7 @@ func validateManagedDefinition(b, expected []byte) error {
 	}
 	for _, expected := range want.Devices.Disks {
 		disk, ok := disks[expected.Target.Dev]
-		if !ok || disk.Type != expected.Type || disk.Device != expected.Device || diskFile(disk) != diskFile(expected) || disk.Driver.Type != expected.Driver.Type || disk.Driver.IOThread != expected.Driver.IOThread || (disk.Readonly != nil) != (expected.Readonly != nil) || disk.Shareable != nil || (disk.Source != nil && (disk.Source.Dev != "" || disk.Source.Protocol != "")) || disk.Target != expected.Target || bootOrder(disk.Boot) != bootOrder(expected.Boot) {
+		if !ok || !managedDiskMatchesOwnership(disk, expected) {
 			return errors.New("VM disk assignment or boot order differs from requested ownership")
 		}
 		if expected.Driver.IOThread != 0 && !hasIOThread(got, expected.Driver.IOThread) {
@@ -4568,11 +5378,9 @@ func validateManagedDefinition(b, expected []byte) error {
 		if got.CurrentMemory != nil {
 			current = *got.CurrentMemory
 		}
-		if current.Unit == "KiB" || current.Unit == "k" {
-			if current.Value != want.CurrentMemory.Value*1024 {
-				return errors.New("VM current memory differs from requested allocation")
-			}
-		} else if current.Unit != "MiB" || current.Value != want.CurrentMemory.Value {
+		gotCurrentMemory, gotCurrentMemoryOK := managedMemoryKiB(current)
+		wantCurrentMemory, wantCurrentMemoryOK := managedMemoryKiB(*want.CurrentMemory)
+		if !gotCurrentMemoryOK || !wantCurrentMemoryOK || gotCurrentMemory != wantCurrentMemory {
 			return errors.New("VM current memory differs from requested allocation")
 		}
 	}
@@ -5200,11 +6008,38 @@ func (e *ManagedEngine) finishFirmwareRemoval(ctx context.Context, j *managedJou
 // resume runs, so a helper's mid-way save never persists a provisional needs_attention; only
 // a result still unsettled at the end becomes needs_attention, keeping its reason.
 func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r protocol.Result, err error) {
+	if j.RecoveryReservation != nil {
+		return j.Result, nil
+	}
+	if j.Command.Kind == "snapshot-create" || j.Command.Kind == "snapshot-revert" || j.Command.Kind == "snapshot-delete" {
+		if j.Result.Status == "pending" {
+			j.Result.Status = "needs_attention"
+			j.Result.Error = "snapshot intent requires owner reservation reconciliation"
+			j.Result.ObservedAt = time.Now().UTC()
+			return j.Result, e.save(j)
+		}
+		return j.Result, nil
+	}
+	js, err := e.journals()
+	if err != nil {
+		return j.Result, err
+	}
+	if err = recoveryReservationRefusal(js, j.Command); err != nil {
+		j.Result.Status, j.Result.Error = "needs_attention", err.Error()
+		j.Result.ObservedAt = time.Now().UTC()
+		return j.Result, e.save(j)
+	}
 	j.Result.Status, j.Result.Error = "pending", ""
 	defer func() { r = unsettledNeedsAttention(r) }()
 	// Network and media removal teardown is idempotent (absent bridge, absent file, absent
 	// ISO all mean done), so an interrupted removal settles by re-running it.
 	if slices.Contains([]string{"storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "media-remove"}, j.Command.Kind) {
+		if isResourceRemovalCommand(j.Command) {
+			// apply persists stage "removing" before its first native effect. Reset
+			// only when reconciling a prior result so a new attempt can prove a
+			// pre-effect refusal independently of an older ambiguous stage.
+			j.Stage = "validating"
+		}
 		js, err := e.journals()
 		if err != nil {
 			return j.Result, err
@@ -5213,7 +6048,10 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r prot
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
 		} else {
-			if errors.Is(err, ErrStorageRollbackUncertain) {
+			if isResourceRemovalCommand(j.Command) && j.Stage != "removing" {
+				j.Stage = "removal-refused"
+			}
+			if errors.Is(err, ErrStorageRollbackUncertain) || j.Stage == "removing" {
 				j.Result.Status = "needs_attention"
 			} else {
 				j.Result.Status = "failed"
@@ -5315,7 +6153,7 @@ func (e *ManagedEngine) reconcile(ctx context.Context, j managedJournal) (r prot
 		} else if err := mediaObserved(ctx, *j.Command.VMMedia, j.MediaPath); err == nil {
 			j.Result.Status = "succeeded"
 			j.Result.Error = ""
-			if err := e.recordVMMedia(*j.Command.VMMedia); err != nil {
+			if err := e.recordVMMedia(ctx, *j.Command.VMMedia); err != nil {
 				return j.Result, err
 			}
 		} else {
@@ -5429,9 +6267,17 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	if observed := strings.TrimSpace(string(state)); observed != "shut off" {
 		return errors.New("stop the VM before deleting it; observed state is " + observed)
 	}
+	chains, err := e.diskChains(ctx, js, cur)
+	if err != nil {
+		return err
+	}
+	cur.DiskChains = chains
 	paths := managedDeleteDiskPaths(js, cur)
 	j.Retained = append([]string{}, paths...)
 	j.Stage = "undefining"
+	if err := e.verifyManagedDeleteFiles(ctx, js, *j); err != nil {
+		return err
+	}
 	if err = e.save(*j); err != nil {
 		return err
 	}
@@ -5443,6 +6289,9 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 // whichever of them the interruption left undone; both are safe to repeat.
 func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js []managedJournal, undefine bool) error {
 	req := j.Command.Delete
+	if err := e.verifyManagedDeleteFiles(ctx, js, *j); err != nil {
+		return err
+	}
 	// The flags come from every revision the journal holds, failed ones included, but libvirt
 	// removes NVRAM and swtpm state only for devices the persistent definition still carries
 	// (BUG-0196, BUG-0214). Asking every revision does not recover state an earlier edit
@@ -5465,6 +6314,9 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 		if err := e.save(*j); err != nil {
 			return err
 		}
+		if err := e.verifyManagedDeleteFiles(ctx, js, *j); err != nil {
+			return err
+		}
 		if err := wipeManagedDisks(j.Retained); err != nil {
 			return err
 		}
@@ -5476,6 +6328,88 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 	}
 	if defined[strings.ToLower(req.VMID)] {
 		return errors.New("VM domain is still defined after undefine")
+	}
+	return nil
+}
+
+// verifyManagedDeleteFiles checks the complete frozen wipe set, including disks retained by
+// earlier successful edits. It runs both before undefine and immediately before unlinking, and
+// on retry skips only files already removed by a previously journaled wiping stage.
+func (e *ManagedEngine) verifyManagedDeleteFiles(ctx context.Context, js []managedJournal, j managedJournal) error {
+	if j.Command.Delete == nil || !j.Command.Delete.DeleteDisks {
+		return nil
+	}
+	vmID := j.Command.Delete.VMID
+	if len(j.Retained) == 0 {
+		return errors.New("managed delete has no recorded disk paths; inspect the VM on its host")
+	}
+	if len(j.Retained) > 4096 {
+		return errors.New("managed delete disk list exceeds the ownership-check limit; inspect the VM on its host")
+	}
+	pathStorage := map[string]string{}
+	for _, revision := range js {
+		if revision.Result.Status != "succeeded" || revision.Command.VM == nil || revision.Command.VM.ID != vmID {
+			continue
+		}
+		chains, err := managedDiskChains(revision)
+		if err != nil || len(chains) != len(revision.Command.VM.Disks) {
+			return errors.New("historical VM disk ownership cannot be established")
+		}
+		for i, chain := range chains {
+			storageID := revision.Command.VM.Disks[i].StorageID
+			for _, path := range chain {
+				if old, ok := pathStorage[path]; ok && old != storageID {
+					return errors.New("historical VM disk storage ownership is ambiguous")
+				}
+				pathStorage[path] = storageID
+			}
+		}
+	}
+	allowMissing := j.Stage == "wiping"
+	var existing []string
+	seen := map[string]bool{}
+	storageRoots := map[string]string{}
+	for _, path := range j.Retained {
+		clean, err := cleanImagePath(path)
+		if err != nil || clean != path || seen[path] {
+			return errors.New("managed delete disk list contains an invalid or repeated path")
+		}
+		seen[path] = true
+		storageID := pathStorage[path]
+		if storageID == "" {
+			return errors.New("managed delete disk storage ownership is unavailable")
+		}
+		root, ok := storageRoots[storageID]
+		if !ok {
+			_, access, err := managedStorageByID(ctx, js, storageID, 0)
+			if err != nil {
+				return errors.New("managed delete storage cannot be verified")
+			}
+			root = filepath.Join(access.Path, "nex-vms", vmID) + string(os.PathSeparator)
+			storageRoots[storageID] = root
+		}
+		if !strings.HasPrefix(path, root) {
+			return errors.New("managed delete disk is outside its registered storage directory")
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) && allowMissing {
+			continue
+		}
+		if err != nil {
+			return errors.New("managed delete disk is unavailable; inspect the VM on its host")
+		}
+		real, resolveErr := filepath.EvalSymlinks(path)
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if resolveErr != nil || real != path || !info.Mode().IsRegular() || !ok || st.Nlink != 1 {
+			return errors.New("managed delete disk is aliased or is not a regular file")
+		}
+		existing = append(existing, path)
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+	if err := (&Engine{config: Config{VirshURI: "qemu:///system"}}).exclusiveDisks(ctx, journal{Operation: Operation{VMID: vmID}}, existing); err != nil {
+		return err
 	}
 	return nil
 }
@@ -5514,8 +6448,12 @@ func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
 		seen[path] = true
 		out = append(out, path)
 	}
-	for _, path := range cur.Disks {
-		add(path)
+	if chains, err := managedDiskChains(cur); err == nil {
+		for _, chain := range chains {
+			for _, path := range chain {
+				add(path)
+			}
+		}
 	}
 	for _, j := range js {
 		if j.Result.Status != "succeeded" {
@@ -5526,9 +6464,23 @@ func managedDeleteDiskPaths(js []managedJournal, cur managedJournal) []string {
 			for _, path := range j.Retained {
 				add(path)
 			}
+			if chains, err := managedDiskChains(j); err == nil {
+				for _, chain := range chains {
+					for _, path := range chain {
+						add(path)
+					}
+				}
+			}
 		case j.Command.Delete != nil && j.Command.Delete.VMID == cur.Command.VM.ID:
 			for _, path := range j.Retained {
 				add(path)
+			}
+			if chains, err := managedDiskChains(j); err == nil {
+				for _, chain := range chains {
+					for _, path := range chain {
+						add(path)
+					}
+				}
 			}
 		}
 	}
@@ -5717,7 +6669,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 		}
 		if tray == "" || source == "" {
 			// Nothing to eject: do not attach a tray, or call virsh, just to remove from it.
-			return e.recordVMMedia(req)
+			return e.recordVMMedia(ctx, req)
 		}
 		dev = tray
 	} else if dev, err = ensureCDROM(ctx, e.stateDir, req.VMID, req.Drive, running); err != nil {
@@ -5743,7 +6695,7 @@ func (e *ManagedEngine) changeMedia(ctx context.Context, j *managedJournal, js [
 	if _, err = managedVirsh(ctx, args...); err != nil {
 		return errors.New("libvirt refused the media change; inspect the VM on its host")
 	}
-	return e.recordVMMedia(req)
+	return e.recordVMMedia(ctx, req)
 }
 
 // managedRunning reports whether the domain is running, so callers read the live definition
@@ -5896,17 +6848,66 @@ func managedVM(js []managedJournal, id string) (protocol.VMCreateSpec, error) {
 	return *cur.Command.VM, nil
 }
 
+// VMDefinition returns the current journaled definition without observing or changing
+// libvirt. Snapshot admission uses it to bind a request to host-owned VM state; execution
+// revalidates the definition before native effects.
+func (e *ManagedEngine) VMDefinition(id string) (protocol.VMCreateSpec, error) {
+	js, err := e.journals()
+	if err != nil {
+		return protocol.VMCreateSpec{}, err
+	}
+	if managedDeletedVMs(js)[id] {
+		return protocol.VMCreateSpec{}, errors.New("VM is not defined on this host")
+	}
+	return managedVM(js, id)
+}
+
 // managedCurrent returns a VM's current definition and the journal entry carrying its disk
 // layout: the highest succeeded revision, where creation is revision 0.
 func managedCurrent(js []managedJournal, id string) (managedJournal, error) {
 	var cur managedJournal
 	found := false
 	for _, j := range js {
-		if j.Result.Status != "succeeded" || j.Command.VM == nil || j.Command.VM.ID != id || (j.Command.Kind != "vm-create" && j.Command.Kind != "vm-update") {
+		if j.Command.VM == nil || j.Command.VM.ID != id {
 			continue
 		}
-		if !found || j.Command.VM.Revision > cur.Command.VM.Revision {
-			cur, found = j, true
+		candidate := j
+		switch j.Command.Kind {
+		case "vm-create", "vm-update":
+			if j.Result.Status != "succeeded" {
+				continue
+			}
+		case "snapshot-revert":
+			if !j.RecoverySettled || j.Result.Status != "succeeded" || j.RecoveryStage != "completed" || j.RecoveryOutcome != "completed" || j.SnapshotRevert == nil {
+				continue
+			}
+			vm := j.SnapshotRevert.ResultSpec
+			if j.CurrentProjection != nil {
+				projection := j.CurrentProjection
+				vm = projection.Spec
+				candidate.Disks = append([]string(nil), projection.Disks...)
+				candidate.DiskChains = cloneDiskChains(projection.DiskChains)
+				candidate.Domain = append([]byte(nil), projection.Domain...)
+				candidate.Targets = append([]string(nil), projection.Targets...)
+				candidate.MediaTarget, candidate.DriversTarget = projection.MediaTarget, projection.DriversTarget
+			} else if j.SnapshotRevert.ObservedAfter != nil {
+				candidate.Disks, candidate.DiskChains = snapshotObservationProjection(*j.SnapshotRevert.ObservedAfter)
+				candidate.Domain = append([]byte(nil), j.SnapshotRevert.ObservedDomain...)
+				candidate.Targets = make([]string, len(j.SnapshotRevert.ObservedAfter.Disks))
+				for i, disk := range j.SnapshotRevert.ObservedAfter.Disks {
+					candidate.Targets[i] = disk.Target
+				}
+				candidate.Targets, candidate.MediaTarget, candidate.DriversTarget = managedTargets(vm)
+			}
+			candidate.Command.VM = &vm
+			candidate.Command.Kind = "vm-update"
+			candidate.Command.Snapshot = nil
+			candidate.projectionView = true
+		default:
+			continue
+		}
+		if !found || candidate.Command.VM.Revision > cur.Command.VM.Revision {
+			cur, found = candidate, true
 		}
 	}
 	if !found {
@@ -5921,8 +6922,18 @@ func managedCurrent(js []managedJournal, id string) (managedJournal, error) {
 	return cur, nil
 }
 
+func snapshotObservationProjection(observation managedSnapshotObservation) ([]string, [][]string) {
+	disks := make([]string, len(observation.Disks))
+	chains := make([][]string, len(observation.Disks))
+	for i, disk := range observation.Disks {
+		disks[i] = disk.Source
+		chains[i] = append([]string(nil), disk.Layers...)
+	}
+	return disks, chains
+}
+
 // recordVMMedia updates the VM's current journal entry so Applied reports the current media.
-func (e *ManagedEngine) recordVMMedia(req protocol.VMMediaRequest) error {
+func (e *ManagedEngine) recordVMMedia(ctx context.Context, req protocol.VMMediaRequest) error {
 	js, err := e.journals()
 	if err != nil {
 		return err
@@ -5932,8 +6943,67 @@ func (e *ManagedEngine) recordVMMedia(req protocol.VMMediaRequest) error {
 		return err
 	}
 	v := protocol.ApplyVMMedia(*cur.Command.VM, req.Action, req.Drive, req.MediaID)
+	if cur.projectionView {
+		mediaPath := ""
+		if req.Action == "insert" {
+			_, mediaPath, err = managedMedia(js, req.MediaID)
+			if err != nil {
+				return err
+			}
+		}
+		raw, dumpErr := managedVirsh(ctx, "dumpxml", req.VMID, "--inactive")
+		if dumpErr != nil {
+			return errors.New("persistent VM definition cannot be verified after media change")
+		}
+		target := cur.MediaTarget
+		if driveName(req.Drive) == protocol.DriversDrive {
+			target = cur.DriversTarget
+		}
+		if err = verifyProjectedMediaChange(cur.Domain, raw, target, mediaPath); err != nil {
+			return err
+		}
+		var domain managedDomain
+		if err = xml.Unmarshal(raw, &domain); err != nil {
+			return errors.New("persistent VM definition is invalid after media change")
+		}
+		if err = verifyManagedDiskHeads(domain, cur.Targets, cur.Disks); err != nil {
+			return err
+		}
+		cur.Domain = append([]byte(nil), raw...)
+	}
 	cur.Command.VM = &v
 	return e.save(cur)
+}
+
+func verifyProjectedMediaChange(beforeXML, afterXML []byte, target, mediaPath string) error {
+	if target == "" {
+		return errors.New("managed media drive target is unavailable")
+	}
+	var before, after managedDomain
+	if xml.Unmarshal(beforeXML, &before) != nil || xml.Unmarshal(afterXML, &after) != nil {
+		return errors.New("persistent VM definition is invalid after media change")
+	}
+	var beforeTray, afterTray *managedDisk
+	for i := range before.Devices.Disks {
+		if before.Devices.Disks[i].Device == "cdrom" && before.Devices.Disks[i].Target.Dev == target {
+			beforeTray = &before.Devices.Disks[i]
+			break
+		}
+	}
+	for i := range after.Devices.Disks {
+		if after.Devices.Disks[i].Device == "cdrom" && after.Devices.Disks[i].Target.Dev == target {
+			afterTray = &after.Devices.Disks[i]
+			break
+		}
+	}
+	if beforeTray == nil || afterTray == nil || cdromMedia(*afterTray) != mediaPath {
+		return errors.New("persistent VM media does not match the requested change")
+	}
+	beforeTray.Source, afterTray.Source = nil, nil
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("persistent VM definition changed outside the requested media drive")
+	}
+	return nil
 }
 
 // mediaObserved reconciles an interrupted media change by observing the CD drive. The journal
@@ -6092,6 +7162,7 @@ func (e *ManagedEngine) RegisterDefaults(ctx context.Context, pool, host string,
 // files of removed disks to retain, and the space each storage target must provide.
 type managedLayout struct {
 	Disks, Targets             []string
+	DiskChains                 [][]string
 	MediaTarget, DriversTarget string
 	New                        []int
 	Retained                   []string
@@ -6103,7 +7174,11 @@ type managedLayout struct {
 // half-allocated file is never reused. Target names come from the journal; new disks take the
 // next free letter on their bus.
 func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMCreateSpec) (managedLayout, error) {
-	l := managedLayout{Disks: make([]string, len(v.Disks)), Targets: make([]string, len(v.Disks)), MediaTarget: cur.MediaTarget, DriversTarget: cur.DriversTarget}
+	l := managedLayout{Disks: make([]string, len(v.Disks)), Targets: make([]string, len(v.Disks)), DiskChains: make([][]string, len(v.Disks)), MediaTarget: cur.MediaTarget, DriversTarget: cur.DriversTarget}
+	oldChains, err := managedDiskChains(cur)
+	if err != nil {
+		return l, err
+	}
 	known := map[string]int{}
 	used := map[string]bool{cur.MediaTarget: true, cur.DriversTarget: true}
 	for i, d := range cur.Command.VM.Disks {
@@ -6115,6 +7190,7 @@ func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMC
 	for i, d := range v.Disks {
 		if old, ok := known[d.Name]; ok {
 			l.Disks[i], l.Targets[i] = cur.Disks[old], cur.Targets[old]
+			l.DiskChains[i] = append([]string(nil), oldChains[old]...)
 			kept[d.Name] = true
 			continue
 		}
@@ -6150,11 +7226,12 @@ func managedUpdateLayout(js []managedJournal, cur managedJournal, v protocol.VMC
 			return l, err
 		}
 		l.Disks[i], l.Targets[i] = path, target
+		l.DiskChains[i] = []string{path}
 		l.New = append(l.New, i)
 	}
 	for i, d := range cur.Command.VM.Disks {
 		if !kept[d.Name] {
-			l.Retained = append(l.Retained, cur.Disks[i])
+			l.Retained = append(l.Retained, oldChains[i]...)
 		}
 	}
 	return l, nil
@@ -6246,6 +7323,11 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			}
 		}
 	}
+	chains, err := e.diskChains(ctx, js, cur)
+	if err != nil {
+		return err
+	}
+	cur.DiskChains = chains
 	layout, err := managedUpdateLayout(js, cur, v)
 	if err != nil {
 		return err
@@ -6306,7 +7388,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 			return err
 		}
 	}
-	j.Disks, j.Targets, j.MediaTarget, j.DriversTarget = layout.Disks, layout.Targets, layout.MediaTarget, layout.DriversTarget
+	j.Disks, j.DiskChains, j.Targets, j.MediaTarget, j.DriversTarget = layout.Disks, layout.DiskChains, layout.Targets, layout.MediaTarget, layout.DriversTarget
 	j.MediaPath, j.DriversPath, j.Retained = mediaPath, driversPath, layout.Retained
 	if j.Domain, err = managedDomainXML(v, nets, j.Disks, j.Targets, j.MediaTarget, mediaPath, j.DriversTarget, driversPath, leases); err != nil {
 		return err
@@ -6366,7 +7448,7 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 	} else if err = e.applyStopped(ctx, j, *cur.Command.VM); err != nil {
 		return err
 	}
-	if err = setAutostart(ctx, v, js); err != nil {
+	if err = setAutostart(ctx, v.ID); err != nil {
 		return err
 	}
 	if err = e.observeDefinition(ctx, *j, observed); err != nil {
@@ -6475,34 +7557,22 @@ func allocateDisk(ctx context.Context, path string, d protocol.VMDisk) error {
 	return err
 }
 
-// SetManagedVMAutostart makes libvirt's own autostart flag for one managed domain match what
-// this host is currently allowed to do. libvirt starts its autostart domains at boot, before
-// Core's agent runs, so no agent-side admission can stop them; disabling the flag is the only
-// way a drained or restricted host stays empty across a reboot.
-//
-// disable is a suppression, never a new desired value: the operator's choice stays in the
-// managed journal, which is Nex's own durable record of the definition, so clearing the
-// suppression restores exactly what was asked for with no operator action and nothing to
-// migrate. It never starts or stops a guest.
-func (e *ManagedEngine) SetManagedVMAutostart(ctx context.Context, v protocol.VMCreateSpec, disable bool) error {
-	js, err := e.journals()
-	if err != nil {
-		return err
-	}
-	if disable {
-		v.Autostart = false
-	}
-	return setAutostart(ctx, v, js)
+// SetManagedVMAutostart keeps libvirt's native boot-time flag disabled for every
+// managed pool VM. Core starts desired autostart guests only after current owner
+// admission; desired state remains in the managed VM spec.
+func (e *ManagedEngine) SetManagedVMAutostart(ctx context.Context, v protocol.VMCreateSpec) error {
+	return setAutostart(ctx, v.ID)
 }
 
-// setAutostart makes libvirt's autostart flag match the definition; it never starts a guest.
-func setAutostart(ctx context.Context, v protocol.VMCreateSpec, js []managedJournal) error {
-	args := []string{"autostart", v.ID}
-	if !v.Autostart || managedUsesPoolSharedStorage(js, v) {
-		args = []string{"autostart", "--disable", v.ID}
+// setAutostart disables and verifies libvirt's native flag without changing the
+// desired Autostart value kept in the Core-managed VM spec.
+func setAutostart(ctx context.Context, vmID string) error {
+	if _, err := managedVirsh(ctx, "autostart", "--disable", vmID); err != nil {
+		return errors.New("VM native autostart could not be disabled; inspect the VM on its host")
 	}
-	if _, err := managedVirsh(ctx, args...); err != nil {
-		return errors.New("VM autostart could not be set; inspect the VM on its host")
+	info, err := managedVirsh(ctx, "dominfo", vmID)
+	if err != nil || !autostartDisabled(info) {
+		return errors.New("VM native autostart is not confirmed disabled")
 	}
 	return nil
 }

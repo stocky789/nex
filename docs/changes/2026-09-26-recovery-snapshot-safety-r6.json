@@ -1,0 +1,40 @@
+{
+  "summary": "Record r6 candidate checks for retained-snapshot VM deletion and the Core startup recovery fence. API impact: none.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-safety-r6.md",
+    "docs/changes/2026-09-26-recovery-snapshot-safety-r6.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This adds bounded implementation QA evidence and changes no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The checks exercise existing authenticated VM-delete and Core startup-hook behavior; they add no endpoint or request/response contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The QA records candidate evidence within the existing recovery plan and does not change scope or acceptance criteria.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The existing Core managed-vms journal stores snapshot intent and settlement; the pool master's existing snapshot catalog supplies retained-snapshot deletion authority.",
+    "reason": "The checks validate existing Core-owned state and add no durable record."
+  },
+  "verification": {
+    "method": "Ran both authenticated VM-delete choices through a fresh disposable Controller against a retained-snapshot VM, comparing Controller and Core state before and after each terminal refusal. Invoked the r6 storage-guard CLI using inactive XML and an isolated, mode-0600 derived unresolved-intent journal, then verified the source Core journal was unchanged. The CLI fixture does not invoke libvirt start.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-safety-r6.md",
+      "docs/changes/2026-09-26-storage-guard-snapshot-fence.json"
+    ],
+    "checks": [
+      "Authenticated Controller delete with disk deletion disabled reached terminal retained-snapshot refusal; Core and Controller state unchanged — passed",
+      "Authenticated Controller delete with disk deletion enabled reached terminal retained-snapshot refusal; Core and Controller state unchanged — passed",
+      "r6 storage-guard isolated unresolved local-intent fixture returned the expected refusal; source journal unchanged — passed",
+      "go test ./internal/vmhost -run 'TestStorageGuard(RefusesUnresolvedSnapshotStateBeforeManagedVMStart|AllowsSettledSnapshotIntent)$' -count=1 — passed (see linked code assessment)"
+    ]
+  }
+}

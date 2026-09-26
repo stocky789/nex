@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -165,6 +166,46 @@ func TestNetworkRemoveRefusedWhileVMUsesIt(t *testing.T) {
 	succeed(t, e, removeNetwork("op-remove-2", n, 1))
 }
 
+func TestLegacyFailedRemovalReplayReconcilesBeforeItCanSettle(t *testing.T) {
+	e, n := removalEngine(t)
+	cmd := removeNetwork("legacy-remove", n, 1)
+	if err := e.save(managedJournal{
+		Command: cmd,
+		Result:  protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "old result", ObservedAt: time.Now().Add(-2 * time.Minute)},
+		Stage:   "removing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.Execute(context.Background(), cmd, nil)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("legacy failed removal replay = %+v, %v", result, err)
+	}
+	outcome, err := e.ResourceRemovalOutcome(context.Background(), cmd.OperationID)
+	if err != nil || outcome == nil || outcome.Result.Status != "succeeded" {
+		t.Fatalf("replayed legacy failure did not reconcile to a definitive result: %+v, %v", outcome, err)
+	}
+	journal, err := e.readJournal(cmd.OperationID + ".json")
+	if err != nil || journal.Stage != "removing" {
+		t.Fatalf("replay did not record its completed removal stage: %+v, %v", journal, err)
+	}
+}
+
+func TestResourceRemovalOutcomeRejectsContradictoryFailedStage(t *testing.T) {
+	e, n := removalEngine(t)
+	cmd := removeNetwork("contradictory-remove", n, 1)
+	if err := e.save(managedJournal{
+		Command: cmd,
+		Result:  protocol.Result{OperationID: cmd.OperationID, Status: "failed", ObservedAt: time.Now()},
+		Stage:   "removing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := e.ResourceRemovalOutcome(context.Background(), cmd.OperationID)
+	if err != nil || outcome != nil {
+		t.Fatalf("contradictory failed/removing journal was treated as definitive: %+v, %v", outcome, err)
+	}
+}
+
 func TestNetworkRenameKeepsEverythingElse(t *testing.T) {
 	e, n := removalEngine(t)
 	file := filepath.Join(e.networkDir, "interfaces.d", "nex-"+n.Source)
@@ -273,6 +314,75 @@ func TestMediaRemoveTreatsMissingFileAsDone(t *testing.T) {
 	if applied := appliedMedia(t, e); len(applied) != 1 || !applied[0].Tombstone {
 		t.Fatalf("applied media: %+v", applied)
 	}
+}
+
+func TestRemovalEffectFailuresStayRetryableUntilSuccess(t *testing.T) {
+	t.Run("media", func(t *testing.T) {
+		e, m, path := mediaEngine(t)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "kept"), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		command := removeMedia("op-remove-retry", m.ID, 1)
+		for attempt := 0; attempt < 2; attempt++ {
+			result, err := e.Execute(context.Background(), command, nil)
+			if err != nil || result.Status != "needs_attention" {
+				t.Fatalf("media removal attempt %d should remain unresolved: %+v, %v", attempt+1, result, err)
+			}
+			journal, err := e.readJournal(command.OperationID + ".json")
+			if err != nil || journal.Stage != "removing" {
+				t.Fatalf("media removal stage was not retained: %+v, %v", journal, err)
+			}
+		}
+		if err := os.Remove(filepath.Join(path, "kept")); err != nil {
+			t.Fatal(err)
+		}
+		result, err := e.Execute(context.Background(), command, nil)
+		if err != nil || result.Status != "succeeded" {
+			t.Fatalf("media removal did not settle after retry: %+v, %v", result, err)
+		}
+		if exists(path) {
+			t.Fatal("successful media retry left the path behind")
+		}
+	})
+
+	t.Run("network", func(t *testing.T) {
+		e, network := removalEngine(t)
+		sysfs, vlanProc := t.TempDir(), t.TempDir()
+		restore := NetworkSysfsRootsForTests(sysfs+string(os.PathSeparator), vlanProc+string(os.PathSeparator))
+		t.Cleanup(restore)
+		bridge := filepath.Join(sysfs, network.Source)
+		for _, path := range []string{filepath.Join(bridge, "bridge"), filepath.Join(bridge, "brif")} {
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		attempts := filepath.Join(t.TempDir(), "attempts")
+		fakeCommand(t, "ip", "count=0; if [ -f '"+attempts+"' ]; then count=$(cat '"+attempts+"'); fi; count=$((count+1)); echo $count > '"+attempts+"'; if [ \"$count\" -le 2 ]; then exit 1; fi; exit 0")
+		command := removeNetwork("op-network-retry", network, 1)
+		for attempt := 0; attempt < 2; attempt++ {
+			result, err := e.Execute(context.Background(), command, nil)
+			if err != nil || result.Status != "needs_attention" {
+				t.Fatalf("network removal attempt %d should remain unresolved: %+v, %v", attempt+1, result, err)
+			}
+			journal, err := e.readJournal(command.OperationID + ".json")
+			if err != nil || journal.Stage != "removing" {
+				t.Fatalf("network removal stage was not retained: %+v, %v", journal, err)
+			}
+		}
+		result, err := e.Execute(context.Background(), command, nil)
+		if err != nil || result.Status != "succeeded" {
+			t.Fatalf("network removal did not settle after retry: %+v, %v", result, err)
+		}
+		if exists(filepath.Join(e.networkDir, "interfaces.d", "nex-"+network.Source)) {
+			t.Fatal("successful network retry left its owned configuration behind")
+		}
+	})
 }
 
 func TestMediaRemoveRefusedWhileAttached(t *testing.T) {

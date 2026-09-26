@@ -146,9 +146,22 @@ class MaintainerScriptRetentionTests(unittest.TestCase):
             source.copy_sources(root, target)
             for path in ('packaging/cluster-storage/Dockerfile',
                          'packaging/cluster-storage/build-matched-dlm.sh',
+                         'packaging/libvirt/build-matched-libvirt.sh',
+                         'packaging/libvirt/readonly-disk-apparmor.patch',
+                         'packaging/libvirt/partial-backing-chain.patch',
+                         'packaging/libvirt/qmp-json-depth.patch',
+                         'packaging/libvirt/preserve-readonly-revert-media.patch',
+                         'packaging/libvirt/unique-revert-overlay.patch',
+                         'tests/integration/libvirt_recovery_ci.py',
+                         'tests/integration/recovery_s0.py',
+                         'tests/integration/recovery_s0_consolidate.py',
+                         'tests/integration/libvirt_readonly_policy.py',
+                         'tests/test_libvirt_recovery_ci.py',
                          'packaging/cluster-storage/cluster-iscsi-session',
                          'packaging/core-local/nex-sensors.conf'):
                 self.assertEqual((target / path).read_bytes(), (root / path).read_bytes())
+            for name in ('serialized-snapshot-delete.patch', 'snapshot-delete-recovery.patch'):
+                self.assertFalse((target / 'packaging/libvirt' / name).exists())
 
     @staticmethod
     def covered_by_tree(path):

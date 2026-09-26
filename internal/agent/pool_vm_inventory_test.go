@@ -92,6 +92,274 @@ func TestPoolVMInventoryAcceptsRealHealthyManagedObservations(t *testing.T) {
 	}
 }
 
+func failedStartInventoryFixture(t *testing.T) (*Store, protocol.VMCreateSpec) {
+	t.Helper()
+	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	storage := protocol.StorageRegistration{ID: "local-1", PoolID: s.State.PoolID, HostID: s.State.HostID, Name: "local", Path: t.TempDir(), Kind: protocol.StorageKindLocal, Generation: 1}
+	vm := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+	vm.Disks[0].StorageID = storage.ID
+	if err := os.MkdirAll(filepath.Join(s.dir, "managed-vms"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, record any) {
+		t.Helper()
+		b, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", name+".json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("register-local", map[string]any{"command": protocol.Command{OperationID: "register-local", Kind: "storage-register", Storage: &storage}, "result": protocol.Result{OperationID: "register-local", Status: "succeeded"}, "applied_storage": storage})
+	write("create-local", map[string]any{"command": protocol.Command{OperationID: "create-local", Kind: "vm-create", VM: &vm}, "result": protocol.Result{OperationID: "create-local", Status: "succeeded"}})
+	autostartVirsh(t, vm.ID)
+	return s, vm
+}
+
+func TestPoolVMInventorySettlesExactFailedStartAfterRestart(t *testing.T) {
+	s, local := failedStartInventoryFixture(t)
+	const operationID = "start-memory-preflight"
+	command := protocol.Command{OperationID: operationID, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: local.PoolID, HostID: local.HostID, Action: "start"}}
+	journal, err := json.Marshal(map[string]any{
+		"command": command,
+		"result":  protocol.Result{OperationID: operationID, Status: "failed", Error: "insufficient available memory"},
+		"stage":   "validating",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", operationID+".json"), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: operationID, Spec: local}
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+		t.Fatalf("owner inventory did not reconcile the failed start: %v", err)
+	}
+	settled := mustLoadPoolVMs(t, s).VMs[local.ID]
+	if settled.State != "stopped" || settled.PendingStartOperationID != "" || settled.Epoch != 2 {
+		t.Fatalf("exact failed start was not safely released: %+v", settled)
+	}
+}
+
+func TestPoolVMInventorySettlesFailedStartAfterCreateAfterRestart(t *testing.T) {
+	s, local := failedStartInventoryFixture(t)
+	local.StartAfterCreate = true
+	create, err := json.Marshal(map[string]any{
+		"command":       protocol.Command{OperationID: "create-local", Kind: "vm-create", VM: &local},
+		"result":        protocol.Result{OperationID: "create-local", Status: "succeeded"},
+		"stage":         "started",
+		"start":         "libvirt refused the start request",
+		"start_outcome": "failed-before-request",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", "create-local.json"), create, 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: "create-local", Spec: local}
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+		t.Fatalf("owner inventory did not reconcile failed StartAfterCreate: %v", err)
+	}
+	settled := mustLoadPoolVMs(t, s).VMs[local.ID]
+	if settled.State != "stopped" || settled.PendingStartOperationID != "" || settled.Epoch != 2 {
+		t.Fatalf("failed StartAfterCreate was not safely released: %+v", settled)
+	}
+}
+
+func TestPoolVMInventoryKeepsAmbiguousAutomaticStartAfterRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		start     string
+		outcome   string
+		observed  string
+		wantState string
+		pending   string
+	}{
+		{name: "request outcome uncertain and shut off", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: "create-auto"},
+		{name: "interrupted outcome and shut off", start: "interrupted before the automatic start completed", outcome: "uncertain", observed: "shut off", wantState: "starting", pending: "create-auto"},
+		{name: "legacy reason and shut off", start: "libvirt refused the start request; inspect the VM on its host", observed: "shut off", wantState: "starting", pending: "create-auto"},
+		{name: "uncertain but currently running", start: "libvirt did not confirm the start request; inspect the VM on its host", outcome: "uncertain", observed: "running", wantState: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, local := failedStartInventoryFixture(t)
+			_ = os.Remove(filepath.Join(s.dir, "managed-vms", "create-local.json"))
+			local.StartAfterCreate = true
+			t.Setenv("NEX_TEST_STATE", tc.observed)
+			create, err := json.Marshal(map[string]any{
+				"command":       protocol.Command{OperationID: "create-auto", Kind: "vm-create", VM: &local},
+				"result":        protocol.Result{OperationID: "create-auto", Status: "succeeded"},
+				"stage":         "started",
+				"start":         tc.start,
+				"start_outcome": tc.outcome,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", "create-auto.json"), create, 0600); err != nil {
+				t.Fatal(err)
+			}
+			record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: "create-auto", Spec: local}
+			if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+				t.Fatalf("owner inventory: %v", err)
+			}
+			settled := mustLoadPoolVMs(t, s).VMs[local.ID]
+			if settled.State != tc.wantState || settled.PendingStartOperationID != tc.pending {
+				t.Fatalf("automatic start reconciliation = %+v, want state %s pending %s", settled, tc.wantState, tc.pending)
+			}
+		})
+	}
+}
+
+func TestPoolVMInventorySettlesObservedRunningStartAfterLostAcknowledgement(t *testing.T) {
+	s, local := failedStartInventoryFixture(t)
+	t.Setenv("NEX_TEST_STATE", "running")
+	const operationID = "start-lost-ack"
+	command := protocol.Command{OperationID: operationID, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: local.PoolID, HostID: local.HostID, Action: "start"}}
+	journal, err := json.Marshal(map[string]any{
+		"command": command,
+		"result":  protocol.Result{OperationID: operationID, Status: "succeeded"},
+		"stage":   "powering",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", operationID+".json"), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: operationID, Spec: local}
+	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+		t.Fatalf("owner inventory did not reconcile the observed running guest: %v", err)
+	}
+	settled := mustLoadPoolVMs(t, s).VMs[local.ID]
+	if settled.State != "running" || settled.PendingStartOperationID != "" || settled.Epoch != 2 {
+		t.Fatalf("observed running guest was not reconciled: %+v", settled)
+	}
+}
+
+func TestPoolVMInventoryKeepsStartPendingWithoutExactDefinitiveFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		journalID   string
+		journalKind string
+		status      string
+		pending     string
+		observed    string
+		wantState   string
+		wantPending string
+	}{
+		{name: "different operation", journalID: "older-failed-start", journalKind: "vm-power", status: "failed", pending: "current-start", observed: "shut off", wantState: "starting", wantPending: "current-start"},
+		{name: "ambiguous result", journalID: "current-start", journalKind: "vm-power", status: "needs_attention", pending: "current-start", observed: "shut off", wantState: "starting", wantPending: "current-start"},
+		{name: "failed stop command", journalID: "current-start", journalKind: "vm-power", status: "failed", pending: "current-start", observed: "shut off", wantState: "starting", wantPending: "current-start"},
+		{name: "running observation", journalID: "current-start", journalKind: "vm-power", status: "needs_attention", pending: "current-start", observed: "running", wantState: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, local := failedStartInventoryFixture(t)
+			t.Setenv("NEX_TEST_STATE", tc.observed)
+			action := "start"
+			if tc.name == "failed stop command" {
+				action = "shutdown"
+			}
+			command := protocol.Command{OperationID: tc.journalID, Kind: tc.journalKind, Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: local.PoolID, HostID: local.HostID, Action: action}}
+			journal, err := json.Marshal(map[string]any{
+				"command": command,
+				"result":  protocol.Result{OperationID: tc.journalID, Status: tc.status, Error: "native start unresolved"},
+				"stage":   "powering",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", tc.journalID+".json"), journal, 0600); err != nil {
+				t.Fatal(err)
+			}
+			record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: tc.pending, Spec: local}
+			if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{local.ID: record}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := PublishPoolVMInventory(context.Background(), s); err != nil {
+				t.Fatalf("inventory publish: %v", err)
+			}
+			unsettled := mustLoadPoolVMs(t, s).VMs[local.ID]
+			if unsettled.State != tc.wantState || unsettled.PendingStartOperationID != tc.wantPending {
+				t.Fatalf("start reconciliation = %+v, want state %s pending %s", unsettled, tc.wantState, tc.wantPending)
+			}
+		})
+	}
+}
+
+func TestPoolVMInventoryKeepsFailedStartFencedDuringUpdateOrRecovery(t *testing.T) {
+	for _, kind := range []string{"update", "recovery"} {
+		t.Run(kind, func(t *testing.T) {
+			s, local := failedStartInventoryFixture(t)
+			const operationID = "start-pending-work"
+			command := protocol.Command{OperationID: operationID, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: local.ID, PoolID: local.PoolID, HostID: local.HostID, Action: "start"}}
+			journal, err := json.Marshal(map[string]any{"command": command, "result": protocol.Result{OperationID: operationID, Status: "failed", Error: "preflight failed"}, "stage": "validating"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", operationID+".json"), journal, 0600); err != nil {
+				t.Fatal(err)
+			}
+			record := poolVMRecord{PoolID: local.PoolID, VMID: local.ID, HostID: local.HostID, State: "starting", Epoch: 2, PendingStartOperationID: operationID, Spec: local}
+			if kind == "update" {
+				next := local
+				next.Revision++
+				record.PendingUpdate = &poolVMPendingUpdate{OperationID: "update-pending", Next: next}
+			} else {
+				stopped := record
+				stopped.State, stopped.PendingStartOperationID = "stopped", ""
+				reservation, err := poolVMRecoveryReservationFor(stopped, "snapshot-pending", "snapshot-create", strings.Repeat("d", 64), 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := reservePoolVMRecovery(&stopped, reservation); err != nil {
+					t.Fatal(err)
+				}
+				descriptor := snapshotDescriptorForTest(reservation, "pending", "")
+				dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(local)
+				if err != nil {
+					t.Fatal(err)
+				}
+				descriptor.Dependencies = &dependencies
+				stopped.PendingSnapshot = &descriptor
+				record.PendingRecovery, record.PendingSnapshot = stopped.PendingRecovery, stopped.PendingSnapshot
+			}
+			inv, err := localPoolVMInventory(context.Background(), s, 1)
+			if err != nil {
+				t.Fatalf("owner inventory: %v", err)
+			}
+			membership, err := Membership(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := poolVMState{VMs: map[string]poolVMRecord{local.ID: record}, Inventory: map[string]poolVMInventory{local.HostID: inv}}
+			if err := seedPoolVMOwners(s, membership, &state, local.HostID); err != nil {
+				t.Fatalf("owner seed: %v", err)
+			}
+			unsettled := state.VMs[local.ID]
+			if unsettled.State != "starting" || unsettled.PendingStartOperationID != operationID {
+				t.Fatalf("failed start bypassed pending %s: %+v", kind, unsettled)
+			}
+		})
+	}
+}
+
 func TestPoolVMInventoryKeepsPausedLocalDefinitionWithoutBlockingPool(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	storage := protocol.StorageRegistration{ID: "local-repo", PoolID: "pool-1", HostID: "host-a", Name: "local", Path: "/var/lib/nex-storage/local", Kind: protocol.StorageKindLocal}
@@ -207,6 +475,28 @@ func TestPoolVMInventoryRejectsStaleGeneration(t *testing.T) {
 	}
 }
 
+func TestPoolReplicaRejoinRequiresCapturedSameGenerationAuthority(t *testing.T) {
+	captured := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 7, Members: []protocol.PoolMember{
+		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
+		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready", ReplicaAckExcluded: true},
+	}}
+	state := poolVMState{Inventory: map[string]poolVMInventory{"member-1": {HostID: "member-1", Generation: 7}}}
+	peer := poolPeerState{Membership: captured, AuthorityDigest: strings.Repeat("c", 64)}
+	if !poolReplicaRejoinStillCurrent(peer, captured, peer.AuthorityDigest, peer.AuthorityDigest, state, "member-1", "master-1") {
+		t.Fatal("the exact captured authority and accepted inventory were rejected")
+	}
+	if poolReplicaRejoinStillCurrent(peer, captured, peer.AuthorityDigest, strings.Repeat("d", 64), state, "member-1", "master-1") {
+		t.Fatal("same-generation content that changed after the acknowledged digest was treated as current")
+	}
+	changed := captured
+	changed.Members = append([]protocol.PoolMember(nil), captured.Members...)
+	changed.Members[1].Maintenance = true // authority-only change, same membership generation
+	peer.Membership = changed
+	if poolReplicaRejoinStillCurrent(peer, captured, peer.AuthorityDigest, peer.AuthorityDigest, state, "member-1", "master-1") {
+		t.Fatal("a same-generation authority change after replica push was treated as the acknowledged snapshot")
+	}
+}
+
 func TestPoolVMInventoryRefreshesOnlyNewerPinnedMembership(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	current := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-master", Generation: 2, Members: []protocol.PoolMember{
@@ -295,7 +585,7 @@ func TestPoolVMInventorySettlesWithAnEjectedMembershipRow(t *testing.T) {
 	// The master's own guest can be started again; the member's record is back in the one
 	// state the master's start admission accepts.
 	permit, epoch := "", uint64(0)
-	if err := poolVMLocal(s, mine.ID, "start", &permit, false, nil, &epoch); err != nil {
+	if err := poolVMLocalBound(s, mine.ID, "start", "inventory-restart", 0, &permit, false, nil, &epoch); err != nil {
 		t.Fatalf("start on the master after a stop: %v", err)
 	}
 	if permit == "" || epoch != 3 {
@@ -346,6 +636,9 @@ func TestPoolVMInventoryDropsSnapshotsOfNonMembers(t *testing.T) {
 		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
 		{HostID: "gone-1", CertificateSHA256: strings.Repeat("c", 64), Generation: 12, Status: "ejected"},
 	}}
+	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
+		t.Fatal(err)
+	}
 	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
 		"gone-1": {HostID: "gone-1", Generation: 9},
 	}}); err != nil {

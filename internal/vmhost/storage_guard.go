@@ -77,6 +77,7 @@ func WritePoolVMStartPermitAdmission(stateDir, poolID, hostID, vmID string, epoc
 }
 
 var poolHostBootID = readKernelBootID
+
 func RemovePoolVMStartPermit(stateDir, vmID string) error {
 	if !uuidPattern.MatchString(vmID) {
 		return errors.New("invalid pool VM identity")
@@ -377,6 +378,11 @@ func checkStorageStartup(ctx context.Context, d domainXML, js []managedJournal, 
 	}
 	if managed && !uuidPattern.MatchString(d.UUID) {
 		return errors.New("managed VM startup requires a valid VM identity")
+	}
+	if managed {
+		if err := recoveryVMReservationRefusal(js, d.UUID, ""); err != nil {
+			return err
+		}
 	}
 	repositories := storageProjection(js)
 	checked := map[string]bool{}

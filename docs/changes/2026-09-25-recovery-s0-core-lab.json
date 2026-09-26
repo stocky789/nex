@@ -1,0 +1,39 @@
+{
+  "summary": "Prepare a disposable package-based three-Core recovery S0 lab with isolated repository and QEMU-eligible NFS/SMB scratch backends, exclusive-host iSCSI, and a bounded-capacity NFS fixture for ENOSPC testing. S0 acceptance remains open. API impact: none.",
+  "paths": [
+    "docs/qa/2026-09-25-recovery-s0-core-lab.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor-only disposable lab setup; no operator workflow or product behavior changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The lab installs and exercises the existing Core package and native filesystem clients only; no Controller/Core contract or client API changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records S0 setup evidence only. Recovery implementation and its acceptance gates remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "All recorded resources are disposable lab artifacts; no durable product state or repository metadata was added."
+  },
+  "verification": {
+    "method": "Verified the official Debian genericcloud image against published SHA-512 and pinned SHA-256, built the signed Controller appliance and Core package from the working tree, and independently verified package identity/version/architecture and manifest signature/digest. Installed the package only in three explicitly disposable guests after applying the ISO recipe's release stamp; verified Core service state, installed component versions, private ext4-backed repository NFS/SMB/iSCSI scratch services, separate QEMU-eligible NFS and authenticated encrypted SMB mounts, and a new 128 MiB file-backed ext4 NFS export restricted to Core C for bounded-capacity testing. On each eligible VM-storage mount, a root-created probe accepted fchown to the observed libvirt-qemu uid, mode 0600, and fsync; the libvirt-qemu account could read and write it. On the capacity fixture, root create/fchown and libvirt-qemu create/read/write/unlink passed; its reserved `backup-enospc` child is mode 0700 and owned by the mapped uid/gid, and 117,440,512 bytes remained available after setup. Also verified cross-host repository NFS marker visibility, SMB marker read/write, and Core B-only blank-LUN checks before ext4 formatting and read/write. OVMF/swtpm versions were matched to the immutable installer snapshot. All results are package-based guest evidence, not ISO install acceptance; the separate ENOSPC backup attempt is not covered by this setup record. See the separate NFS primitive report for its actual run results.",
+    "evidence": [
+      "docs/LICENSING.md",
+      "appliance/README.md",
+      "packaging/core-local/build.py",
+      "installer/build.sh",
+      "tests/integration/cluster_ha_lab.py",
+      "internal/vmhost/storage_mounts.go",
+      "internal/vmhost/storage_native.go",
+      "tests/integration/recovery_s0_repository.py",
+      "docs/qa/2026-09-25-recovery-s0-repository.md"
+    ]
+  }
+}

@@ -140,14 +140,23 @@ class DocumentationGateTests(unittest.TestCase):
         """A controller owner is only legitimate for the closed Controller-scoped list."""
         record = self.record(['app.py'], state={'owner': 'controller', 'reason': 'Kept in SQLite',
                                                 'record': 'Controller table vm_layouts'})
-        with self.assertRaisesRegex(ValueError, 'closed Controller-scoped exceptions: sites, administrator accounts and roles, audit history, enrollment tokens, the Controller CA, backup/restore jobs'):
+        with self.assertRaisesRegex(ValueError, 'closed Controller-scoped exceptions: sites, administrator accounts and roles, audit history, enrollment tokens, the Controller CA'):
             docs.check(self.root, {'app.py', record}, added={record})
         for record_text in ('Enrollment tokens table; re-created on a fresh Controller',
                             'Controller SQLite admins row, in the appliance recovery export',
-                            'Backup job history and catalog, covered by the Controller backup',
                             'The Controller CA under /var/lib/nex-controller'):
             self.record(['app.py'], state={'owner': 'controller', 'reason': 'Closed-list item', 'record': record_text})
             docs.check(self.root, {'app.py', record}, added={record})
+        for record_text in ('Backup job history and catalog, covered by the Controller backup',
+                            'Restore job definitions and schedules in Controller SQLite',
+                            'Backup job history alongside Controller audit history',
+                            'Backup verification results alongside Controller CA',
+                            'Backup execution alongside audit history',
+                            'Backup repository inventory alongside enrollment tokens',
+                            'Restore run history alongside administrator accounts'):
+            self.record(['app.py'], state={'owner': 'controller', 'reason': 'Pool recovery data', 'record': record_text})
+            with self.assertRaisesRegex(ValueError, 'closed Controller-scoped exceptions'):
+                docs.check(self.root, {'app.py', record}, added={record})
 
     def test_editing_a_merged_record_does_not_demand_its_pages_change_again(self):
         """The trap: a record's pages requirement must apply when it is added, not forever.

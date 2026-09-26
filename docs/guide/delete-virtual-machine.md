@@ -12,6 +12,9 @@ Navigation on this page follows the development build 0.4.8 console layout; see
 
 - Administrator access to [Nex Controller](manage-controller.md) and a guest VM
   [created through Controller](create-virtual-machine.md) whose creation task succeeded.
+- No retained snapshots or unresolved snapshot recovery operation. This development slice
+  refuses deletion with retained snapshots even when keeping disk files; snapshot deletion
+  is not yet available. Do not remove files or metadata manually to bypass this check.
 - The VM observed **shut off** with a fresh host report. Use [Control VM power](vm-power.md)
   to stop it first.
 - The VM's host freshly connected and reporting the `vm-delete-v1` capability (matching Nex
@@ -44,6 +47,11 @@ HTTP acceptance is not proof of completion — wait for the task and an updated 
 
 ## Troubleshooting
 
+- **Retained snapshots or recovery operation:** leave the VM and its storage intact.
+  Reconcile an uncertain operation using its original ID. A completed retained snapshot
+  also prevents VM deletion until the snapshot-deletion workflow is implemented.
+- **Pool master unavailable:** restore its connection before retrying deletion; keeping
+  disks does not bypass the owner check.
 - **Delete is greyed with "Stop the VM before deleting it":** shut down or force-stop the VM
   and wait for observed **shut off**.
 - **"The Controller appliance is managed from its host's local page":** appliances are not

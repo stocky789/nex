@@ -72,6 +72,124 @@ build_matched_dlm() {
     printf '%s\n' "$deb"
 }
 
+build_matched_libvirt() {
+    local docker_bin=$1 source_snapshot=$2 security_snapshot=$3
+    local output=.cache/nex-iso/matched-libvirt
+    rm -rf "$output"
+    mkdir -p "$output"
+    [[ -f tests/integration/libvirt_readonly_policy.py ]] || {
+        echo 'matched libvirt helper-policy regression is missing' >&2
+        exit 1
+    }
+    (
+        local recipe
+        recipe=$(mktemp -d .cache/nex-iso/libvirt-recipe.XXXXXX)
+        trap 'rm -rf "$recipe"' EXIT
+        cp -a packaging/libvirt/. "$recipe/"
+        cp tests/integration/libvirt_readonly_policy.py "$recipe/"
+        "$docker_bin" run --rm --init --platform linux/amd64 \
+            -v nex-build-cache:/apt-cache \
+            -v "$PWD/$recipe:/recipe:ro" -v "$PWD/$output:/output" \
+            -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
+            -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
+            debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 \
+            /recipe/build-matched-libvirt.sh >&2
+    )
+    [[ -f $output/SHA256SUMS && -f $output/binary-packages.txt && -f $output/source/libvirt_11.3.0-3+deb13u3+nex4.dsc ]] || {
+        echo 'matched libvirt build is missing its verified source or binary manifest' >&2
+        exit 1
+    }
+    (cd "$output" && sha256sum --check SHA256SUMS) >&2
+    [[ $(grep -Fxc 'local_version=11.3.0-3+deb13u3+nex4' "$output/build-inputs.txt") == 1 ]] || {
+        echo 'matched libvirt build has an unexpected local version' >&2
+        exit 1
+    }
+    printf '%s\n' "$output"
+}
+
+replace_matched_libvirt() {
+    local repository=$1 build_output=$2 third_party=$3
+    python3 - "$repository" "$build_output" "$third_party" <<'PYLIBVIRT'
+import hashlib
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+repository, output, third_party = map(Path, sys.argv[1:])
+expected_version = '11.3.0-3+deb13u3+nex4'
+debian_version = '11.3.0-3+deb13u3'
+
+def fields(path):
+    result = subprocess.run(['dpkg-deb', '-f', str(path)], check=True,
+                            capture_output=True, text=True)
+    return {key: value for line in result.stdout.splitlines() if ': ' in line
+            for key, value in [line.split(': ', 1)]}
+
+def source_name(control):
+    return control.get('Source', control.get('Package', '')).split(' ', 1)[0]
+
+slots = {}
+for deb in sorted(repository.glob('*.deb')):
+    control = fields(deb)
+    if source_name(control) == 'libvirt':
+        if control.get('Version') != debian_version:
+            raise SystemExit(f'unexpected Debian libvirt version in APT closure: {deb.name}')
+        key = (control['Package'], control['Architecture'])
+        if key in slots:
+            raise SystemExit(f'duplicate libvirt package slot: {key}')
+        slots[key] = deb
+
+candidates = {}
+for deb in sorted(output.glob('*.deb')):
+    control = fields(deb)
+    if source_name(control) != 'libvirt':
+        continue
+    if control.get('Version') != expected_version:
+        raise SystemExit(f'unexpected matched libvirt version in {deb.name}')
+    key = (control['Package'], control['Architecture'])
+    if key in candidates:
+        raise SystemExit(f'duplicate matched libvirt package: {key}')
+    candidates[key] = deb
+
+if not slots:
+    raise SystemExit('APT closure has no libvirt source-package slots to replace')
+if not slots.keys() <= candidates.keys():
+    raise SystemExit(f'matched libvirt packages missing for APT slots: {sorted(slots.keys() - candidates.keys())}')
+
+third_party.mkdir(parents=True, exist_ok=False)
+for name in ('source', 'notices', 'recipe'):
+    shutil.copytree(output / name, third_party / name)
+for name in ('binary-packages.txt', 'build-inputs.txt', 'build.log'):
+    shutil.copy2(output / name, third_party / name)
+
+rows = ['package\tarchitecture\tdebian_version\tdebian_sha256\tmatched_version\tmatched_sha256\n']
+for key, original in sorted(slots.items()):
+    candidate = candidates[key]
+    old = fields(original)
+    new = fields(candidate)
+    def digest(path):
+        with path.open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    old_hash = digest(original)
+    new_hash = digest(candidate)
+    destination = repository / candidate.name
+    if destination.exists() and destination != original:
+        raise SystemExit(f'matched package filename already exists: {destination.name}')
+    original.unlink()
+    shutil.copy2(candidate, destination)
+    rows.append(f"{key[0]}\t{key[1]}\t{old['Version']}\t{old_hash}\t{new['Version']}\t{new_hash}\n")
+
+(third_party / 'replaced-packages.tsv').write_text(''.join(rows))
+files = sorted(path for path in third_party.rglob('*') if path.is_file())
+checksums = []
+for path in files:
+    checksums.append(f"{digest(path)}  {path.relative_to(third_party)}\n")
+(third_party / 'SHA256SUMS').write_text(''.join(checksums))
+print(f'replaced {len(slots)} existing libvirt Package+Architecture slots')
+PYLIBVIRT
+}
+
 ensure_perl_exact_source() {
     # Base installer / appliance still ship perl 5.40.1-6 while newer snapshot
     # indices prefer 5.40.1-6+deb13u1. apt-get source then substitutes and the
@@ -245,8 +363,13 @@ if [[ ${1:-} != --inside ]]; then
     # failed apt-get source for a version the pinned sources did not have.
     source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian/20260920T000000Z/}
     security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:-https://snapshot.debian.org/archive/debian-security/20260920T000000Z/}
-    [[ $source_snapshot == https://snapshot.debian.org/archive/* && $security_snapshot == https://snapshot.debian.org/archive/* ]] || {
-        echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable snapshot.debian.org archive URLs.' >&2
+    snapshot_url_ok() {
+        # Reject whitespace/control injection into sources.list; require an exact
+        # immutable snapshot.debian.org archive stamp URL (trailing slash).
+        [[ "$1" =~ ^https://snapshot\.debian\.org/archive/(debian|debian-security)/[0-9]{8}T[0-9]{6}Z/$ ]]
+    }
+    snapshot_url_ok "$source_snapshot" && snapshot_url_ok "$security_snapshot" || {
+        echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable https://snapshot.debian.org/archive/(debian|debian-security)/<stamp>/ URLs.' >&2
         exit 1
     }
     # One version identifies a release. Default to the newest CHANGELOG heading so an
@@ -262,6 +385,7 @@ if [[ ${1:-} != --inside ]]; then
     fi
     rebuild_iso_artifacts "$version"
     matched_dlm_deb=$(build_matched_dlm "$docker_bin")
+    matched_libvirt_dir=$(build_matched_libvirt "$docker_bin" "$source_snapshot" "$security_snapshot")
     iso_core_local=.cache/nex-iso/core-local/nex-core-local_${version}_amd64.deb
     assert_iso_artifacts_current "$iso_core_local" "$version"
     "$docker_bin" build -t nex-iso-builder -f installer/Dockerfile installer
@@ -269,6 +393,7 @@ if [[ ${1:-} != --inside ]]; then
         -v "$PWD:/work" -e BUILD_UID="$(id -u)" -e BUILD_GID="$(id -g)" \
         -e "CORE_LOCAL_DEB=/work/${iso_core_local#"$PWD"/}" \
         -e "MATCHED_DLM_DEB=/work/${matched_dlm_deb#"$PWD"/}" \
+        -e "MATCHED_LIBVIRT_DIR=/work/${matched_libvirt_dir#"$PWD"/}" \
         -e "NEX_DEBIAN_SOURCE_SNAPSHOT=$source_snapshot" \
         -e "NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT=$security_snapshot" \
         -e "NEX_ISO_VERSION=$version" \
@@ -283,6 +408,13 @@ stage=$cache/stage
 downloads=${NEX_DOWNLOADS:-$cache}
 source_snapshot=${NEX_DEBIAN_SOURCE_SNAPSHOT:?NEX_DEBIAN_SOURCE_SNAPSHOT required}
 security_snapshot=${NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT:?NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT required}
+snapshot_url_ok() {
+    [[ "$1" =~ ^https://snapshot\.debian\.org/archive/(debian|debian-security)/[0-9]{8}T[0-9]{6}Z/$ ]]
+}
+snapshot_url_ok "$source_snapshot" && snapshot_url_ok "$security_snapshot" || {
+    echo 'NEX_DEBIAN_SOURCE_SNAPSHOT and NEX_DEBIAN_SECURITY_SOURCE_SNAPSHOT must be immutable https://snapshot.debian.org/archive/(debian|debian-security)/<stamp>/ URLs.' >&2
+    exit 1
+}
 # The ISO carries exactly one Nex Core version: the nex-core-local package it installs.
 core_local_deb=${CORE_LOCAL_DEB:?nex-core-local package path required}
 [[ -f $core_local_deb ]] || { echo "missing nex-core-local package: $core_local_deb" >&2; exit 1; }
@@ -291,6 +423,12 @@ matched_dlm_deb=${MATCHED_DLM_DEB:?matched dlm-controld package path required}
 [[ $(dpkg-deb -f "$matched_dlm_deb" Package) == dlm-controld ]]
 [[ $(dpkg-deb -f "$matched_dlm_deb" Version) == 4.3.0-3+nex1 ]]
 dpkg-deb -f "$matched_dlm_deb" Depends | grep -Fq 'libstonithd56 (= 3.0.0-2)'
+matched_libvirt_dir=${MATCHED_LIBVIRT_DIR:?matched libvirt output directory required}
+[[ -f $matched_libvirt_dir/SHA256SUMS && -f $matched_libvirt_dir/binary-packages.txt ]] || {
+    echo "incomplete matched libvirt output: $matched_libvirt_dir" >&2
+    exit 1
+}
+(cd "$matched_libvirt_dir" && sha256sum --check SHA256SUMS)
 version=$(dpkg-deb -f "$core_local_deb" Version)
 output=/work/dist/nex-core-${version}-amd64.iso
 mkdir -p "$cache" "$downloads" /work/dist
@@ -405,6 +543,7 @@ for deb in "$stage/nex/repo"/libstonithd56_*.deb; do
         exit 1
     }
 done
+replace_matched_libvirt "$stage/nex/repo" "$matched_libvirt_dir" "$stage/nex/third-party/libvirt"
 dlm_source=$(dirname "$matched_dlm_deb")
 [[ -f $dlm_source/build.log && -f $dlm_source/source/dlm_4.3.0-3.dsc && -f $dlm_source/notices/dlm-copyright ]]
 mkdir -p "$stage/nex/third-party"
@@ -599,6 +738,10 @@ if [[ -n ${NEX_NETINST_BASE_URL:-} ]]; then
     rm -rf "$netstage/nex/third-party/dlm-pacemaker-abi"
     mkdir -p "$netstage/nex/third-party/dlm-pacemaker-abi"
     cp -a "$stage/nex/third-party/dlm-pacemaker-abi/notices" "$netstage/nex/third-party/dlm-pacemaker-abi/"
+    rm -rf "$netstage/nex/third-party/libvirt"
+    mkdir -p "$netstage/nex/third-party/libvirt"
+    cp -a "$stage/nex/third-party/libvirt/notices" "$netstage/nex/third-party/libvirt/"
+    (cd "$netstage/nex/third-party/libvirt" && sha256sum notices/* > SHA256SUMS)
     # Replace transport descriptions without modifying hardlinked offline metadata.
     python3 - "$netstage" <<'PYNOTICE'
 from pathlib import Path

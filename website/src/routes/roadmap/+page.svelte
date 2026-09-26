@@ -118,17 +118,25 @@
       ]
     },
     {
-      status: "next",
+      status: "testing",
       title: "Snapshots, backups and proven restores",
       summary:
-        "Getting a VM back — from a rollback point, and from a backup that lives somewhere else.",
-      done: [],
+        "Phase 5 is partially complete but not closed: stopped and running snapshot product paths have disposable-lab and browser evidence; native multi-backend snapshot lifecycle evidence also exists. Forge CI on a published push, independent checklist review and residual matrix honesty still keep the Phase 5 gate open. Phase 6 product backup and restore workflows are not implemented and must not start until that gate closes.",
+      done: [
+        "Bounded disposable-lab native feasibility for disk snapshots, paired firmware state and independent NFS backup/restore probes",
+        "Core-owned stopped snapshot creation and catalog reporting, with bounded exact-retry, interruption, Controller replacement and pool promotion/rejoin evidence",
+        "Corrected stopped revert recovery for a disposable two-disk UEFI guest: exact same-operation retry settled without a second native revert",
+        "Stopped leaf delete with public no-delete blockcommit, catalog metadata rename and Controller Snapshots tab create/list/rename/revert/delete",
+        "Running BIOS crash-consistent and quiesced create through Controller, with honest UEFI and missing-agent refusals",
+        "Browser Snapshots walkthrough: crash create, rename, matching-disk revert and leaf delete",
+        "VMs-list bulk Snapshot for selected shut-off guests with shared name and per-VM create tasks",
+        "Native multi-backend stopped snapshot lifecycle and midcommit consolidation on local, NFS, SMB and exclusive iSCSI (lab only; not product backup)"
+      ],
       open: [
-        "Snapshots: create, list, revert and delete, covering every supported disk and the matching VM configuration, and recovering cleanly when a snapshot or its consolidation is interrupted",
-        "VM disk snapshots through QEMU/libvirt on validated disk-format and storage combinations, without requiring ZFS or Btrfs",
+        "Close Phase 5: forge CI on a published push, independent checklist and state-ownership review, residual matrix acceptance",
         "Backup repositories on storage separate from the VMs they protect, with their own credentials",
         "Full backups of stopped guests first, then running guests through libvirt's backup support, each with checksums and a manifest that can stand on its own",
-        "Schedules, retention, bandwidth limits and per-VM overrides, with missed runs recorded rather than hidden",
+        "Core-owned schedules, jobs, history and retention that continue without Controller, with bandwidth limits, per-VM overrides and visible missed runs",
         "Restoring as a new VM by default, on an isolated network, and replacing an original only with explicit confirmation and proven ownership",
         "Rebuilding the backup catalog from the repository itself, so backups outlive the Controller database"
       ]

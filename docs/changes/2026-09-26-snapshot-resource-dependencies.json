@@ -1,0 +1,90 @@
+{
+  "summary": "Snapshot descriptors retain captured storage, network, and media dependencies. The pool master fences destructive resource removal with a durable marker in signed authority replicas, requires exact ready-member replica acknowledgements before snapshot reservation or settlement returns, and reconciles exact resource-removal outcomes without treating legacy ambiguous failures as settled.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/changes/2026-09-26-snapshot-resource-dependencies.json",
+    "docs/guide/vm-snapshots.md",
+    "internal/agent/managed.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_removal_test.go",
+    "internal/agent/pool_snapshot_promotion_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/controller/poolreplica_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_removal_test.go",
+    "internal/vmhost/managed_test.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_test.go",
+    "internal/vmhost/storage_lifecycle_test.go",
+    "internal/vmhost/storage_mounts.go",
+    "internal/vmhost/storage_mounts_test.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Retained snapshots now keep their captured storage, network, and media resources from source changes or removal after the current VM definition changes. The snapshot guide records these limits and the same-registration storage recheck exception.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Snapshot descriptors gain sorted dependency IDs; the signed pool-authority replica adds a resource_mutations section under capability v2; and snapshot reserve/settle success now requires exact acknowledgements from every ready member before the owner is released.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This closes snapshot resource-lifetime and removal-reconciliation gaps within the existing recovery plan and does not expand phase scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The executing Core managed-vms journal stores the exact sorted dependency set with each immutable snapshot intent and retained snapshot record. The pool master stores compact descriptors in pool-vms.json, checks them during resource mutation admission, and stores unresolved network/media removal markers in pool storage state. The signed authority replica includes those markers; a replacement Controller adopts snapshot descriptors through the authenticated pool snapshot inventory.",
+    "reason": "The dependencies describe the historical VM definition owned by Core and are captured with the snapshot; the pool master retains the matching descriptor so its resource guards survive Controller replacement."
+  },
+  "verification": {
+    "method": "Added regressions for a retained snapshot after the current VM ejects its ISO and removes its disk/network references, unknown legacy dependencies, unresolved snapshot intents, exact intent-to-descriptor binding, source-changing storage updates, same-registration stale-mount recheck, and legacy completed nil-dependency journal load, descriptor generation, and exact terminal replay. Before the dependency guards, the new storage/network/media assertions returned no historical references; the source-update case proceeded into NFS preparation and failed on a host path permission check instead of reporting the retained snapshot reference. Before removal-stage classification, network and media effect errors were recorded as terminal failed outcomes; retries could not reconcile the ambiguous removal. Tests now exercise failed attempts followed by eventual successful cleanup for both resource types. The vmhost reconciliation selector is scoped to the current pool/host and exposes the oldest due pending, needs_attention, or legacy ambiguous removal command; only exact succeeded or `removal-refused` terminal journals can clear a durable marker. Legacy failed/removing entries are re-executed idempotently before they can settle. Snapshot reserve and settlement now return only after every ready member has stored the exact signed authority replica; lost acknowledgements preserve the committed master state and exact retry is idempotent. Three-host tests verify both ready replicas before settlement/return, preserve pending/catalog state through unreachable-member failures, converge on exact retry without duplicate points, and promote a member that adopts the retained catalog. No native host or lab was operated. Agent regressions also cover legacy nil dependencies remaining conservative, durable removal markers across Store reload, exact operation replay, uncertain outcomes, signed replica projection/adoption, and transfer/eject refusal.",
+    "evidence": [
+      "internal/vmhost/managed_snapshot_test.go",
+      "internal/vmhost/managed_removal_test.go",
+      "internal/agent/pool_snapshot_promotion_test.go",
+      "internal/agent/pool_vm_test.go",
+      "internal/vmhost/managed_test.go",
+      "internal/vmhost/storage_lifecycle_test.go",
+      "internal/vmhost/storage_mounts_test.go",
+      "internal/agent/pool_vm_recovery_test.go",
+      "internal/agent/pool_removal_test.go",
+      "internal/agent/pool_transfer_test.go",
+      "internal/agent/pool_authority_freeze_test.go",
+      "internal/protocol/pool_test.go"
+    ],
+    "checks": [
+      "go test ./internal/vmhost -run 'LegacyFailedRemovalReplay|ResourceRemovalOutcome|PendingResourceRemoval|NextResourceRemoval' -count=1 — passed",
+      "go test ./internal/agent -run '^TestSnapshotReserveAndSettlementReplicateBeforeAcknowledgementAndPromotion$' -count=1 — passed",
+      "go test ./internal/agent -run '^TestSnapshot(ReserveAndSettlementReplicateBeforeAcknowledgementAndPromotion|ReplicaFailureKeepsDurableIntentForExactRetry)$' -count=1 — passed",
+      "go test ./internal/vmhost ./internal/agent -run 'ResourceRemoval|Snapshot|PoolResourceRemoval' -count=1 — passed",
+      "go test -race -timeout 20m ./internal/agent ./internal/protocol ./internal/vmhost — passed (agent 56.041s, protocol cached, vmhost cached)",
+      "go test ./internal/vmhost -run 'Snapshot|StorageDependencies|NetworkDependencies|MediaDependencies|RemovalEffectFailuresStayRetryableUntilSuccess|RetainedSnapshotBlocksStorageSourceChangeAfterVMEdit|RecheckRepairsAStaleRemoteMountOnlyWhenNothingUsesIt' -count=1 \u2014 passed",
+      "go test -race ./internal/vmhost -count=1 \u2014 passed",
+      "go test ./internal/protocol ./internal/agent -run 'PoolVMSnapshotDependencies|LegacySnapshotSettlement|PoolVMRecoverySettlement|PoolWideResourceRemoval|ResourceRemoval|PoolAuthorityReplica|PoolTransfer|MasterChange' -count=1 \u2014 passed",
+      "python3 -m unittest tests.test_api_contract \u2014 74 passed",
+      "python3 scripts/generate_api.py --check \u2014 all generated references current"
+    ]
+  }
+}

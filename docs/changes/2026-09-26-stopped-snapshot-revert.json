@@ -1,0 +1,74 @@
+{
+  "summary": "Implement stopped snapshot revert through Core-owned target-bound reservations and durable journals. Slice in progress; native acceptance and operator controls remain open.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "internal/agent/snapshot.go",
+    "internal/agent/snapshot_test.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/localcore/snapshots.go",
+    "internal/localcore/snapshots_test.go",
+    "internal/localcore/service.go",
+    "internal/controller/managed.go",
+    "internal/controller/snapshot_adoption_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_test.go",
+    "internal/vmhost/managed_chain.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "internal/vmhost/managed_snapshot_revert.go",
+    "internal/vmhost/managed_snapshot_revert_test.go",
+    "docs/guide/vm-snapshots.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-26-stopped-revert-native-validation.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Documents the owner-local stopped-revert development request, selected-target semantics, exact retries and guest verification; explicitly marks the native walkthrough and acceptance outstanding.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds an authenticated owner-local stopped-revert route and extends existing Core peer reservation/evidence and reported operation contracts. API documentation and generated references are updated with implementation; native acceptance remains pending.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S2 implementation follows accepted S1; neither phase closes and the published roadmap status is unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Executing Core managed operation journals and immutable snapshot capture journals; pool master pool-vms.json pending recovery/result specification, settled VM definition and receipt, and signed authority replicas.",
+    "reason": "Controller only adopts host-reported outcomes; a fresh Controller reads authoritative VM/catalog and operation inventory through existing authenticated APIs."
+  },
+  "verification": {
+    "method": "Local API/agent queue and Controller tests passed; vmhost full and race tests passed. Independent protocol/master, native executor, queue and API/documentation review passed. The public revert executor tests cover reserved-stage one-call success and persisted-native-stage no-repeat with fake native tools. After the final automatic-start correction, `go test ./... -count=1` passed and the exact privileged race-enabled CI snapshot selection passed all 34 tests without skips on the frozen r9 source. Successful native revert, interruption and guide walkthrough remain pending before acceptance; the failed-start correction passed independent review and awaits its native rerun. The API/CI/documentation Python selection passed all 118 tests after its existing contract check caught and corrected missing revert command/operation enums. The first real r9 stopped revert reproduced BUG-0647: native ran once and produced fresh heads over A, but definition/metadata validation returned needs_attention. The stopped fixture and reservation are preserved; no guest restore or revert acceptance is claimed. Diagnosis, regression and exact-operation native reconciliation remain outstanding.",
+    "evidence": [
+      "internal/localcore/snapshots_test.go",
+      "internal/agent/snapshot_test.go",
+      "internal/vmhost/managed_snapshot_revert_test.go",
+      "docs/BUG_LEDGER.md",
+      "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+      "docs/qa/2026-09-26-stopped-revert-native-validation.md"
+    ]
+  }
+}

@@ -30,7 +30,7 @@ ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64\.iso$"
 SOURCE_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-source\.tar\.gz$")
 NETINST_ISO_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-amd64-netinst\.iso$")
 NETINST_MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-netinst-compliance-manifest\.json$")
-PAYLOAD_NAME = re.compile(r"^(?:nex-core-local|dlm-controld)-[0-9a-f]{64}\.deb$")
+PAYLOAD_NAME = re.compile(r"^(?:nex-core-local|dlm-controld|libvirt[a-z0-9.+-]*|libnss-libvirt)-[0-9a-f]{64}\.deb$")
 MANIFEST_NAME = re.compile(r"^nex-core-(?P<version>[0-9][A-Za-z0-9.+~]*)-compliance-manifest\.json$")
 
 

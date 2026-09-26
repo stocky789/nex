@@ -3,8 +3,12 @@ package vmhost
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -153,5 +157,135 @@ func TestRehomePoolScopePreservesDefaultResourceIdentity(t *testing.T) {
 	got, _ := e.Applied(context.Background())
 	if len(got.Storage) != 1 || got.Storage[0].ID != s.ID || got.Storage[0].PoolID != "new-pool" || len(got.Networks) != 1 || got.Networks[0].ID != n.ID || got.Networks[0].HostID != "new-host" {
 		t.Fatalf("rehomed = %#v", got)
+	}
+}
+
+func TestRehomePoolScopeAllowsMissingStateAndFencesUnsettledSnapshots(t *testing.T) {
+	fresh := filepath.Join(t.TempDir(), "managed-vms")
+	if err := RehomePoolScope(fresh, "new-pool", "new-host"); err != nil {
+		t.Fatalf("fresh host rehome should be a no-op: %v", err)
+	}
+	if _, err := os.Stat(fresh); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh-host no-op unexpectedly created managed state: %v", err)
+	}
+
+	for _, kind := range []string{"snapshot-create", "snapshot-revert", "snapshot-delete"} {
+		t.Run(kind, func(t *testing.T) {
+			e, vm, journalName := unsettledSnapshotPoolFenceFixture(t, kind)
+			if err := RehomePoolScope(e.stateDir, "new-pool", "new-host"); err == nil || !strings.Contains(err.Error(), "snapshot operation is unresolved") {
+				t.Fatalf("join rehome crossed unresolved %s fence: %v", kind, err)
+			}
+			if err := RehomeLeavingPoolScope(e.stateDir, "new-pool", "new-host"); err == nil || !strings.Contains(err.Error(), "snapshot operation is unresolved") {
+				t.Fatalf("leave rehome crossed unresolved %s fence: %v", kind, err)
+			}
+			current, err := e.VMDefinition(vm.ID)
+			if err != nil || current.PoolID != vm.PoolID || current.HostID != vm.HostID {
+				t.Fatalf("refused rehome changed VM ownership: %+v err=%v", current, err)
+			}
+			entry, err := e.readJournal(journalName)
+			if err != nil || entry.Command.VM.PoolID != vm.PoolID || entry.Command.VM.HostID != vm.HostID {
+				t.Fatalf("refused rehome rewrote unsettled %s journal scope: entry=%+v err=%v", kind, entry.Command.VM, err)
+			}
+		})
+	}
+}
+
+// unsettledSnapshotPoolFenceFixture seeds a VM plus one unsettled snapshot mutation journal
+// of the given kind so leave/join fences can be exercised without running native work.
+func unsettledSnapshotPoolFenceFixture(t *testing.T, kind string) (*ManagedEngine, protocol.VMCreateSpec, string) {
+	t.Helper()
+	if kind == "snapshot-create" {
+		e, vm, _ := managedRecoveryFixture(t)
+		return e, vm, "snapshot-op.json"
+	}
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	if err := os.Mkdir(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	vm := managedTestVM()
+	create := protocol.Command{OperationID: "create-seed", Kind: "vm-create", VM: &vm}
+	if err := e.save(managedJournal{Command: create, Result: protocol.Result{OperationID: create.OperationID, Status: "succeeded"}, Stage: "defined"}); err != nil {
+		t.Fatal(err)
+	}
+	targetID := "prior-snap-target"
+	descriptor := protocol.PoolVMSnapshot{
+		ID: targetID, VMID: vm.ID, Name: "prior", CreatedAt: time.Now().UTC(), SpecRevision: 0,
+		SpecSHA256: strings.Repeat("a", 64), DiskIdentitySHA256: strings.Repeat("b", 64),
+	}
+	opID := "snapshot-fence-op"
+	command := protocol.Command{
+		OperationID: opID, Kind: kind, VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{SnapshotID: targetID, Target: &descriptor},
+	}
+	entry := managedJournal{
+		Command: command, Result: protocol.Result{OperationID: opID, Status: "pending"},
+		Stage: kind + "-preflight", RecoveryStage: "preflight",
+	}
+	switch kind {
+	case "snapshot-revert":
+		entry.SnapshotRevert = &managedSnapshotRevertRecord{TargetSnapshotID: targetID, CreatedAt: time.Now().UTC()}
+	case "snapshot-delete":
+		entry.SnapshotDelete = &managedSnapshotDeleteRecord{TargetSnapshotID: targetID, CreatedAt: time.Now().UTC()}
+	default:
+		t.Fatalf("unsupported snapshot fence kind %q", kind)
+	}
+	if err := e.save(entry); err != nil {
+		t.Fatal(err)
+	}
+	return e, vm, opID + ".json"
+}
+
+func TestRehomePoolScopeWaitsForManagedOperationsLock(t *testing.T) {
+	e, _, _ := managedRecoveryFixture(t)
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		finished <- RehomeLeavingPoolScope(e.stateDir, "new-pool", "new-host")
+	}()
+	<-started
+	select {
+	case err := <-finished:
+		unlock(lock)
+		t.Fatalf("rehome passed a held managed-operations lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock(lock)
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "snapshot operation is unresolved") {
+			t.Fatalf("rehome after lock release = %v, want unresolved snapshot refusal", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("rehome did not continue after managed-operations lock release")
+	}
+}
+
+func TestRehomeLeavingPoolScopeRefusesRetainedSnapshotCatalog(t *testing.T) {
+	e, vm, _ := managedRecoveryFixture(t)
+	entry, err := e.readJournal("snapshot-op.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.Result.Status = "succeeded"
+	entry.RecoverySettled = true
+	entry.Result.ObservedAt = time.Now().UTC()
+	if err := e.save(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := RehomeLeavingPoolScope(e.stateDir, "new-pool", "new-host"); err == nil || !strings.Contains(err.Error(), "completed snapshots remain in the old pool catalog") {
+		t.Fatalf("leave rehome did not preserve the old pool snapshot catalog: %v", err)
+	}
+	entry, err = e.readJournal("snapshot-op.json")
+	if err != nil || entry.Command.VM.PoolID != vm.PoolID || entry.Command.VM.HostID != vm.HostID {
+		t.Fatalf("refused leave changed the snapshot master binding: entry=%+v err=%v", entry.Command.VM, err)
+	}
+	current, err := e.VMDefinition(vm.ID)
+	if err != nil || current.PoolID != vm.PoolID || current.HostID != vm.HostID {
+		t.Fatalf("refused leave changed VM ownership: %+v err=%v", current, err)
 	}
 }

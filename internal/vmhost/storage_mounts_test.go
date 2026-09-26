@@ -766,6 +766,23 @@ func TestRecheckRepairsAStaleRemoteMountOnlyWhenNothingUsesIt(t *testing.T) {
 	if len(ran) != 0 {
 		t.Fatalf("a repository in use was remounted anyway: %v", ran)
 	}
+	// A completed snapshot may retain an old VM definition on this same registered
+	// repository after the current VM has moved elsewhere. Recheck restores that existing
+	// registered mount identity; it does not change the source or detach the repository.
+	snapshotVM := managedTestVM()
+	snapshotVM.Disks[0].StorageID = repo.ID
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(snapshotVM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	js = []managedJournal{
+		{Command: protocol.Command{OperationID: "reg", Kind: "storage-register", Storage: &repo}, Result: protocol.Result{OperationID: "reg", Status: "succeeded"}},
+		{Command: protocol.Command{OperationID: "snap", Kind: "snapshot-create", VM: &snapshotVM}, Result: protocol.Result{OperationID: "snap", Status: "succeeded"}, RecoveryStage: "completed", RecoveryOutcome: "completed", RecoverySettled: true, Snapshot: &managedSnapshotRecord{SnapshotID: "snap", Dependencies: &dependencies}},
+	}
+	ran = nil
+	if err := repairStaleRemoteMount(context.Background(), js, repo); err != nil || len(ran) != 1 {
+		t.Fatalf("recheck of the same registered repository was blocked by a historical snapshot: %v %v", err, ran)
+	}
 	// A mount that is not stale is never touched, and neither is an administrator's unit.
 	ran = nil
 	setForTest(t, &storageMountStale, func(string) bool { return false })

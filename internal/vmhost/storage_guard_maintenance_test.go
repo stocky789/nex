@@ -144,33 +144,49 @@ func TestStorageGuardRefusesRestrictedLocalManagedGuestAndLeavesApplianceAlone(t
 	}
 }
 
-// The suppression never becomes the desired value: it is applied on top of the definition
-// Nex already holds, so clearing it restores exactly what the operator asked for.
-func TestSetManagedVMAutostartSuppressesWithoutRewritingTheDefinition(t *testing.T) {
+// Native libvirt autostart remains off on every pass; Core keeps desired intent in the VM spec.
+func TestSetManagedVMAutostartAlwaysSuppressesWithoutRewritingTheDefinition(t *testing.T) {
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "virsh-calls")
-	fakeCommand(t, "virsh", `echo "$@" >> `+calls+`; exit 0`)
+	fakeCommand(t, "virsh", `echo "$@" >> `+calls+`; case "$3" in dominfo) echo 'Autostart: disable';; esac; exit 0`)
 	e := NewManaged(filepath.Join(dir, "managed-vms"))
 	if err := os.MkdirAll(filepath.Join(dir, "managed-vms"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	v := protocol.VMCreateSpec{ID: "11111111-1111-4111-8111-111111111111", Autostart: true}
-	if err := e.SetManagedVMAutostart(t.Context(), v, true); err != nil {
+	if err := e.SetManagedVMAutostart(t.Context(), v); err != nil {
 		t.Fatalf("suppress: %v", err)
 	}
-	if err := e.SetManagedVMAutostart(t.Context(), v, false); err != nil {
-		t.Fatalf("restore: %v", err)
+	if err := e.SetManagedVMAutostart(t.Context(), v); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
 	b, err := os.ReadFile(calls)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 2 || !strings.Contains(lines[0], "autostart --disable") || strings.Contains(lines[1], "--disable") {
+	if len(lines) != 4 || !strings.Contains(lines[0], "autostart --disable") || !strings.Contains(lines[1], "dominfo") ||
+		!strings.Contains(lines[2], "autostart --disable") || !strings.Contains(lines[3], "dominfo") {
 		t.Fatalf("virsh calls = %q", lines)
 	}
 	if !v.Autostart {
 		t.Fatal("the suppression rewrote the caller's definition")
+	}
+}
+
+func TestSetManagedVMAutostartRefusesUnconfirmedNativeFlag(t *testing.T) {
+	for name, info := range map[string]string{"enabled": "Autostart: enable", "missing": "Name: guest", "malformed": "Autostart: perhaps"} {
+		t.Run(name, func(t *testing.T) {
+			fakeCommand(t, "virsh", `case "$3" in
+autostart) exit 0;;
+dominfo) echo '`+info+`';;
+*) exit 2;; esac`)
+			e := NewManaged(filepath.Join(t.TempDir(), "managed-vms"))
+			v := protocol.VMCreateSpec{ID: "11111111-1111-4111-8111-111111111111", Autostart: true}
+			if err := e.SetManagedVMAutostart(t.Context(), v); err == nil || !strings.Contains(err.Error(), "not confirmed disabled") {
+				t.Fatalf("unconfirmed native autostart result: %v", err)
+			}
+		})
 	}
 }
 

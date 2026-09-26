@@ -1,0 +1,40 @@
+{
+  "summary": "Add Core managed-journal execution and recovery evidence for stopped native VM snapshot creation; end-to-end acceptance remains open.",
+  "paths": [
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_test.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "This implements the Core side of the stopped snapshot workflow documented in the coordinated host API slice. The disposable native creation, failure, retry, and firmware walkthrough is not complete.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "The executor implements the snapshot-create command and master reservation/settlement behavior described by the coordinated snapshot contract; the user-facing contract is documented in the API reference.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is an implementation slice of the existing recovery plan and does not close snapshot acceptance or the plan phase.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The executing Core managed journal stores the immutable snapshot intent, observed disk chains, firmware capture manifests, native metadata digest, reservation and exact terminal receipt. The pool master stores the compact descriptor and pending reservation in pool-vms.json; a replacement Controller adopts them from authenticated master inventory.",
+    "reason": "Snapshot creation and recovery evidence are Core-owned pool state and must survive Controller replacement."
+  },
+  "verification": {
+    "method": "`go test ./internal/vmhost -run 'SnapshotStorageIdentityDigest|ManagedSnapshotAdmissionDenial' -count=1`, `go test ./internal/vmhost -count=1`, and `go test -race -timeout 20m ./internal/vmhost` passed. Snapshot identity coverage reproduces local registrations with an empty typed identity, proves path/filesystem-ID changes alter the digest, refuses an unverified typed local identity and typed NFS mismatch, and proves SMB marker identity ignores reconnect-varying filesystem diagnostics. The denial-path regression receives a first-call name-in-use reservation, verifies no native create/output, and replays the immutable failed-before-effects receipt after a lost settlement ACK. No complete CreateStoppedSnapshot lifecycle was executed against a disposable libvirt host. Native creation, interruption recovery, full firmware reopen, and the documented host API walkthrough remain unverified; acceptance is open.",
+    "evidence": [
+      "internal/vmhost/managed_snapshot_test.go",
+      "internal/vmhost/managed_snapshot.go",
+      "docs/guide/vm-snapshots.md",
+      "docs/API.md"
+    ]
+  }
+}

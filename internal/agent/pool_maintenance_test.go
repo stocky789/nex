@@ -181,10 +181,10 @@ func TestPoolMaintenanceRefusesPlacementAndStartButNeverStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	permit, epoch := "", uint64(0)
-	if err := poolVMLocal(s, vm, "start", &permit, false, nil, &epoch); err != nil {
+	if err := poolVMLocalBound(s, vm, "start", "maintenance-start-1", 0, &permit, false, nil, &epoch); err != nil {
 		t.Fatalf("start before maintenance: %v", err)
 	}
-	if err := poolVMLocal(s, vm, "running", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm, "running", "maintenance-start-1", epoch, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A member the master has drained is refused before any peer request is attempted:
@@ -219,7 +219,7 @@ func TestPoolMaintenanceRefusesPlacementAndStartButNeverStop(t *testing.T) {
 	if result := ExecutePoolMaintenance(s, maintenanceCommand("host-a", "host-a", false, 4)); result.Status != "succeeded" {
 		t.Fatalf("exit maintenance: %+v", result)
 	}
-	if err := poolVMLocal(s, vm, "start", &permit, false, nil, &epoch); err != nil {
+	if err := poolVMLocalBound(s, vm, "start", "maintenance-start-2", 0, &permit, false, nil, &epoch); err != nil {
 		t.Fatalf("start after maintenance: %v", err)
 	}
 }
@@ -288,10 +288,10 @@ func TestMaintenanceRefusesWakingAGuestOnADrainedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	permit, epoch := "", uint64(0)
-	if err := poolVMLocal(s, vm, "start", &permit, false, nil, &epoch); err != nil {
+	if err := poolVMLocalBound(s, vm, "start", "wake-setup", 0, &permit, false, nil, &epoch); err != nil {
 		t.Fatal(err)
 	}
-	if err := poolVMLocal(s, vm, "running", nil, false, nil, nil); err != nil {
+	if err := poolVMLocalBound(s, vm, "running", "wake-setup", epoch, nil, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	maintenanceMembership(t, s, "host-a", maintenanceMember("host-a", true))

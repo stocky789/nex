@@ -113,8 +113,16 @@ func TestManagedStartAfterCreateChecksAvailableMemory(t *testing.T) {
 		t.Fatalf("refused automatic start issued virsh start: %q", got)
 	}
 	got, _ := e.Applied(context.Background())
-	if len(got.Outcomes) != 2 || got.Outcomes[1].Error != "VM created but not started: "+startMemoryRefusal {
+	want := protocol.ManagedOutcome{OperationID: "create:start", Kind: "vm-power", ID: v.ID, Name: v.Name,
+		Status: "failed", Error: "VM created but not started: " + startMemoryRefusal}
+	if len(got.Outcomes) != 2 || got.Outcomes[1] != want {
 		t.Fatalf("start outcome %+v", got.Outcomes)
+	}
+	if outcome, found, err := e.CreateStartOutcome(context.Background(), c.OperationID); err != nil || !found || outcome != want {
+		t.Fatalf("exact create start outcome = %+v, found %t, err %v; want %+v", outcome, found, err, want)
+	}
+	if saved, err := e.readJournal("create.json"); err != nil || saved.StartOutcome != startOutcomeFailedBeforeRequest {
+		t.Fatalf("pre-request refusal outcome = %q, err %v", saved.StartOutcome, err)
 	}
 }
 

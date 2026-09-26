@@ -1,0 +1,71 @@
+{
+  "summary": "Keep a verified-fenced offline former master from blocking snapshot reservation and settlement acknowledgements, while requiring exact current-replica and inventory adoption before it rejoins that acknowledgement quorum. API impact: changed contract.",
+  "paths": [
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/vm-snapshots.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_promote_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "docs/changes/2026-09-26-recovery-offline-replica-ack.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Snapshot guidance explains that a promotion-fenced offline member remains a pool member but is temporarily excluded from snapshot reservation and settlement acknowledgements until it adopts current authority and inventory. Other safety gates remain unchanged.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "PoolMembership now carries optional `replica_ack_excluded` authority metadata. False or absent preserves the legacy mandatory-ack behavior. The value is covered by the signed authority replica; a candidate sets it only after validating the exact fresh promotion fence proofs, and the current master clears it only after the returning member has accepted the current-generation inventory and acknowledged the exact current replica. Restart and later promotion fencing requirements are unchanged.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The plan's in-progress note records the post-promotion blocker, but this correction does not change milestone status, scope, or staged acceptance gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool master's pool-peer.json persists the current PoolMembership and authority digest; the signed authority replica carries the same exclusion to members' durable replica records. A returning host adopts that signed replica and publishes current-generation inventory through the authenticated Core peer API; the master then clears the exclusion after the exact verified post-acknowledgement check. A fresh Controller reads the membership from authenticated Core inventory; no Controller state is used.",
+    "reason": "Promotion eligibility and acknowledgement policy are durable Core authority. The existing promotion fence proof and signed replica bind the exclusion, and a fresh Controller observes current host-reported membership through Core APIs."
+  },
+  "verification": {
+    "method": "Ran focused, full, and race Go tests for internal/protocol and internal/agent. The in-process multi-host tests use the real mTLS peer transport, signed replicas, and authority transfer state; only the fencing observation seam is simulated, so they verify exact proof handling and replica/quorum behavior but do not establish physical fencing or a native-host outage walkthrough. The return test verifies that receipt of a replica alone leaves exclusion set, accepted current-generation inventory plus exact current replica ACK clears it, and a subsequent offline member blocks new snapshot reservation again. Destructive resource-removal and storage-lease preparation ACK gates remain all-ready-host requirements. No disposable-host native retest was run in this change.",
+    "evidence": [
+      "internal/agent/pool_promote_test.go",
+      "internal/agent/pool_vm_inventory_test.go",
+      "internal/protocol/pool_test.go",
+      "docs/guide/vm-snapshots.md"
+    ],
+    "checks": [
+      "go test ./internal/protocol ./internal/agent -run '^TestReplicaAckExclusionIsBackwardCompatibleAndSigned|TestPoolReplicaRejoinRequiresCapturedSameGenerationAuthority|TestFencedOfflineFormerMasterDoesNotBlockSnapshotReservation|TestUnprovenOfflineReadyMemberStillBlocksSnapshotReservation|TestReturningFencedMemberRejoinsBeforeReplicaAckExclusionClears|TestPoolPromotionRequiresTheDestructiveConfirmation|TestPoolPromotionRefusesEveryFenceThatIsNotProof|TestRestartedMasterStaysRestrictedOnInvalidRestartFenceProof$' -count=1 — passed",
+      "go test ./internal/protocol ./internal/agent -count=1 — passed",
+      "go test -race ./internal/protocol ./internal/agent -count=1 — passed (agent 56.202s; protocol 1.043s)",
+      "python3 scripts/generate_api.py --check — passed by primary",
+      "python3 -m unittest discover -s tests -p 'test_repository_privacy.py' — passed by primary",
+      "python3 scripts/check_docs.py --worktree — passed for 174 uncommitted paths"
+    ]
+  }
+}

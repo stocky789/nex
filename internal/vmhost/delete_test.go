@@ -13,7 +13,11 @@ import (
 func TestManagedDeleteRetainsOrWipesDisks(t *testing.T) {
 	vm := managedTestVM()
 	vm.MediaID = ""
-	disk := filepath.Join(t.TempDir(), "disk-0.qcow2")
+	storageRoot := t.TempDir()
+	disk := filepath.Join(storageRoot, "nex-vms", vm.ID, "disk-0.qcow2")
+	if err := os.MkdirAll(filepath.Dir(disk), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(disk, []byte("guest-data"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -23,6 +27,10 @@ func TestManagedDeleteRetainsOrWipesDisks(t *testing.T) {
 			t.Fatal(err)
 		}
 		create := protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm}
+		storage := protocol.StorageRegistration{ID: "s", PoolID: vm.PoolID, HostID: vm.HostID, Path: storageRoot, Kind: protocol.StorageKindLocal}
+		if err := e.save(managedJournal{Command: protocol.Command{OperationID: "storage-1", Kind: "storage-register", Storage: &storage}, Result: protocol.Result{OperationID: "storage-1", Status: "succeeded"}}); err != nil {
+			t.Fatal(err)
+		}
 		if err := e.save(managedJournal{
 			Command: create,
 			Result:  protocol.Result{OperationID: create.OperationID, Status: "succeeded"},
@@ -46,9 +54,10 @@ list) ;;
 undefine) [ "$5" = "--nvram" ] || exit 3; exit 0;;
 *) exit 2;; esac`)
 		t.Setenv("VMHOST_LOG", log)
-		e := NewManaged(dir)
+		e := managedTestEngine(dir)
 		seed(t, e)
-		r, err := e.Execute(context.Background(), command("del-retain", false), nil)
+		deleteCommand := command("del-retain", false)
+		r, err := e.Execute(context.Background(), deleteCommand, nil)
 		if err != nil || r.Status != "succeeded" {
 			t.Fatalf("retain delete: %+v %v", r, err)
 		}
@@ -76,7 +85,15 @@ undefine) [ "$5" = "--nvram" ] || exit 3; exit 0;;
 	})
 
 	t.Run("wipe", func(t *testing.T) {
-		wipeDisk := filepath.Join(t.TempDir(), "nex-vms", vm.ID, "disk-0.qcow2")
+		previousReady := managedStorageReadyFn
+		managedStorageReadyFn = func(_ context.Context, _ protocol.StorageRegistration, _ uint64) (storageAccess, error) {
+			return storageAccess{Path: storageRoot, Total: 1 << 40, Available: 1 << 40}, nil
+		}
+		t.Cleanup(func() { managedStorageReadyFn = previousReady })
+		wipeDisk := filepath.Join(storageRoot, "nex-vms", vm.ID, "wipe-disk.qcow2")
+		if err := os.MkdirAll(filepath.Dir(wipeDisk), 0700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.MkdirAll(filepath.Dir(wipeDisk), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -89,11 +106,15 @@ domstate) echo 'shut off';;
 list) ;;
 undefine) exit 0;;
 *) exit 2;; esac`)
-		e := NewManaged(dir)
+		e := managedTestEngine(dir)
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
 		create := protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm}
+		storage := protocol.StorageRegistration{ID: "s", PoolID: vm.PoolID, HostID: vm.HostID, Path: storageRoot, Kind: protocol.StorageKindLocal}
+		if err := e.save(managedJournal{Command: protocol.Command{OperationID: "storage-1", Kind: "storage-register", Storage: &storage}, Result: protocol.Result{OperationID: "storage-1", Status: "succeeded"}}); err != nil {
+			t.Fatal(err)
+		}
 		if err := e.save(managedJournal{
 			Command: create,
 			Result:  protocol.Result{OperationID: create.OperationID, Status: "succeeded"},
@@ -103,7 +124,8 @@ undefine) exit 0;;
 		}); err != nil {
 			t.Fatal(err)
 		}
-		r, err := e.Execute(context.Background(), command("del-wipe", true), nil)
+		deleteCommand := command("del-wipe", true)
+		r, err := e.Execute(context.Background(), deleteCommand, nil)
 		if err != nil || r.Status != "succeeded" {
 			t.Fatalf("wipe delete: %+v %v", r, err)
 		}
@@ -119,9 +141,10 @@ undefine) exit 0;;
 	t.Run("refuse-running", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "state")
 		fakeCommand(t, "virsh", `case "$3" in domstate) echo running;; *) exit 2;; esac`)
-		e := NewManaged(dir)
+		e := managedTestEngine(dir)
 		seed(t, e)
-		r, err := e.Execute(context.Background(), command("del-run", false), nil)
+		deleteCommand := command("del-run", false)
+		r, err := e.Execute(context.Background(), deleteCommand, nil)
 		if err != nil || r.Status != "failed" || !strings.Contains(r.Error, "stop the VM") {
 			t.Fatalf("running delete must refuse: %+v %v", r, err)
 		}
@@ -197,7 +220,8 @@ list) ;;
 undefine) exit 0;;
 *) exit 2;; esac`)
 			t.Setenv("VMHOST_LOG", log)
-			e := NewManaged(dir)
+			e := managedTestEngine(dir)
+			stubManagedDiskChains(e)
 			if err := os.MkdirAll(e.stateDir, 0700); err != nil {
 				t.Fatal(err)
 			}

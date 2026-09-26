@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -681,9 +682,18 @@ func writeAppliedPoolNetworkRename(t *testing.T, s *Store, id string, expected u
 // The master removes a pool resource for the whole pool, so it refuses while any member's
 // published VM still references it, and refuses whenever it cannot prove that it knows.
 func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
-	master, member := joinedPair(t)
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
 	membership, err := Membership(master)
 	if err != nil {
+		t.Fatal(err)
+	}
+	owners, err := loadPoolVMs(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(owners.Inventory, member.State.HostID)
+	if err = savePoolVMs(master, owners); err != nil {
 		t.Fatal(err)
 	}
 	remove := protocol.Command{OperationID: strings.Repeat("a", 64), Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
@@ -694,10 +704,10 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 	}}
 
 	// No member has published at this membership generation yet: fail closed.
-	if err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil || err.Error() != "pool VM inventory is incomplete; wait for every member to report before removing this network" {
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil || err.Error() != "pool VM inventory is incomplete; wait for every member to report before removing this network" {
 		t.Fatalf("stale inventory refusal = %v", err)
 	}
-	if err = BeginPoolResourceRemoval(context.Background(), master, removeISO); err == nil || !strings.HasSuffix(err.Error(), "removing this ISO") {
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, removeISO); err == nil || !strings.HasSuffix(err.Error(), "removing this ISO") {
 		t.Fatalf("stale ISO inventory refusal = %v", err)
 	}
 
@@ -711,11 +721,11 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 	if err = savePoolVMs(master, state); err != nil {
 		t.Fatal(err)
 	}
-	if err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil ||
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil ||
 		err.Error() != "network cannot be removed while used by VM "+vm.ID+" on host "+member.State.HostID {
 		t.Fatalf("member VM refusal = %v", err)
 	}
-	if err = BeginPoolResourceRemoval(context.Background(), master, removeISO); err == nil ||
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, removeISO); err == nil ||
 		err.Error() != "ISO cannot be removed while attached to VM "+vm.ID+" on host "+member.State.HostID {
 		t.Fatalf("member ISO refusal = %v", err)
 	}
@@ -739,7 +749,7 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 		}
 	}
 	setMemberStatus("pending")
-	if err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil || !strings.Contains(err.Error(), "used by VM "+vm.ID) {
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil || !strings.Contains(err.Error(), "used by VM "+vm.ID) {
 		t.Fatalf("a not-ready member's VM stopped holding its network: %v", err)
 	}
 	setMemberStatus("ready")
@@ -748,7 +758,7 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 		Resource: "network", Action: "update", ResourceID: "vlan-1", PoolID: "pool-1",
 		HostID: master.State.HostID, ExpectedGeneration: 1, Name: "Production",
 	}}
-	if err = BeginPoolResourceRemoval(context.Background(), master, rename); err != nil {
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, rename); err != nil {
 		t.Fatalf("master refused a rename: %v", err)
 	}
 
@@ -757,9 +767,24 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 	if err = savePoolVMs(master, state); err != nil {
 		t.Fatal(err)
 	}
-	if err = BeginPoolResourceRemoval(context.Background(), master, remove); err != nil {
+	setMemberStatus("pending")
+	delete(state.Inventory, member.State.HostID)
+	if err = savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = BeginPoolResourceRemoval(context.Background(), master, remove); err == nil || err.Error() != "pool VM inventory is incomplete; wait for every member to report before removing this network" {
+		t.Fatalf("resource removal ignored a non-ejected member with no last-known inventory: %v", err)
+	}
+	setMemberStatus("ready")
+	state.Inventory[member.State.HostID] = poolVMInventory{HostID: member.State.HostID, Generation: membership.Generation}
+	if err = savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	finish, err := BeginPoolResourceRemoval(context.Background(), master, remove)
+	if err != nil {
 		t.Fatalf("master refused a removal no pool VM uses: %v", err)
 	}
+	finish(true, true)
 
 	// A member must not accept a Controller-issued removal at all; its own converge loop
 	// applies the master's decision through the engine directly.
@@ -768,7 +793,7 @@ func TestMasterRefusesPoolWideResourceRemoval(t *testing.T) {
 		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: "pool-1",
 		HostID: member.State.HostID, ExpectedGeneration: 1,
 	}
-	if err = BeginPoolResourceRemoval(context.Background(), member, memberCommand); err == nil || !strings.Contains(err.Error(), "only the pool master") {
+	if _, err = BeginPoolResourceRemoval(context.Background(), member, memberCommand); err == nil || !strings.Contains(err.Error(), "only the pool master") {
 		t.Fatalf("member accepted a Controller-issued removal: %v", err)
 	}
 }
@@ -786,10 +811,244 @@ func TestSingleHostPoolMasterMayRemove(t *testing.T) {
 		{OperationID: strings.Repeat("d", 64), Kind: "media-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
 			Resource: "media", Action: "remove", ResourceID: "iso-1", PoolID: master.State.PoolID, HostID: master.State.HostID, ExpectedGeneration: 1}},
 	} {
-		if err := BeginPoolResourceRemoval(context.Background(), master, cmd); err != nil {
+		finish, err := BeginPoolResourceRemoval(context.Background(), master, cmd)
+		if err != nil {
 			t.Fatalf("single-host pool refused %s: %v", cmd.Kind, err)
 		}
+		finish(true, true)
 	}
+}
+
+func TestPoolResourceRemovalFenceSurvivesUncertainResultAndStoreReload(t *testing.T) {
+	master := peerStore(t, "solo-fence", "pool-fence")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: strings.Repeat("f", 64), Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: master.State.PoolID, HostID: master.State.HostID,
+	}}
+	finish, err := BeginPoolResourceRemoval(context.Background(), master, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := poolResourceMutationKey("network", "vlan-1")
+	state, err := loadPoolStorage(master)
+	if err != nil || state.Mutations[key] != cmd.OperationID {
+		t.Fatalf("resource mutation was not persisted before native removal: state=%#v err=%v", state.Mutations, err)
+	}
+
+	// A restarted Store sees the same unresolved marker, and snapshot/VM admission
+	// cannot bind a new workload to the resource while its removal outcome is unknown.
+	restarted := &Store{dir: master.dir, State: master.State}
+	if err := poolResourceMutationRefusal(restarted, protocol.VMCreateSpec{NICs: []protocol.VMNIC{{NetworkID: "vlan-1"}}}); err == nil {
+		t.Fatal("VM admission ignored the durable resource-removal marker")
+	}
+	if _, err := BeginPoolResourceRemoval(context.Background(), restarted, protocol.Command{OperationID: strings.Repeat("1", 64), Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: restarted.State.PoolID, HostID: restarted.State.HostID,
+	}}); err == nil || !strings.Contains(err.Error(), "another resource removal is pending") {
+		t.Fatalf("a different operation replaced an unresolved marker: %v", err)
+	}
+	// An uncertain native/transport result retains the fence for exact reconciliation.
+	finish(true, false)
+	state, err = loadPoolStorage(restarted)
+	if err != nil || state.Mutations[key] != cmd.OperationID {
+		t.Fatalf("uncertain removal cleared its marker: state=%#v err=%v", state.Mutations, err)
+	}
+	mutations, err := poolReplicaResourceMutations(restarted)
+	if err != nil || len(mutations) != 1 || mutations[0] != (protocol.PoolResourceMutation{Resource: "network", ResourceID: "vlan-1", OperationID: cmd.OperationID}) {
+		t.Fatalf("authority replica did not preserve the unresolved marker: %#v, %v", mutations, err)
+	}
+
+	// Only an exact definitive result clears the marker.
+	retry, err := BeginPoolResourceRemoval(context.Background(), restarted, cmd)
+	if err != nil {
+		t.Fatalf("exact removal replay could not reconcile its marker: %v", err)
+	}
+	// A later admission refusal before Engine.Execute must not clear a marker
+	// left by an earlier ambiguous attempt.
+	retry(false, true)
+	state, err = loadPoolStorage(restarted)
+	if err != nil || state.Mutations[key] != cmd.OperationID {
+		t.Fatalf("pre-execution refusal cleared an earlier ambiguous marker: state=%#v err=%v", state.Mutations, err)
+	}
+	retry(true, true)
+	state, err = loadPoolStorage(restarted)
+	if err != nil || state.Mutations[key] != "" {
+		t.Fatalf("definitive removal did not clear its marker: state=%#v err=%v", state.Mutations, err)
+	}
+}
+
+func TestResourceRemovalReconcileRetriesExactPendingOnlyAfterMasterAdmission(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master := lab.host("master-1")
+	poolVMMu.Lock()
+	ownerState, err := loadPoolVMs(master)
+	if err == nil {
+		delete(ownerState.Inventory, "member-1")
+		err = savePoolVMs(master, ownerState)
+	}
+	poolVMMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: strings.Repeat("a", 64), Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: master.State.PoolID, HostID: master.State.HostID, ExpectedGeneration: 1,
+	}}
+	writeResourceRemovalJournal(t, master, cmd, "needs_attention", "removing")
+	key := poolResourceMutationKey("network", "vlan-1")
+	poolStorageMu.Lock()
+	storage, err := loadPoolStorage(master)
+	if err == nil {
+		storage.Mutations[key] = cmd.OperationID
+		err = savePoolStorage(master, storage)
+	}
+	poolStorageMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The member has no current inventory. The exact pending entry cannot reach
+	// Engine.Execute or clear an earlier marker until the master admission proves
+	// the whole pool safe and the replica ACK is current.
+	engine := vmhost.NewManaged(filepath.Join(master.dir, "managed-vms"))
+	completion, ready, err := reconcilePendingResourceRemoval(context.Background(), master, engine)
+	if err == nil || ready {
+		t.Fatalf("resource removal ran without complete master admission: ready=%v completion=%+v err=%v", ready, completion, err)
+	}
+	poolStorageMu.Lock()
+	storage, err = loadPoolStorage(master)
+	poolStorageMu.Unlock()
+	if err != nil || storage.Mutations[key] != cmd.OperationID {
+		t.Fatalf("admission refusal cleared earlier marker: mutations=%#v err=%v", storage.Mutations, err)
+	}
+	result, resultErr := engine.ResourceRemovalOutcome(context.Background(), cmd.OperationID)
+	if resultErr != nil || result != nil {
+		t.Fatalf("admission refusal executed native work: result=%+v err=%v", result, resultErr)
+	}
+}
+
+func TestResourceRemovalReconcileSettlesExactTerminalJournalAfterCrash(t *testing.T) {
+	master := peerStore(t, "solo-terminal", "pool-terminal")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: strings.Repeat("b", 64), Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: master.State.PoolID, HostID: master.State.HostID, ExpectedGeneration: 1,
+	}}
+	writeResourceRemovalJournal(t, master, cmd, "failed", "validating")
+	// Simulate a process exit after the terminal journal write but before the
+	// original worker cleared the exact replicated marker.
+	if _, err := BeginPoolResourceRemoval(context.Background(), master, cmd); err != nil {
+		t.Fatal(err)
+	}
+	key := poolResourceMutationKey("network", "vlan-1")
+	engine := vmhost.NewManaged(filepath.Join(master.dir, "managed-vms"))
+	completion, ready, err := reconcilePendingResourceRemoval(context.Background(), master, engine)
+	if err != nil || !ready || completion.result.OperationID != cmd.OperationID || completion.result.Status != "failed" || !completion.background {
+		t.Fatalf("terminal removal reconciliation = %+v, %v, %v", completion, ready, err)
+	}
+	poolStorageMu.Lock()
+	storage, err := loadPoolStorage(master)
+	poolStorageMu.Unlock()
+	if err != nil || storage.Mutations[key] != "" {
+		t.Fatalf("exact terminal evidence did not clear its marker: mutations=%#v err=%v", storage.Mutations, err)
+	}
+	if _, ready, err = reconcilePendingResourceRemoval(context.Background(), master, engine); err != nil || ready {
+		t.Fatalf("settled terminal journal was retried again: ready=%v err=%v", ready, err)
+	}
+}
+
+func writeResourceRemovalJournal(t *testing.T, s *Store, cmd protocol.Command, status, stage string) {
+	t.Helper()
+	dir := filepath.Join(s.dir, "managed-vms")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	entry := struct {
+		Command                      protocol.Command `json:"command"`
+		Result                       protocol.Result  `json:"result"`
+		Stage                        string           `json:"stage"`
+		ResourceRemovalBeforeEffects bool             `json:"resource_removal_before_effects,omitempty"`
+	}{
+		Command:                      cmd,
+		Result:                       protocol.Result{OperationID: cmd.OperationID, Status: status, ObservedAt: time.Now().Add(-2 * time.Minute)},
+		Stage:                        stage,
+		ResourceRemovalBeforeEffects: status == "failed" && stage != "removing",
+	}
+	body, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, cmd.OperationID+".json"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPoolResourceRemovalRequiresFreshExactReplicaAckBeforeReturning(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master := lab.host("master-1")
+	cmd := protocol.Command{OperationID: "remove-vlan-1", Kind: "network-remove", ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+		Resource: "network", Action: "remove", ResourceID: "vlan-1", PoolID: master.State.PoolID, HostID: master.State.HostID,
+	}}
+	if err := PushPoolAuthorityReplicas(context.Background(), master, time.Second); err != nil {
+		t.Fatalf("baseline replica push: %v", err)
+	}
+
+	// Simulate a competing single-flight push. The previous ACK has the wrong digest
+	// because it predates this marker, so a nil return from Push cannot authorize work.
+	poolReplicaMu.Lock()
+	poolReplicaPushing[master.dir] = true
+	poolReplicaMu.Unlock()
+	if _, err := BeginPoolResourceRemoval(context.Background(), master, cmd); err == nil || !strings.Contains(err.Error(), "pool resource removal authority") {
+		t.Fatalf("single-flight push incorrectly authorized native removal: %v", err)
+	}
+	poolReplicaMu.Lock()
+	delete(poolReplicaPushing, master.dir)
+	poolReplicaMu.Unlock()
+	state, err := loadPoolStorage(master)
+	if err != nil || state.Mutations[poolResourceMutationKey("network", "vlan-1")] != "" {
+		t.Fatalf("definite pre-native replica refusal retained a new marker: %#v (%v)", state.Mutations, err)
+	}
+	key := poolResourceMutationKey("network", "vlan-1")
+	state.Mutations[key] = cmd.OperationID // an earlier native attempt may have an unknown outcome
+	if err := savePoolStorage(master, state); err != nil {
+		t.Fatal(err)
+	}
+	poolReplicaMu.Lock()
+	poolReplicaPushing[master.dir] = true
+	poolReplicaMu.Unlock()
+	if _, err := BeginPoolResourceRemoval(context.Background(), master, cmd); err == nil {
+		t.Fatal("exact retry with no fresh ACK was accepted")
+	}
+	poolReplicaMu.Lock()
+	delete(poolReplicaPushing, master.dir)
+	poolReplicaMu.Unlock()
+	state, err = loadPoolStorage(master)
+	if err != nil || state.Mutations[key] != cmd.OperationID {
+		t.Fatalf("failed retry cleared a preexisting ambiguous marker: %#v (%v)", state.Mutations, err)
+	}
+	finishPoolStorageMutation(master, key, cmd.OperationID, true)
+
+	// The member commits the marker but the response is lost. No native work may
+	// begin; after a process restart, exact retry gets a fresh ACK idempotently.
+	lab.drop("member-1", "POST:"+poolReplicaPath)
+	if _, err := BeginPoolResourceRemoval(context.Background(), master, cmd); err == nil {
+		t.Fatal("lost replica acknowledgement authorized native removal")
+	}
+	state, err = loadPoolStorage(master)
+	if err != nil || state.Mutations[key] != "" {
+		t.Fatalf("new operation with a lost pre-effect ACK was not safely retired: %#v (%v)", state.Mutations, err)
+	}
+	memberReplica := storedReplica(t, lab.host("member-1"))
+	if memberReplica == nil || !slices.Contains(memberReplica.Replica.ResourceMutations, protocol.PoolResourceMutation{Resource: "network", ResourceID: "vlan-1", OperationID: cmd.OperationID}) {
+		t.Fatalf("member did not store the exact marker before its reply was lost: %#v", memberReplica)
+	}
+	ClearPoolReplicaPostAcksForTest(master)
+	lab.drop("member-1", "")
+	finish, err := BeginPoolResourceRemoval(context.Background(), master, cmd)
+	if err != nil {
+		t.Fatalf("exact retry after lost ACK did not reconcile the stored replica: %v", err)
+	}
+	finish(true, true)
 }
 
 // The new lifecycle kinds must reach the engine with the host the payload names.

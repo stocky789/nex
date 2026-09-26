@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.12. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.13. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (**Settings** → **Members** → each host's
 **Authority copy** check), how to **change which host is the pool master**, how to **eject a host
 from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
@@ -729,10 +729,10 @@ restarts its master normally and keeps starting virtual machines, even with a me
 For a fence-exposed multi-member master, Core withholds managed-VM autostart until this boot has
 confirmed that host's authority. If the confirmation is missing or stale, the host fails closed.
 
-When the restriction clears, Core restores the VM's requested libvirt autostart setting and then
-starts, once for that boot, each virtual machine whose definition asks for autostart and which is
-still shut off. This is what brings a machine on the host's **local** storage back after a reboot:
-libvirt tries its own flag once, too early, while the host is still refusing, and cannot try again.
+In the recovery development build, Core keeps native libvirt autostart disabled for managed
+pool VMs and retains the requested autostart setting in the VM definition. When the restriction
+clears, Core starts each eligible stopped VM once for that boot, after the current pool master
+confirms ownership. This applies to both local and shared storage; pending recovery blocks start.
 It is not a retry of anything else — a machine an operator started by hand and that was refused
 earlier in the boot is not started for them, and a machine that was stopped deliberately stays
 stopped. Every boot makes its own authority confirmation first, so a host that cannot confirm still

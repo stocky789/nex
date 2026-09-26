@@ -76,8 +76,10 @@ limits. A documented procedure is not automatically a tested procedure: check it
 section for the exact evidence and outstanding checks.
 
 Pools are created automatically: each enrolled host becomes the pool master of its own pool.
-Managed snapshots/backups/restores, migrations, HA, and Docker Container Services
+Managed snapshot controls, backups/restores, migrations, HA, and Docker Container Services
 remain **planned and unavailable**; see the [roadmap](../plans/2026-09-08-nex-platform.md).
+The [VM snapshot workflow](vm-snapshots.md) documents the development slice
+under integration; it has not passed native API acceptance.
 
 The [API reference](../API.md) tracks implemented Nex interfaces separately. Build developers
 should use the [ISO build instructions](../../installer/README.md) or

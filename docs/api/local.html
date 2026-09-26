@@ -29,6 +29,12 @@
 <li><a href="#localConsoleStream">GET /api/local/v1/vms/{id}/console</a></li>
 <li><a href="#localGetUpdates">GET /api/local/v1/updates</a></li>
 <li><a href="#localApplyUpdates">POST /api/local/v1/updates/apply</a></li>
+<li><a href="#listPoolVMSnapshotsLocal">GET /api/local/v1/pool/vms/{id}/snapshots</a></li>
+<li><a href="#createStoppedPoolVMSnapshotLocal">POST /api/local/v1/pool/vms/{id}/snapshots</a></li>
+<li><a href="#getPoolVMSnapshotOperationLocal">GET /api/local/v1/pool/vms/{id}/snapshot-operations/{operation_id}</a></li>
+<li><a href="#revertStoppedPoolVMSnapshotLocal">POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/revert</a></li>
+<li><a href="#deleteStoppedPoolVMSnapshotLocal">POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/delete</a></li>
+<li><a href="#updatePoolVMSnapshotMetadataLocal">PATCH /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}</a></li>
 </ul></nav>
 <section><h2>nex-core-local -prepare-recovery-file</h2><pre>{
   &quot;description&quot;: &quot;Root-only manual replacement preparation, not an HTTP operation or running listener. Requires stopped local service and a clean replacement host without outbound agent identity or normal deployments. Uses the selected signed appliance and existing local storage/bridge. Does not bootstrap a Site, enroll a host or adopt the VM. Repeated identical normalized file contents reconcile the persisted request and original VM UUID; changed contents fail. TLS-verified readiness and seed removal precede recovery_prepared.&quot;,
@@ -1606,6 +1612,705 @@
     }
   }
 }</pre></details></section>
+<section id="listPoolVMSnapshotsLocal"><h2>GET <code>/api/local/v1/pool/vms/{id}/snapshots</code></h2>
+<p>List the pool master&#x27;s VM snapshot catalog</p><p>Authenticated local root session. Reads the complete catalog from the current pool master; local libvirt metadata is never substituted when master authority is unavailable. Works without Nex Controller.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listPoolVMSnapshotsLocal&quot;,
+  &quot;summary&quot;: &quot;List the pool master&#x27;s VM snapshot catalog&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session. Reads the complete catalog from the current pool master; local libvirt metadata is never substituted when master authority is unavailable. Works without Nex Controller.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The current master&#x27;s catalog, including an empty array when none exist.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM ID.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM has no pool-master catalog entry.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable or host is not enrolled.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Master catalog could not be read or validated.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createStoppedPoolVMSnapshotLocal"><h2>POST <code>/api/local/v1/pool/vms/{id}/snapshots</code></h2>
+<p>Create a stopped VM snapshot through Nex Core</p><p>Authenticated local root session; CSRF and same-origin required. Core validates exact VM ownership and stopped state, durably reserves the operation with the current pool master, records the native journal before effects, then performs and reports the operation independently of this HTTP connection or Controller. Reuse the same operation_id and exact request to retry; poll the operation route. A 202 acknowledges durable enqueue, not native completion.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createStoppedPoolVMSnapshotLocal&quot;,
+  &quot;summary&quot;: &quot;Create a stopped VM snapshot through Nex Core&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session; CSRF and same-origin required. Core validates exact VM ownership and stopped state, durably reserves the operation with the current pool master, records the native journal before effects, then performs and reports the operation independently of this HTTP connection or Controller. Reuse the same operation_id and exact request to retry; poll the operation route. A 202 acknowledges durable enqueue, not native completion.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotCreateRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Exact operation is durably accepted or replayed; poll for the outcome.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM/operation ID or snapshot request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is unenrolled, the operation ID was reused with different input, or conflicting work for this VM is unresolved. Native preflight refusals after durable acceptance are reported through the operation result.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;Unsupported Content-Type; application/json is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Snapshot execution or current master authority is unavailable; reconcile the same operation ID before retrying.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="getPoolVMSnapshotOperationLocal"><h2>GET <code>/api/local/v1/pool/vms/{id}/snapshot-operations/{operation_id}</code></h2>
+<p>Read a Core snapshot operation</p><p>Authenticated local root session. Reads the exact Core journal receipt by stable operation ID; pending/needs_attention remains unresolved and is not a success signal.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;getPoolVMSnapshotOperationLocal&quot;,
+  &quot;summary&quot;: &quot;Read a Core snapshot operation&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session. Reads the exact Core journal receipt by stable operation ID; pending/needs_attention remains unresolved and is not a success signal.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;operation_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$&quot;
+      }
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Current exact Core operation result.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM or operation ID.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;No matching local operation journal entry.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Core operation journal unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="revertStoppedPoolVMSnapshotLocal"><h2>POST <code>/api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/revert</code></h2>
+<p>Revert a stopped VM to a retained snapshot through Nex Core</p><p>Development slice under integration. Authenticated local root session, same-origin and CSRF required. Address the VM owner. The snapshot_id selects the retained point; operation_id is a distinct stable journal/retry identity. Core resolves captured state internally and binds the exact target to master authority. A 202 acknowledges durable enqueue, not completion. Follow the existing operation route; reuse the same identity and target after lost replies. No automatic VM start.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;revertStoppedPoolVMSnapshotLocal&quot;,
+  &quot;summary&quot;: &quot;Revert a stopped VM to a retained snapshot through Nex Core&quot;,
+  &quot;description&quot;: &quot;Development slice under integration. Authenticated local root session, same-origin and CSRF required. Address the VM owner. The snapshot_id selects the retained point; operation_id is a distinct stable journal/retry identity. Core resolves captured state internally and binds the exact target to master authority. A 202 acknowledges durable enqueue, not completion. Follow the existing operation route; reuse the same identity and target after lost replies. No automatic VM start.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotRevertRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Exact operation is durably accepted or replayed; poll for the outcome.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM, snapshot or operation ID, equal snapshot/operation IDs, or unsupported request fields.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is unenrolled, the operation ID was reused with different input, or conflicting work for this VM is unresolved. Native preflight refusals after durable acceptance are reported through the operation result.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;Unsupported Content-Type; application/json is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Snapshot execution or current master authority is unavailable; reconcile the same operation ID before retrying.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Requested retained snapshot or operation is not found for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="deleteStoppedPoolVMSnapshotLocal"><h2>POST <code>/api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/delete</code></h2>
+<p>Delete a stopped VM leaf snapshot through Nex Core</p><p>Development slice under integration. Authenticated local root session, same-origin and CSRF required. Address the VM owner. The snapshot_id selects a retained leaf point; operation_id is a distinct stable journal/retry identity. Core refuses points with native children before effects. Current leaf delete uses public blockcommit without --delete, metadata-only snapshot-delete, reference scan, and unlink of proven-unreferenced overlays. A 202 acknowledges durable enqueue, not completion. Follow the existing operation route; reuse the same identity and target after lost replies.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;deleteStoppedPoolVMSnapshotLocal&quot;,
+  &quot;summary&quot;: &quot;Delete a stopped VM leaf snapshot through Nex Core&quot;,
+  &quot;description&quot;: &quot;Development slice under integration. Authenticated local root session, same-origin and CSRF required. Address the VM owner. The snapshot_id selects a retained leaf point; operation_id is a distinct stable journal/retry identity. Core refuses points with native children before effects. Current leaf delete uses public blockcommit without --delete, metadata-only snapshot-delete, reference scan, and unlink of proven-unreferenced overlays. A 202 acknowledges durable enqueue, not completion. Follow the existing operation route; reuse the same identity and target after lost replies.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotDeleteRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Exact operation is durably accepted or replayed; poll for the outcome.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM, snapshot or operation ID, equal snapshot/operation IDs, or unsupported request fields.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is unenrolled, the operation ID was reused with different input, or conflicting work for this VM is unresolved. Native preflight refusals after durable acceptance are reported through the operation result.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;Unsupported Content-Type; application/json is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Snapshot execution or current master authority is unavailable; reconcile the same operation ID before retrying.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Requested retained snapshot or operation is not found for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="updatePoolVMSnapshotMetadataLocal"><h2>PATCH <code>/api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}</code></h2>
+<p>Update a retained snapshot name or description through Nex Core</p><p>Authenticated local root session, same-origin and CSRF required. Address the VM owner. Updates only the pool master&#x27;s catalog name and description for an existing snapshot ID. Capture digests, creation time and disk identity stay fixed. Duplicate names and unresolved recovery reservations are refused. Later revert and delete bind the updated descriptor digest.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;updatePoolVMSnapshotMetadataLocal&quot;,
+  &quot;summary&quot;: &quot;Update a retained snapshot name or description through Nex Core&quot;,
+  &quot;description&quot;: &quot;Authenticated local root session, same-origin and CSRF required. Address the VM owner. Updates only the pool master&#x27;s catalog name and description for an existing snapshot ID. Capture digests, creation time and disk identity stay fixed. Duplicate names and unresolved recovery reservations are refused. Later revert and delete bind the updated descriptor digest.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;format&quot;: &quot;uuid&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
+      &quot;in&quot;: &quot;header&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotMetadataRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Updated catalog descriptor.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid VM, snapshot ID or metadata fields.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Requested retained snapshot is not found for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core is unenrolled, the name is already in use, or recovery is reserved for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;415&quot;: {
+      &quot;description&quot;: &quot;Unsupported Content-Type; application/json is required.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Current master authority is unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="LocalSession"><summary>LocalSession</summary><pre>{
@@ -2549,6 +3254,10 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
     },
+    &quot;replica_ack_excluded&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core-owned exclusion from snapshot reservation/settlement replica acknowledgements and ordinary replica-push failure aggregation, recorded only by a supported promotion after validating fresh exact fence evidence. Omitted means false. The host remains a pool member and VM owner; delivery is still attempted. The master clears the exclusion only after accepted current-membership VM inventory and an exact current-generation/content replica POST acknowledgement. Covered by the signed authority content, without changing membership generation when cleared. It does not exempt destructive resource-removal acknowledgements, storage-lease preparation, restart authority confirmation or future promotion fencing. Use matching development Core builds; old promotions are not retroactively excluded.&quot;
+    },
     &quot;replica_generation&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
@@ -2561,7 +3270,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -3399,5 +4108,223 @@
     &quot;total&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolFenceCluster&quot;
+}</pre></details>
+<details id="PoolVMSnapshot"><summary>PoolVMSnapshot</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$&quot;,
+      &quot;maxLength&quot;: 64
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;spec_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;dependencies&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotDependencies&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;vm_id&quot;,
+    &quot;name&quot;,
+    &quot;created_at&quot;,
+    &quot;spec_revision&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshot&quot;,
+  &quot;description&quot;: &quot;Compact master-owned snapshot descriptor. Disk paths, XML and native artifacts remain in the owning Core journal.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotCreateRequest"><summary>PoolVMSnapshotCreateRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ],
+      &quot;description&quot;: &quot;Create capture mode. Omitted or stopped requires a shut-off guest. crash and quiesced require a running guest; quiesced also requires a responding guest agent. UEFI running capture is refused in this development slice.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;name&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolVMSnapshotResult"><summary>PoolVMSnapshotResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pending&quot;,
+        &quot;succeeded&quot;,
+        &quot;failed&quot;,
+        &quot;needs_attention&quot;
+      ]
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolVMSnapshotDependencies"><summary>PoolVMSnapshotDependencies</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;network_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;media_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 2,
+      &quot;uniqueItems&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;storage_ids&quot;,
+    &quot;network_ids&quot;,
+    &quot;media_ids&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshotDependencies&quot;,
+  &quot;description&quot;: &quot;Sorted resource IDs referenced by the captured VM definition. Omitted on legacy descriptors when the historical dependencies are unknown.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotRevertRequest"><summary>PoolVMSnapshotRevertRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;New operation identity, distinct from the retained snapshot ID in the route. VM specification, descriptor and native paths are resolved by Core and cannot be supplied by the caller.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotDeleteRequest"><summary>PoolVMSnapshotDeleteRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;New operation identity, distinct from the retained leaf snapshot ID in the route. Target descriptor and native paths are resolved by Core and cannot be supplied by the caller.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotMetadataRequest"><summary>PoolVMSnapshotMetadataRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 64,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9])?$&quot;
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 512
+    }
+  },
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Name is required; description is optional. Empty description clears the stored note. Capture digests and disk identity stay fixed.&quot;,
+  &quot;required&quot;: [
+    &quot;name&quot;
+  ]
 }</pre></details>
 </section></main></html>

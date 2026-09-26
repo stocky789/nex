@@ -1,0 +1,32 @@
+{
+  "summary": "Disposable multi-backend S0 native snapshot and midcommit consolidation DR matrix on local, NFS, SMB and iSCSI",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-s0-multi-backend-dr.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Lab evidence only; no operator-facing product workflow or UI change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Native virsh/libvirt lab probes only; no Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records S0 lab evidence; Phase 6 product backup/restore milestones remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Disposable lab evidence and documentation; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Fresh recovery-s0-core disposable lab; libvirt 11.3.0-3+deb13u3+nex4; recovery_s0.py lifecycle on local/NFS/SMB/iSCSI (16/16 passed); recovery_s0_consolidate.py normal+midcommit on all four backends (NFS midcommit passed on retry after one missed active-job race). Raw JSON retained under the ignored recovery-s0-dr evidence directory recorded in the QA page.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-s0-multi-backend-dr.md"
+    ]
+  }
+}

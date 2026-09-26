@@ -1,0 +1,52 @@
+{
+  "summary": "Wire the matched libvirt candidate into installer package selection, corresponding-source retention, netinst payloads, and release validation. Native S0 acceptance remains open. API impact: none.",
+  "paths": [
+    "packaging/libvirt/build-matched-libvirt.sh",
+    "installer/build.sh",
+    "installer/netinst-manifest.py",
+    "scripts/build-source.py",
+    "scripts/release-publish.py",
+    "tests/test_netinst.py",
+    "tests/test_netinst_release.py",
+    "tests/test_release_publish.py",
+    "tests/test_build_source.py",
+    "tests/test_source_bundle.py",
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "docs/qa/2026-09-25-recovery-libvirt-delivery.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes contributor installer build and release packaging only; it adds no operator workflow or Core behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The change selects a matched Debian libvirt package set and retains its source; no Nex Controller/Core or client-facing contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The delivery wiring does not close native S0 or advance the recovery plan; native candidate acceptance remains outstanding.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only installer inputs and release artifacts change; no durable Nex pool or Controller state is introduced."
+  },
+  "verification": {
+    "method": "Ran installer/check.sh, shell syntax validation, focused netinst/release/source-retention unit suites, and source archiving checks. The 14-test test_netinst*.py suite passed without skips in a digest-pinned Debian Trixie slim container with APT and dpkg-dev installed, using a minimal read-only snapshot without .cache. Synthetic Debian packages proved replacement is restricted to existing Source=libvirt Package+Architecture slots, while unmatched candidate binaries remain outside the repository. Separate focused checks exercised custom libvirt source retention and hash-pinned publication. No full ISO rebuild, netinst installation, external publication, or native S0 lifecycle acceptance is claimed. On 2026-09-26 the installer selector and synthetic fixtures advanced to the distinct four-patch +nex3 cohort: shell syntax passed and unittest discovery for test_netinst*.py passed 19 tests with one Debian APT prerequisite skip. This is selection validation, not a new ISO or native acceptance result. Independent review corrected stale mirrored release version predicates and confirmed the four-patch source closure; nine build-source tests and fifteen release-publish tests passed. The independent reviewer also ran 36 combined source/publish/source-bundle tests successfully.",
+    "evidence": [
+      "docs/LICENSING.md",
+      "packaging/libvirt/build-matched-libvirt.sh",
+      "docs/qa/2026-09-25-recovery-libvirt-backport.md",
+      "docs/qa/2026-09-25-recovery-libvirt-delivery.md",
+      "installer/check.sh",
+      "tests/test_netinst.py",
+      "tests/test_netinst_release.py",
+      "tests/test_release_publish.py",
+      "tests/test_build_source.py",
+      "tests/test_source_bundle.py"
+    ]
+  }
+}

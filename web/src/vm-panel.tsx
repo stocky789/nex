@@ -5,6 +5,7 @@ import { GuestTools, InstallMedia, VMDetails, VMPower, VMUsage, staleNote, state
 import type { ConsoleMedia } from "./console";
 import { Stats, formatValue } from "./stats";
 import { TagEditor } from "./vm-edit";
+import { VMSnapshots } from "./vm-snapshots";
 import { GuestOS } from "./guest-os";
 import { Activity, Badge, Panel } from "./ui";
 import { Icon } from "./icons";
@@ -80,11 +81,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
       <GuestTools vm={vm} />
     </>}
     {tab === "Performance" && <><VMUsage vm={vm} /><Stats key={vm.id} kind="vm" id={vm.id} api={api} /></>}
-    {tab === "Snapshots" && <section className="tile">
-      <h2>Snapshots</h2>
-      <p className="note">Available with snapshots (Phase 5).</p>
-      <div className="actions"><button type="button" disabled><Icon kind="snapshot" />Take snapshot</button><button type="button" disabled>Revert…</button></div>
-    </section>}
+    {tab === "Snapshots" && <VMSnapshots vm={vm} host={host} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} />}
     {tab === "Configuration" && <>
       <VMDetails vm={vm} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} api={api} reload={reload} busy={busy} unavailable={unavailable} onNotice={onNotice} editing={editing} onEditing={setEditing} />
       {!editing && <>

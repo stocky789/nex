@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,15 @@ type PoolMember struct {
 	ObservedAt            time.Time `json:"observed_at"`
 	Error                 string    `json:"error,omitempty"`
 	PeerOrigin            string    `json:"peer_origin,omitempty"`
+	// ReplicaAckExcluded keeps a verified-fenced, offline member in the pool identity
+	// and VM ownership set while excluding it from snapshot reservation/settlement ACKs
+	// and ordinary replica-push failure aggregation. Destructive resource removal,
+	// storage-lease preparation and restart confirmation still require every ready host.
+	// The current master still attempts delivery, and only clears this after the host
+	// has adopted the current replica and its current-generation VM inventory is accepted.
+	// This authority field is covered by the signed replica digest but does not advance
+	// membership generation: it changes no identity, role, or master re-point target.
+	ReplicaAckExcluded bool `json:"replica_ack_excluded,omitempty"`
 	// Maintenance is the master's durable drain intent for this host: it refuses new
 	// placements and new starts there and changes nothing that is already running.  It is
 	// deliberately outside the generation equality rule below, so draining a host never
@@ -225,7 +235,7 @@ const PoolMaintenanceCapability = "pool-maintenance-v1"
 // push/ack below, the member's stored copy and the reported replica generation.  A master
 // with it and a member without it records that member at replica generation 0 with an
 // upgrade-required reason; the master never degrades to an unsigned or partial copy.
-const PoolAuthorityReplicaCapability = "pool-authority-replica-v1"
+const PoolAuthorityReplicaCapability = "pool-authority-replica-v2"
 
 // PoolAuthorityTransferCapability gates a planned master change and a member eject: the
 // transfer command, the two peer endpoints below and the reported transfer status.  It is
@@ -798,10 +808,349 @@ type PoolTransferStatus struct {
 // truncated copy is exactly what the section digests below exist to make impossible.
 const PoolReplicaLimit = 1 << 20
 
+// VMSnapshotRequest carries create metadata or a revert target. The operation
+// ID remains on Command; SnapshotID is the distinct catalog-point identity.
+// Mode selects stopped (default), crash-consistent or quiesced running capture.
+type VMSnapshotRequest struct {
+	SnapshotID  string          `json:"snapshot_id,omitempty"`
+	Target      *PoolVMSnapshot `json:"target,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Mode        string          `json:"mode,omitempty"`
+}
+
+func (r VMSnapshotRequest) Valid() error {
+	if r.SnapshotID != "" || r.Target != nil || r.Name == "" || len(r.Name) > 64 || strings.TrimSpace(r.Name) != r.Name || strings.ContainsRune(r.Name, '\x00') ||
+		len(r.Description) > 512 || strings.ContainsRune(r.Description, '\x00') || !validSnapshotMode(r.Mode) {
+		return errors.New("VM snapshot request is invalid")
+	}
+	return nil
+}
+
+func validSnapshotMode(mode string) bool {
+	switch mode {
+	case "", "stopped", "crash", "quiesced":
+		return true
+	default:
+		return false
+	}
+}
+
+// SnapshotModeRunning reports whether create mode captures a running guest.
+func SnapshotModeRunning(mode string) bool {
+	return mode == "crash" || mode == "quiesced"
+}
+
+// ValidFor validates the kind-specific snapshot request carried by a managed
+// command. Revert and delete carry the exact catalog descriptor observed by the
+// owner so local intent and the master's reservation bind the same target point.
+func (r VMSnapshotRequest) ValidFor(kind string) error {
+	switch kind {
+	case "snapshot-create":
+		return r.Valid()
+	case "snapshot-revert", "snapshot-delete":
+		if !ValidSnapshotOperationID(r.SnapshotID) || r.Target == nil || r.Target.Valid() != nil || r.Target.ID != r.SnapshotID || r.Name != "" || r.Description != "" || r.Mode != "" {
+			return errors.New("VM snapshot target binding is invalid")
+		}
+		return nil
+	case "snapshot-metadata":
+		if !ValidSnapshotOperationID(r.SnapshotID) || r.Target != nil || r.Mode != "" ||
+			(VMSnapshotRequest{Name: r.Name, Description: r.Description}).Valid() != nil {
+			return errors.New("VM snapshot metadata update is invalid")
+		}
+		return nil
+	default:
+		return errors.New("VM snapshot request kind is unsupported")
+	}
+}
+
+// PoolVMSnapshotDependencies is the compact set of pool resources needed to
+// reconstruct a captured VM definition. Nil on PoolVMSnapshot means an older
+// catalog entry did not record enough information to prove dependencies.
+type PoolVMSnapshotDependencies struct {
+	StorageIDs []string `json:"storage_ids"`
+	NetworkIDs []string `json:"network_ids"`
+	MediaIDs   []string `json:"media_ids"`
+}
+
+// PoolVMSnapshotDependenciesForSpec returns the sorted, de-duplicated pool
+// resource IDs referenced by a valid VM definition.
+func PoolVMSnapshotDependenciesForSpec(spec VMCreateSpec) (PoolVMSnapshotDependencies, error) {
+	if err := ValidateVMSpec(spec); err != nil {
+		return PoolVMSnapshotDependencies{}, err
+	}
+	deps := PoolVMSnapshotDependencies{
+		StorageIDs: make([]string, 0, len(spec.Disks)),
+		NetworkIDs: make([]string, 0, len(spec.NICs)),
+		MediaIDs:   make([]string, 0, 2),
+	}
+	for _, disk := range spec.Disks {
+		deps.StorageIDs = append(deps.StorageIDs, disk.StorageID)
+	}
+	for _, nic := range spec.NICs {
+		deps.NetworkIDs = append(deps.NetworkIDs, nic.NetworkID)
+	}
+	if spec.MediaID != "" {
+		deps.MediaIDs = append(deps.MediaIDs, spec.MediaID)
+	}
+	if spec.DriversMediaID != "" {
+		deps.MediaIDs = append(deps.MediaIDs, spec.DriversMediaID)
+	}
+	deps.StorageIDs = sortedUniqueSnapshotIDs(deps.StorageIDs)
+	deps.NetworkIDs = sortedUniqueSnapshotIDs(deps.NetworkIDs)
+	deps.MediaIDs = sortedUniqueSnapshotIDs(deps.MediaIDs)
+	if err := deps.Valid(); err != nil {
+		return PoolVMSnapshotDependencies{}, err
+	}
+	return deps, nil
+}
+
+func sortedUniqueSnapshotIDs(ids []string) []string {
+	slices.Sort(ids)
+	return slices.Compact(ids)
+}
+
+func (d PoolVMSnapshotDependencies) Valid() error {
+	if d.StorageIDs == nil || d.NetworkIDs == nil || d.MediaIDs == nil || len(d.StorageIDs) > 8 || len(d.NetworkIDs) > 8 || len(d.MediaIDs) > 2 ||
+		!validSortedSnapshotIDs(d.StorageIDs) || !validSortedSnapshotIDs(d.NetworkIDs) || !validSortedSnapshotIDs(d.MediaIDs) {
+		return errors.New("pool VM snapshot dependencies are invalid")
+	}
+	return nil
+}
+
+func validSortedSnapshotIDs(ids []string) bool {
+	for i, id := range ids {
+		if !storageOpaqueID.MatchString(id) || (i > 0 && ids[i-1] >= id) {
+			return false
+		}
+	}
+	return true
+}
+
+// PoolVMSnapshot is the compact pool-master catalog entry. Native XML and disk
+// paths remain in the owning Core's managed journal and snapshot metadata.
+type PoolVMSnapshot struct {
+	ID                 string                      `json:"id"`
+	VMID               string                      `json:"vm_id"`
+	Name               string                      `json:"name"`
+	Description        string                      `json:"description,omitempty"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	SpecRevision       int                         `json:"spec_revision"`
+	SpecSHA256         string                      `json:"spec_sha256"`
+	DiskIdentitySHA256 string                      `json:"disk_identity_sha256"`
+	Dependencies       *PoolVMSnapshotDependencies `json:"dependencies,omitempty"`
+}
+
+// PoolVMSnapshotDescriptorSHA256 binds an operation to the exact current master
+// catalog entry, including metadata that may have changed since creation.
+func PoolVMSnapshotDescriptorSHA256(snapshot PoolVMSnapshot) (string, error) {
+	if snapshot.Valid() != nil {
+		return "", errors.New("pool VM snapshot descriptor is invalid")
+	}
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// PoolVMSnapshotRevertSpec restores the captured execution configuration while
+// retaining the current pool identity and operator-managed presentation fields.
+func PoolVMSnapshotRevertSpec(captured, current VMCreateSpec) (VMCreateSpec, error) {
+	if ValidateVMSpec(captured) != nil || ValidateVMSpec(current) != nil ||
+		captured.ID != current.ID || captured.PoolID != current.PoolID || captured.HostID != current.HostID || current.Revision < 0 {
+		return VMCreateSpec{}, errors.New("VM snapshot revert specifications are incompatible")
+	}
+	next := current
+	next.GuestOS = captured.GuestOS
+	next.CPU = captured.CPU
+	next.Memory = captured.Memory
+	next.Disks = append([]VMDisk(nil), captured.Disks...)
+	next.NICs = append([]VMNIC(nil), captured.NICs...)
+	next.Boot = captured.Boot
+	next.MediaID = captured.MediaID
+	next.DriversMediaID = captured.DriversMediaID
+	next.Revision = current.Revision + 1
+	if err := ValidateVMSpec(next); err != nil {
+		return VMCreateSpec{}, err
+	}
+	return next, nil
+}
+
+func (s PoolVMSnapshot) Valid() error {
+	if !ValidSnapshotOperationID(s.ID) || s.VMID == "" || len(s.VMID) > 128 ||
+		(VMSnapshotRequest{Name: s.Name, Description: s.Description}).Valid() != nil || s.CreatedAt.IsZero() ||
+		s.SpecRevision < 0 || !lowerSHA256(s.SpecSHA256) || !lowerSHA256(s.DiskIdentitySHA256) ||
+		(s.Dependencies != nil && s.Dependencies.Valid() != nil) {
+		return errors.New("pool VM snapshot descriptor is invalid")
+	}
+	return nil
+}
+
+func validPoolOperationID(id string) bool {
+	return id != "" && len(id) <= 128 && strings.TrimSpace(id) == id && !strings.ContainsAny(id, "/\\\x00")
+}
+
+// ValidSnapshotOperationID matches the native managed-journal filename syntax and
+// is also used for snapshot IDs; operation and snapshot IDs remain separate values.
+func ValidSnapshotOperationID(id string) bool {
+	if len(id) == 0 || len(id) > 64 || !((id[0] >= 'a' && id[0] <= 'z') || (id[0] >= 'A' && id[0] <= 'Z') || (id[0] >= '0' && id[0] <= '9')) {
+		return false
+	}
+	for i := 1; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// PoolVMRecoveryReservation is the pool master's compact reservation for one
+// snapshot transition. It binds the operation to the current durable owner,
+// exact VM definition, and normalized native intent digest.
+type PoolVMRecoveryReservation struct {
+	OperationID         string `json:"operation_id"`
+	Kind                string `json:"kind"`
+	OwnerOperationOrder uint64 `json:"owner_operation_order,omitempty"`
+	// AdmissionRefusal records a definitive master-side no-effect decision for a
+	// snapshot create. The Core must settle it with failed-before-effects evidence.
+	AdmissionRefusal     string `json:"admission_refusal,omitempty"`
+	PoolID               string `json:"pool_id"`
+	VMID                 string `json:"vm_id"`
+	OwnerHostID          string `json:"owner_host_id"`
+	Epoch                uint64 `json:"epoch"`
+	SpecRevision         int    `json:"spec_revision"`
+	SpecSHA256           string `json:"spec_sha256"`
+	DiskIdentitySHA256   string `json:"disk_identity_sha256"`
+	IntentSHA256         string `json:"intent_sha256"`
+	TargetSnapshotID     string `json:"target_snapshot_id,omitempty"`
+	TargetSnapshotSHA256 string `json:"target_snapshot_sha256,omitempty"`
+	ResultSpecSHA256     string `json:"result_spec_sha256,omitempty"`
+}
+
+func (r PoolVMRecoveryReservation) Valid() error {
+	if r.OperationID == "" || len(r.OperationID) > 128 || strings.TrimSpace(r.OperationID) != r.OperationID || strings.ContainsAny(r.OperationID, "/\\\x00") ||
+		r.PoolID == "" || len(r.PoolID) > 128 || r.VMID == "" || len(r.VMID) > 128 || r.OwnerHostID == "" || len(r.OwnerHostID) > 128 ||
+		r.Epoch == 0 || r.SpecRevision < 0 || !lowerSHA256(r.SpecSHA256) || !lowerSHA256(r.DiskIdentitySHA256) || !lowerSHA256(r.IntentSHA256) {
+		return errors.New("snapshot recovery reservation is invalid")
+	}
+	switch r.Kind {
+	case "snapshot-create", "snapshot-revert", "snapshot-delete":
+		if r.Kind == "snapshot-create" && (!ValidSnapshotOperationID(r.OperationID) || r.OwnerOperationOrder == 0) {
+			return errors.New("snapshot create operation identity is invalid")
+		}
+		if r.Kind == "snapshot-revert" && (!ValidSnapshotOperationID(r.OperationID) || r.OperationID == r.TargetSnapshotID || r.OwnerOperationOrder == 0 ||
+			!ValidSnapshotOperationID(r.TargetSnapshotID) || !lowerSHA256(r.TargetSnapshotSHA256) || !lowerSHA256(r.ResultSpecSHA256)) {
+			return errors.New("snapshot revert operation binding is invalid")
+		}
+		if r.Kind == "snapshot-delete" && (!ValidSnapshotOperationID(r.OperationID) || r.OperationID == r.TargetSnapshotID || r.OwnerOperationOrder == 0 ||
+			!ValidSnapshotOperationID(r.TargetSnapshotID) || !lowerSHA256(r.TargetSnapshotSHA256) || r.ResultSpecSHA256 != "") {
+			return errors.New("snapshot delete operation binding is invalid")
+		}
+		if r.Kind != "snapshot-revert" && r.Kind != "snapshot-delete" && (r.TargetSnapshotID != "" || r.TargetSnapshotSHA256 != "" || r.ResultSpecSHA256 != "") {
+			return errors.New("snapshot target binding is unsupported for this recovery kind")
+		}
+		if r.AdmissionRefusal != "" && (r.Kind != "snapshot-create" || (r.AdmissionRefusal != "name-in-use" && r.AdmissionRefusal != "catalog-full")) {
+			return errors.New("snapshot recovery admission refusal is invalid")
+		}
+		return nil
+	default:
+		return errors.New("snapshot recovery reservation kind is unsupported")
+	}
+}
+
+// PoolVMRecoveryEvidence is constructed from the exact terminal managed-journal
+// record by the executing Core. Unknown and partial outcomes have no evidence and
+// keep the reservation held.
+type PoolVMRecoveryEvidence struct {
+	Reservation   PoolVMRecoveryReservation `json:"reservation"`
+	Outcome       string                    `json:"outcome"` // completed or failed-before-effects
+	JournalSHA256 string                    `json:"journal_sha256"`
+	Snapshot      *PoolVMSnapshot           `json:"snapshot,omitempty"`
+	ResultSpec    *VMCreateSpec             `json:"result_spec,omitempty"`
+}
+
+func (e PoolVMRecoveryEvidence) Valid() error {
+	if err := e.Reservation.Valid(); err != nil {
+		return err
+	}
+	if (e.Outcome != "completed" && e.Outcome != "failed-before-effects") || !lowerSHA256(e.JournalSHA256) {
+		return errors.New("snapshot recovery journal evidence is invalid")
+	}
+	if e.Reservation.AdmissionRefusal != "" && e.Outcome != "failed-before-effects" {
+		return errors.New("refused snapshot admission cannot have native effects")
+	}
+	if e.Reservation.Kind == "snapshot-create" && e.Outcome == "completed" {
+		if e.Snapshot == nil || e.Snapshot.Valid() != nil || e.Snapshot.ID != e.Reservation.OperationID || e.Snapshot.VMID != e.Reservation.VMID || e.Snapshot.SpecRevision != e.Reservation.SpecRevision || e.Snapshot.SpecSHA256 != e.Reservation.SpecSHA256 || e.Snapshot.DiskIdentitySHA256 != e.Reservation.DiskIdentitySHA256 {
+			return errors.New("completed snapshot recovery evidence has no matching catalog descriptor")
+		}
+	} else if e.Snapshot != nil {
+		return errors.New("snapshot descriptor is not valid for this recovery outcome")
+	}
+	if e.Reservation.Kind == "snapshot-revert" && e.Outcome == "completed" {
+		if e.ResultSpec == nil || ValidateVMSpec(*e.ResultSpec) != nil || e.ResultSpec.ID != e.Reservation.VMID ||
+			e.ResultSpec.PoolID != e.Reservation.PoolID || e.ResultSpec.HostID != e.Reservation.OwnerHostID ||
+			e.ResultSpec.Revision != e.Reservation.SpecRevision+1 {
+			return errors.New("completed snapshot revert evidence has no matching resulting VM definition")
+		}
+		b, err := json.Marshal(e.ResultSpec)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(b)
+		if hex.EncodeToString(digest[:]) != e.Reservation.ResultSpecSHA256 {
+			return errors.New("snapshot revert result differs from its reservation")
+		}
+	} else if e.ResultSpec != nil {
+		return errors.New("snapshot result specification is not valid for this recovery outcome")
+	}
+	return nil
+}
+
+func lowerSHA256(value string) bool {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+// PoolResourceMutation is an in-progress destructive pool-resource operation. It is
+// replicated so promotion cannot forget an outcome the former master has not settled.
+type PoolResourceMutation struct {
+	Resource    string `json:"resource"`
+	ResourceID  string `json:"resource_id"`
+	OperationID string `json:"operation_id"`
+}
+
+func (m PoolResourceMutation) Valid() error {
+	if (m.Resource != "network" && m.Resource != "media") || !storageOpaqueID.MatchString(m.ResourceID) || !validPoolOperationID(m.OperationID) {
+		return errors.New("pool resource mutation is invalid")
+	}
+	return nil
+}
+
+func ValidatePoolResourceMutations(mutations []PoolResourceMutation) error {
+	if len(mutations) > 128 {
+		return errors.New("pool resource mutation list exceeds its bound")
+	}
+	previous := ""
+	for _, mutation := range mutations {
+		key := mutation.Resource + "\x00" + mutation.ResourceID
+		if mutation.Valid() != nil || (previous != "" && previous >= key) {
+			return errors.New("pool resource mutation list is invalid or unsorted")
+		}
+		previous = key
+	}
+	return nil
+}
+
 // PoolReplicaSections are the sections every replica declares, in this order.  A member
 // recomputes each digest and refuses a replica that declares a different set, so a section
 // cannot be dropped, reordered or replaced without invalidating the whole copy.
-var PoolReplicaSections = []string{"membership", "vms", "storage", "networks", "media", "storage_clusters"}
+var PoolReplicaSections = []string{"membership", "vms", "storage", "networks", "media", "storage_clusters", "resource_mutations"}
 
 type PoolReplicaSection struct {
 	Name   string `json:"name"`
@@ -844,13 +1193,14 @@ type PoolAuthorityReplica struct {
 	CreatedAt    time.Time `json:"created_at"`
 	// VMs is the master's pool-vms.json owner projection kept as received bytes, so
 	// ownership, epochs and pending updates survive replication unchanged.
-	Membership      PoolMembership         `json:"membership"`
-	VMs             json.RawMessage        `json:"vms"`
-	Storage         []StorageRegistration  `json:"storage"`
-	Networks        []NetworkRegistration  `json:"networks"`
-	Media           []Media                `json:"media"`
-	StorageClusters []StorageClusterConfig `json:"storage_clusters"`
-	CAKeyWrapped    *PoolWrappedKey        `json:"ca_key_wrapped,omitempty"`
+	Membership        PoolMembership         `json:"membership"`
+	VMs               json.RawMessage        `json:"vms"`
+	Storage           []StorageRegistration  `json:"storage"`
+	Networks          []NetworkRegistration  `json:"networks"`
+	Media             []Media                `json:"media"`
+	StorageClusters   []StorageClusterConfig `json:"storage_clusters"`
+	ResourceMutations []PoolResourceMutation `json:"resource_mutations"`
+	CAKeyWrapped      *PoolWrappedKey        `json:"ca_key_wrapped,omitempty"`
 	// FenceCredentials are the pool's fence credential material, sealed for this member
 	// alone.  Like CAKeyWrapped they are covered by the signature and excluded from
 	// ContentDigest, so the digest stays the same for every member of one generation; what
@@ -887,7 +1237,7 @@ func (r PoolAuthorityReplica) ContentDigest() (string, error) {
 
 // SectionDigests recomputes the per-section digests from the replica's own fields.
 func (r PoolAuthorityReplica) SectionDigests() ([]PoolReplicaSection, error) {
-	values := []any{r.Membership, r.VMs, r.Storage, r.Networks, r.Media, r.StorageClusters}
+	values := []any{r.Membership, r.VMs, r.Storage, r.Networks, r.Media, r.StorageClusters, r.ResourceMutations}
 	out := make([]PoolReplicaSection, 0, len(PoolReplicaSections))
 	for i, name := range PoolReplicaSections {
 		b, err := json.Marshal(values[i])
@@ -947,6 +1297,9 @@ func (r PoolAuthorityReplica) Valid() error {
 	}
 	if len(r.VMs) == 0 || !json.Valid(r.VMs) {
 		return errors.New("pool authority replica VM ownership record is invalid")
+	}
+	if err := ValidatePoolResourceMutations(r.ResourceMutations); err != nil {
+		return err
 	}
 	return r.VerifySections()
 }

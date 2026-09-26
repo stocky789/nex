@@ -316,6 +316,51 @@ separate from registered API operations.
 
 ## Host-local execution and service command
 
+### Stopped snapshot development contract
+
+Stopped creation, stopped revert, leaf delete, catalog metadata updates and Controller
+relay routes have bounded Core/API evidence. Running create admits `crash` and `quiesced`
+modes for supported BIOS guests; UEFI running capture is refused in this development
+slice. These authenticated operator routes address managed pool VMs, separately from the
+appliance-only `/api/local/v1/vms` routes:
+
+| Method and route | Request and result |
+|---|---|
+| `POST /api/local/v1/pool/vms/{id}/snapshots` | `{operation_id,name,description?,mode?}`; `mode` is omitted/`stopped` for shut-off guests, or `crash`/`quiesced` for a running guest; `quiesced` requires a responding guest agent and does not silently downgrade; UEFI running capture is refused; `202` with the durable `Result` after Core saves the canonical current VM definition and request |
+| `POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/revert` | `{operation_id}` with a distinct stable operation ID; target descriptor and captured specification are resolved by Core; guest must be stopped |
+| `POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/delete` | `{operation_id}` with a distinct stable operation ID; leaf-only delete using public no-delete blockcommit, metadata delete, reference scan and unlink of proven-unreferenced overlays; guest must be stopped |
+| `PATCH /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}` | `{name,description?}`; updates the master's catalog name/description only; capture digests and creation time stay fixed |
+| `GET /api/local/v1/pool/vms/{id}/snapshot-operations/{operation_id}` | The retained `Result`, scoped to the same VM; `404` for an unknown or differently scoped operation |
+| `GET /api/local/v1/pool/vms/{id}/snapshots` | The current master's compact snapshot catalog; unavailable authority returns an error, never a fabricated empty list |
+| `GET /api/v1/vms/{id}/snapshots` | Controller view of the master's compact catalog for one VM |
+| `POST /api/v1/vms/{id}/snapshots` | `{request_id,name,description?,mode?}`; Controller queues `snapshot-create` on the owner host with the same mode rules as the host-local create route |
+| `POST /api/v1/vms/{id}/snapshots/{snapshot_id}/revert` | `{request_id}`; Controller queues `snapshot-revert` |
+| `POST /api/v1/vms/{id}/snapshots/{snapshot_id}/delete` | `{request_id}`; Controller queues `snapshot-delete` |
+| `PATCH /api/v1/vms/{id}/snapshots/{snapshot_id}` | `{request_id,name,description?}`; Controller queues `snapshot-metadata` |
+
+The routes reuse host root sessions, same-origin validation, CSRF on POST and PATCH, bounded JSON and
+unknown-field refusal. Operator input cannot select a different host, VM specification or disk
+path. Operation IDs use `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. A create operation ID is also
+the stable snapshot ID; revert uses a distinct operation ID and retains the target ID.
+An exact retry returns the retained outcome; reuse for another VM, action, target or metadata
+returns `409`. Revert does not accept caller-supplied configuration or native paths.
+Catalog name/description updates refuse duplicate names and unresolved recovery reservations;
+later revert/delete bind the updated descriptor digest.
+An exact retry of `needs_attention` queues reconciliation of the original native journal.
+A new operation cannot bypass an unresolved capture for the same VM. Invalid input returns
+`400`; an unenrolled Core returns `409` with enrollment guidance; unavailable host/master state
+returns `503`. A known empty catalog returns `[]`. A lost reply does not prove non-acceptance.
+
+Only agent Run mutates the Core transport journal. One bounded background snapshot operation
+per host leaves the ordinary managed worker available for unrelated controls. Pending snapshot
+work blocks pool identity rewrites and conflicting VM/storage effects; emergency shutdown and
+force-stop do not acquire a derived dependency on the snapshot. Durable native intent precedes
+master reservation, and native execution requires exact persisted acknowledgement. Local
+terminal success and release require matching master settlement. Controller owns none of this
+state. See the [development workflow and verification limits](guide/vm-snapshots.md).
+
+### Authentication and execution
+
 The local service requires TLS 1.3 and authenticates only `root` using the host OS password
 through `/usr/lib/nex/nex-root-auth`, with PAM authentication and account checks. Use the password set during installation
 or its current value after an OS password change. Wrong passwords, other usernames, locked
@@ -1272,14 +1317,15 @@ permit from the master. The check sits at the same choke point as the restrictio
 `wake` (an operator pressing Start on a suspended guest) and `vm-create` with `start_after_create`
 are all refused, on local and shared storage alike, whether or not the master is reachable. The host
 reads its own freshest **verified** membership copy — its own record on the master, the stored
-signed authority replica on a member — so no master round trip is involved and local-only power
-keeps working with the master down. Staleness on a member is at most one master probe interval while
+signed authority replica on a member — so this maintenance refusal needs no master round trip.
+Start, wake, reboot and media changes additionally require current master owner admission;
+shutdown and force-stop remain available during master loss. Staleness on a member is at most one master probe interval while
 the master is reachable, and as old as the last successful replica push while it is not.
 
 Two further layers close the reboot path, which is the workflow maintenance exists for. The agent
-**suppresses libvirt's `autostart` flag** for every managed domain while the host is drained or
-restricted, and restores it on exit from the managed journal — the journal stays Nex's durable
-record of what the operator asked for, and no second "desired autostart" value is stored anywhere.
+**disables and verifies libvirt's `autostart` flag** for every managed pool domain. The flag
+stays disabled when maintenance ends; Core's boot attempt uses current owner admission and
+the desired value retained in the managed journal.
 And Core's libvirt **`StorageGuard` hook refuses a managed domain on a drained host** before any
 repository work. On the **pool master**, including every single-host pool, it reads `state.json` and
 `pool-peer.json`; on a **member** it reads the verified `pool-replica.json` membership copy the
@@ -1444,9 +1490,9 @@ rename), holding the replica exactly as received plus its content digest, the me
 
 **Generation rules.** The master rebuilds its authority on the existing probe tick, and advances
 and persists the generation **only when the content digest changed**, before pushing; it then
-pushes to every ready member that is behind. Pushes are therefore tick-driven rather than
-synchronous with each authority write: a member may lag by up to one probe interval, which is
-harmless because nothing waits on a replica. A crash after the bump simply pushes on the next tick,
+pushes to every ready member that is behind. Ordinary replication is tick-driven; operations
+that require durable replica acknowledgements also push synchronously and wait for their exact
+generation and content digest. A crash after the bump simply pushes on the next tick,
 and generations may skip. A member accepts a higher generation, re-accepts the same generation with
 identical content, refuses a lower one (`pool authority replica generation is older than the stored
 replica`) and refuses the same generation with different content (`pool authority replica
@@ -2971,6 +3017,27 @@ it is valid for its own pool, names the same master, keeps the member's own cert
 unchanged, and has a strictly newer generation; it persists that membership and retries the inventory
 once. Any invalid, foreign, identity-changing, non-newer or second stale reply remains refused.
 
+**Failed start reconciliation (BUG-0644, development integration).** The existing authenticated
+peer `start` action binds `operation_id` to the master's `pending_start_operation_id` and
+increments the existing execution `epoch`. Core requires an exact operation ID and nonzero
+epoch in the acknowledgement before native execution. Completion from `starting` to `running`
+or `stopped` must match both values and the current owner. A stale completion cannot release
+a later start. These fields live in the master's `pool-vms.json` and signed authority replicas;
+Controller only displays host-reported state and outcomes.
+
+Owner inventory can carry `start_outcomes` entries containing `vm_id`, `operation_id` and
+terminal `status: failed`. An exact failed start plus fresh native shut-off observation can settle
+the matching pending identity after a lost completion or Core restart. A fresh running
+observation from the current owner can confirm present execution without granting another
+start or changing an uncertain task outcome. Start-after-create uses the base create operation
+ID rather than its synthetic display-task suffix. Its Core journal records whether failure
+preceded native dispatch; missing or uncertain evidence cannot release a shut-off reservation.
+Pending definition/recovery changes and unrelated failures also leave the start reserved.
+Legacy `starting` records without a durable operation binding remain fenced.
+Use matching development Core versions: an older peer's missing acknowledgement cannot
+establish this contract. Emergency reducing-power requests remain independent of master
+availability. Native acceptance of this correction is pending.
+
 **Settling operations the master reserved but never saw finish (BUG-0536–BUG-0538).** A member
 that refuses a `vm-create` or `vm-update` before executing it (for example because the master's
 reply to `define` or `update-reserve` was lost) journals the operation as `failed` at stage
@@ -3036,6 +3103,143 @@ it changes no durable state. Admission still refuses a raw `vm-media` command th
 shared VM's definition. The master keeps this state in its Core
 `pool-vms.json`; a replacement Controller adopts the committed Core inventory and holds no durable
 VM definition.
+
+**VM deletion with retained snapshots (development integration).** Every pool VM delete,
+including local-storage VMs and requests that keep disk files, requires the authenticated
+owner's `delete-check` on `POST /api/v1/pool/vms/{vm_id}`. The current master checks the
+exact owner and definition, refuses an unresolved transition or retained snapshot catalog,
+and replies with the matching VM ID, action and `spec_match:true`. Missing or mismatched
+acknowledgements, an unavailable master and frozen authority refuse deletion before native
+changes. This check is read-only and can be retried; it does not remove the catalog or grant
+permission to bypass native ownership checks. Native deletion rechecks retained snapshot
+journals under its mutation lock, covering a capture that finishes after the master check.
+Older peers without this action fail closed;
+use matching development builds. The client-facing VM delete request is unchanged.
+
+**Snapshot recovery authority (development integration; acceptance open).** The master reports
+its durable pending reservations in `ManagedState.recovery_reservations` and retained descriptors
+in `pool_vm_snapshots`. Their respective `recovery_reservations_reported` and
+`pool_vm_snapshots_reported` flags are true only after a complete successful read. Omitted or
+false means unknown, not empty. Members cannot publish a master catalog, and older hosts omit
+these additive fields. Controller retains the authenticated observation for display and adoption.
+
+New snapshot descriptors carry `dependencies` with sorted, bounded `storage_ids`,
+`network_ids` and `media_ids`, derived from the exact captured VM specification. The master
+retains them with the catalog and verifies them in settlement. Missing legacy dependencies
+mean unknown and conservatively refuse destructive resource changes; they never mean an
+empty set. Current VM edits do not discard a retained point's captured references. Ordinary
+storage leases/starts and non-destructive metadata operations keep their existing contracts.
+
+Network/media removal records an exact-operation mutation in the master's existing
+`pool-storage.json` mutation ledger before native work. Every ready member must acknowledge
+the exact marker-containing authority replica before removal can begin; a busy push, missing
+or stale acknowledgement is not permission to proceed. Competing VM create/update and
+snapshot admissions cannot add a reference to that resource until the outcome is definitive.
+An uncertain native removal remains `needs_attention`; restart and exact-operation replay
+retain its protection. Core's existing background worker revisits the exact saved removal
+after rechecking current ownership, dependencies and replica acknowledgement. A definitive
+journal result also lets Core retire its matching marker after an interrupted settlement,
+without repeating native removal. A pre-execution refusal cannot release uncertainty from
+an earlier attempt. Signed authority replicas include the bounded `resource_mutations`
+section, and promotion preserves unresolved markers. Replicas missing that required section
+cannot establish the new recovery contract. Use matching development Core versions and
+upgrade Controller before Core for the expanded snapshot descriptor.
+
+Each reservation binds `operation_id`, `kind`, `pool_id`, `vm_id`, `owner_host_id`, ownership
+`epoch`, `spec_revision`, `spec_sha256`, `disk_identity_sha256` and `intent_sha256`. Snapshot
+creation and revert also bind nonzero `owner_operation_order` from the owner's durable journal.
+The last settlement's order fences older requests from the same continuing owner, including
+after a start advances its execution epoch,
+so a delayed request cannot acquire a new reservation after a later operation settles. The current
+create path uses `snapshot-create` with optional `mode` (`stopped`, `crash`, or `quiesced`);
+stopped `snapshot-revert` and leaf `snapshot-delete` use their own kinds, and catalog
+metadata updates use `snapshot-metadata`. The master's existing `pool-vms.json` holds the
+pending reservation, proposed create descriptor or master-derived revert result, retained
+snapshot catalog and one terminal replay receipt. Native paths, complete capture intent and
+progress remain in the executing owner's managed journal.
+
+The authenticated owner reserves capture using the pinned mTLS `snapshot-reserve`
+action on `/api/v1/pool/vms/{vm_id}`. The exact acknowledgement binds operation, VM, metadata,
+capture time, owner, definition and immutable intent before native effects. Names are unique
+within the VM and the catalog is bounded to 32 retained points. Snapshot identity is the original
+operation ID. Members read the master's catalog through
+`GET /api/v1/pool/vms/{vm_id}/snapshots`; they do not substitute a local native list when authority
+is unavailable. Host-local operator ingress is documented under the snapshot development workflow.
+
+The revert extension uses the same `snapshot-reserve` peer action with
+`recovery_kind: snapshot-revert`, `snapshot.snapshot_id`, its exact internally resolved
+`snapshot.target`, and `captured_spec` from the owner's immutable capture journal. The master
+verifies captured specification/disk hashes and dependencies against its catalog, then derives
+the next revision from its current VM record. It preserves current identity, name, description,
+tags and autostart; captured hardware, disks, NICs, boot and media replace execution settings.
+The reservation binds `target_snapshot_id`, `target_snapshot_sha256` and `result_spec_sha256`;
+`pool-vms.json` retains the pending derived result specification for promotion and exact
+settlement. A completed revert supplies `recovery_evidence.result_spec`, which must match that
+result exactly. It updates the current VM definition and receipt without creating or removing
+a catalog point. Unknown or partial effects keep the reservation. These development fields
+require matching Core/Controller versions; native revert acceptance remains open.
+
+Reservation and settlement responses additionally require every eligible ready member to acknowledge
+the exact authority replica containing the pending reservation or terminal catalog receipt.
+Core releases state locks during peer I/O, then rechecks current authority and the exact
+transition before returning success. A single-host pool has no member acknowledgement to
+await. Missing, lost or stale acknowledgement leaves the operation unresolved, including
+when the master already saved it; peer `409` may therefore mean saved-but-unacknowledged
+state, not proof of no effects. Retry the exact operation after connectivity recovers. A
+successful asynchronous replication trigger alone does not satisfy this requirement.
+
+In the development promotion correction, `PoolMember.replica_ack_excluded` records a
+verified-fenced member's exclusion from snapshot reservation/settlement acknowledgements
+and ordinary replica-push failure aggregation. Only supported
+promotion can set it, using fresh fence evidence bound to the exact host, pool, operation and
+authority generation. Mere unreachability cannot set it. The member remains in pool identity,
+VM ownership and inventory completeness checks; Core still attempts replica delivery. This
+does not relax destructive resource-removal acknowledgements, storage-lease preparation,
+restarted-master confirmation, fence-profile retirement or fresh fencing in
+a later promotion. The master clears it only after accepting current-membership VM inventory
+and verifying an exact current-generation/content replica POST acknowledgement. Clearing
+changes signed authority content, so subsequent operations require acknowledgements of the
+new content. The durable field lives in `pool-peer.json` and its signed authority replicas;
+Controller adopts the reported membership. Absent means false. Use matching development
+Core builds; a prior promotion without this field remains conservative. The bounded
+[r8 virtual-fence promotion/rejoin check](qa/2026-09-26-recovery-snapshot-promotion-r8.md)
+passed; this does not establish independent physical fencing.
+
+A duplicate name or full catalog returns an exact durable reservation with
+`admission_refusal` set to `name-in-use` or `catalog-full`, and `snapshot_accepted:false`.
+The owner must not execute native capture for that reservation. It proves absence of effects
+and settles through the same `failed-before-effects` path; only then is the failure terminal.
+Exact reservation retries preserve the refusal. Unknown responses and transport failures remain
+unresolved rather than being interpreted as definitive rejection.
+
+The pinned mTLS `snapshot-settle` action on `/api/v1/pool/vms/{vm_id}` carries one bounded
+`recovery_evidence` object. The master validates the authenticated owner, current membership,
+ownership epoch and pending reservation, and refuses frozen or handed-off authority, unknown
+reservations or mismatched evidence with `409`. Only `snapshot_settled:true` with the exact
+evidence echoed back acknowledges durable settlement. An exact retry returns the same retained
+receipt. A generic `/inventory` HTTP `200` is not a local reservation-release acknowledgement.
+
+Exact owner evidence carries `completed` or `failed-before-effects`, the reservation and
+`journal_sha256`; completed creation also carries the matching snapshot descriptor. A timeout,
+partial native result or generic inventory acknowledgement cannot release the local fence.
+The owner requires acknowledgement of the exact durable master settlement before reporting a
+terminal result. The digest binds journal evidence; it does not prove a working restore.
+Snapshot creation preserves the VM specification revision. Retained descriptors include identity,
+name, description, capture time and captured specification/disk identity digests.
+
+Managed local-storage start, wake, reboot and media changes use current-owner admission just as
+shared-storage VMs do; shutdown and force-stop remain available without a master round trip.
+Pending recovery blocks conflicting VM operations, dependent storage changes and pool rehome.
+Ejection of a member with retained snapshots is also refused until its catalog can move with
+the VM; master-role transfer retains the catalog in the existing authority replica.
+Controller replacement adopts the master observation and explicit owner results; absence of an
+operation from inventory never turns an unresolved snapshot into success. Adopted Controller
+operation IDs for snapshots are a deterministic host-scoped projection; the original Core
+operation ID remains in the existing `adopt-outcome:<host>:<operation>` request key. This
+prevents two hosts using the same client-supplied ID from hiding each other's history. Core
+snapshot IDs and host-local status lookup continue to use the original operation ID. Native host-API,
+outage and replacement acceptance remain open; this contract does not advertise completed
+snapshot capability.
 
 The master's Core peer listener also exposes pool-storage reconciliation only to an authenticated
 member certificate: it serves desired NFS/SMB repositories and accepts that member's access result
@@ -3673,8 +3877,9 @@ deployed, from the appliance engine's deploy journal under the nex-core-local da
 `--appliance-journal-dir`), `outcomes` (`ManagedOutcome`: terminal managed journal entries, with the host's
 operation ID, kind, resource ID, name, status
 and error, plus two derived outcomes: a failed automatic start after `vm-create`, reported
-under ID `<operation-id>:start` with kind `vm-power` and status `failed`, and received queued
-work from the Core command journal. A non-executing orphaned **non-storage** pending entry is
+under ID `<operation-id>:start` with kind `vm-power` and status `failed` for a confirmed
+preflight refusal or `needs_attention` for an interrupted/unconfirmed native start, and received queued
+work from the Core command journal. A non-executing orphaned **non-storage, non-snapshot** pending entry is
 reported as `needs_attention` with `interrupted before completion; retry from a new request`.
 Storage originals are different: Core's periodic recovery lane retries at most one due
 `storage-*` entry per minute (see `ReconcileStorage` above). The host re-observes a
@@ -3835,9 +4040,9 @@ MAC uniqueness and host capacity stay with their owners.
   available memory to start this VM including 2 GiB host reserve` before issuing `virsh start`.
   A start of a running VM stays a no-op; a refused pool autostart is not retried in that boot.
   A created VM whose automatic start is refused stays
-  defined and stopped, with `VM created but not started: <reason>` reported. Libvirt's own
-  autostart replay at host boot (non-shared VMs) is outside this check; Core's own once-per-boot
-  autostart attempt for such a guest issues the same start and so does apply it. API impact: **changed
+  defined and stopped, with `VM created but not started: <reason>` reported. Managed pool VMs
+  keep native libvirt autostart disabled; Core's once-per-boot autostart applies the same check.
+  API impact: **changed
   contract** — same requests and results; the available-memory refusal moved from `vm-create`
   and stopped `vm-update` to starting, with the message above (BUG-0195).
 - **`disks`.** One to eight. Each carries `storage_id`, a `name` unique within the VM
@@ -3845,6 +4050,10 @@ MAC uniqueness and host capacity stay with their owners.
   `virtio|sata|scsi`, `thin` (`true` sparse, `false` preallocated) and `boot_order`. Disks are
   created inside the VM's exclusive directory on their storage target; Core checks exclusive
   ownership for every disk and free space per target, summing the disks that share one.
+  Existing ownership checks refuse foreign image chains with external data files or encryption,
+  including metadata omitted from domain XML, because exclusive access cannot be established.
+  Managed chain checks also require the exact unique writable disk targets and sources from
+  the journal; extra or duplicate writable disks are refused before native mutation.
 - **`nics`.** Zero to eight. Each carries `network_id`, `model`, `mac` and an optional `mtu`.
   `model` is `virtio|e1000|e1000e|rtl8139|vmxnet3` (`virtio` needs a guest driver). `mtu` is
   `0` for the network's own MTU and is **accepted only on `virtio`** (via `host_mtu`; other models
@@ -3866,20 +4075,18 @@ MAC uniqueness and host capacity stay with their owners.
 - **`boot`.** `firmware` `uefi` (the default; requires EFI firmware advertised by the host's
   `domcapabilities`) or `bios`. `machine` is empty for Core's default (q35) or a plain machine
   name (`^[a-z0-9][a-z0-9._-]{0,31}$`).
-- **Lifecycle.** For storage that is not pool-shared, `autostart` is the libvirt property
-  (`virsh autostart`) set while the stopped guest is defined, so the host starts the VM on boot;
-  it is not a start. A pool-shared VM has libvirt autostart disabled. In both cases Core's
-  serialized worker makes at most one durable autostart attempt per VM per OS boot, recorded in
-  the private Core state before observation or admission, and only on a host that is neither
-  drained nor restricted. A pool-shared VM can start only as a currently shut-off,
-  already-recorded owner after fresh master admission, current storage/execution checks and a
-  one-use Core permit. A local-storage VM takes the same attempt with no master round trip and no
-  permit, which is what an API start of one does too; it is the retry libvirt cannot make, because
-  libvirt tries its flag once at boot, before a fence-exposed master has confirmed that boot's
-  authority, and the `StorageGuard` hook refuses it there (changed 2026-09-20: before this, such a
-  guest stayed shut off for the rest of the boot). Agent restart, a later manual stop, master
-  outage, failed validation or a failed start cannot create another attempt in that boot; this is
-  neither HA nor failover.
+- **Lifecycle.** Managed pool VMs keep native libvirt autostart disabled, including on local
+  storage. The desired `autostart` setting remains in Core's VM definition. Core disables and
+  verifies the native flag when defining or updating a VM and during its autostart pass; the
+  Controller appliance uses its separate lifecycle. Core's worker makes at most one durable
+  autostart attempt per VM per OS boot, recorded before observation or admission, and only on
+  a host that is neither drained nor restricted. A guest must be shut off and receive fresh
+  current-owner admission from the pool master. Shared storage additionally requires current
+  storage/execution checks and a one-use Core permit. Pending recovery refuses admission.
+  Agent restart, a later manual stop, master outage, failed validation or a failed start cannot
+  create another attempt in that boot; this is neither HA nor failover. Existing definitions
+  with native autostart still enabled must have it disabled and verified before snapshot
+  effects; an agent-side admission check alone cannot intercept libvirt's earlier boot replay.
   `start_after_create` is
   honoured by the host inside the same creation (changed contract, 2026-09-10): after every disk
   is created and the persistent definition is verified, the creation has **succeeded** whether
@@ -3888,15 +4095,18 @@ MAC uniqueness and host capacity stay with their owners.
   `start` field. That field is what makes the start happen once: a replayed command returns
   the durable result and never starts again, and a creation interrupted at the start step is
   reconciled by observing libvirt — `running` records `started`, anything else records the
-  failure `interrupted before the automatic start completed`. A start that libvirt refuses
-  leaves the creation `succeeded` and the VM defined with its disks, stopped, as a normal
-  managed VM: power, console and media work on it and a replacement Controller adopts it. The
+  uncertain outcome `interrupted before the automatic start completed`. A start failure
+  leaves the creation `succeeded` and the VM defined with its disks; a replacement Controller
+  adopts that definition without treating creation success as proof of a start. The
   host reports the failed start as its own outcome with ID `<operation-id>:start`, kind
-  `vm-power`, status `failed` and error `VM created but not started: <reason>`, which the
+  `vm-power`, status `failed` for a preflight refusal or `needs_attention` for an interrupted
+  or unconfirmed native request, and error `VM created but not started: <reason>`, which the
   Controller records in Task history next to the succeeded creation; a failed or uncertain
   creation never boots. Controller issues no follow-on `vm-power` operation and no longer
   needs `vm-power-v1` for this; the operator sees the creation task and, only when the
-  automatic start failed, one failed start task.
+  automatic start failed or remains uncertain, one separate start task. The creation callback
+  and owner inventory read this exact durable start outcome before settling its master
+  reservation; uncertain starts remain fenced even if the latest observation is shut off.
 
 `createVM` refusals, in the order they are evaluated: **400** for a client-supplied `id`, an
 invalid `request_id` or name, any `protocol.ValidateVMSpec` violation (its message is returned

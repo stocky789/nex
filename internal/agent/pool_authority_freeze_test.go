@@ -26,6 +26,32 @@ func frozenAuthorityDigest(t *testing.T, s *Store) string {
 	return digest
 }
 
+func TestAuthorityFreezeDetectsVMChangeAfterReplicaBuild(t *testing.T) {
+	s := peerStore(t, "master-1", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	spec := *poolVMTestSpec("44444444-4444-4444-8444-444444444444", "master-1")
+	state := poolVMState{VMs: map[string]poolVMRecord{
+		spec.ID: {PoolID: spec.PoolID, VMID: spec.ID, HostID: spec.HostID, Epoch: 1, State: "stopped", Spec: spec},
+	}}
+	if err := savePoolVMs(s, state); err != nil {
+		t.Fatal(err)
+	}
+	builtVMs, err := poolReplicaVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.VMs[spec.ID] = poolVMRecord{PoolID: spec.PoolID, VMID: spec.ID, HostID: spec.HostID, Epoch: 2, State: "stopped", Spec: spec}
+	if err := savePoolVMs(s, state); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := poolAuthorityVMSectionMatches(builtVMs, state.VMs)
+	if err != nil || matches {
+		t.Fatalf("freeze accepted a VM section changed after replica build: matches=%v err=%v", matches, err)
+	}
+}
+
 // freezeLabAuthority drives the transfer machine far enough to persist the freeze, with the
 // target unreachable so nothing else moves.
 func freezeLabAuthority(t *testing.T, lab *transferLab, operation string) *Store {

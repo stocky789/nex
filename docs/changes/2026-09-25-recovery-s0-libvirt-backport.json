@@ -1,0 +1,53 @@
+{
+  "summary": "Build and assess disposable matched libvirt recovery patches. The six-patch +nex2 candidate passed its source/build gates and a Core A native 32-point two-disk delete/reopen check; interrupted-delete/restart and AppArmor guest CI remain open. API impact: none.",
+  "paths": [
+    "packaging/libvirt/build-matched-libvirt.sh",
+    "packaging/libvirt/readonly-disk-apparmor.patch",
+    "packaging/libvirt/unique-revert-overlay.patch",
+    "packaging/libvirt/partial-backing-chain.patch",
+    "packaging/libvirt/qmp-json-depth.patch",
+    "installer/build.sh",
+    "tests/integration/libvirt_readonly_policy.py",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py",
+    "tests/test_netinst.py",
+    ".github/workflows/recovery-libvirt.yml",
+    ".gitea/workflows/recovery-libvirt.yml",
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "docs/qa/2026-09-25-recovery-libvirt-backport.md",
+    "docs/LICENSING.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor-only disposable-lab package experiment. No supported operator workflow or product behavior has changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The experiment patches a matched Debian libvirt package and runs native helper/lifecycle checks. No Controller/Core or client-facing API contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The candidate addresses two observed native S0 blockers but does not implement or complete snapshots, backups, restores, installer integration, or the recovery phase gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No Nex product state changed. Package artifacts and generated guest state are isolated build/lab evidence, not durable Nex state."
+  },
+  "verification": {
+    "method": "The four-patch APT-locked builder ran end to end from the immutable recipe recorded in `build-inputs.txt` (recipe SHA256 `a38a06cdb52a26ae08dc2e18538ee2253c11d763f3321aeb1baf39c82bdf5034`). It produced 73 version-matched binaries and complete corresponding source; all 90 `SHA256SUMS` entries verified (manifest SHA256 `a359ec053cbad8a789d082f63de51aefd45d78ba6e03df287499c58dad51080a`). The patched `.dsc` hash is `3289e58eb09953e749050aa594ccd921afb5e2fc99fe7d7442cceb12b666f83e`; its Debian tar hash is `7e6b42c5bcb4cd4770da6dd1d9e347d2a683f4a26d2a675d811b8e5c7deb3f8a`. Reconstructing the patched source from that `.dsc` matched the compiled tree in a no-follow comparison, excluding only generated `debian/.pc` and `debian/files`. The complete Meson suite reported 158 pass, one expected failure, one skip, zero unexpected failures; upstream `virt-aa-helper-test`, readonly policy checks, and partial-backing-chain checks passed. These build/helper results are for the four-patch cohort only. The earlier three-patch session-TCG CI pass and preceding two-patch native reverts/retries remain separate historical cohorts. At the four-patch cohort checkpoint, Core B had the four-patch package set installed without a recorded native check and Core A was staged but not installed; the later six-patch Core A run is recorded below. Core C has the three-patch cohort installed and a curated reopen summary, with a logged source-reopen recheck pending. The current AppArmor-enabled nested system-guest runner has received source and validator tests but has not run. `python3 -m py_compile tests/integration/libvirt_recovery_ci.py tests/test_libvirt_recovery_ci.py` passed; four focused validator and mixed-architecture selector tests passed, as did the source-retention test and a schema check against the saved four-patch parent-delete result after adapting only its package/URI envelope. The selector also chose all 15 package artifacts from the retained four-patch output using exact Package, Version, and Architecture metadata. The validator requires matching package versions, both one/two-disk controls, an enforcing QEMU observation during the initial parent deletion, successful newest-first cleanup deletions with marker/chain reconciliation and clear deletion flags, and a successful final QEMU reopen. This schema check is not a six-patch or system-guest runtime result. The builder, installer exact-version checks, source retention, and release workflow pins target the six-patch `+nex2` candidate. Its exact recipe hash is `351d6faf4560879e2e442a3ba98c8874f418c54f638a2683f92a055253d91f35`; one capped `--init` Docker build completed with exit code 0 and no OOM. It produced 73 unique package binaries; all 92 SHA256 entries verify (manifest hash `926cf76145b10555bc535d68d2df38581dace88efc154ae70d3a37990d1a4f60`). The patched `.dsc` hash is `56dc146870e0eff8b737bb4d99aa03ae83bb88082054d6d47327557d281a6a08`, and Debian tar hash `e84bdff49ff93192551a1178f776b55f95d89e25cd6ca7572d99b9371a3c7238`. `dpkg-source -x` reconstruction passed; the nine C files modified by the six patches match the compiled source tree. Meson reports 158 pass, one expected failure, one skip, zero failures; `qemumonitorjsontest`, `virt-aa-helper-test`, readonly helper policy, and partial-chain checks passed. The six-patch candidate later passed the Core A native local-filesystem 32-point chain case described below; the enforcing AppArmor guest, interrupted-delete/restart test, and installer build remain unrun. No remote Forge execution is claimed. `packaging/libvirt/qmp-json-depth.patch` is source-reviewed and compiled into that recipe; the qemumonitorjsontest passed in the full Meson run. Earlier revision test results and the JSON-C boundary report remain historical and are not used in place of this six-patch build result. The sixth patch `snapshot-delete-recovery.patch` is included in this six-patch build; independent source review found no correctness blocker and the author reports a clean dry-run against retained four-patch source. Existing fixtures do not cover its stopped external-delete preparation branch, so the interruption/restart regression and native behavior remain required. Core A then received the exact six-patch +nex2 closure: all 15 staged package hashes matched the retained manifest, APT simulated 15 upgrades with zero installs/removals, and installation completed with a clean dpkg audit. All 15 installed package versions match +nex2, libvirtd is active, and eight pre-existing recovery domains remained shut off. The installed helper policy regression passed. `recovery_s0.py --stress-point-chain 32` passed on Core A with 32 two-disk points, parent `stress-08` deletion, retained marker/backing-chain reconciliation and clear deletion flags, all 31 remaining points deleted newest-first, and final QEMU reopen (`running`, no guest OS); exit 0 in 144.17 seconds. Raw evidence is under `.cache/recovery-s0-native/six-patch-corea-deep32-8c9a0c8cbd/`. This does not test interrupted-delete restart or enforcing-AppArmor system-guest CI.",
+    "evidence": [
+      "packaging/libvirt/build-matched-libvirt.sh",
+      "tests/integration/libvirt_readonly_policy.py",
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/test_libvirt_recovery_ci.py",
+      ".github/workflows/recovery-libvirt.yml",
+      ".gitea/workflows/recovery-libvirt.yml",
+      "docs/qa/2026-09-25-recovery-libvirt-backport.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

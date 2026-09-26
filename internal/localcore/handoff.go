@@ -135,6 +135,7 @@ func (h *handoffHTTP) waitApplianceReady(ctx context.Context) error {
 type runningAgent struct {
 	store                     *agent.Store
 	hostID, controller, trust string
+	snapshotRequests          chan agent.SnapshotRequest
 	started                   bool
 	stop                      context.CancelFunc
 	done                      chan struct{}
@@ -158,7 +159,7 @@ func getHandoffAgent(dir string) (*runningAgent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &runningAgent{store: s, hostID: s.State.HostID, controller: s.State.Controller, trust: s.State.TrustPEM, done: make(chan struct{})}
+	a := &runningAgent{store: s, hostID: s.State.HostID, controller: s.State.Controller, trust: s.State.TrustPEM, snapshotRequests: make(chan agent.SnapshotRequest), done: make(chan struct{})}
 	handoffAgents.entries[key] = a
 	return a, nil
 }
@@ -217,24 +218,18 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 	key, _ := filepath.Abs(dir)
 	go func() {
 		if a.hostID != "" {
-			rehomed := make(chan struct{})
-			go func() {
-				defer close(rehomed)
-				if err := agent.ResumePoolRehome(agentCtx, a.store); err != nil && agentCtx.Err() == nil {
-					log.Printf("pool scope recovery: %v", err)
-				} else if agentCtx.Err() == nil {
-					if err := vmhost.RehomePoolScope(filepath.Join(dir, "managed-vms"), a.store.State.PoolID, a.store.State.HostID); err != nil {
-						log.Printf("pool journal scope recovery: %v", err)
-					}
+			rehomeErr := agent.ResumePoolRehome(agentCtx, a.store)
+			if rehomeErr != nil && agentCtx.Err() == nil {
+				log.Printf("pool scope recovery: %v", rehomeErr)
+			} else if agentCtx.Err() == nil {
+				if err := vmhost.RehomePoolScope(filepath.Join(dir, "managed-vms"), a.store.State.PoolID, a.store.State.HostID); err != nil {
+					log.Printf("pool journal scope recovery: %v", err)
 				}
-			}()
-			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second})
+			}
+			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second, SnapshotRequests: a.snapshotRequests})
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)
 			}
-			// Wait for scope recovery too, so a caller that re-enrolls after done never
-			// rewrites the store under it. A stop cancels agentCtx, which ends its retries.
-			<-rehomed
 		} else {
 			<-agentCtx.Done()
 		}

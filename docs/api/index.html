@@ -90,6 +90,11 @@
 <li><a href="#setPoolBMCProvisioning">POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning</a></li>
 <li><a href="#setPoolHostFencing">POST /api/v1/pools/{id}/host-fencing</a></li>
 <li><a href="#replaceSystemDisk">POST /api/v1/hosts/{id}/system-disk</a></li>
+<li><a href="#listVMSnapshots">GET /api/v1/vms/{id}/snapshots</a></li>
+<li><a href="#createVMSnapshot">POST /api/v1/vms/{id}/snapshots</a></li>
+<li><a href="#revertVMSnapshot">POST /api/v1/vms/{id}/snapshots/{snapshot_id}/revert</a></li>
+<li><a href="#deleteVMSnapshot">POST /api/v1/vms/{id}/snapshots/{snapshot_id}/delete</a></li>
+<li><a href="#updateVMSnapshotMetadata">PATCH /api/v1/vms/{id}/snapshots/{snapshot_id}</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -413,6 +418,46 @@
   },
   &quot;semantics&quot;: &quot;Addressed to the host whose mirror is rebuilt and performed entirely by it; nothing is pool-scoped and nothing is kept by the Controller. The durable record is the md superblocks and the installer&#x27;s /etc/mdadm/mdadm.conf, whose array UUID does not change when a member is added. Core journals the operation under its state directory, keyed on operation_id: a redelivered command replays its recorded outcome, an array that already has the replacement as a member is adopted without wiping it again, and an agent interrupted after the wipe resumes from the wipe-started stage, where the wiped disk can no longer match its fingerprint and the identity that survives a wipe (the same by_id, serial and size) is checked instead. A member whose disk the kernel no longer exposes is the failure being repaired and is passed over. Refusals are definite failed results carrying Core&#x27;s own sentence: \&quot;/dev/mdN is not degraded, so there is no member to replace\&quot;, \&quot;&lt;device&gt; is a &lt;level&gt; array; only a RAID1 mirror is rebuilt this way\&quot;, \&quot;&lt;device&gt; has no working member to copy from; restore this host instead\&quot;, \&quot;the replacement disk changed since it was selected, or is in use\&quot;, \&quot;the replacement disk holds old data and was not confirmed for erasure\&quot;, \&quot;Nex Core cannot read this host&#x27;s RAID arrays\&quot;, \&quot;this host has no array &lt;mdN&gt;\&quot;, \&quot;&lt;disk&gt; already holds a working member of &lt;array&gt;\&quot;, \&quot;the replacement disk cannot be safely observed\&quot;, \&quot;the replacement disk is smaller than the remaining system disk\&quot;.&quot;,
   &quot;capability&quot;: &quot;host-system-disk-replace-v1&quot;
+}</pre></section>
+<section><h2>snapshot-create</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/local/v1/pool/vms/{id}/snapshots&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Core-owned VM snapshot create. The local Core API accepts one stable snapshot operation ID, optional mode (omitted/stopped for shut-off guests; crash or quiesced for a running guest), and exact current VM definition, persists intent, obtains the current pool-master reservation, captures native disk and firmware recovery state, and settles the compact descriptor in the master catalog before reporting success. Quiesced mode requires a responding guest agent and does not silently downgrade; UEFI running capture is refused in this development slice. Same-ID exact replay returns the journaled result; changed intent, unknown outcome, unavailable authority or incomplete evidence remains refused/pending for reconciliation. Controller does not execute or schedule the operation.&quot;
+}</pre></section>
+<section><h2>snapshot-revert</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/revert&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Development stopped-revert slice under integration. Core resolves the retained target and captured specification, persists a distinct operation journal, obtains an exact target-bound master reservation, and must verify all disk/configuration and paired firmware effects before settlement. Revert preserves current VM identity/name/description/tags/autostart and increments its specification revision; it does not start the VM. Unknown effects remain fenced for exact-operation observation. Controller only adopts Core-reported outcomes.&quot;
+}</pre></section>
+<section><h2>snapshot-delete</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}/delete&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Development stopped leaf-delete slice under integration. Core resolves the retained target, refuses points with native children before effects, persists a distinct operation journal, and obtains an exact target-bound master reservation. Current leaf delete uses public blockcommit without --delete, metadata-only snapshot-delete, reference scan, and unlink of proven-unreferenced overlays. Completed settlement removes the catalog entry without changing the VM specification. Exact retries past reservation must not repeat native effects. Controller only adopts Core-reported outcomes.&quot;
+}</pre></section>
+<section><h2>snapshot-metadata</h2><pre>{
+  &quot;transport&quot;: &quot;PATCH /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id}&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+  },
+  &quot;semantics&quot;: &quot;Development catalog metadata update. Authenticated host-local PATCH updates only the pool master&#x27;s retained name and description for an existing snapshot ID. Capture digests, creation time and disk identity stay fixed. Duplicate names and unresolved recovery reservations are refused. Later revert and delete bind the updated descriptor digest. Controller only adopts host-reported catalog rows.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -8785,6 +8830,621 @@
     }
   }
 }</pre></details></section>
+<section id="listVMSnapshots"><h2>GET <code>/api/v1/vms/{id}/snapshots</code></h2>
+<p>List retained snapshots for a VM</p><p>Returns the pool master&#x27;s compact snapshot catalog for one VM. Requires an administrator session. Controller does not invent an empty catalog when the master has not reported one.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listVMSnapshots&quot;,
+  &quot;summary&quot;: &quot;List retained snapshots for a VM&quot;,
+  &quot;description&quot;: &quot;Returns the pool master&#x27;s compact snapshot catalog for one VM. Requires an administrator session. Controller does not invent an empty catalog when the master has not reported one.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Compact catalog rows for this VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master or snapshot catalog unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createVMSnapshot"><h2>POST <code>/api/v1/vms/{id}/snapshots</code></h2>
+<p>Create a VM snapshot</p><p>Queues a durable snapshot-create command on the VM&#x27;s owner host. Requires administrator session, CSRF and a stable request_id. Optional mode follows Core rules: omitted/stopped for shut-off guests; crash or quiesced for a running guest. Controller only relays; Core owns capture and catalog settlement.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createVMSnapshot&quot;,
+  &quot;summary&quot;: &quot;Create a VM snapshot&quot;,
+  &quot;description&quot;: &quot;Queues a durable snapshot-create command on the VM&#x27;s owner host. Requires administrator session, CSRF and a stable request_id. Optional mode follows Core rules: omitted/stopped for shut-off guests; crash or quiesced for a running guest. Controller only relays; Core owns capture and catalog settlement.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;name&quot;
+          ],
+          &quot;additionalProperties&quot;: false,
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;description&quot;: &quot;Stable client request identity; also used as the Core snapshot operation ID.&quot;
+            },
+            &quot;name&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;description&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;mode&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;stopped&quot;,
+                &quot;crash&quot;,
+                &quot;quiesced&quot;
+              ],
+              &quot;description&quot;: &quot;Omitted or stopped for shut-off guests; crash or quiesced for a running guest.&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Snapshot create queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict or capability refusal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="revertVMSnapshot"><h2>POST <code>/api/v1/vms/{id}/snapshots/{snapshot_id}/revert</code></h2>
+<p>Revert a VM to a retained snapshot</p><p>Queues a durable snapshot-revert command on the VM&#x27;s owner host. Guest must be shut off. request_id must be distinct from snapshot_id. Controller only relays; Core owns reservation and settlement.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;revertVMSnapshot&quot;,
+  &quot;summary&quot;: &quot;Revert a VM to a retained snapshot&quot;,
+  &quot;description&quot;: &quot;Queues a durable snapshot-revert command on the VM&#x27;s owner host. Guest must be shut off. request_id must be distinct from snapshot_id. Controller only relays; Core owns reservation and settlement.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Retained snapshot ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;
+          ],
+          &quot;additionalProperties&quot;: false,
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Snapshot revert queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM or snapshot not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict or capability refusal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="deleteVMSnapshot"><h2>POST <code>/api/v1/vms/{id}/snapshots/{snapshot_id}/delete</code></h2>
+<p>Delete a retained leaf snapshot</p><p>Queues a durable snapshot-delete command on the VM&#x27;s owner host. Guest must be shut off. Leaf-only delete. Controller only relays; Core owns reservation and settlement.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;deleteVMSnapshot&quot;,
+  &quot;summary&quot;: &quot;Delete a retained leaf snapshot&quot;,
+  &quot;description&quot;: &quot;Queues a durable snapshot-delete command on the VM&#x27;s owner host. Guest must be shut off. Leaf-only delete. Controller only relays; Core owns reservation and settlement.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Retained snapshot ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;
+          ],
+          &quot;additionalProperties&quot;: false,
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Snapshot delete queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM or snapshot not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict or capability refusal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="updateVMSnapshotMetadata"><h2>PATCH <code>/api/v1/vms/{id}/snapshots/{snapshot_id}</code></h2>
+<p>Rename or describe a retained snapshot</p><p>Queues a durable snapshot-metadata command to update the pool master&#x27;s catalog name and description only. Capture digests and creation time stay fixed.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;updateVMSnapshotMetadata&quot;,
+  &quot;summary&quot;: &quot;Rename or describe a retained snapshot&quot;,
+  &quot;description&quot;: &quot;Queues a durable snapshot-metadata command to update the pool master&#x27;s catalog name and description only. Capture digests and creation time stay fixed.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;snapshot_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Retained snapshot ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;name&quot;
+          ],
+          &quot;additionalProperties&quot;: false,
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;name&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;description&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Snapshot metadata update queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of an existing request_id with the same body.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PowerVMResponse&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM or snapshot not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict or capability refusal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -9497,7 +10157,11 @@
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
         &quot;pool-host-fencing&quot;,
-        &quot;host-system-disk-replace&quot;
+        &quot;host-system-disk-replace&quot;,
+        &quot;snapshot-create&quot;,
+        &quot;snapshot-revert&quot;,
+        &quot;snapshot-delete&quot;,
+        &quot;snapshot-metadata&quot;
       ]
     },
     &quot;storage&quot;: {
@@ -9653,6 +10317,16 @@
         }
       ],
       &quot;description&quot;: &quot;Set on a host-system-disk-replace command: the array to rebuild and the replacement disk.&quot;
+    },
+    &quot;snapshot&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
     }
   },
   &quot;required&quot;: [
@@ -10459,7 +11133,8 @@
         }
       }
     }
-  ]
+  ],
+  &quot;description&quot;: &quot;Snapshot-create commands carry bounded snapshot name and description metadata; OperationID is the stable snapshot ID.&quot;
 }</pre></details>
 <details id="Result"><summary>Result</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -10754,7 +11429,11 @@
         &quot;pool-fence-profile&quot;,
         &quot;pool-bmc-provisioning&quot;,
         &quot;pool-host-fencing&quot;,
-        &quot;host-system-disk-replace&quot;
+        &quot;host-system-disk-replace&quot;,
+        &quot;snapshot-create&quot;,
+        &quot;snapshot-revert&quot;,
+        &quot;snapshot-delete&quot;,
+        &quot;snapshot-metadata&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -13477,6 +14156,10 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
     },
+    &quot;replica_ack_excluded&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core-owned exclusion from snapshot reservation/settlement replica acknowledgements and ordinary replica-push failure aggregation, recorded only by a supported promotion after validating fresh exact fence evidence. Omitted means false. The host remains a pool member and VM owner; delivery is still attempted. The master clears the exclusion only after accepted current-membership VM inventory and an exact current-generation/content replica POST acknowledgement. Covered by the signed authority content, without changing membership generation when cleared. It does not exempt destructive resource-removal acknowledgements, storage-lease preparation, restart authority confirmation or future promotion fencing. Use matching development Core builds; old promotions are not retroactively excluded.&quot;
+    },
     &quot;replica_generation&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
@@ -13489,7 +14172,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -13840,7 +14523,7 @@
     },
     &quot;replica_supported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;The pool master advertises pool-authority-replica-v1. False means no member can hold a replica and every member row reports state unsupported.&quot;
+      &quot;description&quot;: &quot;The pool master advertises pool-authority-replica-v2. False means no member can hold a replica and every member row reports state unsupported.&quot;
     },
     &quot;transfer_supported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
@@ -15850,6 +16533,21 @@
       },
       &quot;description&quot;: &quot;Core-owned ZFS provisioning results for Controller adoption.&quot;
     },
+    &quot;recovery_reservations&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryReservation&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Reported only by the pool master. Its durable unresolved snapshot operations, adopted by a fresh Controller as host observation; members omit it. Bounded by the 1 MiB pool authority limit.&quot;
+    },
+    &quot;recovery_reservations_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the pool master successfully read and reported its durable snapshot reservation list; false or omitted is unknown, never an empty list.&quot;
+    },
     &quot;membership&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -15929,6 +16627,21 @@
     &quot;peer_origin&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;This host&#x27;s own pool-peer origin as it works it out at report time from its configured peer listener (bind address, or the management address behind its default route, plus port): what a pool master would dial to reach it. An observation for the join dialog to prefill, mirrored by the Controller for display only; the join records the member&#x27;s peer origin durably on the master. Omitted when the host has no route to work it out.&quot;
+    },
+    &quot;pool_vm_snapshots&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Complete compact snapshot catalog reported only by the current pool master; host paths and native metadata are not included.&quot;
+    },
+    &quot;pool_vm_snapshots_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the current pool master successfully loaded and reported the full catalog; false or omitted is unknown, not an empty catalog.&quot;
     }
   },
   &quot;required&quot;: [],
@@ -16835,7 +17548,8 @@
         &quot;storage&quot;,
         &quot;networks&quot;,
         &quot;media&quot;,
-        &quot;storage_clusters&quot;
+        &quot;storage_clusters&quot;,
+        &quot;resource_mutations&quot;
       ]
     },
     &quot;sha256&quot;: {
@@ -16851,7 +17565,7 @@
 }</pre></details>
 <details id="PoolAuthorityReplica"><summary>PoolAuthorityReplica</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;The pool master&#x27;s signed, read-only copy of its own durable pool authority, pushed to one member. It is stored by every ready member and acted on by none of them: no membership, VM, storage, network or media record on the receiving host is read from or changed by a replica, and no health judgement is derived from one. The signature is made with the pool CA key over every field but signature, so a member verifies it against the pool CA it pinned at join, long after the master that signed it is gone. Bounded to 1 MiB on the wire and on disk.&quot;,
+  &quot;description&quot;: &quot;The pool master&#x27;s signed, read-only copy of its own durable pool authority, pushed to one member. It is stored by every ready member and acted on by none of them: no membership, VM, storage, network, media or in-progress resource mutation on the receiving host is read from or changed by a replica, and no health judgement is derived from one. The signature is made with the pool CA key over every field but signature, so a member verifies it against the pool CA it pinned at join, long after the master that signed it is gone. Bounded to 1 MiB on the wire and on disk.&quot;,
   &quot;properties&quot;: {
     &quot;pool_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -16952,7 +17666,7 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolReplicaSection&quot;
       },
-      &quot;description&quot;: &quot;Exactly the six sections above, in order.&quot;
+      &quot;description&quot;: &quot;Exactly the seven sections above, in order.&quot;
     },
     &quot;signature&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -16967,6 +17681,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedWitnessCredential&quot;
       },
       &quot;description&quot;: &quot;Per-member sealed native qdevice credentials. The shared qdevice key is wrapped separately to each member and bound to the fencing generation.&quot;
+    },
+    &quot;resource_mutations&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolResourceMutation&quot;
+      },
+      &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
     }
   },
   &quot;required&quot;: [
@@ -16981,7 +17705,8 @@
     &quot;networks&quot;,
     &quot;media&quot;,
     &quot;storage_clusters&quot;,
-    &quot;sections&quot;
+    &quot;sections&quot;,
+    &quot;resource_mutations&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolAuthorityReplica&quot;
 }</pre></details>
@@ -17228,7 +17953,7 @@
         &quot;behind&quot;,
         &quot;current&quot;
       ],
-      &quot;description&quot;: &quot;First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now, and freshness deliberately outranks capability, because a stale host&#x27;s capability list is a memory too); unsupported when the master or this member does not advertise pool-authority-replica-v1; refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master&#x27;s observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master&#x27;s reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master&#x27;s authority record can itself be an older report than a member&#x27;s. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves \u2014 unsupported, refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member&#x27;s own copy cannot stand in for it.&quot;
+      &quot;description&quot;: &quot;First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now, and freshness deliberately outranks capability, because a stale host&#x27;s capability list is a memory too); unsupported when the master or this member does not advertise pool-authority-replica-v2; refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master&#x27;s observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master&#x27;s reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master&#x27;s authority record can itself be an older report than a member&#x27;s. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves \u2014 unsupported, refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member&#x27;s own copy cannot stand in for it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -17737,6 +18462,147 @@
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolTransferStatus&quot;,
   &quot;description&quot;: &quot;One participant&#x27;s own report of the master change or eject it is part of. Every participant reports its own; nothing merges them into a job, and a host that is not reporting says nothing rather than repeating its last stage.&quot;
+}</pre></details>
+<details id="PoolVMRecoveryReservation"><summary>PoolVMRecoveryReservation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;snapshot-create&quot;,
+        &quot;snapshot-revert&quot;,
+        &quot;snapshot-delete&quot;
+      ]
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;owner_host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;epoch&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1
+    },
+    &quot;spec_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;intent_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;owner_operation_order&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;description&quot;: &quot;Nonzero durable owner command order for create, revert and delete; exact reservations and last settled receipts reject delayed older requests.&quot;
+    },
+    &quot;admission_refusal&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;name-in-use&quot;,
+        &quot;catalog-full&quot;
+      ],
+      &quot;description&quot;: &quot;A definitive no-effect snapshot-create refusal. It must settle only as failed-before-effects and cannot authorize native creation.&quot;
+    },
+    &quot;target_snapshot_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Exact retained target ID; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;target_snapshot_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Canonical exact target descriptor hash; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;result_spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Master-derived expected restored VM specification hash; required only for revert.&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;pool_id&quot;,
+    &quot;vm_id&quot;,
+    &quot;owner_host_id&quot;,
+    &quot;epoch&quot;,
+    &quot;spec_revision&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;,
+    &quot;intent_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMRecoveryReservation&quot;,
+  &quot;description&quot;: &quot;Master-owned pending snapshot intent bound to exact owner/epoch, current VM/disk definition, native intent and operation order. Revert additionally binds the retained target descriptor and master-derived next specification; the master persists that pending result beside the reservation. Create admission_refusal is a definitive no-effect duplicate-name/full-catalog decision. Matching development Core versions are required.&quot;
+}</pre></details>
+<details id="PoolVMRecoveryEvidence"><summary>PoolVMRecoveryEvidence</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;reservation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolVMRecoveryReservation&quot;
+    },
+    &quot;outcome&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;completed&quot;,
+        &quot;failed-before-effects&quot;
+      ]
+    },
+    &quot;journal_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;snapshot&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Required for completed snapshot-create evidence; absent on all other outcomes.&quot;
+    },
+    &quot;result_spec&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Required only for completed revert; exact observed resulting VM specification must match the master-derived reservation hash. Absent on create and failed-before-effects.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;reservation&quot;,
+    &quot;outcome&quot;,
+    &quot;journal_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMRecoveryEvidence&quot;,
+  &quot;description&quot;: &quot;Owner-generated receipt for one exact terminal managed-journal record. Unknown, partial and failed-after-effects outcomes leave the reservation pending.&quot;
 }</pre></details>
 <details id="PoolAuthorityRecord"><summary>PoolAuthorityRecord</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -20521,5 +21387,186 @@
     &quot;armed_generation&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolStorageLeaseExclusion&quot;
+}</pre></details>
+<details id="PoolVMSnapshot"><summary>PoolVMSnapshot</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$&quot;,
+      &quot;maxLength&quot;: 64
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;spec_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;dependencies&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshotDependencies&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;vm_id&quot;,
+    &quot;name&quot;,
+    &quot;created_at&quot;,
+    &quot;spec_revision&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshot&quot;,
+  &quot;description&quot;: &quot;Compact master-owned snapshot descriptor. Disk paths, XML and native artifacts remain in the owning Core journal.&quot;
+}</pre></details>
+<details id="VMSnapshotRequest"><summary>VMSnapshotRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;description&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 1024
+    },
+    &quot;snapshot_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
+      &quot;description&quot;: &quot;Retained target ID for revert, distinct from the command operation ID; absent on create.&quot;
+    },
+    &quot;target&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Exact master catalog descriptor resolved internally by Core for revert; absent on create and never supplied through the operator endpoint.&quot;
+    },
+    &quot;mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ],
+      &quot;description&quot;: &quot;Create capture mode. Omitted or stopped requires a shut-off guest. crash and quiesced require a running guest; quiesced also requires a responding guest agent. UEFI running capture is refused in this development slice.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.VMSnapshotRequest&quot;,
+  &quot;description&quot;: &quot;Core snapshot command payload. Create requires nonempty name and optional description and mode (omitted/stopped, crash, or quiesced), with no target. Revert requires snapshot_id and the exact internally resolved target descriptor, with empty name and description.&quot;
+}</pre></details>
+<details id="PoolVMSnapshotDependencies"><summary>PoolVMSnapshotDependencies</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;storage_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;network_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 8,
+      &quot;uniqueItems&quot;: true
+    },
+    &quot;media_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+      },
+      &quot;maxItems&quot;: 2,
+      &quot;uniqueItems&quot;: true
+    }
+  },
+  &quot;required&quot;: [
+    &quot;storage_ids&quot;,
+    &quot;network_ids&quot;,
+    &quot;media_ids&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshotDependencies&quot;,
+  &quot;description&quot;: &quot;Sorted resource IDs referenced by the captured VM definition. Omitted on legacy descriptors when the historical dependencies are unknown.&quot;
+}</pre></details>
+<details id="PoolResourceMutation"><summary>PoolResourceMutation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;resource&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;network&quot;,
+        &quot;media&quot;
+      ]
+    },
+    &quot;resource_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 128,
+      &quot;pattern&quot;: &quot;^[^/\\\\\\u0000]+$&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;resource&quot;,
+    &quot;resource_id&quot;,
+    &quot;operation_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.PoolResourceMutation&quot;
 }</pre></details>
 </section></main></html>

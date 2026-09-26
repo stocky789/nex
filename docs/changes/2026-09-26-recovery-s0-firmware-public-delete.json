@@ -1,0 +1,35 @@
+{
+  "summary": "Add a bounded Secure Boot/vTPM public firmware snapshot-deletion probe. API impact: none.",
+  "paths": [
+    "tests/integration/recovery_s0_firmware.py",
+    "tests/test_recovery_s0_firmware.py",
+    "docs/qa/2026-09-26-recovery-s0-firmware-public-delete.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor-only test on an explicitly disposable lab guest. It adds no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe invokes libvirt and QEMU directly and changes no Controller/Core or client-facing API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The probe adds bounded S0 evidence only; the recovery plan remains owned by the project owner.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state changes. VM, disk, snapshot and firmware files are test-only disposable artifacts."
+  },
+  "verification": {
+    "method": "The reviewed +nex3 qemu/TCG run completed the two-disk stopped public consolidation, metadata deletion, reference scan, exact A-top unlink, paired point-B firmware restore, and guest reopen. The final result and refreshed remote receipt were independently reviewed; graceful outer shutdown exited with status 0 and left the pinned source image hash unchanged. `python3 -m unittest tests/test_recovery_s0_firmware.py` passed 17 tests; py_compile and the repository privacy test passed. Private result and receipt digests are recorded in the QA note.",
+    "evidence": [
+      "tests/test_recovery_s0_firmware.py",
+      "tests/integration/recovery_s0_firmware.py",
+      "docs/qa/2026-09-26-recovery-s0-firmware-public-delete.md"
+    ]
+  }
+}

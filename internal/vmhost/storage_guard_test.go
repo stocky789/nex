@@ -201,3 +201,104 @@ func TestStorageGuardPreservesIndependentApplianceWithoutJournal(t *testing.T) {
 		}
 	}
 }
+
+func TestStorageGuardRefusesUnresolvedSnapshotStateBeforeManagedVMStart(t *testing.T) {
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	for _, tc := range []struct {
+		name    string
+		journal managedJournal
+		want    string
+	}{
+		{
+			name:    "local snapshot intent",
+			journal: snapshotGuardJournal(vmID, "snapshot-intent", false),
+			want:    "unresolved local snapshot intent",
+		},
+		{
+			name:    "master snapshot reservation and local intent",
+			journal: snapshotGuardJournal(vmID, "snapshot-reservation", true),
+			want:    "unresolved local snapshot intent",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			e := NewManaged(filepath.Join(state, "managed-vms"))
+			if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.save(storageGuardRegistrationJournal()); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.save(tc.journal); err != nil {
+				t.Fatal(err)
+			}
+			domain := `<domain><uuid>` + vmID + `</uuid><devices><disk type="file" device="disk"><source file="/srv/nex-vms/` + vmID + `/disk-0.qcow2"/><target dev="vda"/></disk></devices></domain>`
+			js, err := e.journals()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed domainXML
+			if err := xml.Unmarshal([]byte(domain), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			probes := 0
+			err = checkStorageStartup(t.Context(), parsed, js, func(context.Context, protocol.StorageRegistration) error {
+				probes++
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || probes != 0 {
+				t.Fatalf("startup recovery refusal=%v, repository probes=%d", err, probes)
+			}
+			err = StorageGuard(t.Context(), state, strings.NewReader(domain))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("managed VM start with unresolved snapshot state: %v", err)
+			}
+		})
+	}
+}
+
+func TestStorageGuardAllowsSettledSnapshotIntent(t *testing.T) {
+	const vmID = "11111111-1111-4111-8111-111111111111"
+	j := snapshotGuardJournal(vmID, "snapshot-settled", true)
+	j.Result = protocol.Result{OperationID: "snapshot-settled", Status: "succeeded"}
+	j.RecoveryStage = "completed"
+	j.RecoveryOutcome = "completed"
+	j.RecoverySettled = true
+	var parsed domainXML
+	if err := xml.Unmarshal([]byte(`<domain><uuid>`+vmID+`</uuid><devices><disk type="file" device="disk"><source file="/srv/nex-vms/`+vmID+`/disk-0.qcow2"/><target dev="vda"/></disk></devices></domain>`), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	if err := checkStorageStartup(t.Context(), parsed, []managedJournal{storageGuardRegistrationJournal(), j}, func(context.Context, protocol.StorageRegistration) error {
+		probes++
+		return nil
+	}); err != nil || probes != 1 {
+		t.Fatalf("settled snapshot startup = %v, repository probes = %d", err, probes)
+	}
+}
+
+func storageGuardRegistrationJournal() managedJournal {
+	registration := protocol.StorageRegistration{ID: "local-repository", PoolID: "p", HostID: "h", Name: "Local", Kind: "local", Path: "/srv", Generation: 1}
+	return managedJournal{
+		Command: protocol.Command{OperationID: "storage-registration", Kind: "storage-register", Storage: &registration},
+		Result:  protocol.Result{OperationID: "storage-registration", Status: "succeeded"},
+		Stage:   "registered",
+	}
+}
+
+func snapshotGuardJournal(vmID, operationID string, reserved bool) managedJournal {
+	vm := managedTestVM()
+	vm.ID = vmID
+	vm.Disks[0].StorageID = "local-repository"
+	command, snapshot, reservation := managedRecoveryEntryForTest(vm, operationID)
+	journal := managedJournal{
+		Command: command, Snapshot: &snapshot,
+		Result: protocol.Result{OperationID: operationID, Status: "needs_attention"},
+		Stage:  "snapshot-reserved", RecoveryStage: "local-intent",
+	}
+	if reserved {
+		journal.RecoveryReservation = &reservation
+		journal.RecoveryStage = "reserved"
+	}
+	return journal
+}

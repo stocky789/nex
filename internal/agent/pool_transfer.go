@@ -78,6 +78,14 @@ var poolTransferMu sync.Mutex
 // completes activation to fail after VM adoption, so rollback is exercised.
 var poolTransferFailSavePeerAfterVMAdopt func() error
 
+func poolAuthorityVMSectionMatches(expected json.RawMessage, current map[string]poolVMRecord) (bool, error) {
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(expected, encoded), nil
+}
+
 // poolTransferRecord is the durable record in pool-peer.json. Stage names the step still to
 // perform, as the staged join does, so a host that froze but has not replicated reports
 // "replicate", which is the truth a caller needs.
@@ -166,7 +174,7 @@ func requirePoolVMAuthorityWritable(s *Store, action string, create bool) error 
 	if state.Transfer != nil && state.Transfer.HandedOff {
 		return refusal
 	}
-	if action == "update-reserve" || action == "start" || (action == "define" && create) {
+	if action == "update-reserve" || action == "snapshot-reserve" || action == "snapshot-metadata" || action == "delete-check" || action == "start" || (action == "define" && create) {
 		return refusal
 	}
 	return nil
@@ -749,6 +757,24 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 		return nil, errors.New("the wrapped pool CA key is unusable on this host")
 	}
 	membership := nextPoolMembership(replica.Membership, s.State.HostID, "")
+	if record.Action == "promote" && record.Role == "candidate" {
+		if record.TargetHostID != s.State.HostID || record.AuthorityGeneration != replica.Generation {
+			return nil, errors.New("promotion fence proofs do not match the authority being adopted")
+		}
+		for _, hostID := range record.FenceAgreed {
+			member, ok := poolMemberByID(replica.Membership, hostID)
+			proof := poolPromotionProofFor(record.Fences, hostID)
+			if !ok || protocol.PoolPromotionFenceVerified(proof, member, replica.PoolID, hostID, record.OperationID, replica.Generation, time.Now().UTC()) != nil {
+				return nil, errors.New("promotion cannot exclude a member without its exact current fence proof")
+			}
+			for i := range membership.Members {
+				if membership.Members[i].HostID == hostID {
+					membership.Members[i].ReplicaAckExcluded = true
+					break
+				}
+			}
+		}
+	}
 	if err = membership.Valid(); err != nil {
 		return nil, errors.New("the replicated membership cannot name this host as master")
 	}
@@ -770,8 +796,10 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	if err = adoptPoolVMAuthority(s, replica); err != nil {
 		return nil, err
 	}
+	poolVMMu.Lock()
 	poolPeerMu.Lock()
 	state, err = loadPoolPeer(s)
+	var rollbackResourceMutations func()
 	if err == nil {
 		state.CAKeyPEM, state.Membership = caKeyPEM, membership
 		state.AuthorityGeneration, state.AuthorityDigest = replica.Generation+1, ""
@@ -800,12 +828,19 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 				err = poolTransferFailSavePeerAfterVMAdopt()
 			}
 			if err == nil {
+				rollbackResourceMutations, err = adoptPoolResourceMutations(s, replica.ResourceMutations)
+			}
+			if err == nil {
 				err = savePoolPeer(s, state)
 			}
 		}
 	}
 	poolPeerMu.Unlock()
+	poolVMMu.Unlock()
 	if err != nil {
+		if rollbackResourceMutations != nil {
+			rollbackResourceMutations()
+		}
 		poolVMMu.Lock()
 		restoreErr := savePoolVMs(s, vmSnapshot)
 		poolVMMu.Unlock()
@@ -815,6 +850,50 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 		return nil, errors.New("the pool master change could not be recorded durably")
 	}
 	return poolRepointNotice(s, state, record)
+}
+
+func adoptPoolResourceMutations(s *Store, mutations []protocol.PoolResourceMutation) (func(), error) {
+	if err := protocol.ValidatePoolResourceMutations(mutations); err != nil {
+		return nil, errors.New("replicated pool resource mutations are invalid")
+	}
+	poolStorageMu.Lock()
+	state, err := loadPoolStorage(s)
+	if err != nil {
+		poolStorageMu.Unlock()
+		return nil, errors.New("pool resource mutation state is unavailable")
+	}
+	previous := make(map[string]string)
+	for key, operation := range state.Mutations {
+		if strings.HasPrefix(key, poolResourceMutationPrefix) {
+			previous[key] = operation
+			delete(state.Mutations, key)
+		}
+	}
+	for _, mutation := range mutations {
+		state.Mutations[poolResourceMutationKey(mutation.Resource, mutation.ResourceID)] = mutation.OperationID
+	}
+	err = savePoolStorage(s, state)
+	poolStorageMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		poolStorageMu.Lock()
+		defer poolStorageMu.Unlock()
+		current, loadErr := loadPoolStorage(s)
+		if loadErr != nil {
+			return
+		}
+		for key := range current.Mutations {
+			if strings.HasPrefix(key, poolResourceMutationPrefix) {
+				delete(current.Mutations, key)
+			}
+		}
+		for key, operation := range previous {
+			current.Mutations[key] = operation
+		}
+		_ = savePoolStorage(s, current)
+	}, nil
 }
 
 // poolRepointNotice is the new master's signed statement of the new membership. Every other
@@ -1346,7 +1425,8 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 	digest := ""
 	for attempt := 0; attempt < 3; attempt++ {
 		var generation uint64
-		_, digest, err = buildPoolAuthorityReplica(s)
+		var replica protocol.PoolAuthorityReplica
+		replica, digest, err = buildPoolAuthorityReplica(s)
 		if err != nil {
 			return err
 		}
@@ -1354,14 +1434,48 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 			return err
 		}
 		record.AuthorityGeneration = generation
+		poolVMMu.Lock()
+		vmState, vmErr := loadPoolVMs(s)
+		matches, compareErr := poolAuthorityVMSectionMatches(replica.VMs, vmState.VMs)
+		if vmErr != nil || compareErr != nil {
+			poolVMMu.Unlock()
+			return errors.New("pool VM authority is unavailable while freezing")
+		}
+		if !matches {
+			poolVMMu.Unlock()
+			continue
+		}
 		poolPeerMu.Lock()
 		state, loadErr := loadPoolPeer(s)
 		if loadErr != nil {
 			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
 			return loadErr
 		}
 		if state.AuthorityDigest != digest || state.AuthorityGeneration != generation {
 			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
+			continue
+		}
+		poolStorageMu.Lock()
+		storage, storageErr := loadPoolStorage(s)
+		currentMutations, mutationErr := poolResourceMutationsFromStorage(storage)
+		if storageErr != nil || mutationErr != nil {
+			poolStorageMu.Unlock()
+			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
+			return errors.New("pool resource mutation state is unavailable while freezing")
+		}
+		if poolResourceMutationPending(storage) {
+			poolStorageMu.Unlock()
+			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
+			return errors.New("pool resource removal outcome is unresolved; finish or reconcile it before changing the master")
+		}
+		if !slices.Equal(currentMutations, replica.ResourceMutations) {
+			poolStorageMu.Unlock()
+			poolPeerMu.Unlock()
+			poolVMMu.Unlock()
 			continue
 		}
 		record.Frozen, record.MembershipGeneration = true, state.Membership.Generation
@@ -1373,7 +1487,9 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 		stored := *record
 		state.Transfer = &stored
 		err = savePoolPeer(s, state)
+		poolStorageMu.Unlock()
 		poolPeerMu.Unlock()
+		poolVMMu.Unlock()
 		return err
 	}
 	return errors.New("pool authority changed while it was being frozen; retry the master change")
@@ -1422,6 +1538,9 @@ func poolEjectRefusal(s *Store, membership protocol.PoolMembership, target proto
 	if storageErr != nil {
 		return errors.New("pool storage reservation state is unavailable")
 	}
+	if poolResourceMutationPending(storage) {
+		return errors.New("pool resource removal outcome is unresolved; finish or reconcile it before ejecting a host")
+	}
 	for id, holders := range storage.Reservations {
 		if holders[target.HostID] != "" {
 			return errors.New("host " + target.HostID + " still holds a pool-shared storage reservation on " + id + "; let it finish before ejecting it")
@@ -1440,14 +1559,31 @@ func poolEjectOwnerRefusal(state poolVMState, membership protocol.PoolMembership
 		return errors.New("host " + target.HostID + " has not reported a current VM inventory; wait for it before ejecting it")
 	}
 	owned := []string{}
+	recovering := []string{}
+	snapshotted := []string{}
 	for id, vm := range state.VMs {
 		if vm.HostID != target.HostID {
+			continue
+		}
+		if len(vm.Snapshots) != 0 {
+			snapshotted = append(snapshotted, id)
+		}
+		if vm.PendingRecovery != nil {
+			recovering = append(recovering, id)
 			continue
 		}
 		current := findPoolVMInventorySpec(inventory, id)
 		if !poolVMRecordMatchesSpec(vm, current) || vmUsesInventorySharedStorage(current, inventory.Storage) {
 			owned = append(owned, id)
 		}
+	}
+	if len(recovering) != 0 {
+		slices.Sort(recovering)
+		return errors.New("host " + target.HostID + " has unresolved snapshot recovery for pool VMs (" + strings.Join(recovering, ", ") + "); reconcile them before ejecting it")
+	}
+	if len(snapshotted) != 0 {
+		slices.Sort(snapshotted)
+		return errors.New("host " + target.HostID + " has VM snapshots that are not yet transferable (" + strings.Join(snapshotted, ", ") + "); delete the snapshots before ejecting it")
 	}
 	if len(owned) != 0 {
 		names := strings.Join(owned, ", ")

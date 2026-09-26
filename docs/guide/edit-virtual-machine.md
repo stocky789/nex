@@ -238,8 +238,9 @@ unreleased admission change. Browser checks use simulated Core responses; native
 multi-host outage and recovery acceptance remains open.
 
 See [pool CPU baseline evidence](../qa/2026-09-17-cpu-baseline.md) for this unreleased
-CPU-definition change. Native libvirt autostart bypasses the explicit CPU preflight;
-Core-mediated starts use it. No future-host or live-migration certification is claimed.
+CPU-definition change. In the recovery development build, managed pool autostart uses Core's
+start admission and CPU preflight, with native libvirt autostart disabled. No future-host or
+live-migration certification is claimed.
 
 The [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md) (`0.2.10~gate5`, 2026-09-17,
 disposable nested-KVM lab, headless Chromium) walked the edit steps in the browser on a real host:

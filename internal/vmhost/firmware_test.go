@@ -917,6 +917,7 @@ undefine) exit 0;;
 *) exit 2;; esac`)
 			t.Setenv("VMHOST_LOG", log)
 			e := NewManaged(filepath.Join(t.TempDir(), "state"))
+			stubManagedDiskChains(e)
 			if err := os.MkdirAll(e.stateDir, 0700); err != nil {
 				t.Fatal(err)
 			}

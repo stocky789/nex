@@ -1,0 +1,49 @@
+{
+  "summary": "Record the bounded r8 Core crash-after-native-snapshot acceptance result and its remaining scope limits. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-core-crash-r8.md",
+    "docs/changes/2026-09-26-recovery-snapshot-core-crash-r8.json",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/guide/vm-snapshots.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The operator guide now links the verified bounded crash-recovery evidence and states the remaining acceptance boundary; no operator workflow changed.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The walkthrough used the existing authenticated Core snapshot request, exact-operation retry, operation readback, and pool replica/catalog contracts. It changed no API implementation or contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records one bounded crash-boundary result. Collective S1 acceptance is recorded separately in the recovery plan; neither recovery phase is closed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The executing Core's managed snapshot journal and native libvirt snapshot/disk state, with the pool master's durable VM snapshot catalog, recovery reservation/settlement record, and signed member replicas.",
+    "reason": "The evidence verifies existing Core-owned recovery state and its replication; it introduces no Controller-owned pool state. A fresh Controller reads the catalog and operation through existing authenticated host APIs."
+  },
+  "verification": {
+    "method": "Inspected private receipts, summarized and sanitized in the public QA record, from a package-based Debian 13 disposable three-Core lab running matched r8 candidates. Native capture succeeded once; the held native client then timed out and Core recorded needs_attention before service interruption. Verified that the journal, master reservation and signed replicas remained unsettled; masked and SIGKILLed the verified Core service; restarted and retried the exact owner request; then checked settled journal/catalog, both signed member replicas, shut-off VM, native metadata, disk chains and markers. This does not prove a service kill during an active native call or a Controller outage. The prior missed v2 injection, wrong-master 503 and polling 429 remain qualified. Repository privacy, documentation gate and diff checks passed.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-core-crash-r8.md",
+      "docs/guide/vm-snapshots.md",
+      "docs/BUG_LEDGER.md"
+    ],
+    "checks": [
+      "The authenticated exact-request retry returned the operation as succeeded; no second native snapshot invocation occurred \u2014 passed",
+      "Master catalog advanced from three entries to four with exactly one new point; both signed member replicas reached verified generation 28 with matching digests and no pending reservation \u2014 passed",
+      "The stopped VM's native snapshot metadata matched; both disk chains and marker reads passed after recovery \u2014 passed",
+      "Running-guest, other crash-point, ISO-install, and broader runtime/storage coverage \u2014 not established"
+    ]
+  }
+}

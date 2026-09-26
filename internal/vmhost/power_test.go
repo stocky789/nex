@@ -26,7 +26,7 @@ func TestManagedPowerDependencies(t *testing.T) {
 		{"not-vm", "storage-register", "succeeded"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := NewManaged(t.TempDir())
+			e := managedTestEngine(t.TempDir())
 			log := filepath.Join(t.TempDir(), "calls")
 			t.Setenv("VMHOST_LOG", log)
 			fakeCommand(t, "virsh", `echo "$3" >> "$VMHOST_LOG"; case "$3" in domstate) echo 'shut off';; start) exit 0;; *) exit 1;; esac`)
@@ -61,7 +61,7 @@ func TestManagedPowerDependencies(t *testing.T) {
 				want = "succeeded"
 			}
 			for i := 0; i < 2; i++ {
-				r, err := NewManaged(e.stateDir).Execute(context.Background(), c, nil)
+				r, err := managedTestEngine(e.stateDir).Execute(context.Background(), c, nil)
 				if err != nil || r.Status != want || (want == "failed" && r.Error == "") {
 					t.Fatalf("attempt %d: %+v %v", i, r, err)
 				}
@@ -89,7 +89,7 @@ func TestManagedPowerRequests(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "virsh.log")
 	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; start|shutdown|reboot|destroy|reset) [ "$VMHOST_FAIL" = "$3" ] && exit 1; exit 0;; *) exit 2;; esac`)
 	t.Setenv("VMHOST_LOG", log)
-	e := NewManaged(dir)
+	e := managedTestEngine(dir)
 	vm := "11111111-2222-4333-a444-555555555555"
 	command := func(op, action string) protocol.Command {
 		return protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm, PoolID: "pool1", HostID: "host1", Action: action}}
@@ -184,7 +184,7 @@ func TestManagedPowerRequestCancellationSettlesFromObservation(t *testing.T) {
 domstate) cat "$VMHOST_POWER_STATE";;
 start) echo start >> "$VMHOST_POWER_LOG"; echo running > "$VMHOST_POWER_STATE"; sleep 2;;
 esac`)
-			e := NewManaged(dir)
+			e := managedTestEngine(dir)
 			c := protocol.Command{OperationID: "start-deadline", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: "start"}}
 			if fromStage == "validating" {
 				if err := os.MkdirAll(dir, 0700); err != nil {
@@ -262,7 +262,7 @@ func TestManagedPowerPostEffectFailureIsUncertain(t *testing.T) {
 			fakeCommand(t, "virsh", `case "$3" in domstate) cat "$VMHOST_POWER_STATE";; *) echo "$3" >> "$VMHOST_POWER_LOG"; echo "$VMHOST_POWER_AFTER" > "$VMHOST_POWER_STATE"; exit 1;; esac`)
 			t.Setenv("VMHOST_POWER_AFTER", tc.after)
 			c := protocol.Command{OperationID: "uncertain-" + tc.action, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: "11111111-2222-4333-a444-555555555555", PoolID: "pool1", HostID: "host1", Action: tc.action}}
-			e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+			e := managedTestEngine(filepath.Join(t.TempDir(), "managed"))
 			r, err := e.Execute(context.Background(), c, nil)
 			if err != nil || r.Status != tc.wantFirst {
 				t.Fatalf("post-effect %s = %+v, %v", tc.action, r, err)
@@ -290,7 +290,7 @@ func TestManagedPowerWakesSleepingGuest(t *testing.T) {
 	fakeCommand(t, "virsh", `echo "$3 $4" >> "$VMHOST_LOG"; case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; start|shutdown|reboot|destroy|reset|dompmwakeup) [ "$VMHOST_FAIL" = "$3" ] && exit 1; exit 0;; *) exit 2;; esac`)
 	t.Setenv("VMHOST_LOG", log)
 	t.Setenv("VMHOST_STATE", "pmsuspended")
-	e := NewManaged(dir)
+	e := managedTestEngine(dir)
 	vm := "11111111-2222-4333-a444-555555555555"
 	command := func(op, action string) protocol.Command {
 		return protocol.Command{OperationID: op, Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm, PoolID: "pool1", HostID: "host1", Action: action}}

@@ -1,0 +1,35 @@
+{
+  "summary": "Add bounded two-disk deep-chain public consolidation validation for the four-patch libvirt candidate and preserve its native evidence accurately. API impact: none.",
+  "paths": [
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py",
+    "docs/qa/2026-09-26-recovery-libvirt-deep32.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This adds contributor-only disposable native validation and does not define an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe exercises existing libvirt commands and does not change Nex Core, Controller, or client-facing API contracts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The result is a bounded deep-chain check; S0 acceptance remains open and integrated multi-disk snapshot deletion remains unsupported.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable guest evidence and contributor validation code changed; no durable Nex pool or Controller state was introduced."
+  },
+  "verification": {
+    "method": "The immutable four-patch candidate at 11.3.0-3+deb13u3+nex3 has recipe SHA256 3bf950c83fa9279de22e80c736984304e275d77ffcecd0609893cc5466ac46a5 and SHA256SUMS digest 116615ecd128c157d390d96ada07281d53b77d4afb5c61dc628a20ef6450588e. A fresh qemu:///system Debian 13 guest under nested TCG and enforcing AppArmor executed the 32-point, two-disk public no-delete blockcommit, metadata-only delete, reference scan, data/chain verification, exact point-00 unlink, same-UUID reopen, and QMP checks. Its preserved inner result SHA256 is dcd29f89d05c1866c64936eca159a9b2b10d6999958addf063392060c66365d5. The raw runner returned nonzero after recording completed lifecycle evidence because the terminal JSON status print passed `flush` to json.dumps; it is not counted as a raw passing run. A separate in-memory evidence projection was used only to check observed fields against the validator and is not treated as a capture. The runner and focused tests now align the emitted target-oriented data schema with the validator and test the terminal status emitter and saved-source mapping. `python3 -m py_compile tests/integration/libvirt_recovery_ci.py tests/test_libvirt_recovery_ci.py`, `python3 -m unittest tests.test_libvirt_recovery_ci` (15 passed), and `git diff --check` passed. Final Python discovery ran 538 tests (one skipped; the others passed); `python3 scripts/check_docs.py --worktree` passed for 168 uncommitted paths; repository privacy discovery passed (one test). The preserved native result SHA256 is dcd29f89d05c1866c64936eca159a9b2b10d6999958addf063392060c66365d5 and records the completed 32-point lifecycle, but the raw runner returned nonzero on the status-emission TypeError after undefining the domain. Raw qemu-img chain checkpoints, sampled at snapshot creation before writing that point\u2019s post-head markers/payload, show 2, 17, and 33 images per disk at point-00, point-15, and point-31; summed chain actual-size is 667648, 7610368, and 15015936 bytes per disk, or 1335296, 15220736, and 30031872 bytes across both independent disks. The last figure is about 28.6 MiB for this sparse 128-MiB-virtual-disk synthetic marker workload only. The probe reached the existing 32-point catalog limit before consolidation; after deleting point-00, 31 snapshot records remained and reopen showed 32 QMP image layers including the base. This is not a capacity, headroom, or workload guarantee. Earlier preserved receipts are distinct: expected-parent assertion attempt f2c7561a15501e963d8b14b51a233c64fd22b154733abaf337877001ee148a52; retained-data observer attempt 87a450d5803a08451f1681b2985b6173afa89951f99045ca2840e029b7fa487f, which read the wrong post-point path after unlink; read-only reconciliation 85bb65fbd83f47cb8e767c31872c17fc8e90193ba3fcb532319c9cadb5396660; and separate current-source reads 524c14f6a65275dd7ce17969cecb0a286ee1d58a87dace4c132d63577c65c1fb. The read-only check of the observer-failure guest confirmed its saved/post data remained readable. The dcd29f raw report was then normalized only in memory for validator inspection, including the old data shape and status envelope; it did not rewrite the receipt or establish a raw passing runner result. No native rerun was made after correcting the terminal serializer and data-shape producer because the captured raw fields already establish the required completed operations and reads. No Core package installation, remote Forge run, or full S0 acceptance is claimed.",
+    "evidence": [
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/test_libvirt_recovery_ci.py",
+      "docs/qa/2026-09-26-recovery-libvirt-deep32.md"
+    ]
+  }
+}
