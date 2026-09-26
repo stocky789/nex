@@ -18,6 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Bug Fixes
 
 - Fixed matched libvirt recovery package builds on slim images that lack CA certificates.
+- Fixed matched libvirt source packaging when the readonly-revert patch needed a fuzz-free refresh.
 
 ### Miscellaneous
 

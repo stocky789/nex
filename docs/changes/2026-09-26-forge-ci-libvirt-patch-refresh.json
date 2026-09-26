@@ -1,0 +1,36 @@
+{
+  "summary": "Unblock forge recovery-libvirt after CA bootstrap by making the readonly-revert patch apply without fuzz",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-forge-ci-recovery-bootstrap.json",
+    "docs/changes/2026-09-26-forge-ci-libvirt-patch-refresh.json",
+    "packaging/libvirt/build-matched-libvirt.sh",
+    "packaging/libvirt/preserve-readonly-revert-media.patch"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Matched libvirt packaging/CI only; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not change the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Packaging patch refresh and CI only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Reproduced forge failure: preserve-readonly-revert-media.patch applied with fuzz under quilt then failed dpkg-source -S. Refreshed hunk against post-unique-revert tree; verified nex patch series applies with patch -F 0; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "packaging/libvirt/preserve-readonly-revert-media.patch",
+      "packaging/libvirt/build-matched-libvirt.sh"
+    ]
+  }
+}

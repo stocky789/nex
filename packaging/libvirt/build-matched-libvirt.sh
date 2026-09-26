@@ -105,6 +105,9 @@ for patch in readonly-disk-apparmor.patch unique-revert-overlay.patch partial-ba
     printf '%s\n' "$patch" >> debian/patches/series
 done
 quilt push -a
+# dpkg-source -S rejects fuzzy hunks (-F 0). Refresh the top Nex patch so the
+# later source package build matches what quilt just applied.
+quilt refresh
 
 # Record the local build in Debian metadata while retaining the untouched
 # source artifacts above and the exact patched source package below.

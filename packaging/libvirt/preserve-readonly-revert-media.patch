@@ -9,11 +9,10 @@ Keep the exclusion in the transient revert definition so snapshot metadata
 does not invent an external media overlay.
 --- a/src/qemu/qemu_snapshot.c
 +++ b/src/qemu/qemu_snapshot.c
-@@ -2384,7 +2384,24 @@ qemuSnapshotRevertExternalPrepare(virDomainObj *vm,
-                                     false, true) < 0) {
+@@ -2400,6 +2400,23 @@ qemuSnapshotRevertExternalPrepare(virDom
          return -1;
      }
-
+ 
 +    /* The reverted domain definition restores read-only media sources. Do not
 +     * put CD-ROMs, other non-disk devices, or read-only disks behind a new
 +     * writable overlay. Keep this in tmpsnapdef so metadata records the same
