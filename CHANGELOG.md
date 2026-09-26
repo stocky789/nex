@@ -15,6 +15,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.13] — 2026-09-26
 
+### Bug Fixes
+
+- Fixed matched libvirt recovery package builds on slim images that lack CA certificates.
+
 ### Miscellaneous
 
 - Recorded a disposable multi-backend snapshot recovery lab pass on local disk, NFS, SMB and iSCSI (native lifecycle and midcommit consolidation).
