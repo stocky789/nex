@@ -1247,6 +1247,11 @@ def host_run(candidate_dir: Path | None = None) -> int:
         run(["docker", "exec", runtime_id, "mkdir", "-p", "/candidate", "/tests/integration", "/evidence"])
         for package in candidate_debs:
             run(["docker", "cp", str(package), f"{runtime_id}:/candidate/"])
+        for name in ("SHA256SUMS", "build-inputs.txt"):
+            path = candidate / name
+            if not path.is_file():
+                raise RuntimeError(f"candidate is missing {name}")
+            run(["docker", "cp", str(path), f"{runtime_id}:/candidate/"])
         for name in ("libvirt_readonly_policy.py", "recovery_s0.py",
                      "recovery_s0_consolidate.py", "libvirt_recovery_ci.py"):
             run(["docker", "cp", str(tests / name), f"{runtime_id}:/tests/integration/"])

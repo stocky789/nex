@@ -526,6 +526,17 @@ class CandidatePackageTests(unittest.TestCase):
             "sha256": hashlib.sha256(b"selected candidate package").hexdigest(),
         }])
 
+    def test_candidate_provenance_requires_checksum_manifest_and_build_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory)
+            deb = candidate / f"libvirt0_{CI.SOURCE_VERSION}_amd64.deb"
+            deb.write_bytes(b"selected candidate package")
+            with self.assertRaisesRegex(RuntimeError, "checksum manifest or build-input"):
+                CI.candidate_provenance(candidate, [deb])
+            (candidate / "SHA256SUMS").write_text("x\n")
+            with self.assertRaisesRegex(RuntimeError, "checksum manifest or build-input"):
+                CI.candidate_provenance(candidate, [deb])
+
     def test_system_guest_stages_sources_from_the_loaded_runner_directory(self):
         sources = CI.system_guest_source_files()
         self.assertEqual([path.name for path in sources], [
