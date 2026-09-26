@@ -444,6 +444,25 @@ class CandidatePackageTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 CI.check_runtime_result(result)
 
+    def test_domain_xml_helpers_avoid_nested_elementtree_predicates(self):
+        xml = """<domain type='qemu'>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/tmp/root.qcow2'/><target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <source file='/tmp/installer-a.iso'/><target dev='hdc' bus='ide'/><readonly/>
+    </disk>
+  </devices>
+</domain>"""
+        self.assertEqual(CI.disk_source_from_domain_xml(xml, "hdc"), "/tmp/installer-a.iso")
+        self.assertIsNotNone(CI.disk_readonly_from_domain_xml(xml, "hdc"))
+        self.assertIsNone(CI.disk_readonly_from_domain_xml(xml, "vda"))
+        with self.assertRaises(Exception) as raised:
+            from xml.etree import ElementTree
+            ElementTree.fromstring(xml).find("./devices/disk[target[@dev='hdc']]/readonly")
+        self.assertIn("predicate", str(raised.exception).lower())
+
     def test_system_package_closure_accepts_exact_amd64_and_all_debs(self):
         all_packages = {"libvirt-daemon-config-network", "libvirt-daemon-config-nwfilter"}
         with tempfile.TemporaryDirectory() as directory:

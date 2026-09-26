@@ -190,6 +190,29 @@ def check_runtime_result(path: Path) -> None:
         raise RuntimeError("runtime evidence lacks the read-only media revert regression")
 
 
+def disk_source_from_domain_xml(xml: str, target: str) -> str | None:
+    for disk_node in ElementTree.fromstring(xml).findall("./devices/disk"):
+        target_node = disk_node.find("target")
+        if target_node is not None and target_node.get("dev") == target:
+            source_node = disk_node.find("source")
+            if source_node is not None:
+                return source_node.get("file") or source_node.get("dev")
+    return None
+
+
+def disk_readonly_from_domain_xml(xml: str, target: str):
+    """Return the readonly element for target, or None.
+
+    xml.etree.ElementTree rejects nested predicates such as
+    ./devices/disk[target[@dev='hdc']]/readonly with "invalid predicate".
+    """
+    for disk_node in ElementTree.fromstring(xml).findall("./devices/disk"):
+        target_node = disk_node.find("target")
+        if target_node is not None and target_node.get("dev") == target:
+            return disk_node.find("readonly")
+    return None
+
+
 def readonly_media_revert_probe(root: Path) -> dict:
     """Verify external revert restores read-only media without making an overlay."""
     uri = "qemu:///session"
@@ -217,16 +240,6 @@ def readonly_media_revert_probe(root: Path) -> dict:
 
     def xml_text(command: str, *args: str) -> str:
         return virsh(command, domain, *args)
-
-    def disk_source(xml: str, target: str) -> str | None:
-        definition = ElementTree.fromstring(xml)
-        for disk_node in definition.findall("./devices/disk"):
-            target_node = disk_node.find("target")
-            if target_node is not None and target_node.get("dev") == target:
-                source_node = disk_node.find("source")
-                if source_node is not None:
-                    return source_node.get("file") or source_node.get("dev")
-        return None
 
     snapshot_policy = None
     result = {"status": "failed-preserved", "domain": domain,
@@ -270,11 +283,11 @@ def readonly_media_revert_probe(root: Path) -> dict:
         result["snapshot_media_policy"] = snapshot_policy
         if snapshot_policy != "no":
             raise RuntimeError(f"snapshot metadata recorded hdc policy {snapshot_policy!r}, expected no")
-        if disk_source(xml_text("dumpxml", "--inactive"), "hdc") != str(media_a):
+        if disk_source_from_domain_xml(xml_text("dumpxml", "--inactive"), "hdc") != str(media_a):
             raise RuntimeError("initial inactive domain XML does not reference original read-only media")
         virsh("change-media", domain, "hdc", "--eject", "--config")
         virsh("change-media", domain, "hdc", str(media_b), "--insert", "--config")
-        if disk_source(xml_text("dumpxml", "--inactive"), "hdc") != str(media_b):
+        if disk_source_from_domain_xml(xml_text("dumpxml", "--inactive"), "hdc") != str(media_b):
             raise RuntimeError("test setup failed to replace the configured read-only media")
         virsh("snapshot-revert", domain, snapshot, "--force")
         inactive_xml = xml_text("dumpxml", "--inactive")
@@ -288,12 +301,11 @@ def readonly_media_revert_probe(root: Path) -> dict:
                 source_node = disk_node.find("source")
                 if source_node is not None:
                     reverted_media_source = source_node.get("file") or source_node.get("dev")
-        restored = disk_source(inactive_xml, "hdc") == str(media_a)
-        readonly_node = ElementTree.fromstring(inactive_xml).find(
-            "./devices/disk[target[@dev='hdc']]/readonly")
+        restored = disk_source_from_domain_xml(inactive_xml, "hdc") == str(media_a)
+        readonly_node = disk_readonly_from_domain_xml(inactive_xml, "hdc")
         media_overlay = (reverted_media_policy != "no" or reverted_media_source is not None or
                          any(case_dir.glob("installer-a.iso.*")))
-        current_head = disk_source(inactive_xml, "vda")
+        current_head = disk_source_from_domain_xml(inactive_xml, "vda")
         if not current_head:
             raise RuntimeError("reverted inactive domain has no writable vda source")
         image_info = json.loads(subprocess.run(
@@ -301,10 +313,16 @@ def readonly_media_revert_probe(root: Path) -> dict:
             text=True, capture_output=True, timeout=120).stdout)
         checked_head = subprocess.run(["qemu-img", "check", current_head], text=True,
                                       capture_output=True, timeout=120)
+        # External snapshot create left the frozen point at `disk` and made `head`
+        # the pre-revert active overlay. Revert creates a fresh overlay whose
+        # backing is the frozen snapshot image (`disk`), not the abandoned head.
+        backing = image_info.get("full-backing-filename") or image_info.get("backing-filename")
         writable_valid = (image_info.get("format") == "qcow2" and
-                          image_info.get("backing-filename") == str(head) and
-                          checked_head.returncode == 0 and Path(current_head).is_file() and
-                          head.is_file())
+                          backing is not None and
+                          Path(backing).resolve() == disk.resolve() and
+                          checked_head.returncode == 0 and
+                          Path(current_head).is_file() and
+                          Path(current_head).resolve() != disk.resolve())
         media_hash_after = hashlib.sha256(media_a.read_bytes()).hexdigest()
         result.update({"restored_original_source": restored,
                        "readonly_restored": readonly_node is not None,
@@ -1589,7 +1607,7 @@ def probe_run(evidence: Path) -> int:
         "readonly_media_revert": {
             key: media_result.get(key) for key in (
                 "status", "snapshot_media_policy", "restored_original_source",
-                "media_overlay_created", "writable_disk_head_valid")
+                "media_overlay_created", "writable_disk_head_valid", "error")
         },
     }
     print(json.dumps(summary, indent=2), flush=True)

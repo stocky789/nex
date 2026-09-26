@@ -1,0 +1,35 @@
+{
+  "summary": "Fix recovery-libvirt readonly-media probe ElementTree predicate and writable-head check",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-forge-ci-readonly-media-probe.json",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI probe correction only; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not change the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI probe and regression test only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Reproduced forge readonly_media_revert failure: ElementTree nested predicate raised invalid predicate; after that fix, writable check wrongly required backing==pre-revert head. Corrected to frozen snapshot base. Local docker probe with cached +nex4 packages returned status passed. python3 -m unittest for domain XML helpers and runtime result gate.",
+    "evidence": [
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/test_libvirt_recovery_ci.py"
+    ]
+  }
+}
