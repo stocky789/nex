@@ -6,12 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.14` →
-> Debian `0.4.14`).
+> development software. Builds use the newest numbered changelog heading (`0.4.15` →
+> Debian `0.4.15`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.15] — 2026-09-28
+
+### Bug Fixes
+
+- Website downloads show a short release page instead of listing every network-installer
+  package and verification file.
+
+### Miscellaneous
+
+- Forge releases now attach only the two ISOs and checksums. Source bundles, compliance
+  manifests and network-installer packages remain on the download site, and release
+  publication requires configured website deployment credentials.
 
 ## [0.4.14] — 2026-09-27
 

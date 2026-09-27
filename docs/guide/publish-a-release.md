@@ -59,7 +59,9 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
   ```
 
   This creates the signed APT archive, the `/srv/nex-downloads` tree owned by the publishing
-  user, and the two nginx includes. `NEX_PUBLISH_USER` is required. Re-running it is safe. Then
+  user, and the two nginx includes. `NEX_PUBLISH_USER` is required. Re-run the updated
+  bootstrap on an existing website host before publishing the short download pages;
+  it installs the HTML content type and reloads nginx. Then
   set the deployment secrets; without them the run says so and publishes to Gitea only.
 
   | Secret | Value |
@@ -106,7 +108,10 @@ marked prerelease. The changelog section supplies the notes. The release include
 - `nex-core-<Debian-version>-amd64-netinst.iso` and its `.sha256` sidecar
 
 The versioned website download directory holds the matching source bundle,
-compliance manifests and hash-pinned netinst `.deb` files with checksums.
+compliance manifests and hash-pinned netinst `.deb` files with checksums. Opening
+`/downloads/latest/` or a version directory shows installer links, checksums and
+source/compliance links without listing the network-installer packages. The packages
+remain available at their exact URLs inside the network installer.
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
@@ -211,3 +216,8 @@ boot menus, signed APT and public delivery checks. This was direct website/APT p
 no Git-forge release or hosted CI completion is implied.
 
 For the development 0.4.12 netinst changes, see [network-installer verification](../qa/iso/2026-09-24-net-installer.md). Local publication fixtures do not establish a hosted release run.
+
+The download-page regression checks cover generated installer/source
+links, hidden package names, retained-version backfill, and nginx HTML delivery while
+exact package URLs remain reachable. The live website and forge release require a new
+owner-published run and separate inspection.

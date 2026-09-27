@@ -82,6 +82,11 @@ A release now attaches only the offline and netinst ISOs and their SHA-256 sidec
 to the forge. The matching source, compliance manifests and hash-pinned netinst
 packages remain in the versioned website download directory. Website deployment
 credentials are required; the workflow stops before publishing if they are absent.
+The download directory presents a short index of installer, checksum, source and
+compliance links; netinst package URLs remain directly available without appearing
+in the operator-facing list. A publication backfills indexes for retained versions.
+An existing website host needs the updated nginx download include installed before
+the HTML page can render in browsers.
 This changes release packaging only. API impact: none — the local installer download
 flow has no Controller/Core or client API. Guide impact: updated in the release guide.
 State owner: none — no pool or Controller state is added.

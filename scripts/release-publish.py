@@ -125,6 +125,31 @@ def prune(root, keep):
     return removed
 
 
+def write_download_page(directory, version):
+    images = (f"nex-core-{version}-amd64.iso", f"nex-core-{version}-amd64-netinst.iso")
+    documents = (f"nex-core-{version}-source.tar.gz",
+                 f"nex-core-{version}-compliance-manifest.json",
+                 f"nex-core-{version}-netinst-compliance-manifest.json")
+    lines = ["<!doctype html>", '<html lang="en">', '<meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+             f"<title>Nex Core {version} downloads</title>",
+             f"<h1>Nex Core {version}</h1>",
+             "<p>Development build for disposable evaluation.</p>"]
+    for heading, names in (("Installer images", images), ("Source and compliance", documents)):
+        lines.extend((f"<h2>{heading}</h2>", "<ul>"))
+        for name in names:
+            if (directory / name).is_file():
+                checksum = (f' (<a href="{name}.sha256">SHA-256</a>)'
+                            if (directory / (name + ".sha256")).is_file() else "")
+                lines.append(f'<li><a href="{name}">{name}</a>{checksum}</li>')
+        lines.append("</ul>")
+    lines.append("</html>")
+    temporary = directory / ".index.html.tmp"
+    temporary.write_text("\n".join(lines) + "\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, directory / "index.html")
+
+
 def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifest=None, payloads=(), check=False):
     root = _real_dir(root, create=True)
     iso = Path(iso)
@@ -186,6 +211,7 @@ def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifes
                 f"{digests[asset.name]}  {asset.name}\n")
         for entry in staging.iterdir():
             os.chmod(entry, 0o644)
+        write_download_page(staging, version)
         os.chmod(staging, 0o755)
         if target.exists() or target.is_symlink():
             if target.is_symlink():
@@ -206,7 +232,11 @@ def publish(root, iso, source, manifest, keep, netinst_iso=None, netinst_manifes
         temporary.unlink()
     temporary.symlink_to(newest)
     os.replace(temporary, link)
-    return version, digests[iso.name], newest, prune(root, keep)
+    removed = prune(root, keep)
+    for old_version in existing_releases(root):
+        if old_version != version:
+            write_download_page(root / old_version, old_version)
+    return version, digests[iso.name], newest, removed
 
 
 def main(argv=None):

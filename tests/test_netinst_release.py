@@ -42,6 +42,12 @@ class NetinstReleaseTests(unittest.TestCase):
             publish.publish(*args, check=True)
             self.assertEqual(list(root.iterdir()), [])
             publish.publish(*args)
+            page = (root / version / 'index.html').read_text()
+            self.assertIn(iso.name, page)
+            self.assertIn(netinst.name, page)
+            self.assertIn(source.name, page)
+            self.assertNotIn(payload.name, page)
+            self.assertNotIn(libvirt_payload.name, page)
             for asset in (iso, source, manifest, netinst, network_manifest, payload, libvirt_payload):
                 self.assertEqual((root / version / asset.name).read_bytes(), asset.read_bytes())
                 self.assertTrue((root / version / (asset.name + '.sha256')).is_file())

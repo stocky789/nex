@@ -124,6 +124,16 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(publish.sha256(installed), digest)
             self.assertEqual(publish.existing_releases(root), ["0.1.6"])
 
+    def test_new_publication_adds_download_pages_to_retained_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "downloads"
+            publish_release(root, tmp, "0.1.6")
+            (root / "0.1.6" / "index.html").unlink(missing_ok=True)
+            publish_release(root, tmp, "0.1.7")
+            page = (root / "0.1.6" / "index.html").read_text()
+            self.assertIn("nex-core-0.1.6-amd64.iso", page)
+            self.assertIn("nex-core-0.1.6-source.tar.gz", page)
+
     def test_rejects_unexpected_iso_filename(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "something-else.iso"

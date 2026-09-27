@@ -1,0 +1,36 @@
+{
+  "summary": "Show a short download page for each retained release while keeping network-installer payload URLs available.",
+  "paths": [
+    "CHANGELOG.md",
+    "scripts/release-publish.py",
+    "packaging/apt/nginx-downloads.inc",
+    "tests/test_release_publish.py",
+    "tests/test_netinst_release.py",
+    "tests/test_website_hosting.py",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-24-net-installer.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The versioned website download URL now presents a curated page instead of a raw directory listing.",
+    "pages": ["docs/guide/publish-a-release.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The release publisher writes static HTML; client, Controller/Core and host APIs are unchanged. Exact netinst payload URLs and hashes remain unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Release presentation changes no milestone status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The generated download page is a publication artifact, not Controller or pool state."
+  },
+  "verification": {
+    "method": "Release publisher (16), netinst (3), and real-nginx hosting (7) tests passed. A disposable 0.4.14 page rendered in headless Firefox; its ISO, source, and direct package URLs returned 200 over local HTTP. The screenshot was visually inspected but not added to the repository. Live website and forge publication remain unverified and require project-owner deployment.",
+    "evidence": ["tests/test_release_publish.py", "tests/test_netinst_release.py", "tests/test_website_hosting.py", "docs/guide/publish-a-release.md"]
+  }
+}

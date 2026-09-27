@@ -33,12 +33,20 @@ class WebsiteHosting(unittest.TestCase):
         (release / '_app').mkdir()
         (release / 'leak').symlink_to('/etc/passwd')
         (release / '.secret').write_text('not served')
+        downloads = cls.base / 'downloads' / '0.4.14'
+        downloads.mkdir(parents=True)
+        (downloads / 'index.html').write_text('<!doctype html><title>Nex Core downloads</title>')
+        (downloads / 'nex-core-local-fixture.deb').write_bytes(b'netinst payload')
         cls.log_dir = cls.base / 'log'
         cls.log_dir.mkdir()
         cls.port = cls.free_port()
         config = TEMPLATE.read_text()
         config = config.replace('@NEX_WEBSITE_LISTEN@', f'127.0.0.1:{cls.port}')
         config = config.replace('/srv/nex-website/current', str(cls.release))
+        download_location = (ROOT / 'packaging/apt/nginx-downloads.inc').read_text()
+        config = config.replace('        location / {',
+                                download_location.replace('/srv/nex-downloads/', str(cls.base / 'downloads') + '/')
+                                + '\n        location / {', 1)
         config = config.replace('/run/nex-website', str(cls.base / 'runtime'))
         (cls.base / 'runtime').mkdir()
         config = config.replace('/var/log/nex-website', str(cls.log_dir))
@@ -116,6 +124,14 @@ class WebsiteHosting(unittest.TestCase):
         status, headers, _ = self.request('/', 'POST')
         self.assertEqual(status, 403)
         self.assert_headers(headers)
+
+    def test_download_index_renders_and_payload_url_stays_available(self):
+        status, headers, body = self.request('/downloads/0.4.14/')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'text/html')
+        self.assertIn(b'Nex Core downloads', body)
+        status, _, _ = self.request('/downloads/0.4.14/nex-core-local-fixture.deb', 'HEAD')
+        self.assertEqual(status, 200)
 
     def test_service_runs_nginx_as_the_dedicated_account(self):
         unit = (ROOT / 'packaging/website/nex-website.service').read_text()

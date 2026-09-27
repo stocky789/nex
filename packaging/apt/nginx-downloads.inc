@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Include from the nex-website server block, alongside nginx-apt.inc.
 
-# Release downloads: ISO images and their SHA-256 sidecars (GET/HEAD only).
-# autoindex is on here, unlike /apt/, because operators need to find the ISO for
-# the version they want; the tree holds only ISOs and checksums.
+# Release downloads (GET/HEAD only). The publisher adds an index to each retained
+# version; direct package URLs remain available to the network installer.
 location /downloads/ {
     alias /srv/nex-downloads/;
     # `latest` is an atomically switched release symlink owned by the publishing
@@ -14,6 +13,7 @@ location /downloads/ {
     absolute_redirect off;
     limit_except GET HEAD { deny all; }
     types {
+        text/html html;
         application/x-iso9660-image iso;
         text/plain sha256;
     }

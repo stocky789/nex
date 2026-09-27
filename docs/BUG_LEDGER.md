@@ -9973,3 +9973,19 @@ Append resolved defects with their evidence and the approach to avoid.
   expansion or forge run is claimed.
 - Avoid: caching pool identity only in Controller/browser, treating a saved OS as live agent
   health, blaming SPICE for QEMU Guest Agent facts, or advising a reboot just to refresh a label.
+
+## BUG-0672 — Release downloads exposed the netinst payload directory
+
+- Date: 2026-09-28.
+- Symptom: the website's Latest Nex Core build link opened a long directory listing of
+  hash-pinned packages, source files and checksums instead of a usable installer page.
+- Root cause: the website links to `/downloads/latest/`, and nginx autoindexes the same
+  flat directory that the network installer must fetch exact package URLs from.
+- Fix: the publisher writes an installer/source download page into each release directory
+  and backfills retained versions when publishing. The nginx download location serves
+  HTML as HTML. Direct package URLs stay available.
+- Regression: `python3 -m unittest discover -s tests -p 'test_netinst_release.py'` checks
+  the page lists installers and source without payload names; `test_release_publish.py`
+  checks retained-version backfill; `test_website_hosting.py` checks real nginx HTML
+  delivery and a direct package URL. All run in the existing forge test workflow.
+- Avoid: deleting the hash-pinned packages or changing their URLs to clean up the listing.
