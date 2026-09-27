@@ -1,0 +1,58 @@
+{
+  "summary": "Close Phase 6 for disposable virtual-lab scope on project owner decision after lab install, product NFS backup/restore, bounded Campaign A/B, browser walkthrough, hermetic CI and replace cutover.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-gate/CLOSED.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "docs/qa/2026-09-27-phase6-campaign-b.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-phase6-gate-closed.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Acceptance close and roadmap/status wording only; operator backup/restore guide steps already landed in S4–S7 change records and are unchanged here.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Gate close, checklist and published status language only; no Controller/Core contract change in this slice."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Move Phase 6 backups milestone to Built / closed for disposable virtual-lab scope with accepted residuals named; physical/production not claimed.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Acceptance and roadmap status only; durable backup state ownership remains Core as recorded in S4–S7 change records."
+  },
+  "verification": {
+    "method": "Cross-checked existing Phase 6 QA receipts (lab install, product backup lab, Campaign A, Campaign B re-run, browser, hermetic CI, replace cutover). python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. Owner authorized disposable close 2026-09-27. Forge CI on published push not claimed (agents do not push).",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-gate/CLOSED.md",
+      "docs/qa/2026-09-27-phase6-implementation-index.md",
+      "docs/qa/2026-09-27-phase6-lab-install.md",
+      "docs/qa/2026-09-27-phase6-product-backup-lab.md",
+      "docs/qa/2026-09-27-phase6-campaign-a.md",
+      "docs/qa/2026-09-27-phase6-campaign-b.md",
+      "docs/qa/2026-09-27-phase6-backup-browser.md",
+      "internal/agent/backup_ci_test.go",
+      "docs/changes/2026-09-27-phase6-replace-cutover.json",
+      "docs/changes/2026-09-27-phase6-campaign-b-rerun.json",
+      "docs/changes/2026-09-27-phase6-backup-settlement-fix.json"
+    ],
+    "limits": [
+      "Nested disposable lab is not physical failure-domain certification",
+      "Quiesced/UEFI online remain refused",
+      "Live browser re-walk after BUG-0649/0650 may remain outstanding",
+      "Full three-host simultaneous join + schedule wall-clock span not fully proven",
+      "Package 0.4.12 + binary overlay — not ISO install acceptance",
+      "Forge CI on published push not yet inspected (owner push residual)"
+    ]
+  }
+}

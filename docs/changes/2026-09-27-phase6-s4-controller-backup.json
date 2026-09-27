@@ -1,0 +1,49 @@
+{
+  "summary": "Phase 6 / S4 Controller relay for backup repositories, back-up-now, catalog/runs inventory views and restore-as-new.",
+  "paths": [
+    "internal/controller/backups.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/identity.go",
+    "internal/controller/monitor.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/API.md",
+    "docs/changes/2026-09-27-phase6-s4-controller-backup.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "API relay only; operator backup UI and guide walkthroughs remain a later Controller/UI lane.",
+    "pages": []
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds Controller pool backup repository/catalog/runs/restore routes and VM backup-now that queue Core-owned commands and require master *_reported inventory flags.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S4 Controller relay only; Phase 6 gate and public roadmap status remain open until later slices close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-repositories.json, pool-backup-catalog/ and pool-backup-runs/ plus repository recovery-point directories. Controller retains master-reported inventory observations for display and outcome adoption only; a fresh Controller recovers repositories, catalog and runs when backup_*_reported flags are true.",
+    "reason": "Pool backup destinations, recovery points and run history are Core-owned and must survive Controller replacement without Controller catalog authority."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/controller/; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree. Coverage includes inventory retention, missing *_reported 503, backup-now relay/conflict, repository register/test queue, and Core backup outcome adoption without redispatch.",
+    "evidence": [
+      "internal/controller/backup_adoption_test.go",
+      "docs/API.md"
+    ]
+  }
+}

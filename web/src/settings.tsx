@@ -6,7 +6,8 @@ import type { UpdateStatus } from "./updates";
 import { relativeTime } from "./labels";
 import { Icon, type IconKind } from "./icons";
 import { Badge, Section, date } from "./ui";
-import { BackupRepositories, Gated, gatedButtons } from "./gated";
+import { Gated, gatedButtons } from "./gated";
+import { BackupRepositories } from "./backup-repositories";
 import "./settings.css";
 
 // Pool-level configuration, stacked by section. Storage, Networks and the ISO library are
@@ -58,17 +59,19 @@ export function SettingsHead({ section, pool, master, hostCount }: { section: st
   </>;
 }
 
-export function Settings({ section, pool, hosts = [], api, busy, unavailable, updates, onEnrollHost }: {
+export function Settings({ section, pool, hosts = [], api, busy, unavailable, updates, onEnrollHost, onNotice }: {
   section: string; pool?: Pool; hosts?: Host[]; api: API; busy: boolean; unavailable: boolean; updates: Updates; onEnrollHost?: () => void;
+  onNotice?: (text: string, operationID?: string) => void;
 }) {
+  const notice = onNotice || (() => {});
   const current = sections.find(s => s.key === section);
   if (!current) return <section className="panel empty"><h2>Object not found</h2><p>This link does not match a settings section.</p><a href="#/settings">Return to settings</a></section>;
   if (current.pool && !pool) return <><h1>{current.label}</h1><p className="empty">Choose a pool in the scope menu to see its {current.label.toLowerCase()}.</p></>;
   const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
   const updatesPanel = <UpdatesPanel {...updates} busy={busy} />;
   switch (section) {
-    case "overview": return <>{members}<HighAvailability /><BackupRepositories />{updatesPanel}</>;
-    case "backups": return <BackupRepositories />;
+    case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
+    case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;
     case "ha": return <HighAvailability />;
     case "members": return members;
     case "updates": return updatesPanel;

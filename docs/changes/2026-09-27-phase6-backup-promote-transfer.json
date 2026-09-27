@@ -1,0 +1,55 @@
+{
+  "summary": "Promote transfers durable backup repositories, policies, runs and catalog index from the signed authority replica; empty catalog rebuilds from NFS manifests.",
+  "paths": [
+    "internal/protocol/backup_policy.go",
+    "internal/protocol/pool.go",
+    "internal/agent/backup_policy.go",
+    "internal/agent/backup_authority_transfer.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/backup_promote_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/qa/2026-09-27-phase6-campaign-b.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-phase6-backup-promote-transfer.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator-visible promote and backup workflows are unchanged; this restores Core takeover of already-documented backup authority after fence-verified promotion.",
+    "pages": []
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "PoolBackupAuthority on the signed pool authority replica now carries repositories, full policy definitions, retained runs and catalog index for takeover (additive fields; compact refs retained). No new Controller HTTP routes.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Closes the Campaign B backup-takeover Core gap; Phase 6 gate stays open until live multi-host campaigns and remaining slices close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-repositories.json, pool-backup-policies.json, pool-backup-runs/ and pool-backup-catalog/ remain Core-owned. Signed pool authority replica backup_authority now replicates those durable records (catalog index only). On promote, adoptPoolAuthorityFromReplica materializes them on the survivor; empty catalog with a usable repository mount rebuilds from NFS manifests. Fresh Controller adopts the same IDs from the new master's inventory.",
+    "reason": "Backup jobs/history must survive master loss without Controller-owned copies."
+  },
+  "verification": {
+    "method": "go test -count=1 -timeout 120s ./internal/agent/ -run 'PoolPromotionRetainsBackupAuthority|PoolPromotionRebuildsCatalogFromNFSWhenIndexEmpty|AdoptPoolBackupAuthorityAndRebuildFromMount|PoolBackupAuthorityRefsDoesNotReenterPeerLock|PoolPromotion|AdoptPoolAuthority'; go test -count=1 ./internal/protocol/ -run 'BackupPolicy'; python3 scripts/generate_api.py --check; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree. Live nested Campaign B re-run optional.",
+    "evidence": [
+      "internal/agent/backup_promote_test.go",
+      "docs/BUG_LEDGER.md",
+      "docs/qa/2026-09-27-phase6-campaign-b.md"
+    ]
+  }
+}

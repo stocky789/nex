@@ -1355,6 +1355,94 @@ func TestAuthorityFreezeRefusesUnresolvedResourceRemoval(t *testing.T) {
 	}
 }
 
+func TestAuthorityFreezeRefusesUnresolvedBackup(t *testing.T) {
+	for _, state := range []string{"run", "receipt", "journal"} {
+		t.Run(state, func(t *testing.T) {
+			lab := newTransferLab(t, 1)
+			master := lab.host("master-1")
+			now := time.Now().UTC()
+			switch state {
+			case "run":
+				if err := savePoolBackupRun(master, protocol.BackupRun{OperationID: "pending-backup", Kind: protocol.BackupKindBackupNow,
+					PoolID: master.State.PoolID, RepositoryID: "repo-1", Stage: "reserved", Status: "pending", CreatedAt: now}); err != nil {
+					t.Fatal(err)
+				}
+			case "receipt":
+				if err := savePoolBackupMetadataReceipt(master, protocol.BackupMetadataReceipt{OperationID: "pending-receipt",
+					Kind: "backup-policy-upsert", IntentSHA256: strings.Repeat("a", 64), Status: "pending", ObservedAt: now}); err != nil {
+					t.Fatal(err)
+				}
+			case "journal":
+				master.State.Journal["pending-restore"] = JournalEntry{Command: &protocol.Command{OperationID: "pending-restore", Kind: protocol.BackupKindRestoreNew}, Status: "pending"}
+			}
+			record := &poolTransferRecord{OperationID: "op-freeze-backup", Action: "promote", Role: "source", TargetHostID: "member-1"}
+			if err := freezePoolAuthority(master, record); err == nil || !strings.Contains(err.Error(), "backup operation is unresolved") {
+				t.Fatalf("authority freeze with %s = %v", state, err)
+			}
+			if record.Frozen || peerState(t, master).Transfer != nil {
+				t.Fatalf("unresolved backup partially froze authority: record=%#v peer=%#v", record, peerState(t, master).Transfer)
+			}
+		})
+	}
+}
+
+func TestPoolTransferRefusesPendingBackupBeforeFreeze(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master := lab.host("master-1")
+	if err := savePoolBackupRun(master, protocol.BackupRun{OperationID: "pending-backup", Kind: protocol.BackupKindBackupNow,
+		PoolID: master.State.PoolID, RepositoryID: "repo-1", Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	result := ExecutePoolTransfer(context.Background(), master, transferCommand("change-with-backup", "master-change", "member-1", "master-1"))
+	if result.Status != "failed" || !strings.Contains(result.Error, "backup operation is unresolved") {
+		t.Fatalf("pending backup transfer result = %+v", result)
+	}
+	if peerState(t, master).Transfer != nil {
+		t.Fatal("refused transfer froze pool authority")
+	}
+}
+
+func TestInheritedPendingBackupNeedsAttentionAndKeepsPin(t *testing.T) {
+	s := seedBackupMaster(t)
+	now := time.Now().UTC()
+	authority := &protocol.PoolBackupAuthority{
+		History: []protocol.BackupRun{{OperationID: "pending-restore", Kind: protocol.BackupKindRestoreNew,
+			PoolID: s.State.PoolID, RepositoryID: "repo-1", RecoveryPointID: "point-1", NewVMID: "11111111-1111-4111-8111-111111111111",
+			Stage: "reserved", Status: "pending", CreatedAt: now}},
+		Pins: []protocol.BackupRestorePin{{OperationID: "pending-restore", RecoveryPointID: "point-1",
+			Kind: protocol.BackupPinKindNew, CreatedAt: now}},
+		MetadataReceipts: []protocol.BackupMetadataReceipt{{OperationID: "pending-metadata", Kind: "backup-protect",
+			IntentSHA256: strings.Repeat("a", 64), Status: "pending", ObservedAt: now}},
+	}
+	root, _, err := stagePoolBackupAuthorityActivation(s, inheritedBackupAuthority(authority), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := peerState(t, s)
+	peer.BackupActiveRoot = root
+	if err := savePoolPeer(s, peer); err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadPoolBackupRun(s, "pending-restore")
+	if err != nil || run.Status != "needs_attention" || run.Stage != "authority_transfer" {
+		t.Fatalf("inherited run = %+v, %v", run, err)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, "pending-metadata")
+	if err != nil || receipt.Status != "needs_attention" {
+		t.Fatalf("inherited metadata receipt = %+v, %v", receipt, err)
+	}
+	pins, err := ActiveBackupRestorePins(s)
+	if err != nil || !pins["point-1"] {
+		t.Fatalf("inherited restore pin = %+v, %v", pins, err)
+	}
+	if authority.History[0].Status != "pending" || authority.MetadataReceipts[0].Status != "pending" {
+		t.Fatal("signed source authority was changed")
+	}
+	if err := unsettledBackupTransferRefusal(s); err != nil {
+		t.Fatalf("retained uncertain history blocked a later planned transfer: %v", err)
+	}
+}
+
 func TestResourceRemovalMarkerIsAdoptedFromAuthorityReplica(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")

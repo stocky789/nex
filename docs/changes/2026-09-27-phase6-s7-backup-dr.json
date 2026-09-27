@@ -1,0 +1,87 @@
+{
+  "summary": "Phase 6 / S7 disaster recovery: restore replace, protect/pins, test restore, catalog rebuild/import, Core-local recovery and Controller UI.",
+  "paths": [
+    "internal/protocol/backup_dr.go",
+    "internal/protocol/backup_dr_test.go",
+    "internal/protocol/backup.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/backup_catalog_scan.go",
+    "internal/agent/backup_protect.go",
+    "internal/agent/backup_replace.go",
+    "internal/agent/backup_catalog_rebuild.go",
+    "internal/agent/backup_test_restore.go",
+    "internal/agent/backup_dr_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/controller/backup_dr.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/localcore/backup_dr.go",
+    "internal/localcore/service.go",
+    "cmd/nex-core-local/main.go",
+    "web/src/backups.tsx",
+    "web/src/backup-repositories.tsx",
+    "web/src/backup-types.ts",
+    "web/src/labels.ts",
+    "docs/guide/restore-replace.md",
+    "docs/guide/catalog-rebuild.md",
+    "docs/guide/recover-without-controller.md",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/restore-as-new.md",
+    "docs/guide/README.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/changes/2026-09-27-phase6-s7-backup-dr.json",
+    "docs/qa/2026-09-27-phase6-s7-status.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can replace, protect, test-restore, import points and recover without Controller.",
+    "pages": [
+      "docs/guide/restore-replace.md",
+      "docs/guide/catalog-rebuild.md",
+      "docs/guide/recover-without-controller.md",
+      "docs/guide/backup-repositories.md",
+      "docs/guide/restore-as-new.md",
+      "docs/guide/README.md",
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds restore-replace, protect, test-restore verify/cleanup, catalog import/rebuild and Core-local backup-status on Controller and host-local APIs; CLI rebuild-backup-catalog.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json",
+      "docs/api/index.html",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S7 product surfaces only; Phase 6 gate stays open until S8 and three-host campaigns close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-catalog/ (including protected and last_test_*), pool-backup-pins.json, repository .nex-protected markers, backup-replace retained-original/cutover staging, pool-backup-runs/ for replace and test-restore kinds. Fresh Controller adopts repositories, catalog, runs and policies when backup_*_reported flags are true.",
+    "reason": "DR protect/pins, test results and replace staging must survive Controller absence and catalog rebuild without Controller-owned state."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/agent/ ./internal/controller/ ./internal/localcore/ ./internal/vmhost/; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree; web typecheck if UI changed. Unit evidence: replace safety, protect vs prune, catalog rebuild from manifests, pin survival. Three-host Campaign A/B unexecuted.",
+    "evidence": [
+      "internal/protocol/backup_dr_test.go",
+      "internal/agent/backup_dr_test.go",
+      "docs/qa/2026-09-27-phase6-s7-status.md",
+      "docs/API.md"
+    ]
+  }
+}

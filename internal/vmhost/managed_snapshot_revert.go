@@ -366,8 +366,11 @@ func (e *ManagedEngine) snapshotRevertIntent(ctx context.Context, command protoc
 			if captured.OS.NVRAM == nil || captured.OS.NVRAM.Path != source || firmwareVariablesFile(source) != nil {
 				return managedSnapshotRevertRecord{}, errors.New("selected snapshot NVRAM path is not a supported libvirt variable store")
 			}
-		} else if source != filepath.Join("/var/lib/libvirt/swtpm", command.VM.ID) {
-			return managedSnapshotRevertRecord{}, errors.New("selected snapshot TPM state path is not the VM's libvirt state directory")
+		} else {
+			expected, sourceErr := managedTPMStateSource(captured, command.VM.ID)
+			if sourceErr != nil || source != expected {
+				return managedSnapshotRevertRecord{}, errors.New("selected snapshot TPM state path is not the VM's libvirt state directory")
+			}
 		}
 		currentManifest, manifestErr := managedSnapshotManifest(ctx, source)
 		if manifestErr != nil {

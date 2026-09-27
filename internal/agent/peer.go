@@ -297,6 +297,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolReplicaHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolBackupPagePath {
+			PoolBackupPageHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolBackupPeerPath || strings.HasPrefix(r.URL.Path, poolBackupPeerPath+"/") {
+			PoolBackupPeerHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolTransferPath {
 			PoolTransferHandler(s).ServeHTTP(w, r)
 			return

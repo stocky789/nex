@@ -95,6 +95,25 @@
 <li><a href="#revertVMSnapshot">POST /api/v1/vms/{id}/snapshots/{snapshot_id}/revert</a></li>
 <li><a href="#deleteVMSnapshot">POST /api/v1/vms/{id}/snapshots/{snapshot_id}/delete</a></li>
 <li><a href="#updateVMSnapshotMetadata">PATCH /api/v1/vms/{id}/snapshots/{snapshot_id}</a></li>
+<li><a href="#listBackupRepositories">GET /api/v1/pools/{id}/backup-repositories</a></li>
+<li><a href="#createBackupRepository">POST /api/v1/pools/{id}/backup-repositories</a></li>
+<li><a href="#testBackupRepository">POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test</a></li>
+<li><a href="#listBackupCatalog">GET /api/v1/pools/{id}/backup-catalog</a></li>
+<li><a href="#listBackupRuns">GET /api/v1/pools/{id}/backup-runs</a></li>
+<li><a href="#restoreBackupAsNew">POST /api/v1/pools/{id}/backup-restore</a></li>
+<li><a href="#backupVMNow">POST /api/v1/vms/{id}/backup</a></li>
+<li><a href="#listBackupPolicies">GET /api/v1/pools/{id}/backup-policies</a></li>
+<li><a href="#createBackupPolicy">POST /api/v1/pools/{id}/backup-policies</a></li>
+<li><a href="#updateBackupPolicy">PUT /api/v1/pools/{id}/backup-policies/{policy_id}</a></li>
+<li><a href="#pauseBackupPolicy">POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause</a></li>
+<li><a href="#runNowBackupPolicy">POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now</a></li>
+<li><a href="#restoreBackupReplace">POST /api/v1/pools/{id}/backup-restore-replace</a></li>
+<li><a href="#protectBackupPoint">POST /api/v1/pools/{id}/backup-protect</a></li>
+<li><a href="#testRestoreBackup">POST /api/v1/pools/{id}/backup-test-restore</a></li>
+<li><a href="#verifyTestRestore">POST /api/v1/pools/{id}/backup-test-verify</a></li>
+<li><a href="#cleanupTestRestore">POST /api/v1/pools/{id}/backup-test-cleanup</a></li>
+<li><a href="#importBackupCatalog">POST /api/v1/pools/{id}/backup-catalog/import</a></li>
+<li><a href="#rebuildBackupCatalog">POST /api/v1/pools/{id}/backup-catalog/rebuild</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -369,7 +388,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Addressed to the pool&#x27;s current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \&quot;durable and still running \u2014 the hosts finish it\&quot;. Core refusals include \&quot;only the pool master starts a master change or an eject\&quot;, \&quot;no such member of this pool\&quot;, \&quot;only a ready member with a peer endpoint can become the pool master\&quot;, \&quot;another pool authority transfer is already in progress on this pool\&quot;, \&quot;pool authority is frozen for a master change; retry when it completes\&quot;, \&quot;pool authority was handed to another host; this host is no longer the pool master\&quot;, \&quot;host &lt;id&gt; still owns pool VM records (&lt;ids&gt;); move or delete them before ejecting it\&quot;, \&quot;host &lt;id&gt; still holds a pool-shared storage reservation on &lt;repo&gt;; let it finish before ejecting it\&quot;, \&quot;no pool authority transfer is in progress on this pool\&quot;, \&quot;the pool authority transfer in progress has another target\&quot; and \&quot;the target has already activated this pool authority; the master change can only go forward\&quot;, \&quot;host &lt;id&gt; is already removed from this pool&#x27;s membership; the eject can only go forward\&quot; and \&quot;this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\&quot;. A cancelled eject records \&quot;the pool member eject was cancelled by an operator\&quot;; a cancelled master change records \&quot;the pool master change was cancelled by an operator\&quot;. A cancel is accepted only before the transfer&#x27;s first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen.&quot;,
+  &quot;semantics&quot;: &quot;Addressed to the pool&#x27;s current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \&quot;durable and still running \u2014 the hosts finish it\&quot;. Core refusals include \&quot;only the pool master starts a master change or an eject\&quot;, \&quot;no such member of this pool\&quot;, \&quot;only a ready member with a peer endpoint can become the pool master\&quot;, \&quot;another pool authority transfer is already in progress on this pool\&quot;, \&quot;pool authority is frozen for a master change; retry when it completes\&quot;, \&quot;pool authority was handed to another host; this host is no longer the pool master\&quot;, \&quot;host &lt;id&gt; still owns pool VM records (&lt;ids&gt;); move or delete them before ejecting it\&quot;, \&quot;host &lt;id&gt; still holds a pool-shared storage reservation on &lt;repo&gt;; let it finish before ejecting it\&quot;, \&quot;no pool authority transfer is in progress on this pool\&quot;, \&quot;the pool authority transfer in progress has another target\&quot; and \&quot;the target has already activated this pool authority; the master change can only go forward\&quot;, \&quot;host &lt;id&gt; is already removed from this pool&#x27;s membership; the eject can only go forward\&quot; and \&quot;this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\&quot;. A cancelled eject records \&quot;the pool member eject was cancelled by an operator\&quot;; a cancelled master change records \&quot;the pool master change was cancelled by an operator\&quot;. A cancel is accepted only before the transfer&#x27;s first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen. Before a planned master change or eject records its first freeze, Core refuses unresolved backup journal work, pending backup runs and pending metadata receipts with \&quot;backup operation is unresolved; finish or reconcile it before changing pool authority\&quot;; the check and first durable freeze hold the same backup authority lock. Fenced promotion may inherit pending backup authority and reports those runs/receipts needs_attention, retaining restore pins instead of queuing their native work on the new master.&quot;,
   &quot;capability&quot;: &quot;pool-authority-transfer-v1 on the pool master, on the selected host and on every ready member. The Controller offers no master change or eject without it on the master, because a member that cannot re-point would keep following a host that is no longer the pool master.&quot;
 }</pre></section>
 <section><h2>pool-promote</h2><pre>{
@@ -458,6 +477,146 @@
     &quot;$ref&quot;: &quot;#/components/schemas/PoolVMSnapshot&quot;
   },
   &quot;semantics&quot;: &quot;Development catalog metadata update. Authenticated host-local PATCH updates only the pool master&#x27;s retained name and description for an existing snapshot ID. Capture digests, creation time and disk identity stay fixed. Duplicate names and unresolved recovery reservations are refused. Later revert and delete bind the updated descriptor digest. Controller only adopts host-reported catalog rows.&quot;
+}</pre></section>
+<section><h2>backup-repository-register</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues registration of an external NFS backup destination on the pool master. Core owns the durable pool-backup-repositories.json record. Exact request_id replay is required; Controller stores no authoritative repository catalog.&quot;
+}</pre></section>
+<section><h2>backup-repository-test</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues a mount/access check for a registered backup repository on the pool master. Core updates observed access; Controller only relays.&quot;
+}</pre></section>
+<section><h2>backup-now</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupNowRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues a stopped full backup of one VM into a registered repository. Client request_id is the Core operation ID. Core publishes a complete recovery point or refuses; Controller adopts outcomes and catalog rows from master inventory.&quot;
+}</pre></section>
+<section><h2>backup-restore-as-new</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/RestoreAsNewRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues restore-as-new on the selected host. Core copies validated artifacts locally first, then creates a new stopped VM. Controller never keeps an authoritative recovery catalog.&quot;
+}</pre></section>
+<section><h2>backup-restore-replace</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/RestoreReplaceRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Command with RestoreReplaceRequest.&quot;
+}</pre></section>
+<section><h2>backup-test-restore</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Command with TestRestoreRequest.&quot;
+}</pre></section>
+<section><h2>backup-protect</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ProtectRecoveryPointRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Command with ProtectRecoveryPointRequest.&quot;
+}</pre></section>
+<section><h2>backup-catalog-import</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/CatalogImportRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Command with CatalogImportRequest.&quot;
+}</pre></section>
+<section><h2>backup-catalog-rebuild</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/CatalogImportRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Command with CatalogImportRequest.&quot;
+}</pre></section>
+<section><h2>backup-test-verify</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreVerifyRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues operator verification of a test restore. Core records the result beside the catalog point; Controller adopts from master inventory.&quot;
+}</pre></section>
+<section><h2>backup-test-cleanup</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreCleanupRequest&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues cleanup of one test restore VM and its staging only. Core removes that test guest; other recovery points are untouched.&quot;
+}</pre></section>
+<section><h2>backup-policy-upsert</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues create/update of a master-owned backup policy. Core persists pool-backup-policies.json; exact request_id replay is required.&quot;
+}</pre></section>
+<section><h2>backup-policy-pause</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues pause or resume of a backup policy on the pool master. Core owns enabled/paused state; Controller adopts inventory.&quot;
+}</pre></section>
+<section><h2>backup-policy-run-now</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -2602,12 +2761,12 @@
   &quot;x-audience&quot;: &quot;agent&quot;
 }</pre></details></section>
 <section id="reportHost"><h2>POST <code>/api/v1/agent/report</code></h2>
-<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false.</p>
+<p>Report observations and reconcile commands</p><p>Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;reportHost&quot;,
   &quot;summary&quot;: &quot;Report observations and reconcile commands&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -9445,6 +9604,2247 @@
     }
   }
 }</pre></details></section>
+<section id="listBackupRepositories"><h2>GET <code>/api/v1/pools/{id}/backup-repositories</code></h2>
+<p>List pool backup repositories</p><p>Returns the pool master&#x27;s NFS backup destination list from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listBackupRepositories&quot;,
+  &quot;summary&quot;: &quot;List pool backup repositories&quot;,
+  &quot;description&quot;: &quot;Returns the pool master&#x27;s NFS backup destination list from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Master-reported backup repositories.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master or backup repository inventory unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories</code></h2>
+<p>Register a pool backup repository</p><p>Queues backup-repository-register on the pool master. Requires administrator session, CSRF and a stable request_id. External NFS only. Controller only relays; Core owns the durable registration.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createBackupRepository&quot;,
+  &quot;summary&quot;: &quot;Register a pool backup repository&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-register on the pool master. Requires administrator session, CSRF and a stable request_id. External NFS only. Controller only relays; Core owns the durable registration.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;name&quot;,
+            &quot;kind&quot;,
+            &quot;source&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
+              &quot;description&quot;: &quot;Optional repository ID; Controller mints one when omitted.&quot;
+            },
+            &quot;name&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;kind&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;nfs&quot;
+              ]
+            },
+            &quot;source&quot;: {
+              &quot;type&quot;: &quot;object&quot;,
+              &quot;required&quot;: [
+                &quot;server&quot;,
+                &quot;export&quot;
+              ],
+              &quot;properties&quot;: {
+                &quot;server&quot;: {
+                  &quot;type&quot;: &quot;string&quot;
+                },
+                &quot;export&quot;: {
+                  &quot;type&quot;: &quot;string&quot;
+                },
+                &quot;directory&quot;: {
+                  &quot;type&quot;: &quot;string&quot;
+                }
+              },
+              &quot;additionalProperties&quot;: false
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact request_id replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="testBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/test</code></h2>
+<p>Test backup repository access</p><p>Queues backup-repository-test on the pool master. Requires administrator session, CSRF and a stable request_id distinct from repo_id.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;testBackupRepository&quot;,
+  &quot;summary&quot;: &quot;Test backup repository access&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-test on the pool master. Requires administrator session, CSRF and a stable request_id distinct from repo_id.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;repo_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Backup repository ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listBackupCatalog"><h2>GET <code>/api/v1/pools/{id}/backup-catalog</code></h2>
+<p>List pool backup recovery points</p><p>Returns the pool master&#x27;s completed recovery-point catalog from retained inventory. Requires backup_catalog_reported; never invents an empty catalog.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listBackupCatalog&quot;,
+  &quot;summary&quot;: &quot;List pool backup recovery points&quot;,
+  &quot;description&quot;: &quot;Returns the pool master&#x27;s completed recovery-point catalog from retained inventory. Requires backup_catalog_reported; never invents an empty catalog.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Master-reported recovery points.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master or backup catalog unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listBackupRuns"><h2>GET <code>/api/v1/pools/{id}/backup-runs</code></h2>
+<p>List pool backup runs</p><p>Returns the pool master&#x27;s retained backup/restore run records from inventory. Requires backup_runs_reported; never invents an empty list.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listBackupRuns&quot;,
+  &quot;summary&quot;: &quot;List pool backup runs&quot;,
+  &quot;description&quot;: &quot;Returns the pool master&#x27;s retained backup/restore run records from inventory. Requires backup_runs_reported; never invents an empty list.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Master-reported runs.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupRun&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master or backup runs unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="restoreBackupAsNew"><h2>POST <code>/api/v1/pools/{id}/backup-restore</code></h2>
+<p>Restore a recovery point as a new VM</p><p>Queues backup-restore-as-new on the pool master with the selected executing host. Requires administrator session, CSRF, stable request_id and host_id. Controller only relays; the master dispatches member work over the authenticated Core peer route, and the executing Core copies artifacts locally then creates the stopped guest.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;restoreBackupAsNew&quot;,
+  &quot;summary&quot;: &quot;Restore a recovery point as a new VM&quot;,
+  &quot;description&quot;: &quot;Queues backup-restore-as-new on the pool master with the selected executing host. Requires administrator session, CSRF, stable request_id and host_id. Controller only relays; the master dispatches member work over the authenticated Core peer route, and the executing Core copies artifacts locally then creates the stopped guest.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;host_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;new_vm_id&quot;,
+            &quot;new_vm_name&quot;,
+            &quot;storage_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;host_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;new_vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;new_vm_name&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;storage_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact request_id replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="backupVMNow"><h2>POST <code>/api/v1/vms/{id}/backup</code></h2>
+<p>Back up a VM now</p><p>Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;backupVMNow&quot;,
+  &quot;summary&quot;: &quot;Back up a VM now&quot;,
+  &quot;description&quot;: &quot;Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;consistency&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;stopped&quot;,
+                &quot;crash&quot;,
+                &quot;quiesced&quot;
+              ],
+              &quot;description&quot;: &quot;Omitted or stopped for shut-off guests; crash for online crash-consistent; quiesced refused until proven.&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact request_id replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict or pending work.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="listBackupPolicies"><h2>GET <code>/api/v1/pools/{id}/backup-policies</code></h2>
+<p>List backup policies</p><p>Master inventory; 503 when backup_policies_reported is false.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;listBackupPolicies&quot;,
+  &quot;summary&quot;: &quot;List backup policies&quot;,
+  &quot;description&quot;: &quot;Master inventory; 503 when backup_policies_reported is false.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Policies.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Policies unavailable from pool master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="createBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies</code></h2>
+<p>Create a backup policy</p><p>Queues backup-policy-upsert on the pool master.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;createBackupPolicy&quot;,
+  &quot;summary&quot;: &quot;Create a backup policy&quot;,
+  &quot;description&quot;: &quot;Queues backup-policy-upsert on the pool master.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: true
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="updateBackupPolicy"><h2>PUT <code>/api/v1/pools/{id}/backup-policies/{policy_id}</code></h2>
+<p>Update a backup policy</p><p>Update a backup policy</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;updateBackupPolicy&quot;,
+  &quot;summary&quot;: &quot;Update a backup policy&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;policy_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: true
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;description&quot;: &quot;Update a backup policy&quot;
+}</pre></details></section>
+<section id="pauseBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/pause</code></h2>
+<p>Pause or resume a backup policy</p><p>Pause or resume a backup policy</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;pauseBackupPolicy&quot;,
+  &quot;summary&quot;: &quot;Pause or resume a backup policy&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;policy_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;paused&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;paused&quot;: {
+              &quot;type&quot;: &quot;boolean&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;description&quot;: &quot;Pause or resume a backup policy&quot;
+}</pre></details></section>
+<section id="runNowBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/run-now</code></h2>
+<p>Run a backup policy for one VM now</p><p>Run a backup policy for one VM now</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;runNowBackupPolicy&quot;,
+  &quot;summary&quot;: &quot;Run a backup policy for one VM now&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    {
+      &quot;name&quot;: &quot;policy_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;vm_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Error.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;description&quot;: &quot;Run a backup policy for one VM now&quot;
+}</pre></details></section>
+<section id="restoreBackupReplace"><h2>POST <code>/api/v1/pools/{id}/backup-restore-replace</code></h2>
+<p>Restore replace</p><p>Queues backup-restore-replace. Requires confirm_replace; retains originals; refuses unsafe in-place overwrite. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;restoreBackupReplace&quot;,
+  &quot;summary&quot;: &quot;Restore replace&quot;,
+  &quot;description&quot;: &quot;Queues backup-restore-replace. Requires confirm_replace; retains originals; refuses unsafe in-place overwrite. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;host_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;original_vm_id&quot;,
+            &quot;storage_id&quot;,
+            &quot;confirm_replace&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;host_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;original_vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;storage_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;confirm_replace&quot;: {
+              &quot;type&quot;: &quot;boolean&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="protectBackupPoint"><h2>POST <code>/api/v1/pools/{id}/backup-protect</code></h2>
+<p>Protect recovery point</p><p>Sets or clears deletion protection on a recovery point (catalog + repository marker).</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;protectBackupPoint&quot;,
+  &quot;summary&quot;: &quot;Protect recovery point&quot;,
+  &quot;description&quot;: &quot;Sets or clears deletion protection on a recovery point (catalog + repository marker).&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;protected&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;protected&quot;: {
+              &quot;type&quot;: &quot;boolean&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="testRestoreBackup"><h2>POST <code>/api/v1/pools/{id}/backup-test-restore</code></h2>
+<p>Test restore</p><p>Queues backup-test-restore as a new VM for verification. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;testRestoreBackup&quot;,
+  &quot;summary&quot;: &quot;Test restore&quot;,
+  &quot;description&quot;: &quot;Queues backup-test-restore as a new VM for verification. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;host_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;new_vm_id&quot;,
+            &quot;new_vm_name&quot;,
+            &quot;storage_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;host_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;new_vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;new_vm_name&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;storage_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="verifyTestRestore"><h2>POST <code>/api/v1/pools/{id}/backup-test-verify</code></h2>
+<p>Record test restore result</p><p>Records the operator&#x27;s passed/failed observation only after Core proves the current VM belongs to the exact successful test restore. Passed requires intact current disks and firmware; failed permits damaged artifacts if the native creator and definition still match. A member-owned VM is checked through authenticated Core peer origin proof. Missing or changed provenance is refused; uncertain transport retains a retryable Core metadata receipt.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;verifyTestRestore&quot;,
+  &quot;summary&quot;: &quot;Record test restore result&quot;,
+  &quot;description&quot;: &quot;Records the operator&#x27;s passed/failed observation only after Core proves the current VM belongs to the exact successful test restore. Passed requires intact current disks and firmware; failed permits damaged artifacts if the native creator and definition still match. A member-owned VM is checked through authenticated Core peer origin proof. Missing or changed provenance is refused; uncertain transport retains a retryable Core metadata receipt.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;test_vm_id&quot;,
+            &quot;result&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;test_vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;result&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;enum&quot;: [
+                &quot;passed&quot;,
+                &quot;failed&quot;
+              ]
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="cleanupTestRestore"><h2>POST <code>/api/v1/pools/{id}/backup-test-cleanup</code></h2>
+<p>Clean up test restore</p><p>Removes only the selected stopped test VM and copied artifacts after Core proves its exact test-restore creator and current identity. A changed or reused VM ID is refused; ambiguous native deletion remains a retained Core result for safe reconciliation.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;cleanupTestRestore&quot;,
+  &quot;summary&quot;: &quot;Clean up test restore&quot;,
+  &quot;description&quot;: &quot;Removes only the selected stopped test VM and copied artifacts after Core proves its exact test-restore creator and current identity. A changed or reused VM ID is refused; ambiguous native deletion remains a retained Core result for safe reconciliation.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;,
+            &quot;recovery_point_id&quot;,
+            &quot;test_vm_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;recovery_point_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;test_vm_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="importBackupCatalog"><h2>POST <code>/api/v1/pools/{id}/backup-catalog/import</code></h2>
+<p>Import recovery points</p><p>Imports validated repository manifests into the catalog.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;importBackupCatalog&quot;,
+  &quot;summary&quot;: &quot;Import recovery points&quot;,
+  &quot;description&quot;: &quot;Imports validated repository manifests into the catalog.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="rebuildBackupCatalog"><h2>POST <code>/api/v1/pools/{id}/backup-catalog/rebuild</code></h2>
+<p>Rebuild backup catalog</p><p>Rebuilds catalog entries for one repository from validated manifests.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;rebuildBackupCatalog&quot;,
+  &quot;summary&quot;: &quot;Rebuild backup catalog&quot;,
+  &quot;description&quot;: &quot;Rebuilds catalog entries for one repository from validated manifests.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.13&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;repository_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            }
+          },
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;operation&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/Operation&quot;
+              }
+            },
+            &quot;required&quot;: [
+              &quot;operation&quot;
+            ],
+            &quot;additionalProperties&quot;: false
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="schemas"><h2>Schemas and authentication</h2>
 <h3>securitySchemes</h3>
 <details id="AdminSession"><summary>AdminSession</summary><pre>{
@@ -10161,7 +12561,21 @@
         &quot;snapshot-create&quot;,
         &quot;snapshot-revert&quot;,
         &quot;snapshot-delete&quot;,
-        &quot;snapshot-metadata&quot;
+        &quot;snapshot-metadata&quot;,
+        &quot;backup-repository-register&quot;,
+        &quot;backup-repository-test&quot;,
+        &quot;backup-now&quot;,
+        &quot;backup-restore-as-new&quot;,
+        &quot;backup-restore-replace&quot;,
+        &quot;backup-test-restore&quot;,
+        &quot;backup-protect&quot;,
+        &quot;backup-catalog-import&quot;,
+        &quot;backup-catalog-rebuild&quot;,
+        &quot;backup-test-verify&quot;,
+        &quot;backup-test-cleanup&quot;,
+        &quot;backup-policy-upsert&quot;,
+        &quot;backup-policy-pause&quot;,
+        &quot;backup-policy-run-now&quot;
       ]
     },
     &quot;storage&quot;: {
@@ -10322,6 +12736,106 @@
       &quot;anyOf&quot;: [
         {
           &quot;$ref&quot;: &quot;#/components/schemas/VMSnapshotRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;backup&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupNowRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;restore&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/RestoreAsNewRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;restore_replace&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/RestoreReplaceRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;backup_protect&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ProtectRecoveryPointRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;test_restore&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;test_restore_verify&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreVerifyRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;test_restore_cleanup&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/TestRestoreCleanupRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;catalog_import&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/CatalogImportRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;backup_repository&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;backup_policy&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
         },
         {
           &quot;type&quot;: &quot;null&quot;
@@ -11368,6 +13882,17 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolRequest&quot;
       },
       &quot;description&quot;: &quot;One-shot addressed pool requests for a Core reporting protocol v2 and pool-join-v1. Delivered once and never journaled; the Controller takes each pending request out of its bounded in-memory broker as it sends it, so a lost response simply expires and the operator retries.&quot;
+    },
+    &quot;backup_support&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupSupport&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Controller acknowledgement of backup-v1 after a protocol-v2 Core offers the capability; Core withholds backup inventory until acknowledged.&quot;
     }
   },
   &quot;required&quot;: [
@@ -11433,7 +13958,21 @@
         &quot;snapshot-create&quot;,
         &quot;snapshot-revert&quot;,
         &quot;snapshot-delete&quot;,
-        &quot;snapshot-metadata&quot;
+        &quot;snapshot-metadata&quot;,
+        &quot;backup-repository-register&quot;,
+        &quot;backup-repository-test&quot;,
+        &quot;backup-now&quot;,
+        &quot;backup-restore-as-new&quot;,
+        &quot;backup-restore-replace&quot;,
+        &quot;backup-test-restore&quot;,
+        &quot;backup-protect&quot;,
+        &quot;backup-catalog-import&quot;,
+        &quot;backup-catalog-rebuild&quot;,
+        &quot;backup-test-verify&quot;,
+        &quot;backup-test-cleanup&quot;,
+        &quot;backup-policy-upsert&quot;,
+        &quot;backup-policy-pause&quot;,
+        &quot;backup-policy-run-now&quot;
       ]
     },
     &quot;request_id&quot;: {
@@ -14172,7 +16711,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -16642,6 +19181,64 @@
     &quot;pool_vm_snapshots_reported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
       &quot;description&quot;: &quot;True only when the current pool master successfully loaded and reported the full catalog; false or omitted is unknown, not an empty catalog.&quot;
+    },
+    &quot;backup_repositories&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Master-owned NFS backup destinations reported only by the current pool master.&quot;
+    },
+    &quot;backup_repositories_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the master successfully loaded and reported the repository list; false or omitted is unknown, not empty.&quot;
+    },
+    &quot;backup_catalog&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;
+      },
+      &quot;maxItems&quot;: 10000,
+      &quot;description&quot;: &quot;Master catalog of completed recovery points; the repository remains authoritative for payloads.&quot;
+    },
+    &quot;backup_catalog_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the master successfully loaded and reported the catalog; false or omitted is unknown, not empty.&quot;
+    },
+    &quot;backup_runs&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRun&quot;
+      },
+      &quot;maxItems&quot;: 30000,
+      &quot;description&quot;: &quot;Master-owned backup and restore run records.&quot;
+    },
+    &quot;backup_runs_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only when the master successfully loaded and reported run history; false or omitted is unknown, not empty.&quot;
+    },
+    &quot;backup_policies&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+      },
+      &quot;description&quot;: &quot;Master-owned backup policy definitions.&quot;
+    },
+    &quot;backup_policies_reported&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
     }
   },
   &quot;required&quot;: [],
@@ -17691,6 +20288,27 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolResourceMutation&quot;
       },
       &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
+    },
+    &quot;backup_authority&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolBackupAuthority&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;backup_manifest&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolBackupManifest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
     }
   },
   &quot;required&quot;: [
@@ -18406,7 +21024,7 @@
     },
     &quot;stage&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;The stage this host has durably reached. For a master change: freeze, replicate, activate (the signed hand-off), repoint (every other host is told, in the new master&#x27;s own signed words, who the master is now). For an eject: freeze, remove (the durable membership change, after which nothing stays frozen), repoint, leave. For a promotion: preflight, fence, activate, repoint. done and aborted are terminal.&quot;
+      &quot;description&quot;: &quot;The stage this host has durably reached. For a master change: freeze, replicate, activate (the signed hand-off), repoint (every other host is told, in the new master&#x27;s own signed words, who the master is now). For an eject: freeze, remove (the durable membership change, after which nothing stays frozen), repoint, leave. For a promotion: preflight, fence, activate, optional catalog-rebuild (after authority commit when repositories exist and the signed catalog is empty), repoint. A catalog import error leaves catalog-rebuild at needs_attention for retry before repoint, without reactivating or rolling back the committed master. done and aborted are terminal.&quot;
     },
     &quot;status&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -19428,7 +22046,7 @@
     },
     &quot;stage&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;The stage the candidate has durably reached: preflight, fence, activate, repoint, done or aborted.&quot;
+      &quot;description&quot;: &quot;The stage the candidate has durably reached: preflight, fence, activate, optional catalog-rebuild, repoint, done or aborted. A failed catalog import remains at catalog-rebuild with needs_attention until Core retries it.&quot;
     },
     &quot;status&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -19615,7 +22233,7 @@
     },
     &quot;stage&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;The stage the candidate has durably reached: preflight, fence, activate, repoint, done or aborted.&quot;
+      &quot;description&quot;: &quot;The stage the candidate has durably reached: preflight, fence, activate, optional catalog-rebuild, repoint, done or aborted. A failed catalog import remains at catalog-rebuild with needs_attention until Core retries it.&quot;
     },
     &quot;status&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -21448,6 +24066,255 @@
   &quot;x-go-type&quot;: &quot;protocol.PoolVMSnapshot&quot;,
   &quot;description&quot;: &quot;Compact master-owned snapshot descriptor. Disk paths, XML and native artifacts remain in the owning Core journal.&quot;
 }</pre></details>
+<details id="BackupRepository"><summary>BackupRepository</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Master-owned external NFS backup destination.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRepository&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;nfs&quot;
+      ]
+    },
+    &quot;source&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageSource&quot;
+    },
+    &quot;identity&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/NFSStorageIdentity&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;mount_path&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;access&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/StorageAccess&quot;
+    },
+    &quot;member_access&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolStorageAccess&quot;
+      }
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;name&quot;,
+    &quot;kind&quot;,
+    &quot;source&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRecoveryPoint"><summary>BackupRecoveryPoint</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Master catalog index for one completed recovery point.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRecoveryPoint&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;source_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;source_vm_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;captured_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;consistency&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ]
+    },
+    &quot;manifest_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-f0-9]{64}$&quot;
+    },
+    &quot;protected&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;last_test_result&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;passed&quot;,
+        &quot;failed&quot;
+      ]
+    },
+    &quot;last_tested_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;last_test_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;source_vm_id&quot;,
+    &quot;captured_at&quot;,
+    &quot;consistency&quot;,
+    &quot;manifest_sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: true
+}</pre></details>
+<details id="BackupRun"><summary>BackupRun</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Master-owned backup or restore run record.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRun&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;backup-now&quot;,
+        &quot;backup-restore-as-new&quot;,
+        &quot;backup-restore-replace&quot;,
+        &quot;backup-test-restore&quot;,
+        &quot;backup-scheduled&quot;,
+        &quot;backup-policy-run-now&quot;
+      ]
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;new_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;schedule_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;occurrence_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;policy_revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;occurrence_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;intent_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;capture_mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ],
+      &quot;description&quot;: &quot;Scheduled or run-now capture mode when present.&quot;
+    },
+    &quot;retention&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRetention&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Retention attached to a scheduled or run-now run when present.&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Owner host of the backup or restore run when assigned.&quot;
+    },
+    &quot;manifest_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
+      &quot;description&quot;: &quot;Master catalog manifest digest pinned in a new restore run. Optional only for readable legacy runs; an unbound restore cannot execute or replay.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;pool_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;stage&quot;,
+    &quot;status&quot;,
+    &quot;created_at&quot;,
+    &quot;updated_at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
 <details id="VMSnapshotRequest"><summary>VMSnapshotRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -21568,5 +24435,876 @@
   ],
   &quot;additionalProperties&quot;: false,
   &quot;x-go-type&quot;: &quot;protocol.PoolResourceMutation&quot;
+}</pre></details>
+<details id="BackupPolicy"><summary>BackupPolicy</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Master-owned backup job/schedule definition.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupPolicy&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;schedule_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;enabled&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;paused&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;capture_mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ]
+    },
+    &quot;time_zone&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;rule&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupScheduleRule&quot;
+    },
+    &quot;vm_ids&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;retention&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupRetention&quot;
+    },
+    &quot;limits&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicyLimits&quot;
+    },
+    &quot;overrides&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicyVMOverride&quot;
+      }
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;next_dispatch_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;last_dispatch_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;schedule_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;name&quot;,
+    &quot;enabled&quot;,
+    &quot;paused&quot;,
+    &quot;repository_id&quot;,
+    &quot;capture_mode&quot;,
+    &quot;time_zone&quot;,
+    &quot;rule&quot;,
+    &quot;vm_ids&quot;,
+    &quot;retention&quot;,
+    &quot;revision&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupDiskArtifact"><summary>BackupDiskArtifact</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One complete standalone disk image in a recovery point.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupDiskArtifact&quot;,
+  &quot;properties&quot;: {
+    &quot;target&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;filename&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;format&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;target&quot;,
+    &quot;filename&quot;,
+    &quot;format&quot;,
+    &quot;size&quot;,
+    &quot;sha256&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupFirmwareArtifact"><summary>BackupFirmwareArtifact</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Captured firmware payload relative to the recovery point.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupFirmwareArtifact&quot;,
+  &quot;properties&quot;: {
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;nvram&quot;,
+        &quot;swtpm&quot;
+      ]
+    },
+    &quot;filename&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;size&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;kind&quot;,
+    &quot;filename&quot;,
+    &quot;sha256&quot;,
+    &quot;size&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupManifest"><summary>BackupManifest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Versioned recovery-point descriptor written to the repository.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupManifest&quot;,
+  &quot;properties&quot;: {
+    &quot;version&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;source_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;source_vm_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;captured_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;consistency&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;spec_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;disk_identity_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;captured_spec&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMCreateSpec&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;disks&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupDiskArtifact&quot;
+      }
+    },
+    &quot;firmware&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupFirmwareArtifact&quot;
+      }
+    },
+    &quot;complete&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;success&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;version&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;repository_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;source_vm_id&quot;,
+    &quot;captured_at&quot;,
+    &quot;consistency&quot;,
+    &quot;spec_sha256&quot;,
+    &quot;disk_identity_sha256&quot;,
+    &quot;disks&quot;,
+    &quot;complete&quot;,
+    &quot;success&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupNowRequest"><summary>BackupNowRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Starts a full backup of one VM into a registered repository.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupNowRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;consistency&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stopped&quot;,
+        &quot;crash&quot;,
+        &quot;quiesced&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="RestoreAsNewRequest"><summary>RestoreAsNewRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Restores a recovery point as a new stopped VM from local copies.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.RestoreAsNewRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;new_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;new_vm_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Selected executing host; Core checks pool ownership.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;new_vm_id&quot;,
+    &quot;new_vm_name&quot;,
+    &quot;storage_id&quot;,
+    &quot;host_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="RestoreReplaceRequest"><summary>RestoreReplaceRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Restores a recovery point over an existing VM identity with exclusive cutover.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.RestoreReplaceRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;original_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;confirm_replace&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Selected executing host; Core checks pool ownership.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;original_vm_id&quot;,
+    &quot;storage_id&quot;,
+    &quot;confirm_replace&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ProtectRecoveryPointRequest"><summary>ProtectRecoveryPointRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Sets or clears deletion protection on a catalog recovery point.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.ProtectRecoveryPointRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;protected&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;protected&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="TestRestoreRequest"><summary>TestRestoreRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Restores as a new VM marked for verification and later cleanup.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.TestRestoreRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;new_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;new_vm_name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;storage_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Selected executing host; Core checks pool ownership.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;new_vm_id&quot;,
+    &quot;new_vm_name&quot;,
+    &quot;storage_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="TestRestoreVerifyRequest"><summary>TestRestoreVerifyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Records the operator verification result for a test restore.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.TestRestoreVerifyRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;test_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;result&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;passed&quot;,
+        &quot;failed&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;test_vm_id&quot;,
+    &quot;result&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="TestRestoreCleanupRequest"><summary>TestRestoreCleanupRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Removes only the selected test VM and staging for that test.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.TestRestoreCleanupRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;test_vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;recovery_point_id&quot;,
+    &quot;test_vm_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="CatalogImportRequest"><summary>CatalogImportRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Scans one repository and imports validated manifests into the catalog.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.CatalogImportRequest&quot;,
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;repository_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRestorePin"><summary>BackupRestorePin</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Prevents prune while this restore operation uses the recovery point. Multiple operation IDs may pin one point; each operation ID must be unique in transferred authority.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRestorePin&quot;,
+  &quot;properties&quot;: {
+    &quot;recovery_point_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;recovery_point_id&quot;,
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;created_at&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupScheduleRule"><summary>BackupScheduleRule</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One local-time cadence for a policy schedule.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupScheduleRule&quot;,
+  &quot;properties&quot;: {
+    &quot;frequency&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;daily&quot;,
+        &quot;weekly&quot;
+      ]
+    },
+    &quot;hour&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 23
+    },
+    &quot;minute&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;maximum&quot;: 59
+    },
+    &quot;weekdays&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;integer&quot;,
+        &quot;minimum&quot;: 0,
+        &quot;maximum&quot;: 6
+      }
+    }
+  },
+  &quot;required&quot;: [
+    &quot;frequency&quot;,
+    &quot;hour&quot;,
+    &quot;minute&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRetention"><summary>BackupRetention</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Keeps successful points per VM; age protection is optional.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRetention&quot;,
+  &quot;properties&quot;: {
+    &quot;keep_latest&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1,
+      &quot;maximum&quot;: 365
+    },
+    &quot;protect_newer_than&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;Nanoseconds duration (Go time.Duration JSON encoding).&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;keep_latest&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupPolicyLimits"><summary>BackupPolicyLimits</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Optional advanced throughput bounds for a backup policy.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupPolicyLimits&quot;,
+  &quot;properties&quot;: {
+    &quot;max_concurrent_per_host&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;max_concurrent_per_repo&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupPolicyVMOverride"><summary>BackupPolicyVMOverride</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Adjusts retention or capture for one VM in a policy.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupPolicyVMOverride&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;retention&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupRetention&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;capture_mode&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupPolicyRef"><summary>BackupPolicyRef</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Compact committed policy/schedule reference for takeover.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupPolicyRef&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;schedule_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;revision&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;enabled&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;paused&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;schedule_id&quot;,
+    &quot;revision&quot;,
+    &quot;enabled&quot;,
+    &quot;paused&quot;,
+    &quot;name&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupRunRef"><summary>BackupRunRef</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Compact committed or unresolved run reference for takeover.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupRunRef&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;occurrence_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;status&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="PoolBackupAuthority"><summary>PoolBackupAuthority</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Bounded replica section for backup repositories, policy/schedule definitions, retained runs and catalog index. Full NFS recovery-point payloads are never embedded.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolBackupAuthority&quot;,
+  &quot;properties&quot;: {
+    &quot;repositories&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
+      },
+      &quot;description&quot;: &quot;Durable NFS backup destination registrations for master takeover.&quot;
+    },
+    &quot;definitions&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+      },
+      &quot;description&quot;: &quot;Full committed policy/schedule definitions for master takeover.&quot;
+    },
+    &quot;history&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRun&quot;
+      },
+      &quot;description&quot;: &quot;Retained and unresolved backup/restore run records for master takeover.&quot;
+    },
+    &quot;catalog&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;
+      },
+      &quot;description&quot;: &quot;Master catalog index entries only; NFS payloads are never embedded.&quot;
+    },
+    &quot;policies&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicyRef&quot;
+      },
+      &quot;description&quot;: &quot;Compact policy refs derived from definitions for observation.&quot;
+    },
+    &quot;runs&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRunRef&quot;
+      },
+      &quot;description&quot;: &quot;Compact run refs derived from history for observation.&quot;
+    },
+    &quot;pins&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupRestorePin&quot;
+      },
+      &quot;description&quot;: &quot;Active per-operation restore pins transferred to the new master before retention can prune. Several pins may refer to the same recovery point; operation IDs are unique.&quot;
+    },
+    &quot;metadata_receipts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupMetadataReceipt&quot;
+      },
+      &quot;description&quot;: &quot;Durable operation result receipts retained for exact metadata retry after master takeover.&quot;
+    }
+  },
+  &quot;required&quot;: [],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="BackupSupport"><summary>BackupSupport</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;capability&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;backup-v1&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;capability&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.BackupSupport&quot;
+}</pre></details>
+<details id="BackupMetadataReceipt"><summary>BackupMetadataReceipt</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Durable outcome of one Core-owned backup metadata mutation, retained for exact replay after master promotion.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.BackupMetadataReceipt&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;intent_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;kind&quot;,
+    &quot;intent_sha256&quot;,
+    &quot;status&quot;,
+    &quot;observed_at&quot;
+  ]
+}</pre></details>
+<details id="PoolBackupManifest"><summary>PoolBackupManifest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Signed reference to all paged backup authority bytes. Every page and the full bundle are SHA-256 checked before promotion.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolBackupManifest&quot;,
+  &quot;properties&quot;: {
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;page_sha256&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;total_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;repositories&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;definitions&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;history&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;catalog&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;pins&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;metadata_receipts&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;page_bytes&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;integer&quot;,
+        &quot;minimum&quot;: 1,
+        &quot;maximum&quot;: 262144
+      },
+      &quot;description&quot;: &quot;Exact expected byte length of each ordered page.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;sha256&quot;,
+    &quot;page_sha256&quot;,
+    &quot;page_bytes&quot;,
+    &quot;total_bytes&quot;,
+    &quot;repositories&quot;,
+    &quot;definitions&quot;,
+    &quot;history&quot;,
+    &quot;catalog&quot;,
+    &quot;pins&quot;,
+    &quot;metadata_receipts&quot;
+  ],
+  &quot;additionalProperties&quot;: false
 }</pre></details>
 </section></main></html>

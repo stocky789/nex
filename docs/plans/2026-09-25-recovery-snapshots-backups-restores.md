@@ -1,9 +1,81 @@
 # Recovery delivery: snapshots, backups and restores
 
-Date: 2026-09-25; checkpoint updated 2026-09-27. Status: **Phase 5 closed for disposable
-virtual-lab scope (2026-09-27).** S0–S3 accepted within that recorded lab boundary.
-Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
-**Phase 6 / S4–S8 not started.** Owner: project owner.
+Date: 2026-09-25; checkpoint updated 2026-09-27 (Phase 6 disposable close). Status: **Phase 5
+closed for disposable virtual-lab scope (2026-09-27).** S0–S3 accepted within that
+recorded lab boundary. Close record:
+[docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+**Phase 6 closed for disposable virtual-lab scope (2026-09-27).** Close record:
+[docs/qa/2026-09-27-phase6-gate/CLOSED.md](../qa/2026-09-27-phase6-gate/CLOSED.md).
+Physical/production certification is not claimed. Owner: project owner.
+The 2026-09-27 close decision remains a historical disposable-lab decision. A
+[subsequent staged-code review](../qa/2026-09-27-phase6-post-close-review.md)
+identified unresolved data-safety and verification gaps in the current worktree;
+the candidate is under correction and has not been reaccepted after those changes.
+For this changed candidate, the Phase 6 acceptance gate is **open** pending
+independent correction review, interrupted-request and native restore reruns,
+and proof that promotion preserves complete retained history as the replica
+grows. The bounded Campaign A/B and browser results remain evidence for their
+tested builds; they do not certify these later edits.
+The current paged authority refuses more than 64 MiB or 1024 pages without
+truncating records. The encoder's packing rule means the 64 MiB byte bound
+arrives before the page-count bound for valid records. The new admission
+guard refuses growth that would cross the bound, preserving a previously
+complete replica. An older oversized history, or a failed replica push,
+still prevents complete-history takeover. Phase 6 stays
+open for a near-boundary transfer/promotion check and a product decision on
+history capacity and continued takeover beyond it. Current Core source adds
+master-side capacity preflight for new backup metadata and reserves room for
+pending operation outcomes. A focused sparse-page assertion passed; near-boundary
+native transfer/promotion proof remains open.
+Test-result recording now requires the exact successful restore creator and
+current native VM identity on the owner host. The current master obtains
+authenticated member proof when needed. Passed requires intact current
+artifacts; Failed can document damaged artifacts with creator and definition
+proven. Cleanup likewise binds native deletion and settlement to that origin.
+Focused source tests passed. A later disposable Core3 BIOS test restore
+completed with its point pin and creator record. The inspected isolated boot
+screen showed no bootable device; the operator recorded Failed, then Verify
+and typed-ID Cleanup receipts succeeded. The native VM, disk and firmware,
+master's exact owner row and point pin were absent after cleanup. This covers
+one Failed member test-restore workflow. Passed verification, interrupted
+member proof/cleanup and multiple native test VMs remain open.
+The executing Core can now resume only its exact retained native `allocating`
+restore with the same operation and target; later ambiguous native stages and
+inherited promoted-master runs remain observation-only. Focused test evidence
+passed. New allocation journals bind the immutable point digest and disks;
+older unbound journals require full local and placed artifact proof under the
+native lock before binding. The disposable Core3 v5 native resume is still open.
+Successful test restores keep their recovery-point pin through proven cleanup,
+including member execution. A promoted master now rehydrates an inherited
+pending cleanup only from one exact successful test run and receipt hash;
+terminal ordinary pin release is reconciled after an interrupted clear.
+Focused tests passed, and the single native member test restore retained its
+point pin until typed-ID cleanup. Retention/prune and promotion cleanup remain
+open acceptance work.
+The original native v5 restore succeeded in Core. Its Controller task row
+still showed `needs_attention` at the earlier checkpoint. A source correction
+lets a later same-host backup Result or recurring durable Core backup outcome
+settle only that Controller-owned nonterminal task row. Focused red/green and
+catch-up tests passed. In the disposable v12 changed-binary rerun, Controller C
+settled that historical row to `succeeded` from the recurring authenticated
+outcome without a database edit or new restore POST. This closes that task
+projection defect, not the remaining Phase 6 acceptance gates.
+The current candidate now binds each new restore run to the selected master's
+catalog manifest digest. Local as-new, test and replace execution compare that
+digest with the repository manifest before native effects. Member restores
+receive the catalog point over an authenticated Core peer route, retain the
+digest in their run and return it for exact GET retry; the master checks it
+before settlement. Legacy unbound runs, changed points and old members fail
+closed with unresolved protection retained. Focused source tests passed;
+changed-binary native tamper and interrupted member retry checks remain open.
+An empty signed catalog with repositories now leaves promotion at a durable
+`catalog-rebuild` stage after the master record commits. Core reports an import
+error as `needs_attention` and retries catalog import before re-pointing members;
+it does not activate a second master or roll back the committed authority.
+Focused source and failure-injection tests passed, while the native promotion
+rerun remains part of the open gate.
+Implementation index:
+[docs/qa/2026-09-27-phase6-implementation-index.md](../qa/2026-09-27-phase6-implementation-index.md).
 
 **Resume here:** [2026-09-26 session handoff](2026-09-26-recovery-session-handoff.md).
 Use that page for resume order, lab notes and what not to re-open.
@@ -451,20 +523,35 @@ lifecycle/midcommit campaign on local/NFS/SMB/iSCSI is recorded under
 [docs/qa/2026-09-26-recovery-s0-multi-backend-dr.md](../qa/2026-09-26-recovery-s0-multi-backend-dr.md);
 it does not claim product S2/S3 on every backend and is not Phase 6 backup/restore.
 Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
-**S4–S8 remain open and may begin.** The rows below describe required delivery;
-Phase 6 boxes are not completion claims.
+**Phase 6 closed for disposable nested-lab scope (2026-09-27).** The rows below describe
+required delivery and honest slice status. Physical/production and full three-host
+campaigns remain accepted residuals — see
+[close record](../qa/2026-09-27-phase6-gate/CLOSED.md).
 
-| Slice | Deliverable and prerequisite | Exit evidence |
-|---|---|---|
-| S0: feasibility and workflow contract | Read actual code/bug history; select disposable resources; run installed-version experiment; review workflows and close legacy ownership-checker gap | Runnable experiment, observed capability matrix, chosen native commands/state boundaries, UX defaults; `check_docs.py` and regressions reject new Controller-owned pool backup state |
-| S1: chain and authority safety | Depends on S0. Add minimal disk-chain and master reservation model; trace every VM/disk/storage consumer, replica/adoption and recovery path | Core API tests for admission/replay/interruptions; no unsafe edit/delete/power/storage path bypass; long operation does not block unrelated VM control |
-| S2: stopped snapshot lifecycle | Depends on S1. Create/list/revert/delete with all disks and required state; VM panel and bulk workflow; guide | Native markers, older-point/descendant handling, configuration match, consolidation/deletion/reboot, restart and Controller replacement; browser workflow |
-| S3: running snapshots and Phase 5 close | Depends on S2. Crash-consistent and supported quiesced capture; bounded freeze/thaw; complete Phase 5 matrix | Running write workload, freeze failure/thaw proof, unsupported refusal, independent review and Phase 5 checklist below |
-| S4: destination and stopped full recovery | Depends on closed Phase 5. Core repository and manifest, stopped full backup, new stopped VM restore, Back up now/Restore UI and guides | Original disks unavailable; different compatible host/storage; isolated boot and multi-disk/application checks; corruption and interruption refusal |
-| S5: online full recovery | Depends on S4. Installed libvirt native full-backup API and matching state capture; running-VM UI | Running writes, guest shutdown/agent failure, snapshot-plus-backup, destination stalls/fullness, interrupted publication, full independent restore |
-| S6: policy, scheduling and retention | Depends on S4/S5 evidence for each selectable mode. Core scheduler, job/history/catalog authority and replication; Controller API views; reviewed presets and retention preview | Time-zone/DST, missed/overlap/restart tests, Controller-absent schedules, safe master takeover, bounded throughput, retention and partial outcomes |
-| S7: replacement and disaster recovery | Depends on S4–S6. Original replacement, Core recovery command/local UI, master-only adoption and supported appliance replacement, test results/cleanup; separate Controller identity export checks | Mandatory three-host campaigns below; source/catalog loss; restored guests verified before new Controller; full job/history adoption without old DB/export; guide-only rehearsal |
-| S8: Phase 6 close | Depends on every preceding gate. UX refinement, package/native regression, documentation and independent acceptance review | Complete evidence index and closeout checklist, exact limitations, published status updated only for proven results |
+| Slice | Deliverable and prerequisite | Exit evidence | Slice status (2026-09-27) |
+|---|---|---|---|
+| S0: feasibility and workflow contract | Read actual code/bug history; select disposable resources; run installed-version experiment; review workflows and close legacy ownership-checker gap | Runnable experiment, observed capability matrix, chosen native commands/state boundaries, UX defaults; `check_docs.py` and regressions reject new Controller-owned pool backup state | Accepted (Phase 5 close) |
+| S1: chain and authority safety | Depends on S0. Add minimal disk-chain and master reservation model; trace every VM/disk/storage consumer, replica/adoption and recovery path | Core API tests for admission/replay/interruptions; no unsafe edit/delete/power/storage path bypass; long operation does not block unrelated VM control | Accepted (Phase 5 close) |
+| S2: stopped snapshot lifecycle | Depends on S1. Create/list/revert/delete with all disks and required state; VM panel and bulk workflow; guide | Native markers, older-point/descendant handling, configuration match, consolidation/deletion/reboot, restart and Controller replacement; browser workflow | Accepted (Phase 5 close) |
+| S3: running snapshots and Phase 5 close | Depends on S2. Crash-consistent and supported quiesced capture; bounded freeze/thaw; complete Phase 5 matrix | Running write workload, freeze failure/thaw proof, unsupported refusal, independent review and Phase 5 checklist below | Accepted (Phase 5 close) |
+| S4: destination and stopped full recovery | Depends on closed Phase 5. Core repository and manifest, stopped full backup, new stopped VM restore, Back up now/Restore UI and guides | Original disks unavailable; different compatible host/storage; isolated boot and multi-disk/application checks; corruption and interruption refusal | **Accepted (disposable)** — product NFS stopped backup + restore-as-new ([product lab](../qa/2026-09-27-phase6-product-backup-lab.md)); hermetic CI |
+| S5: online full recovery | Depends on S4. Installed libvirt native full-backup API and matching state capture; running-VM UI | Running writes, guest shutdown/agent failure, snapshot-plus-backup, destination stalls/fullness, interrupted publication, full independent restore | **Accepted (disposable bounds)** — crash path unit/contract; quiesced/UEFI online **refused**; live online crash guest not prepared in product lab (accepted residual) |
+| S6: policy, scheduling and retention | Depends on S4/S5 evidence for each selectable mode. Core scheduler, job/history/catalog authority and replication; Controller API views; reviewed presets and retention preview | Time-zone/DST, missed/overlap/restart tests, Controller-absent schedules, safe master takeover, bounded throughput, retention and partial outcomes | **Accepted (bounded)** — Controller-absent policy Run now + adoption ([Campaign A](../qa/2026-09-27-phase6-campaign-a.md)); full wall-clock schedule span residual |
+| S7: replacement and disaster recovery | Depends on S4–S6. Original replacement, Core recovery command/local UI, master-only adoption and supported appliance replacement, test results/cleanup; separate Controller identity export checks | Mandatory three-host campaigns below; source/catalog loss; restored guests verified before new Controller; full job/history adoption without old DB/export; guide-only rehearsal | **Accepted (bounded)** — replace cutover implemented; Campaign B re-run PASS after BUG-0651; full three-host / physical residual |
+| S8: Phase 6 close | Depends on every preceding gate. UX refinement, package/native regression, documentation and independent acceptance review | Complete evidence index and closeout checklist, exact limitations, published status updated only for proven results | **Closed** for disposable virtual-lab scope — [close record](../qa/2026-09-27-phase6-gate/CLOSED.md) |
+
+**Current candidate reassessment (2026-09-27):** S4–S8 acceptance is open for
+the post-close worktree changes described in the [review note](../qa/2026-09-27-phase6-post-close-review.md).
+The table records the historical disposable close, not a fresh run of the
+changed candidate. Its changed API contract adds the `backup-v1` Controller
+acknowledgement and authenticated master-to-member backup peer GET/POST routes;
+Core retains the repository, policy, run, catalog, pin and metadata mutation
+receipt records. A signed paged backup authority manifest carries them to a
+promotion candidate, and a fresh Controller adopts the authenticated master
+inventory. The Core-local metadata replay response may be a durable `Result`
+when the original resource DTO is unavailable. **API impact: changed
+contract; guide impact: updated** for the current candidate. See
+[docs/API.md](../API.md) and the backup operator guides.
 
 ### S0 experiment must settle these implementation choices
 
@@ -726,17 +813,24 @@ not establish CI success. Missing required evidence keeps acceptance open.
 
 ## Closeout checklists
 
-### Execution checkpoint — 2026-09-27
+### Execution checkpoint — 2026-09-27 (Phase 6 disposable close)
 
-**Phase 5 closed for disposable virtual-lab scope (2026-09-27).** S0 feasibility was
-accepted after independent review of the selected native command path and bounded
-matrix. S1 chain and authority safety was accepted after reviewed Core regressions
-and the bounded r8 native crash, promotion and safe-rejoin checks. S2/S3 disposable-lab
-and browser evidence closed the Phase 5 checklist within that scope.
+**Phase 5 closed for disposable virtual-lab scope (2026-09-27).**
 Close record: [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
-**S4–S8 are not started.** This does not enable unverified product operations or
-certify broader hardware/backend combinations.
-Resume order: [session handoff](2026-09-26-recovery-session-handoff.md).
+
+**Phase 6 closed for disposable virtual-lab scope (2026-09-27).** Owner authorized
+close after lab install, product NFS backup/restore, bounded Campaign A/B (B re-run
+PASS after BUG-0651), browser walkthrough (settlement fixed in code), hermetic CI and
+replace cutover. Physical/production certification is **not** claimed.
+Close record: [docs/qa/2026-09-27-phase6-gate/CLOSED.md](../qa/2026-09-27-phase6-gate/CLOSED.md).
+Index: [Phase 6 implementation index](../qa/2026-09-27-phase6-implementation-index.md).
+
+Accepted residuals (see close record): nested ≠ physical domains; quiesced/UEFI online
+refused; browser re-walk after settlement fix may remain; full three-host join+schedule
+wall-clock not fully proven; `0.4.12` + overlay (not ISO); forge CI on published push
+not yet inspected.
+
+Resume / next work: [session handoff](2026-09-26-recovery-session-handoff.md).
 
 The selected path is public per-disk blockcommit without data deletion, followed by
 verified metadata changes, a complete reference scan and exact unreferenced-file unlink.
@@ -1025,23 +1119,56 @@ restore walkthroughs remain untested and open.
 
 ### Phase 6 and the complete recovery delivery
 
+**Phase 6 closed for disposable virtual-lab scope (2026-09-27).** Checked items below
+are accepted within that boundary. Unchecked boxes are **accepted residuals** (or later
+roadmap), not open Phase 6 blockers for disposable close — see
+[close record](../qa/2026-09-27-phase6-gate/CLOSED.md).
+
 - [x] Phase 5 closed for disposable virtual-lab scope (2026-09-27);
   [close record](../qa/2026-09-26-phase5-gate/CLOSED.md).
-- [ ] S4–S8 implemented with no unresolved safety finding.
-- [ ] Repository identity/access/independence and complete immutable backup publication proven.
-- [ ] Stopped and online full backups include every supported disk/configuration/required firmware state.
-- [ ] Source disks unavailable: restore on another compatible host/storage, isolated boot and file/application proof.
-- [ ] New-VM defaults, explicit replacement, retained-original recovery and test-VM cleanup proven.
-- [ ] Schedules/time zones/DST, missed/overlap runs, per-VM overrides, bandwidth/concurrency and retention pass.
-- [ ] Protected points and active restores survive concurrent prune, restart and catalog rebuild safely.
-- [ ] Corrupt/missing backups, full/stalled repository, guest shutdown, interruptions and snapshot interaction pass.
-- [ ] Core catalog rebuild/recovery command and Controller-absent restore pass; Controller identity export remains separate.
-- [ ] Three-host Controller-loss and master-host-loss campaigns pass with master-only adoption of all members/jobs/schedules/retained history, no old Controller DB/export and no duplicate execution.
-- [ ] UI shows last backup, integrity, last tested restore, capacity, next/missed runs and per-VM failures accurately.
-- [ ] Independent usability, responsive/theme/accessibility review and guide-only recovery rehearsal pass.
-- [ ] Candidate package/native/browser evidence, API/docs/privacy gates and actual required CI pass recorded.
-- [ ] Measured backup/restore durations, support limits and remaining later-phase work published honestly.
-- [ ] Independent reviewer and project owner accept the evidence; update platform plan, guide, changelog and roadmap.
+- [x] S4–S8 implemented with no unresolved safety finding for disposable scope.
+  S4–S7 product surfaces + unit/contract; S8 disposable close —
+  [implementation index](../qa/2026-09-27-phase6-implementation-index.md);
+  [close record](../qa/2026-09-27-phase6-gate/CLOSED.md).
+- [x] Repository identity/access/independence and complete immutable backup publication proven
+  on disposable lab ([product lab](../qa/2026-09-27-phase6-product-backup-lab.md);
+  hermetic CI in `internal/agent/backup_ci_test.go`).
+- [x] Stopped full backup proven on disposable lab; online crash path unit/contract present;
+  quiesced/UEFI online remain refused (accepted product limit). Live online crash guest not
+  prepared in product lab (accepted residual).
+- [x] Source disks unavailable: restore-as-new on disposable lab
+  ([product lab](../qa/2026-09-27-phase6-product-backup-lab.md);
+  [Campaign A](../qa/2026-09-27-phase6-campaign-a.md)). Isolated boot / application-file
+  proof beyond registration remains residual.
+- [x] New-VM defaults and restore-as-new lab-proven; restore-replace exclusive cutover
+  implemented ([replace cutover](../changes/2026-09-27-phase6-replace-cutover.json));
+  test-restore unit/contract. Full live replace UI browser proof residual.
+- [x] Controller-absent policy Run now + adoption proven on bounded Campaign A; unit ticks
+  cover schedule ownership. Full multi-occurrence wall-clock schedule span residual.
+- [x] Protected points / catalog rebuild covered by unit tests + Campaign B re-run catalog
+  continuity after promote (BUG-0651). Concurrent prune stress residual.
+- [x] Corrupt/missing backup refusal covered by hermetic CI regression
+  (`TestPhase6BackupHermeticCIRegression`). Broader live fault matrix residual.
+- [x] Core catalog rebuild and Controller-absent restore pass on bounded nested campaigns;
+  Controller identity export remains separate.
+- [ ] Three-host Controller-loss and master-host-loss campaigns on physical failure domains.
+  **Accepted residual:** bounded nested Campaign A/B recorded; full three-host simultaneous
+  join + schedule wall-clock span not fully proven.
+- [x] Backups UI exercised on disposable lab
+  ([browser QA](../qa/2026-09-27-phase6-backup-browser.md)); Overview tile wired to catalog;
+  settlement bugs fixed in code (BUG-0649/0650). Live browser re-walk after fix may remain
+  (accepted residual).
+- [ ] Independent usability, responsive/theme/accessibility review and guide-only recovery
+  rehearsal. **Accepted residual** for disposable close.
+- [x] Candidate package/native/browser evidence and API/docs/privacy gates recorded for
+  disposable scope (`0.4.12` + overlay —
+  [lab install](../qa/2026-09-27-phase6-lab-install.md)). Forge CI on published push **not
+  yet inspected** (agents do not push) — accepted residual needing owner push.
+- [ ] Measured backup/restore durations published for RPO/RTO claims.
+  **Accepted residual:** limits named; durations unpublished.
+- [x] Project owner accepts disposable virtual-lab evidence and status updates
+  (platform plan, changelog, roadmap, close record) 2026-09-27. Physical/production
+  certification is not claimed.
 
 No checkbox is checked by writing this plan. “Implemented”, “locally tested”, “native verified” and
 “phase accepted” are distinct statuses. Required failed, missing or unexecuted rows keep the relevant
@@ -1064,9 +1191,12 @@ Technical references used to constrain the native experiment:
 slices require the guide updates and walkthroughs above. **State owner: none for this plan**; future
 Core/repository ownership is specified above; the former Controller backup exception is superseded.
 **Original planning assessment:** the initial plan did not change roadmap status.
-**Checkpoint, 2026-09-27: Phase 5 closed** for disposable virtual-lab scope; Phase 6 /
-S4–S8 remain open and not started. The parent plan and session handoff carry the same
-status. Snapshot product evidence for that close is indexed in
+**Checkpoint, 2026-09-27: Phase 5 closed** for disposable virtual-lab scope.
+**Checkpoint, 2026-09-27: Phase 6 closed** for disposable virtual-lab scope —
+[close record](../qa/2026-09-27-phase6-gate/CLOSED.md). Index:
+[docs/qa/2026-09-27-phase6-implementation-index.md](../qa/2026-09-27-phase6-implementation-index.md).
+Physical/production certification is not claimed. Snapshot product evidence for Phase 5
+close is indexed in
 [docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
 The original 2026-09-25 planning authorship of this section claimed no runtime evidence by
-itself; later implemented slices and the close record supply the executed checks.
+itself; later implemented slices and the close records supply the executed checks.

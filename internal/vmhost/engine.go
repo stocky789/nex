@@ -325,7 +325,10 @@ func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, 
 func virshTimeout(command string) time.Duration {
 	switch command {
 	case "shutdown", "reboot", "reset", "start", "destroy",
-		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename":
+		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename",
+		"backup-begin":
+		// backup-begin starts an asynchronous job and should return promptly; keep the
+		// job-taking bound so a hung domain job does not leave Core with a 20s false refusal.
 		return 5 * time.Minute
 	}
 	return 20 * time.Second

@@ -790,6 +790,94 @@ func TestPoolVMRecoveryPeerRejectsChangedDurableSpec(t *testing.T) {
 	}
 }
 
+func TestRestorePlacementPeerReleaseRequiresExactOwner(t *testing.T) {
+	lab := newTransferLab(t, 2)
+	master, owner, other := lab.host("master-1"), lab.host("member-1"), lab.host("member-2")
+	spec := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", owner.State.HostID)
+	op := "restore-peer-release"
+	run := protocol.BackupRun{OperationID: op, Kind: protocol.BackupKindRestoreNew, PoolID: spec.PoolID,
+		HostID: spec.HostID, RepositoryID: "repo-1", RecoveryPointID: "point-1", NewVMID: spec.ID,
+		IntentSHA256: strings.Repeat("a", 64), Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}
+	if _, err := ReservePoolBackupRun(master, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{spec.ID: {
+		PoolID: spec.PoolID, VMID: spec.ID, HostID: spec.HostID, CreateOperationID: op,
+		State: "defined", Epoch: 1, Spec: spec,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(peer *Store, request poolVMRequest) int {
+		t.Helper()
+		client, err := PoolPeerClient(peer, lab.origin[master.State.HostID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.CloseIdleConnections()
+		body, _ := json.Marshal(request)
+		httpRequest, err := http.NewRequest(http.MethodPost, lab.origin[master.State.HostID]+poolVMPath+spec.ID, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpRequest.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(httpRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	request := poolVMRequest{VMID: spec.ID, Action: "release-restore-placement", OperationID: op, VM: &spec, PlacementAbsent: true}
+	withoutProof := request
+	withoutProof.PlacementAbsent = false
+	if got := send(owner, withoutProof); got != http.StatusBadRequest {
+		t.Fatalf("release without absence proof = %d", got)
+	}
+	if got := send(other, request); got != http.StatusBadRequest {
+		t.Fatalf("different member released owner = %d", got)
+	}
+	changed := spec
+	changed.Name = "different guest"
+	wrongSpec := request
+	wrongSpec.VM = &changed
+	if got := send(owner, wrongSpec); got != http.StatusConflict {
+		t.Fatalf("changed spec released owner = %d", got)
+	}
+	wrongOperation := request
+	wrongOperation.OperationID = "other-restore"
+	if got := send(owner, wrongOperation); got != http.StatusConflict {
+		t.Fatalf("different operation released owner = %d", got)
+	}
+	state, err := loadPoolVMs(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := state.VMs[spec.ID]
+	legacy.CreateOperationID = ""
+	state.VMs[spec.ID] = legacy
+	if err := savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := send(owner, request); got != http.StatusConflict {
+		t.Fatalf("legacy owner without creator proof was released = %d", got)
+	}
+	legacy.CreateOperationID = op
+	state.VMs[spec.ID] = legacy
+	if err := savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := send(owner, request); got != http.StatusOK {
+		t.Fatalf("exact release = %d", got)
+	}
+	if got := send(owner, request); got != http.StatusOK {
+		t.Fatalf("exact retry = %d", got)
+	}
+	state, err = loadPoolVMs(master)
+	if err != nil || len(state.VMs) != 0 {
+		t.Fatalf("owner survived proven release: %+v err=%v", state.VMs, err)
+	}
+}
+
 func TestPoolVMUpdatePeerTransitionRequiresExactJournalEvidence(t *testing.T) {
 	master, member := peerStore(t, "master-1", "pool-1"), peerStore(t, "member-1", "other-pool")
 	csr, err := PoolJoinCSR(member)

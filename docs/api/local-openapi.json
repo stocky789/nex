@@ -32,7 +32,7 @@
             }
           },
           "400": {
-            "description": "HTTPS required, invalid JSON/input, password outside 1\u20131024 UTF-8 bytes or containing NUL; invalid password input is rejected before invoking the helper.",
+            "description": "HTTPS required, invalid JSON/input, password outside 1–1024 UTF-8 bytes or containing NUL; invalid password input is rejected before invoking the helper.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2229,6 +2229,1859 @@
           }
         }
       }
+    },
+    "/api/local/v1/pool/backup-repositories": {
+      "get": {
+        "operationId": "listBackupRepositoriesLocal",
+        "summary": "List pool backup repositories",
+        "description": "Authenticated local root session. Returns the master's durable NFS backup destination list from pool-backup-repositories.json.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "responses": {
+          "200": {
+            "description": "Master backup repositories.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRepository"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Host is not enrolled or is not the pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup state unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerBackupRepositoryLocal",
+        "summary": "Register an NFS backup repository",
+        "description": "Authenticated local root session, same-origin and CSRF required. External NFS only. Persists the destination on the pool master.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operation_id",
+                  "repository"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository": {
+                    "$ref": "#/components/schemas/BackupRepository"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved repository. Exact operation-ID replay after restart or master promotion returns the durable Result when the original resource DTO is unavailable; inspect status before treating it as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRepository"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Host is not enrolled or is not the pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-repositories/{id}/test": {
+      "post": {
+        "operationId": "testBackupRepositoryLocal",
+        "summary": "Test backup repository access",
+        "description": "Checks the mount path and exclusive owner marker for a registered NFS backup destination.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operation_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Repository with observed access. Exact operation-ID replay after restart or master promotion returns the durable Result when the original resource DTO is unavailable; inspect status before treating it as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRepository"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-catalog": {
+      "get": {
+        "operationId": "listBackupCatalogLocal",
+        "summary": "List completed backup recovery points",
+        "description": "Master catalog index from pool-backup-catalog/. Repository payloads remain authoritative.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "responses": {
+          "200": {
+            "description": "Recovery points.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRecoveryPoint"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Catalog unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-runs": {
+      "get": {
+        "operationId": "listBackupRunsLocal",
+        "summary": "List backup and restore run records",
+        "description": "Master-owned run history from pool-backup-runs/.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "responses": {
+          "200": {
+            "description": "Run records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupRun"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Run history unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-operations/{operation_id}": {
+      "get": {
+        "operationId": "getBackupOperationLocal",
+        "summary": "Read a backup or restore operation result",
+        "description": "Authenticated local root session. Returns the retained Result for backup-now or restore-as-new.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained Result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operation not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/vms/{id}/backup": {
+      "post": {
+        "operationId": "backupNowLocal",
+        "summary": "Start a stopped full backup for a VM",
+        "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller only relays; Core owns publication.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operation_id",
+                  "repository_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "consistency": {
+                    "type": "string",
+                    "enum": [
+                      "stopped",
+                      "crash",
+                      "quiesced"
+                    ],
+                    "description": "Omitted or stopped for shut-off guests; crash for online crash-consistent; quiesced refused until proven."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted durable Result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with retained work or changed input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-restore": {
+      "post": {
+        "operationId": "restoreBackupAsNewLocal",
+        "summary": "Restore a recovery point as a new VM",
+        "description": "Copies repository exports to local files before restore. Does not open NFS paths in place as VM disks.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "new_vm_id",
+                  "new_vm_name",
+                  "storage_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "new_vm_id": {
+                    "type": "string"
+                  },
+                  "new_vm_name": {
+                    "type": "string"
+                  },
+                  "storage_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted durable Result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with retained work or changed input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-policies": {
+      "get": {
+        "operationId": "listBackupPoliciesLocal",
+        "summary": "List backup policies",
+        "description": "Master-owned job/schedule definitions from pool-backup-policies.json.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "responses": {
+          "200": {
+            "description": "Policies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupPolicy"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Policies unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "upsertBackupPolicyLocal",
+        "summary": "Create or update a backup policy",
+        "description": "Persists a policy/schedule on the pool master.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "policy"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/BackupPolicy"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved policy. Exact operation-ID replay after restart or master promotion returns the durable Result when the original resource DTO is unavailable; inspect status before treating it as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupPolicy"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-policies/{id}/pause": {
+      "post": {
+        "operationId": "pauseBackupPolicyLocal",
+        "summary": "Pause or resume a backup policy schedule",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "paused"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "paused": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated policy. Exact operation-ID replay after restart or master promotion returns the durable Result when the original resource DTO is unavailable; inspect status before treating it as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupPolicy"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Result"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Pause or resume a backup policy schedule"
+      }
+    },
+    "/api/local/v1/pool/backup-policies/{id}/run-now": {
+      "post": {
+        "operationId": "runNowBackupPolicyLocal",
+        "summary": "Run a backup policy for one VM now",
+        "description": "Reserves one run without moving next_dispatch_at.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "vm_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "vm_id": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-restore-replace": {
+      "post": {
+        "operationId": "restoreBackupReplaceLocal",
+        "summary": "Restore replace",
+        "description": "Queues backup-restore-replace. Requires confirm_replace; retains originals; refuses unsafe in-place overwrite.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "original_vm_id",
+                  "storage_id",
+                  "confirm_replace"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "original_vm_id": {
+                    "type": "string"
+                  },
+                  "storage_id": {
+                    "type": "string"
+                  },
+                  "confirm_replace": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-protect": {
+      "post": {
+        "operationId": "protectBackupPointLocal",
+        "summary": "Protect recovery point",
+        "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker).",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "protected"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "protected": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-test-restore": {
+      "post": {
+        "operationId": "testRestoreBackupLocal",
+        "summary": "Test restore",
+        "description": "Queues backup-test-restore as a new VM for verification.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "new_vm_id",
+                  "new_vm_name",
+                  "storage_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "new_vm_id": {
+                    "type": "string"
+                  },
+                  "new_vm_name": {
+                    "type": "string"
+                  },
+                  "storage_id": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-test-verify": {
+      "post": {
+        "operationId": "verifyTestRestoreLocal",
+        "summary": "Record test restore result",
+        "description": "Records the operator's passed/failed observation only after Core proves the current VM belongs to the exact successful test restore. Passed requires intact current disks and firmware; failed permits damaged artifacts if the native creator and definition still match. A member-owned VM is checked through authenticated Core peer origin proof. Missing or changed provenance is refused; uncertain transport retains a retryable Core metadata receipt.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "test_vm_id",
+                  "result"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "test_vm_id": {
+                    "type": "string"
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "passed",
+                      "failed"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-test-cleanup": {
+      "post": {
+        "operationId": "cleanupTestRestoreLocal",
+        "summary": "Clean up test restore",
+        "description": "Removes only the selected stopped test VM and copied artifacts after Core proves its exact test-restore creator and current identity. A changed or reused VM ID is refused; ambiguous native deletion remains a retained Core result for safe reconciliation.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id",
+                  "recovery_point_id",
+                  "test_vm_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "recovery_point_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "test_vm_id": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-catalog/import": {
+      "post": {
+        "operationId": "importBackupCatalogLocal",
+        "summary": "Import recovery points",
+        "description": "Imports validated repository manifests into the catalog.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-catalog/rebuild": {
+      "post": {
+        "operationId": "rebuildBackupCatalogLocal",
+        "summary": "Rebuild backup catalog",
+        "description": "Rebuilds catalog entries for one repository from validated manifests.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation_id",
+                  "repository_id"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted or queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Succeeded or replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local/v1/pool/backup-status": {
+      "get": {
+        "operationId": "backupStatusLocal",
+        "summary": "Backup status while Controller absent",
+        "description": "Returns repositories, catalog and runs from Core.",
+        "tags": [
+          "Host-local"
+        ],
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.13",
+        "x-audience": "host-local",
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2422,7 +4275,7 @@
           },
           "address_cidr": {
             "type": "string",
-            "description": "Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
+            "description": "Static usable unicast IPv4 address with /8–/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
           },
           "gateway": {
             "type": "string",
@@ -2720,7 +4573,7 @@
             "type": "string",
             "minLength": 1,
             "writeOnly": true,
-            "description": "Current host root password, set initially during OS installation, 1\u20131024 UTF-8 bytes without NUL. Local web access does not set or reset the OS password.",
+            "description": "Current host root password, set initially during OS installation, 1–1024 UTF-8 bytes without NUL. Local web access does not set or reset the OS password.",
             "x-max-utf8-bytes": 1024
           }
         },
@@ -2885,7 +4738,7 @@
           },
           "address_cidr": {
             "type": "string",
-            "description": "Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
+            "description": "Static usable unicast IPv4 address with /8–/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
           },
           "gateway": {
             "type": "string",
@@ -3242,7 +5095,7 @@
           },
           "bmc_provisioning_disabled": {
             "type": "boolean",
-            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it \u2014 one operator action with one meaning \u2014 and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
+            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it — one operator action with one meaning — and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
           },
           "watchdog": {
             "anyOf": [
@@ -3585,7 +5438,7 @@
               3,
               17
             ],
-            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself \u2014 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement \u2014 either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
+            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself — 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement — either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
           },
           "provisioned_by_core": {
             "type": "boolean",
@@ -3596,7 +5449,7 @@
           "kind"
         ],
         "x-go-type": "protocol.StorageClusterFence",
-        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection \u2014 identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read \u2014 rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
+        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages — the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection — identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read — rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
       },
       "PoolFenceCheck": {
         "type": "object",
@@ -3748,7 +5601,7 @@
               "no_peer",
               "not_applicable"
             ],
-            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait \u2014 a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
+            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait — a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
           },
           "reason": {
             "type": "string",
@@ -3857,7 +5710,7 @@
               "unknown",
               "none"
             ],
-            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software \u2014 a hung kernel does not run it \u2014 so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
+            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software — a hung kernel does not run it — so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
           },
           "device": {
             "type": "string",
@@ -3972,12 +5825,12 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at \u2014 not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
+            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at — not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
           },
           "armed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog \u2014 a reboot, a cluster restart \u2014 produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
+            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog — a reboot, a cluster restart — produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
           }
         },
         "required": [
@@ -4247,6 +6100,1002 @@
         "required": [
           "name"
         ]
+      },
+      "BackupRepository": {
+        "type": "object",
+        "description": "Master-owned external NFS backup destination.",
+        "x-go-type": "protocol.BackupRepository",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "nfs"
+            ]
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "server": {
+                "type": "string"
+              },
+              "export": {
+                "type": "string"
+              },
+              "directory": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "export"
+            ],
+            "additionalProperties": false
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "access": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "member_access": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "pool_id",
+          "name",
+          "kind",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRecoveryPoint": {
+        "type": "object",
+        "description": "Master catalog index for one completed recovery point.",
+        "x-go-type": "protocol.BackupRecoveryPoint",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repository_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "source_vm_id": {
+            "type": "string"
+          },
+          "source_vm_name": {
+            "type": "string"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consistency": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "crash",
+              "quiesced"
+            ]
+          },
+          "manifest_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "last_test_result": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "last_tested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_test_vm_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "repository_id",
+          "pool_id",
+          "source_vm_id",
+          "captured_at",
+          "consistency",
+          "manifest_sha256"
+        ],
+        "additionalProperties": true
+      },
+      "BackupRun": {
+        "type": "object",
+        "description": "Master-owned backup or restore run record.",
+        "x-go-type": "protocol.BackupRun",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "backup-now",
+              "backup-restore-as-new",
+              "backup-restore-replace",
+              "backup-test-restore",
+              "backup-scheduled",
+              "backup-policy-run-now"
+            ]
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "vm_id": {
+            "type": "string"
+          },
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "new_vm_id": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "schedule_id": {
+            "type": "string"
+          },
+          "occurrence_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "occurrence_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "intent_sha256": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capture_mode": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "crash",
+              "quiesced"
+            ],
+            "description": "Scheduled or run-now capture mode when present."
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRetention"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Retention attached to a scheduled or run-now run when present."
+          },
+          "host_id": {
+            "type": "string",
+            "description": "Owner host of the backup or restore run when assigned."
+          },
+          "manifest_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Master catalog manifest digest pinned in a new restore run. Optional only for readable legacy runs; an unbound restore cannot execute or replay."
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "pool_id",
+          "repository_id",
+          "stage",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Result": {
+        "type": "object",
+        "description": "Durable managed operation result.",
+        "x-go-type": "protocol.Result",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "BackupPolicy": {
+        "type": "object",
+        "description": "Master-owned backup job/schedule definition.",
+        "x-go-type": "protocol.BackupPolicy",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "schedule_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "repository_id": {
+            "type": "string"
+          },
+          "capture_mode": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "crash",
+              "quiesced"
+            ]
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/BackupScheduleRule"
+          },
+          "vm_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "retention": {
+            "$ref": "#/components/schemas/BackupRetention"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/BackupPolicyLimits"
+          },
+          "overrides": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupPolicyVMOverride"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_dispatch_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_dispatch_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "pool_id",
+          "name",
+          "enabled",
+          "paused",
+          "repository_id",
+          "capture_mode",
+          "time_zone",
+          "rule",
+          "vm_ids",
+          "retention",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
+      "BackupDiskArtifact": {
+        "type": "object",
+        "description": "One complete standalone disk image in a recovery point.",
+        "x-go-type": "protocol.BackupDiskArtifact",
+        "properties": {
+          "target": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "filename",
+          "format",
+          "size",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "BackupFirmwareArtifact": {
+        "type": "object",
+        "description": "Captured firmware payload relative to the recovery point.",
+        "x-go-type": "protocol.BackupFirmwareArtifact",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "nvram",
+              "swtpm"
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "filename",
+          "sha256",
+          "size"
+        ],
+        "additionalProperties": false
+      },
+      "BackupNowRequest": {
+        "type": "object",
+        "description": "Starts a full backup of one VM into a registered repository.",
+        "x-go-type": "protocol.BackupNowRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "consistency": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "crash",
+              "quiesced"
+            ]
+          }
+        },
+        "required": [
+          "repository_id"
+        ],
+        "additionalProperties": false
+      },
+      "RestoreAsNewRequest": {
+        "type": "object",
+        "description": "Restores a recovery point as a new stopped VM from local copies.",
+        "x-go-type": "protocol.RestoreAsNewRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "new_vm_id": {
+            "type": "string"
+          },
+          "new_vm_name": {
+            "type": "string"
+          },
+          "storage_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string",
+            "description": "Selected executing host; Core checks pool ownership."
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "new_vm_id",
+          "new_vm_name",
+          "storage_id",
+          "host_id"
+        ],
+        "additionalProperties": false
+      },
+      "RestoreReplaceRequest": {
+        "type": "object",
+        "description": "Restores a recovery point over an existing VM identity with exclusive cutover.",
+        "x-go-type": "protocol.RestoreReplaceRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "original_vm_id": {
+            "type": "string"
+          },
+          "storage_id": {
+            "type": "string"
+          },
+          "confirm_replace": {
+            "type": "boolean"
+          },
+          "host_id": {
+            "type": "string",
+            "description": "Selected executing host; Core checks pool ownership."
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "original_vm_id",
+          "storage_id",
+          "confirm_replace"
+        ],
+        "additionalProperties": false
+      },
+      "ProtectRecoveryPointRequest": {
+        "type": "object",
+        "description": "Sets or clears deletion protection on a catalog recovery point.",
+        "x-go-type": "protocol.ProtectRecoveryPointRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "protected"
+        ],
+        "additionalProperties": false
+      },
+      "TestRestoreRequest": {
+        "type": "object",
+        "description": "Restores as a new VM marked for verification and later cleanup.",
+        "x-go-type": "protocol.TestRestoreRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "new_vm_id": {
+            "type": "string"
+          },
+          "new_vm_name": {
+            "type": "string"
+          },
+          "storage_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string",
+            "description": "Selected executing host; Core checks pool ownership."
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "new_vm_id",
+          "new_vm_name",
+          "storage_id"
+        ],
+        "additionalProperties": false
+      },
+      "TestRestoreVerifyRequest": {
+        "type": "object",
+        "description": "Records the operator verification result for a test restore.",
+        "x-go-type": "protocol.TestRestoreVerifyRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "test_vm_id": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "test_vm_id",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "TestRestoreCleanupRequest": {
+        "type": "object",
+        "description": "Removes only the selected test VM and staging for that test.",
+        "x-go-type": "protocol.TestRestoreCleanupRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "test_vm_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_id",
+          "recovery_point_id",
+          "test_vm_id"
+        ],
+        "additionalProperties": false
+      },
+      "CatalogImportRequest": {
+        "type": "object",
+        "description": "Scans one repository and imports validated manifests into the catalog.",
+        "x-go-type": "protocol.CatalogImportRequest",
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository_id"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRestorePin": {
+        "type": "object",
+        "description": "Prevents prune while a restore uses the recovery point.",
+        "x-go-type": "protocol.BackupRestorePin",
+        "properties": {
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "recovery_point_id",
+          "operation_id",
+          "kind",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "BackupScheduleRule": {
+        "type": "object",
+        "description": "One local-time cadence for a policy schedule.",
+        "x-go-type": "protocol.BackupScheduleRule",
+        "properties": {
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly"
+            ]
+          },
+          "hour": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "minute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 59
+          },
+          "weekdays": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          }
+        },
+        "required": [
+          "frequency",
+          "hour",
+          "minute"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRetention": {
+        "type": "object",
+        "description": "Keeps successful points per VM; age protection is optional.",
+        "x-go-type": "protocol.BackupRetention",
+        "properties": {
+          "keep_latest": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "protect_newer_than": {
+            "type": "integer",
+            "description": "Nanoseconds duration (Go time.Duration JSON encoding)."
+          }
+        },
+        "required": [
+          "keep_latest"
+        ],
+        "additionalProperties": false
+      },
+      "BackupPolicyLimits": {
+        "type": "object",
+        "description": "Optional advanced throughput bounds for a backup policy.",
+        "x-go-type": "protocol.BackupPolicyLimits",
+        "properties": {
+          "max_concurrent_per_host": {
+            "type": "integer"
+          },
+          "max_concurrent_per_repo": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "BackupPolicyVMOverride": {
+        "type": "object",
+        "description": "Adjusts retention or capture for one VM in a policy.",
+        "x-go-type": "protocol.BackupPolicyVMOverride",
+        "properties": {
+          "vm_id": {
+            "type": "string"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRetention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capture_mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vm_id"
+        ],
+        "additionalProperties": false
+      },
+      "BackupPolicyRef": {
+        "type": "object",
+        "description": "Compact committed policy/schedule reference for takeover.",
+        "x-go-type": "protocol.BackupPolicyRef",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "schedule_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "revision",
+          "enabled",
+          "paused",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRunRef": {
+        "type": "object",
+        "description": "Compact committed or unresolved run reference for takeover.",
+        "x-go-type": "protocol.BackupRunRef",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "occurrence_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "vm_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "PoolBackupAuthority": {
+        "type": "object",
+        "description": "Bounded replica section for backup repositories, policy/schedule definitions, retained runs and catalog index. Full NFS recovery-point payloads are never embedded.",
+        "x-go-type": "protocol.PoolBackupAuthority",
+        "properties": {
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRepository"
+            },
+            "description": "Durable NFS backup destination registrations for master takeover."
+          },
+          "definitions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupPolicy"
+            },
+            "description": "Full committed policy/schedule definitions for master takeover."
+          },
+          "history": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRun"
+            },
+            "description": "Retained and unresolved backup/restore run records for master takeover."
+          },
+          "catalog": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRecoveryPoint"
+            },
+            "description": "Master catalog index entries only; NFS payloads are never embedded."
+          },
+          "policies": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupPolicyRef"
+            },
+            "description": "Compact policy refs derived from definitions for observation."
+          },
+          "runs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRunRef"
+            },
+            "description": "Compact run refs derived from history for observation."
+          },
+          "pins": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRestorePin"
+            },
+            "description": "Active restore pins transferred to the new master before retention can prune."
+          },
+          "metadata_receipts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupMetadataReceipt"
+            },
+            "description": "Durable operation result receipts retained for exact metadata retry after master takeover."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "BackupMetadataReceipt": {
+        "type": "object",
+        "description": "Durable outcome of one Core-owned backup metadata mutation, retained for exact replay after master promotion.",
+        "x-go-type": "protocol.BackupMetadataReceipt",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "intent_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "status": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "intent_sha256",
+          "status",
+          "observed_at"
+        ]
       }
     }
   },
@@ -4269,6 +7118,106 @@
       },
       "failure": "Nonzero exit and error on stderr. Retain original request and journal; inspect uncertain VM effects before retry. No automatic restore, takeover or enrollment.",
       "compatibility": "Same signed appliance format/protocol v1 and architecture amd64 as ordinary deployment. Restore requires matching source SHA-256 via the separate manual recovery command."
+    },
+    "backup-restore-replace": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/RestoreReplaceRequest"
+      },
+      "semantics": "Command with RestoreReplaceRequest."
+    },
+    "backup-test-restore": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/TestRestoreRequest"
+      },
+      "semantics": "Command with TestRestoreRequest."
+    },
+    "backup-protect": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/ProtectRecoveryPointRequest"
+      },
+      "semantics": "Command with ProtectRecoveryPointRequest."
+    },
+    "backup-catalog-import": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/CatalogImportRequest"
+      },
+      "semantics": "Command with CatalogImportRequest."
+    },
+    "backup-catalog-rebuild": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/CatalogImportRequest"
+      },
+      "semantics": "Command with CatalogImportRequest."
+    },
+    "backup-test-verify": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/TestRestoreVerifyRequest"
+      },
+      "semantics": "Controller queues operator verification of a test restore. Core records the result beside the catalog point; Controller adopts from master inventory."
+    },
+    "backup-test-cleanup": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/TestRestoreCleanupRequest"
+      },
+      "semantics": "Controller queues cleanup of one test restore VM and its staging only. Core removes that test guest; other recovery points are untouched."
+    },
+    "backup-policy-upsert": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/BackupPolicy"
+      },
+      "semantics": "Controller queues create/update of a master-owned backup policy. Core persists pool-backup-policies.json; exact request_id replay is required."
+    },
+    "backup-policy-pause": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/BackupPolicy"
+      },
+      "semantics": "Controller queues pause or resume of a backup policy on the pool master. Core owns enabled/paused state; Controller adopts inventory."
+    },
+    "backup-policy-run-now": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "payload": {
+        "$ref": "#/components/schemas/BackupPolicy"
+      },
+      "semantics": "Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes."
     }
   }
 }

@@ -1,0 +1,66 @@
+{
+  "summary": "Phase 6 restore completion: restore-as-new registers a stopped VM from captured spec; replace cutover-ready is needs_attention; pending gates, basename bind, O_NOFOLLOW artifact IO.",
+  "paths": [
+    "internal/protocol/backup.go",
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/managed_backup_restore.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/vmhost/backup_catalog_scan.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_replace.go",
+    "internal/agent/backup_test_restore.go",
+    "internal/agent/backup_dr_test.go",
+    "internal/controller/backups.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/controller/managed.go",
+    "docs/API.md",
+    "docs/guide/restore-as-new.md",
+    "docs/guide/restore-replace.md",
+    "docs/qa/2026-09-27-phase6-s7-status.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "docs/changes/2026-09-27-phase6-restore-completion-fix.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Restore-as-new now registers a stopped VM; restore-replace cutover-ready is not task success.",
+    "pages": [
+      "docs/guide/restore-as-new.md",
+      "docs/guide/restore-replace.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Restore-as-new succeeds only after registered stopped VM; restore-replace settles cutover-ready as needs_attention; manifests carry captured_spec for restore.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 6 gate stays open; exclusive replace cutover and lab campaigns remain outstanding.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-runs/ stages registered (restore-as-new/test) and cutover-ready/needs_attention (replace); managed-vms journal create entries for restored guests; recovery-point manifest captured_spec on published points.",
+    "reason": "Restored VM identity and incomplete replace cutover must live on Core so a fresh Controller adopts honest status."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/vmhost/ ./internal/agent/ ./internal/controller/ ./internal/localcore/ -run 'Backup|Restore|Copy|Basename|Symlink|PendingIncludesReplace|BuildRestore|Catalog|Protect|ClaimBackup|PublishBackup|RefuseOnline|ConvertStopped|RequireCompleted|ScanBackup'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/agent/backup_dr_test.go",
+      "internal/vmhost/managed_backup_test.go",
+      "internal/controller/backup_adoption_test.go",
+      "docs/qa/2026-09-27-phase6-s7-status.md",
+      "docs/API.md",
+      "docs/guide/restore-as-new.md",
+      "docs/guide/restore-replace.md"
+    ],
+    "limits": [
+      "Full restore-as-new registration against live libvirt/storage remains disposable-lab gated",
+      "Exclusive replace cutover after cutover-ready is not implemented",
+      "Points published without captured_spec must be re-backed up before restore-as-new"
+    ]
+  }
+}

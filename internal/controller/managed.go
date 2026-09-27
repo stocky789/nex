@@ -43,6 +43,43 @@ func (c *Controller) managedHost(tx *sql.Tx, pool, host string) error {
 	return nil
 }
 
+func (c *Controller) backupHost(tx *sql.Tx, pool, host string) error {
+	if err := c.managedHost(tx, pool, host); err != nil {
+		return err
+	}
+	var master string
+	if err := tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil {
+		return err
+	}
+	if master != host {
+		if err := c.managedHost(tx, pool, master); err != nil {
+			return err
+		}
+	}
+	for _, target := range []string{host, master} {
+		var raw string
+		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", target).Scan(&raw); err != nil {
+			return err
+		}
+		var capabilities []string
+		if json.Unmarshal([]byte(raw), &capabilities) != nil || !slices.Contains(capabilities, protocol.BackupCapability) {
+			return fmt.Errorf("host does not support backup-v1; upgrade Nex Core")
+		}
+	}
+	return nil
+}
+
+func (c *Controller) backupMasterHost(tx *sql.Tx, pool, target string) (string, error) {
+	if err := c.backupHost(tx, pool, target); err != nil {
+		return "", err
+	}
+	var master string
+	if err := tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil {
+		return "", err
+	}
+	return master, nil
+}
+
 // placementHost only verifies that both Core peers understand the master-owned
 // placement protocol. Resource availability and VM admission are Core's decision.
 func (c *Controller) placementHost(tx *sql.Tx, pool, host string) error {
@@ -94,10 +131,10 @@ func (c *Controller) saveResourceStatus(tx *sql.Tx, user, requestID, pool, host,
 	}
 	return op, err
 }
-func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID, kind string, payload any) bool {
-	var raw, command string
+func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID, kind string, payload any, pool ...string) bool {
+	var raw, command, storedPool string
 	var opID string
-	err := tx.QueryRow("SELECT payload,command,operation_id FROM managed_resources WHERE request_id=?", requestID).Scan(&raw, &command, &opID)
+	err := tx.QueryRow("SELECT payload,command,operation_id,pool_id FROM managed_resources WHERE request_id=?", requestID).Scan(&raw, &command, &opID, &storedPool)
 	if err == sql.ErrNoRows {
 		var existing int
 		if e := tx.QueryRow("SELECT count(*) FROM operations WHERE request_id=?", requestID).Scan(&existing); e != nil {
@@ -117,7 +154,20 @@ func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID
 	b, _ := json.Marshal(payload)
 	var cmd protocol.Command
 	json.Unmarshal([]byte(command), &cmd)
-	if raw != string(b) || cmd.Kind != kind {
+	targetMatches := true
+	if len(pool) > 1 {
+		switch {
+		case cmd.BackupPolicy != nil:
+			targetMatches = cmd.BackupPolicy.ID == pool[1]
+		case cmd.BackupRepository != nil:
+			targetMatches = cmd.BackupRepository.ID == pool[1]
+		case cmd.VM != nil:
+			targetMatches = cmd.VM.ID == pool[1]
+		default:
+			targetMatches = false
+		}
+	}
+	if raw != string(b) || cmd.Kind != kind || (len(pool) > 0 && storedPool != pool[0]) || !targetMatches {
 		fail(w, 409, "request_id already used with another payload")
 		return true
 	}
@@ -186,7 +236,38 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 			response["repository_id"] = cmd.ZFSProvision.RepositoryID
 		}
 		return response
+	case cmd.BackupRepository != nil:
+		return map[string]any{"repository_id": cmd.BackupRepository.ID, "name": cmd.BackupRepository.Name, "operation": op}
+	case cmd.BackupPolicy != nil:
+		out := map[string]any{"policy_id": cmd.BackupPolicy.ID, "name": cmd.BackupPolicy.Name, "operation": op}
+		if cmd.VM != nil {
+			out["vm_id"] = cmd.VM.ID
+		}
+		return out
+	case cmd.Backup != nil && cmd.VM != nil:
+		return map[string]any{"vm_id": cmd.VM.ID, "repository_id": cmd.Backup.RepositoryID, "operation": op}
+	case cmd.Restore != nil:
+		return map[string]any{
+			"repository_id": cmd.Restore.RepositoryID, "recovery_point_id": cmd.Restore.RecoveryPointID,
+			"new_vm_id": cmd.Restore.NewVMID, "new_vm_name": cmd.Restore.NewVMName,
+			"storage_id": cmd.Restore.StorageID, "operation": op,
+		}
+	case cmd.RestoreReplace != nil:
+		return map[string]any{
+			"repository_id": cmd.RestoreReplace.RepositoryID, "recovery_point_id": cmd.RestoreReplace.RecoveryPointID,
+			"original_vm_id": cmd.RestoreReplace.OriginalVMID, "storage_id": cmd.RestoreReplace.StorageID,
+			"operation": op,
+		}
+	case cmd.TestRestore != nil:
+		return map[string]any{
+			"repository_id": cmd.TestRestore.RepositoryID, "recovery_point_id": cmd.TestRestore.RecoveryPointID,
+			"new_vm_id": cmd.TestRestore.NewVMID, "new_vm_name": cmd.TestRestore.NewVMName,
+			"storage_id": cmd.TestRestore.StorageID, "operation": op,
+		}
 	default:
+		if cmd.VM == nil {
+			return map[string]any{"operation": op}
+		}
 		return map[string]any{"vm_id": cmd.VM.ID, "operation": op}
 	}
 }
@@ -923,6 +1004,9 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 			if snapshotOutcomeKind(o.Kind) {
 				ids = append(ids, adoptedSnapshotOperationID(host, o.OperationID))
 			}
+			if backupOutcomeKind(o.Kind) {
+				ids = append(ids, adoptedBackupOperationID(host, o.OperationID))
+			}
 			requests = append(requests, "adopt-outcome:"+host+":"+o.OperationID)
 		}
 		idMarks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
@@ -948,7 +1032,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	for _, o := range m.Outcomes {
 		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
 	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata','backup-now','backup-restore-as-new','backup-restore-replace','backup-test-restore','backup-repository-register','backup-repository-test','backup-policy-upsert','backup-policy-pause','backup-policy-run-now','backup-protect','backup-catalog-import','backup-catalog-rebuild','backup-test-verify','backup-test-cleanup') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
 		return err
 	}
 	for _, o := range m.Outcomes {
@@ -958,12 +1042,12 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		}
 		requestID := "adopt-outcome:" + host + ":" + o.OperationID
 		knownOwnOperation := known[o.OperationID]
-		// Snapshot projection IDs are host-scoped digests and can equal a later Core
-		// operation ID. Only a row this Controller issued (with a managed_resources
-		// command payload) is settled as an own operation; adopt mirrors remap again.
-		if snapshotOutcomeKind(o.Kind) && knownOwnOperation {
+		// Snapshot and backup projection IDs can equal another host's or kind's
+		// operation ID. Only this host's matching Controller command is its own;
+		// otherwise the outcome needs a separate adopted mirror.
+		if (snapshotOutcomeKind(o.Kind) || backupOutcomeKind(o.Kind)) && knownOwnOperation {
 			var owned int
-			if err = tx.QueryRow("SELECT count(*) FROM managed_resources WHERE operation_id=?", o.OperationID).Scan(&owned); err != nil {
+			if err = tx.QueryRow("SELECT count(*) FROM managed_resources r JOIN operations op ON op.id=r.operation_id WHERE r.operation_id=? AND r.host_id=? AND r.kind=? AND op.host_id=? AND op.kind=?", o.OperationID, host, o.Kind, host, o.Kind).Scan(&owned); err != nil {
 				return err
 			}
 			knownOwnOperation = owned > 0
@@ -997,6 +1081,15 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				continue
 			}
 		}
+		if backupOutcomeKind(o.Kind) {
+			controllerID = adoptedBackupOperationID(host, o.OperationID)
+			if known[controllerID] {
+				if err = attention("backup", o.Kind, o.OperationID, o.Name, "adopted backup operation ID conflicts with existing history"); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		now := stamp()
 		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
 			return err
@@ -1014,8 +1107,22 @@ func adoptedSnapshotOperationID(host, coreOperationID string) string {
 	return "snapshot-" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
+func adoptedBackupOperationID(host, coreOperationID string) string {
+	digest := sha256.Sum256([]byte(host + "\x00backup\x00" + coreOperationID))
+	return "backup-" + base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
 func snapshotOutcomeKind(kind string) bool {
 	return kind == "snapshot-create" || kind == "snapshot-revert" || kind == "snapshot-delete" || kind == "snapshot-metadata"
+}
+
+func backupOutcomeKind(kind string) bool {
+	return kind == "backup-now" || kind == "backup-restore-as-new" ||
+		kind == "backup-restore-replace" || kind == "backup-test-restore" ||
+		kind == "backup-repository-register" || kind == "backup-repository-test" ||
+		kind == "backup-policy-upsert" || kind == "backup-policy-pause" || kind == "backup-policy-run-now" ||
+		kind == "backup-protect" || kind == "backup-catalog-import" || kind == "backup-catalog-rebuild" ||
+		kind == "backup-test-verify" || kind == "backup-test-cleanup"
 }
 
 // adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
@@ -1091,7 +1198,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

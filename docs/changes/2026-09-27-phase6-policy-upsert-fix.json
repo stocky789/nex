@@ -1,0 +1,46 @@
+{
+  "summary": "Fix Core-local backup policy upsert HTTP 400 when pool_id is omitted; align Valid() with repository enrollment fill.",
+  "paths": [
+    "internal/protocol/backup_policy.go",
+    "internal/protocol/backup_policy_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_policy.go",
+    "internal/localcore/backup_test.go",
+    "docs/API.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-phase6-policy-upsert-fix.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator GUI/Controller create already supplies pool from the path; only Core-local request shape for omitted pool_id changed to match repositories.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Documents that local POST /api/local/v1/pool/backup-policies may omit pool_id; Core fills from enrollment (parity with backup repositories).",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix for Phase 6 lab path; milestone status unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-policies.json; pool_id on the durable policy is the enrolled master pool identity.",
+    "reason": "Policies remain Core-owned; omitted request pool_id is filled from host enrollment before write."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/localcore/ ./internal/agent/ -run 'BackupPolicy|BackupPolicyUpsert|UpsertPoolBackupPolicy|EvaluateBackupSchedule'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/protocol/backup_policy_test.go",
+      "internal/localcore/backup_test.go",
+      "docs/API.md"
+    ],
+    "limits": [
+      "Disposable-lab re-walk of Controller-absent schedule tick not re-run in this slice"
+    ]
+  }
+}

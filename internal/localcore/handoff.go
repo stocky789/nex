@@ -136,6 +136,7 @@ type runningAgent struct {
 	store                     *agent.Store
 	hostID, controller, trust string
 	snapshotRequests          chan agent.SnapshotRequest
+	backupRequests            chan agent.BackupRequest
 	started                   bool
 	stop                      context.CancelFunc
 	done                      chan struct{}
@@ -159,7 +160,7 @@ func getHandoffAgent(dir string) (*runningAgent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &runningAgent{store: s, hostID: s.State.HostID, controller: s.State.Controller, trust: s.State.TrustPEM, snapshotRequests: make(chan agent.SnapshotRequest), done: make(chan struct{})}
+	a := &runningAgent{store: s, hostID: s.State.HostID, controller: s.State.Controller, trust: s.State.TrustPEM, snapshotRequests: make(chan agent.SnapshotRequest), backupRequests: make(chan agent.BackupRequest), done: make(chan struct{})}
 	handoffAgents.entries[key] = a
 	return a, nil
 }
@@ -226,7 +227,7 @@ func startHandoffAgent(ctx context.Context, dir string, a *runningAgent) {
 					log.Printf("pool journal scope recovery: %v", err)
 				}
 			}
-			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second, SnapshotRequests: a.snapshotRequests})
+			err := agent.Run(agentCtx, a.store, agent.RunConfig{Heartbeat: time.Second, ProbeInterval: 5 * time.Second, ProbeTimeout: 3 * time.Second, SnapshotRequests: a.snapshotRequests, BackupRequests: a.backupRequests})
 			if err != nil {
 				log.Printf("local agent stopped: %v", err)
 			}

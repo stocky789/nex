@@ -1,0 +1,36 @@
+{
+  "summary": "Stop PoolBackupAuthorityRefs from re-entering Membership/poolPeerMu while snapshot reservation sizes the authority replica.",
+  "paths": [
+    "internal/agent/backup_policy.go",
+    "internal/agent/backup_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-backup-authority-peer-lock.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal Core lock-order fix; operator workflows and guide steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core contract change; compact backup_authority refs still use the existing replica section shape.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix only; Phase 6 milestone status is unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record; corrects lock ordering when projecting existing Core backup policy/run refs into the authority replica."
+  },
+  "verification": {
+    "method": "go test -count=1 -timeout 60s ./internal/agent/ -run 'Catalog|PoolBackupAuthorityRefsDoesNotReenterPeerLock|BackupSchedule|EvaluateBackupSchedule'; go test -count=1 -timeout 30s ./internal/agent/ -run 'PoolBackupAuthorityRefsDoesNotReenterPeerLock|EvaluateBackupSchedule|ApplyBackupSchedule|RetentionEligible'.",
+    "evidence": [
+      "internal/agent/backup_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "summary": "Phase 6 restore-replace exclusive cutover: place restored disks, switch stopped definition, settle succeeded; pre-cutover keeps originals; mid-cutover needs_attention with stage.",
+  "paths": [
+    "internal/vmhost/managed_backup_restore.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/agent/backup_replace.go",
+    "internal/agent/backup_dr_test.go",
+    "docs/guide/restore-replace.md",
+    "docs/guide/restore-as-new.md",
+    "docs/API.md",
+    "docs/changes/2026-09-27-phase6-replace-cutover.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Replace now finishes exclusive cutover to a stopped, disconnected guest instead of stopping at cutover-ready.",
+    "pages": [
+      "docs/guide/restore-replace.md",
+      "docs/guide/restore-as-new.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "backup-restore-replace settles replaced/succeeded after exclusive cutover; mid-cutover failures are needs_attention with exact stage.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase 6 gate stays open; Campaign A/B and browser walkthroughs remain outstanding.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-runs/ stage replaced|defining|cutover-ready; backup-replace retained-original.json + cutover.json; managed-vms vm-update journal with Retained original disk paths. Fresh Controller adopts run status and VM definition from master inventory.",
+    "reason": "Exclusive cutover and retained originals must live on Core so a fresh Controller adopts honest replace status and recover-original paths."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/agent/ -run 'RestoreReplace'; go test -count=1 ./internal/vmhost/ -run 'BuildRestoreReplace|ApplyExclusiveReplace'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/agent/backup_dr_test.go",
+      "internal/vmhost/managed_backup_test.go",
+      "docs/guide/restore-replace.md",
+      "docs/API.md"
+    ],
+    "limits": [
+      "Disposable three-host Campaign A/B replace evidence unexecuted",
+      "Browser walkthrough of Replace UI unexecuted",
+      "Full live libvirt/NFS cutover remains lab-gated"
+    ]
+  }
+}

@@ -1022,12 +1022,16 @@ filesystems today does not enable that integration.
 
 ### 6. Backups, scheduling, and restoration
 
-**Checkpoint, 2026-09-27: product implementation not started; gate open.**
-Native independent-NFS backup/restore feasibility and S0 snapshot destination probes
-exist, but Core repository/job/restore workflows, scheduling, retention, recovery
-APIs and Controller UI are **not delivered**. Phase 5 closed 2026-09-27 for disposable
-virtual-lab scope, so S4 may begin; S4–S8 remain open and not started.
-Feasibility and native snapshot matrix results do not close them.
+**Checkpoint, 2026-09-27: Phase 6 closed for disposable virtual-lab scope.**
+S4–S7 Core/Controller/UI/guide code is present with unit and contract evidence. Disposable-lab
+product NFS backup/restore, lab install (`0.4.12` + overlay), bounded nested Campaign A/B
+(Campaign B re-run PASS after BUG-0651), browser walkthrough (settlement fixed in code) and
+hermetic CI are recorded. Owner closed disposable scope 2026-09-27. Physical/production
+certification is **not** claimed. Close record:
+[docs/qa/2026-09-27-phase6-gate/CLOSED.md](../qa/2026-09-27-phase6-gate/CLOSED.md).
+Index:
+[docs/qa/2026-09-27-phase6-implementation-index.md](../qa/2026-09-27-phase6-implementation-index.md).
+Phase 5 closed 2026-09-27 for disposable virtual-lab scope.
 
 1. Add pool-level backup repositories, initially an external NFS-backed filesystem in a separate failure domain from primary VM storage. Separate repository credentials and permissions from guest access.
 2. Implement full backups of gracefully stopped VMs first. Include every supported disk, VM configuration, required firmware/NVRAM state, format versions, checksums, and a standalone recovery manifest. Preserve vTPM state if supported; otherwise block backup of that configuration explicitly.

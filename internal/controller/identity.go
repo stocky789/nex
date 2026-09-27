@@ -489,7 +489,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	if v.Inventory != nil && v.Inventory.Managed != nil {
 		managed := v.Inventory.Managed
-		if managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported {
+		if managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
+			managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+			managed.BackupPoliciesReported {
 			if managed.Membership == nil || managed.Membership.Valid() != nil || managed.Membership.MasterHostID != host {
 				fail(w, 400, "snapshot authority must be reported by the pool master")
 				return
@@ -557,6 +559,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
+		if slices.Contains(v.Capabilities, protocol.BackupCapability) {
+			out.BackupSupport = &protocol.BackupSupport{Capability: protocol.BackupCapability}
+		}
 		repositoryCapability := protocol.StorageRepositoryCapability
 		// Reuse the established support capability handshake: a Core must not send
 		// ZFS-only inventory to a strict older Controller until this acknowledgement.
@@ -627,12 +632,12 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			fail(w, 409, "operation has not been delivered")
 			return
 		}
-		// Core may recover a durable ZFS provision after it previously reported
-		// needs_attention (an interrupted create whose native receipt later verifies).
-		// Accept only that exact authoritative recovery; other kinds settle through the
-		// host's reported managed outcomes, and the Controller never infers success from
-		// an adopted storage projection.
-		if status == "dispatched" || (status == "needs_attention" && kind == "storage-zfs-provision" && res.Status == "succeeded") {
+		// Backup work and ZFS provision can settle after an earlier uncertain
+		// result. Their later result comes from the same authenticated Core and
+		// operation ID; backup runs and storage projections alone never settle it.
+		recovered := status == "needs_attention" && (res.Status == "succeeded" || res.Status == "failed") &&
+			(kind == "storage-zfs-provision" && res.Status == "succeeded" || backupOutcomeKind(kind))
+		if status == "dispatched" || recovered {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")
 				return
@@ -672,7 +677,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				fail(w, 500, "pool master adoption failed")
 				return
 			}
-			if managed := v.Inventory.Managed; managed != nil && (managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported) {
+			if managed := v.Inventory.Managed; managed != nil && (managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
+				managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+				managed.BackupPoliciesReported) {
 				var pool, master string
 				if err = tx.QueryRow("SELECT h.pool_id,p.master_host_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=?", host).Scan(&pool, &master); err != nil {
 					fail(w, 500, "snapshot authority lookup failed")
@@ -685,6 +692,30 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				for _, reservation := range managed.RecoveryReservations {
 					if reservation.PoolID != pool {
 						fail(w, 400, "snapshot reservation belongs to another pool")
+						return
+					}
+				}
+				for _, repo := range managed.BackupRepositories {
+					if repo.PoolID != pool {
+						fail(w, 400, "backup repository belongs to another pool")
+						return
+					}
+				}
+				for _, point := range managed.BackupCatalog {
+					if point.PoolID != pool {
+						fail(w, 400, "backup recovery point belongs to another pool")
+						return
+					}
+				}
+				for _, run := range managed.BackupRuns {
+					if run.PoolID != pool {
+						fail(w, 400, "backup run belongs to another pool")
+						return
+					}
+				}
+				for _, policy := range managed.BackupPolicies {
+					if policy.PoolID != pool {
+						fail(w, 400, "backup policy belongs to another pool")
 						return
 					}
 				}
@@ -741,7 +772,11 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				// join dialog can offer it; the join records it durably on the master.
 				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin,
 					PoolVMSnapshots: merged.Managed.PoolVMSnapshots, PoolVMSnapshotsReported: merged.Managed.PoolVMSnapshotsReported,
-					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported}
+					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported,
+					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,
+					BackupCatalog: merged.Managed.BackupCatalog, BackupCatalogReported: merged.Managed.BackupCatalogReported,
+					BackupRuns: merged.Managed.BackupRuns, BackupRunsReported: merged.Managed.BackupRunsReported,
+					BackupPolicies: merged.Managed.BackupPolicies, BackupPoliciesReported: merged.Managed.BackupPoliciesReported}
 			} else {
 				stored.Managed = nil
 			}

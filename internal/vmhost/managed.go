@@ -120,19 +120,26 @@ func (e powerRequestError) Error() string {
 func (e powerRequestError) Unwrap() []error { return []error{errPowerRequestUncertain, e.cause} }
 
 type managedJournal struct {
-	Command             protocol.Command                    `json:"command"`
-	Result              protocol.Result                     `json:"result"`
-	Stage               string                              `json:"stage"`
-	RecoveryReservation *protocol.PoolVMRecoveryReservation `json:"recovery_reservation,omitempty"`
-	RecoveryStage       string                              `json:"recovery_stage,omitempty"`
-	RecoveryOutcome     string                              `json:"recovery_outcome,omitempty"`
-	RecoverySettled     bool                                `json:"recovery_settled,omitempty"`
-	Snapshot            *managedSnapshotRecord              `json:"snapshot,omitempty"`
-	SnapshotRevert      *managedSnapshotRevertRecord        `json:"snapshot_revert,omitempty"`
-	SnapshotDelete      *managedSnapshotDeleteRecord        `json:"snapshot_delete,omitempty"`
-	CurrentProjection   *managedSnapshotCurrentProjection   `json:"current_projection,omitempty"`
-	projectionView      bool                                `json:"-"`
-	Disks               []string                            `json:"disks,omitempty"`
+	Command                 protocol.Command                    `json:"command"`
+	Result                  protocol.Result                     `json:"result"`
+	Stage                   string                              `json:"stage"`
+	RecoveryReservation     *protocol.PoolVMRecoveryReservation `json:"recovery_reservation,omitempty"`
+	RecoveryStage           string                              `json:"recovery_stage,omitempty"`
+	RecoveryOutcome         string                              `json:"recovery_outcome,omitempty"`
+	RecoverySettled         bool                                `json:"recovery_settled,omitempty"`
+	Snapshot                *managedSnapshotRecord              `json:"snapshot,omitempty"`
+	SnapshotRevert          *managedSnapshotRevertRecord        `json:"snapshot_revert,omitempty"`
+	SnapshotDelete          *managedSnapshotDeleteRecord        `json:"snapshot_delete,omitempty"`
+	CurrentProjection       *managedSnapshotCurrentProjection   `json:"current_projection,omitempty"`
+	projectionView          bool                                `json:"-"`
+	Disks                   []string                            `json:"disks,omitempty"`
+	BackupFirmware          []protocol.BackupFirmwareArtifact   `json:"backup_firmware,omitempty"`
+	BackupRestore           bool                                `json:"backup_restore,omitempty"`
+	BackupManifestSHA256    string                              `json:"backup_manifest_sha256,omitempty"`
+	BackupDisks             []protocol.BackupDiskArtifact       `json:"backup_disks,omitempty"`
+	BackupTPMRootAbsent     bool                                `json:"backup_tpm_root_absent,omitempty"`
+	BackupTPMManifestSHA256 string                              `json:"backup_tpm_manifest_sha256,omitempty"`
+	BackupTPMPreviousSHA256 string                              `json:"backup_tpm_previous_sha256,omitempty"`
 	// DiskChains is ordered with Disks; each chain is its active head followed by every
 	// backing image. Paths stay in this host journal and never cross the Core API.
 	DiskChains      [][]string      `json:"disk_chains,omitempty"`
@@ -867,6 +874,19 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 			return j, err
 		}
 	}
+	if j.BackupRestore && j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Stage == "allocating" && j.Result.Status == "pending" &&
+		j.BackupManifestSHA256 == "" && len(j.BackupDisks) == 0 && len(j.Domain) == 0 && j.BackupTPMManifestSHA256 == "" &&
+		len(j.Disks) > 0 && len(j.Disks) == len(j.Command.VM.Disks) && len(j.Targets) == len(j.Disks) && len(j.DiskChains) == len(j.Disks) {
+		unallocated := true
+		for _, chain := range j.DiskChains {
+			if chain != nil {
+				unallocated = false
+			}
+		}
+		if unallocated {
+			j.DiskChains = nil // Older restore journals reserved heads before disk copying.
+		}
+	}
 	if j.Command.Kind != "snapshot-create" && j.Command.Kind != "snapshot-revert" && j.Command.Kind != "snapshot-delete" {
 		if _, err := managedDiskChains(j); err != nil {
 			return j, err
@@ -915,7 +935,7 @@ func (e *ManagedEngine) readable() ([]managedJournal, []string) {
 // interrupted mutations are observed, never replayed. Errors indicate persistence
 // failure; callers must retain the command and report an uncertain outcome.
 func (e *ManagedEngine) Execute(ctx context.Context, c protocol.Command, fetch func(context.Context, string) (io.ReadCloser, error)) (protocol.Result, error) {
-	return e.execute(ctx, c, fetch, nil, nil)
+	return e.execute(ctx, c, fetch, nil, nil, nil)
 }
 
 // ExecuteEjectCleanup is the leave state machine's private removal path. The marker is
@@ -926,7 +946,7 @@ func (e *ManagedEngine) ExecuteEjectCleanup(ctx context.Context, c protocol.Comm
 	if !ok || poolID == "" || hostID == "" || membershipGeneration == 0 || generation == 0 {
 		return protocol.Result{OperationID: c.OperationID, Status: "failed", Error: "invalid eject cleanup", ObservedAt: time.Now().UTC()}, nil
 	}
-	return e.execute(ctx, c, nil, &ejectCleanup{PoolID: poolID, HostID: hostID, Resource: resource, ResourceID: id, MembershipGeneration: membershipGeneration}, nil)
+	return e.execute(ctx, c, nil, &ejectCleanup{PoolID: poolID, HostID: hostID, Resource: resource, ResourceID: id, MembershipGeneration: membershipGeneration}, nil, nil)
 }
 
 // ExecuteEjectCleanupReapply is the member's private, authenticated rejoin path. It grants
@@ -950,7 +970,7 @@ func (e *ManagedEngine) ExecuteEjectCleanupReapply(ctx context.Context, c protoc
 	// Bind the internal receipt to the exact selected cleanup instead. The result is stable
 	// for retries of this cleanup and distinct for the next signed eject of the same ID.
 	c.OperationID = ejectCleanupReapplyOperation(c.OperationID, removal.Command.OperationID)
-	return e.execute(ctx, c, nil, nil, &ejectCleanupReapply{RemovalOperationID: removal.Command.OperationID, MembershipGeneration: membershipGeneration})
+	return e.execute(ctx, c, nil, nil, &ejectCleanupReapply{RemovalOperationID: removal.Command.OperationID, MembershipGeneration: membershipGeneration}, nil)
 }
 
 func ejectCleanupReapplyOperation(commandOperation, removalOperation string) string {
@@ -986,7 +1006,7 @@ func (e *ManagedEngine) EjectCleanupReapplyAvailable(c protocol.Command, poolID,
 	return err == nil, err
 }
 
-func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch func(context.Context, string) (io.ReadCloser, error), cleanup *ejectCleanup, reapply *ejectCleanupReapply) (protocol.Result, error) {
+func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch func(context.Context, string) (io.ReadCloser, error), cleanup *ejectCleanup, reapply *ejectCleanupReapply, guard func(context.Context, []managedJournal) error) (protocol.Result, error) {
 	result := protocol.Result{OperationID: c.OperationID, Status: "failed", ObservedAt: time.Now().UTC()}
 	if err := validateManaged(c); err != nil {
 		result.Error = err.Error()
@@ -1014,6 +1034,12 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 	js, err := e.journals()
 	if err != nil {
 		return result, err
+	}
+	if guard != nil {
+		if err := guard(ctx, js); err != nil {
+			result.Error = err.Error()
+			return result, nil
+		}
 	}
 	if reapply != nil {
 		_, _, poolID, hostID, _, _ := cleanupResource(c)
@@ -5446,7 +5472,7 @@ func sameMTU(got, want *mtuXML) bool {
 	return want == nil || (got != nil && *got == *want)
 }
 
-// carryFirmwareVariables keeps an existing UEFI store during an edit. Older Nex
+// carryFirmwareVariables keeps existing UEFI and TPM state during an edit. Older Nex
 // definitions let libvirt choose a name-derived path; moving them to the new UUID path would
 // discard boot entries and Secure Boot variables. New definitions already carry the UUID path.
 func carryFirmwareVariables(expected, current []byte) ([]byte, error) {
@@ -5459,6 +5485,12 @@ func carryFirmwareVariables(expected, current []byte) ([]byte, error) {
 			return nil, errors.New("existing UEFI VM has no firmware variable store; inspect it on the host before editing")
 		}
 		want.OS.NVRAM = &nvramXML{Path: got.OS.NVRAM.Path}
+	}
+	if want.Devices.TPM != nil && got.Devices.TPM != nil {
+		if _, err := managedTPMStateSource(got, got.UUID); err != nil {
+			return nil, err
+		}
+		want.Devices.TPM.Backend.Source = got.Devices.TPM.Backend.Source
 	}
 	return xml.Marshal(want)
 }
@@ -6309,6 +6341,13 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 			return err
 		}
 	}
+	defined := domains(ctx)
+	if defined == nil {
+		return errors.New("libvirt did not list domains after undefine; inspect the host before retrying")
+	}
+	if defined[strings.ToLower(req.VMID)] {
+		return errors.New("VM domain is still defined after undefine")
+	}
 	if req.DeleteDisks {
 		j.Stage = "wiping"
 		if err := e.save(*j); err != nil {
@@ -6321,13 +6360,6 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 			return err
 		}
 		j.Retained = nil
-	}
-	defined := domains(ctx)
-	if defined == nil {
-		return errors.New("libvirt did not list domains after undefine; inspect the host before retrying")
-	}
-	if defined[strings.ToLower(req.VMID)] {
-		return errors.New("VM domain is still defined after undefine")
 	}
 	return nil
 }
@@ -7399,7 +7431,8 @@ func (e *ManagedEngine) update(ctx context.Context, j *managedJournal, js []mana
 		}
 	}
 	var current []byte
-	if cur.Command.VM.Boot.Firmware == "uefi" && v.Boot.Firmware == "uefi" {
+	if cur.Command.VM.Boot.Firmware == "uefi" && v.Boot.Firmware == "uefi" ||
+		cur.Command.VM.Boot.TPMEnabled() && v.Boot.TPMEnabled() {
 		// A journal written before explicit NVRAM paths cannot tell us libvirt's generated
 		// path. Read the stopped definition before a rename and retain that path, so an
 		// upgrade does not replace an installed guest's firmware variables.

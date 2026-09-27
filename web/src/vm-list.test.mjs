@@ -70,7 +70,7 @@ assert.match(list, /Tags<svg/, "the Tags facet is offered");
 // The panel keeps phase-gated actions visible and disabled, and a stale host's VM says why.
 const panel = renderToStaticMarkup(createElement(VMList, { ...props, selectedID: "web" }));
 assert.match(panel, /disabled="" title="Available with live migration \(Phase 7\)"/);
-assert.match(panel, /Available with backups \(Phase 6\)/);
+assert.match(panel, /Last backup<\/dt><dd class="muted">Loading…<\/dd><dt>Last tested restore/);
 const stalePanel = renderToStaticMarkup(createElement(VMList, { ...props, selectedID: "lost" }));
 assert.match(stalePanel, /class="why" role="status">node-2 is not reporting\. Current execution state is unknown/);
 assert.match(stalePanel, /Console<\/button>/);

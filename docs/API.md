@@ -359,6 +359,268 @@ master reservation, and native execution requires exact persisted acknowledgemen
 terminal success and release require matching master settlement. Controller owns none of this
 state. See the [development workflow and verification limits](guide/vm-snapshots.md).
 
+### Backup development contract (Phase 6 / S4–S5)
+
+Core-owned NFS backup destinations, stopped and online full backup publication and
+restore-as-new from local copies. Authenticated host-local routes:
+
+| Method and route | Request and result |
+|---|---|
+| `GET /api/local/v1/pool/backup-repositories` | Master's durable NFS destination list |
+| `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; external NFS only; `200` with the saved repository |
+| `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; checks the configured NFS source, mounted path, filesystem identity, and repository owner marker |
+| `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
+| `GET /api/local/v1/pool/backup-runs` | Retained run records from `pool-backup-runs/` |
+| `GET /api/local/v1/pool/backup-policies` | Master's durable policy list |
+| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment) |
+| `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}` |
+| `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; `202` |
+| `GET /api/local/v1/pool/backup-operations/{operation_id}` | Retained `Result` for backup-now or restore-as-new |
+| `POST /api/local/v1/pool/vms/{id}/backup` | `{operation_id,repository_id,consistency?}`; `consistency` omitted/`stopped` for shut-off guests, or `crash` for online crash-consistent; `quiesced` is refused until proven; UEFI online is refused; `202` with durable `Result` |
+| `POST /api/local/v1/pool/backup-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; restore-as-new copies artifacts locally, reconstructs from the captured VM spec, places disks on `storage_id`, and registers a new stopped VM with disconnected NICs before succeeding |
+| `POST /api/local/v1/pool/backup-restore-replace` | `{operation_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace:true}`; retains originals, places restored disks, exclusive cutover updates the stopped definition (disconnected NICs), settles `replaced`/`succeeded`; pre-cutover failure keeps originals; mid-cutover failure is `needs_attention` with exact stage; never succeeds at cutover-ready alone; refuses powered/in-place overwrite |
+| `POST /api/local/v1/pool/backup-protect` | `{operation_id,repository_id,recovery_point_id,protected}`; catalog + repository `.nex-protected` marker |
+| `POST /api/local/v1/pool/backup-test-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; `202` |
+| `POST /api/local/v1/pool/backup-test-verify` | `{operation_id,repository_id,recovery_point_id,test_vm_id,result}` with `passed`\|`failed`; Core proves this is the current VM created by the exact successful test restore |
+| `POST /api/local/v1/pool/backup-test-cleanup` | `{operation_id,repository_id,recovery_point_id,test_vm_id}`; removes that test staging only |
+| `POST /api/local/v1/pool/backup-catalog/import` | `{operation_id,repository_id}`; merge validated manifests into catalog |
+| `POST /api/local/v1/pool/backup-catalog/rebuild` | `{operation_id,repository_id}`; replace that repository's catalog entries from manifests |
+| `GET /api/local/v1/pool/backup-status` | `{repositories,catalog,runs}` for Controller-absent recovery |
+
+For Core-local repository registration/test and policy upsert/pause, a first
+successful `200` returns the saved resource. An exact operation-ID replay after
+restart or master promotion can return the durable `Result` instead if the
+original response resource is no longer retained. Protect, test verification,
+and catalog import/rebuild likewise return the durable `Result` on exact
+receipt replay. Inspect its `status`; Core does not substitute a resource's
+current definition for the original result.
+
+Controller relay (administrator session, Origin and CSRF; Core remains authoritative):
+
+| Method and route | Request and result |
+|---|---|
+| `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source,id?}`; queues `backup-repository-register` on the master; `202` |
+| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
+| `GET /api/v1/pools/{id}/backup-catalog` | Master's recovery points; `503` when `backup_catalog_reported` is false |
+| `GET /api/v1/pools/{id}/backup-runs` | Master's run records; `503` when `backup_runs_reported` is false |
+| `GET /api/v1/pools/{id}/backup-policies` | Master's policies; `503` when `backup_policies_reported` is false |
+| `POST /api/v1/pools/{id}/backup-policies` | Create policy; omitted `schedule_id` defaults to the policy ID; queues `backup-policy-upsert`; `202` |
+| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update policy; omitted `schedule_id` uses the master's reported schedule ID, or `503` if unavailable; queues `backup-policy-upsert`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
+| `POST /api/v1/vms/{id}/backup` | `{request_id,repository_id,consistency?}`; queues `backup-now` on the pool master with the VM owner host in the command; `202` |
+| `POST /api/v1/pools/{id}/backup-restore` | `{request_id,host_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; queues `backup-restore-as-new` on the master, which dispatches to `host_id`; `202` |
+| `POST /api/v1/pools/{id}/backup-restore-replace` | `{request_id,host_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace}`; queues `backup-restore-replace` on the master, which dispatches to `host_id`; `202` |
+| `POST /api/v1/pools/{id}/backup-protect` | `{request_id,repository_id,recovery_point_id,protected}`; `202` `{operation}` |
+| `POST /api/v1/pools/{id}/backup-test-restore` | `{request_id,host_id,...}`; queues `backup-test-restore` on the master, which dispatches to `host_id`; `202` |
+| `POST /api/v1/pools/{id}/backup-test-verify` | `{request_id,repository_id,recovery_point_id,test_vm_id,result}`; `202` `{operation}` |
+| `POST /api/v1/pools/{id}/backup-test-cleanup` | `{request_id,repository_id,recovery_point_id,test_vm_id}`; `202` `{operation}` |
+| `POST /api/v1/pools/{id}/backup-catalog/import` | `{request_id,repository_id}`; `202` `{operation}` |
+| `POST /api/v1/pools/{id}/backup-catalog/rebuild` | `{request_id,repository_id}`; `202` `{operation}` |
+
+Core advertises `backup-v1` in its protocol-v2 report. Controller acknowledges it
+with `backup_support:{"capability":"backup-v1"}` in `ReportResponse`; Core withholds
+backup inventory fields until this acknowledgement. Controller returns `409` for a
+backup mutation targeting a host without `backup-v1` and leaves execution to Core.
+A later authenticated `succeeded` or `failed` backup Result for the same
+host and operation ID can settle an earlier Controller `needs_attention`
+operation row. Backup run and catalog inventory alone cannot settle that row, and a foreign
+host's Result is rejected. After Result acknowledgement, the executing Core
+continues to report its Controller-owned backup Journal outcome in managed
+inventory, including repository, policy, protect, catalog and test metadata
+commands. A same-ID native VM-create outcome does not replace it, and
+peer-dispatched member work is excluded. Controller may update only its own
+matching nonterminal operation row from that explicit Core outcome.
+For backup and restore work targeting a member, including scheduled and policy
+run-now backups, the pool master uses the pinned pool peer listener
+(`PoolMasterCertificate`) to read
+`GET /api/v1/pool/backup/{operation_id}` before submitting backup-now or
+test-cleanup through `POST /api/v1/pool/backup` with `{command,repository}`.
+Restore-as-new, replace and test-restore use
+`POST /api/v1/pool/backup/restore` with
+`{command,repository,catalog_point}`. The member checks the
+current master identity, derives its own NFS mount and filesystem identity from
+the source-only repository registration, and returns
+`{result,point?,run?,intent_sha256}`. The master compares the durable intent
+digest with its reserved run before settling a result and uses the member run
+to preserve the exact terminal stage. A new restore run pins the master's
+catalog `manifest_sha256` before execution. The member verifies its own
+repository manifest against that digest before native effects, and its
+durable GET/POST reply includes `catalog_manifest_sha256`. The master checks
+that digest against its pinned catalog point and the shared repository payload
+before accepting a successful member result. A missing or different digest,
+including a reply from an older member, leaves the run unresolved and its
+point pin retained. An exact retry uses the same pinned digest; a changed
+catalog point or unbound legacy run cannot authorize fresh restore effects.
+A terminal run with an otherwise exact,
+lagging `pending` or `needs_attention` command Result is retried; changed
+intent, pool, owner host, repository, recovery point or VM target, and
+contradictory status remain a refusal. The
+command kind is `backup-now`, `backup-restore-as-new`, `backup-restore-replace`,
+`backup-test-restore` or `backup-test-cleanup`; VM execution commands carry the
+selected owner host ID. Test cleanup follows the successful test run's retained
+owner host and removes only its stopped test VM and copied artifacts. A lost
+response is reconciled with the same operation ID; changed command input is
+refused.
+
+Test verification of a member-owned VM uses authenticated master-to-member
+`POST /api/v1/pool/backup/verify-test` with the operator request, exact
+successful test run and master VM specification. The member requires its own
+matching durable run and native creator/current identity. For `passed`, it
+also checks current disk and firmware state; `failed` can be recorded for
+damaged artifacts when the unchanged creator and definition are proven.
+The read-only peer response is `{result,run,intent_sha256}` and must match the
+master's reserved run before the catalog result is saved. Invalid input is
+`400`, a caller other than the current master is `401`, and missing or changed
+native provenance is `409`. Transport ambiguity leaves a durable metadata
+receipt for exact retry; it cannot produce an unproved passing result.
+
+After an as-new or test restore is admitted to the pool master's VM owner
+record, a definite native refusal before any target effect may be settled as
+`failed`. The executing Core first checks that its managed journal, libvirt
+domain, target disk directories, NVRAM and TPM state are absent. If it can
+prove this, it sends authenticated member-to-master `POST
+/api/v1/pool/vms/{vm_id}` with `action: release-restore-placement`, the exact
+`operation_id` and VM specification, and `placement_absent: true`. The master
+requires a matching pending restore/test run and the same creator operation in
+the untouched epoch-1 VM owner record before durably deleting that provisional
+row. It replies `placement_released: true`, including on an exact replay after
+a lost acknowledgement. Missing creator provenance in older records, a
+changed owner, or uncertain native state leaves the restore at
+`needs_attention` with its pin retained. The pool master's `pool-vms.json`
+owns `create_operation_id`; signed authority transfer retains the owner record,
+and fresh Controller adoption still reads the master's VM inventory. This is a Core peer
+contract change; no Controller route or state is added.
+
+For master takeover, the signed pool authority replica may carry
+`backup_manifest` in place of inline `backup_authority`. The master sends each
+page (at most 256 KiB, with an exact length in the manifest) to the member's authenticated
+`POST /api/v1/pool/replica/backup-page` with `{replica,index,data}`; `data` is a
+base64 JSON byte string. The member checks the signed replica, target, page
+length and SHA-256 before staging a page. It accepts the final replica only
+after all pages and the full backup authority digest validate. The manifest
+binds counts for repositories, definitions, history, catalog, pins and
+metadata mutation receipts. Missing or corrupt pages refuse the replica;
+staged pages alone grant no authority. An index `-1` POST with empty `data`
+returns `{next_index}` for the first absent or corrupt page, allowing an exact
+retry to resume page transfer. The bundled authority has a 64 MiB
+limit, at most 1024 pages, and bounded record counts (including at most
+100,000 retained run, catalog, pin or metadata receipt records). A record must
+fit one page. Crossing a bound refuses the replica without truncation. The
+master's admission guard refuses new metadata that would cross the bound;
+an older oversized history or failed replica push can still prevent a member
+from taking over the complete history.
+An encoder test reached 60 MiB, but a near-boundary native transfer/promotion
+still needs disposable-lab proof.
+
+The master checks signed-authority capacity before accepting new backup
+metadata. Repository and policy mutations, run reservations and settlement,
+point protection, and verification results can refuse capacity on their
+existing Core API routes. A refused preflight does not create that metadata
+record. Inspect retained runs and member replica status before retrying.
+
+Durable master state: `pool-backup-repositories.json`, `pool-backup-catalog/`,
+`pool-backup-runs/`, `pool-backup-policies.json`, `pool-backup-pins.json`, plus
+repository `.nex-protected` markers beside recovery-point payloads. Inventory reports
+`backup_repositories`, `backup_catalog`, `backup_runs` and `backup_policies` with matching
+`*_reported` flags only after a complete master read.
+The master run record carries `host_id` when an owner has been selected, so a
+member operation retains its target across restart and authority transfer.
+Controller retains those observations for display and adoption, never as catalog
+authority. Stopped backup converts each disk with `qemu-img convert` to standalone
+qcow2 (no backing links). Online backup uses libvirt `backup-begin --reuse-external`
+with explicit per-disk targets prepared as `libvirt-qemu` mode `0600`; completed-job
+statistics must report `success=1` (job disappearance alone is never success). Both
+modes stage under the NFS root, validate a complete manifest (`complete=true`,
+`success=1`) including matching firmware when present, then publish with
+sync → rename → sync parent. Initial publication and an exact same-key retry
+verify artifact digests before catalog settlement.
+Exact retries reuse the retained operation; changed input returns `409`. A published
+recovery-point directory for the same operation id settles succeeded without
+re-publishing (exact same-key retry after a lost reply or interrupted catalog write).
+Controller-dispatched backup and restore commands reserve `pool-backup-runs/` during
+execution when admission did not already create that record. Owner
+marker uses `O_CREAT|O_EXCL|O_NOFOLLOW`. Restore always copies artifacts locally
+before opening them as VM disks. Restore replace retains original disk paths, places
+restored disks beside them, switches the stopped definition (disconnected NICs) at
+exclusive cutover, and clears the restore pin only after `replaced`/`succeeded`.
+Pre-cutover failure leaves originals live; mid-cutover failure is `needs_attention`
+with the exact stage. Powered or in-place overwrite is refused. Restore pins and
+protect markers survive restart and catalog rebuild on the same master; active
+restore pins are included in master authority transfer. UEFI NVRAM and emulated
+vTPM state are restored into operation-specific paths and bound to the durable
+managed VM definition; Core refuses missing or mismatched firmware artifacts
+and verifies the restored state after native definition. Native libvirt/swtpm
+recovery has not yet been reverified in a disposable guest after this change.
+The master stores restore pins by operation ID. Multiple restores with distinct
+target VMs may use the same immutable recovery point; retention and catalog
+rebuild keep that point protected until every operation pin is cleared. A
+same-target restore remains a conflict. Older point-keyed pin files are read
+and reindexed by operation ID without discarding unresolved pins. Signed
+authority transfer accepts multiple pins for one point but requires each
+operation ID to be unique.
+Successful test restores retain their point pin until exact test-VM cleanup;
+terminal ordinary restore pins interrupted before release are reconciled from
+their durable runs. After promotion, a pending test-cleanup receipt with no
+local command is rehydrated only if exactly one successful test run reproduces
+its intent hash. The recovered command uses the existing authenticated
+owner-host and native creator checks; mismatch remains pending and pinned.
+Its journal is internal to the promoted Core and does not claim the former
+master's Controller operation result in a new host report.
+On a promoted master, an exact retry of an inherited restore run returns its
+durable outcome without enqueuing a new native command; a changed intent for
+that operation ID returns a conflict. Fenced promotion marks inherited pending
+runs and metadata receipts `needs_attention` and retains restore pins. A
+planned master change or eject refuses unresolved backup journal work,
+pending runs or pending metadata receipts before the first authority freeze.
+On the original executing Core, a restore-as-new or test restore left at the
+native `allocating` stage may resume only its exact retained operation and
+target through the Core tick. Core rechecks the manifest, intent, owner and
+native journal, copies verified artifacts to the same local operation path,
+then observes the result before settling the run and releasing its pin. A
+changed request or a later ambiguous native stage is not re-executed. This
+does not authorize a promoted master to replay inherited native work.
+New native allocation journals bind the manifest SHA-256 and disk descriptors
+before placement. An older unbound `allocating` journal can be bound only
+after Core proves complete matching local and placed disks, firmware,
+unchanged target identity, and absence of a domain or TPM effect under the
+native operations lock; otherwise it remains `needs_attention`.
+Core CLI:
+`nex-core-local rebuild-backup-catalog --agent-state-dir … --repository-id …`.
+
+### Backup policies and schedules (Phase 6 / S6)
+
+Core-owned job/schedule definitions, master scheduler and retention. Authenticated host-local routes:
+
+| Method and route | Request and result |
+|---|---|
+| `GET /api/local/v1/pool/backup-policies` | Master's durable policy list from `pool-backup-policies.json` |
+| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment, must match when supplied); `200` with saved policy |
+| `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}`; toggles pause; recalculates next dispatch when resumed |
+| `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; reserves one run without moving next dispatch; `202` |
+
+Controller relay:
+
+| Method and route | Request and result |
+|---|---|
+| `GET /api/v1/pools/{id}/backup-policies` | Master's inventory; `503` when `backup_policies_reported` is false |
+| `POST /api/v1/pools/{id}/backup-policies` | Create; queues `backup-policy-upsert` on the master; `202` |
+| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update; queues `backup-policy-upsert`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
+
+Scheduler defaults: store UTC occurrence plus IANA time zone/rule; nonexistent local time is
+missed; repeated local time runs once. After Core scheduler downtime, missed occurrences are
+recorded (bounded) without catch-up storm; **Run now** is offered. Controller absence alone is
+not scheduler downtime. Durable `backup_authority` on the signed pool authority replica
+carries repositories, full policy/schedule definitions, retained run history and catalog
+index entries for master takeover (NFS recovery-point payloads are never embedded). On
+fence-verified promotion the survivor materializes those stores before advertising backup
+ops; if the catalog index is empty but a registered repository mount is usable, Core
+rebuilds the catalog from validated manifests. Retention prune never removes protected or
+active restore pins; failed new backups must not prune prior good points.
+
 ### Authentication and execution
 
 The local service requires TLS 1.3 and authenticates only `root` using the host OS password
@@ -1641,7 +1903,9 @@ Terminal results are `succeeded`; `failed`, which is a decision and means nothin
   any current ready member, because the host issuing it has just become the master and the addressed
   host does not know that yet — which is exactly what the signature proves. Every action is
   idempotent by `operation_id`. `200 PoolTransferReply`, `409` with the same shape plus a bounded
-  `error`, `400 invalid pool transfer request`, `401 pool transfer peer rejected`, `405` with
+  `error` (including `the new pool master's backup catalog import is pending` while
+  activation has committed but catalog reconstruction has not finished),
+  `400 invalid pool transfer request`, `401 pool transfer peer rejected`, `405` with
   `Allow: POST`.
 - `GET /api/v1/pool/authority` — the read-only authority probe, admitted to **any** holder of a
   certificate this pool's CA issued, **including one this pool has ejected**: an ejected host must
@@ -1766,6 +2030,14 @@ sentence when the record is `failed` or `needs_attention`, `unknown` while pendi
 produces no synthetic healthy sample. That check reaches an operator through the
 host's own reported check list, not through the pool members **Convergence** column, which shows
 only the fixed `poolConvergeChecks` set.
+
+A promotion can report `stage: catalog-rebuild` after the new master identity and backup
+authority root are durable. This stage applies when the signed authority contains
+repositories but no catalog entries. Core imports the catalog from every repository
+before re-pointing members. An import error reports `needs_attention` and keeps the
+same transfer stage; Core retries from that durable stage without activating a second
+master or rolling back the committed authority. Operators must restore repository
+access and check the transfer status before relying on the promoted catalog.
 
 **Members projection additions.** Pool level: `transfer_supported` (the master advertises the
 capability); `authority`, the master's own record mirrored verbatim, `null` when the master is not

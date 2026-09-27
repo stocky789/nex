@@ -42,6 +42,7 @@ import (
 )
 
 const poolReplicaPath = "/api/v1/pool/replica"
+const poolBackupPagePath = "/api/v1/pool/replica/backup-page"
 const poolReplicaFileName = "pool-replica.json"
 const poolReplicaCheck = "pool-authority-replica"
 
@@ -67,6 +68,7 @@ var poolReplicaRefusals = map[string]protocol.PoolReplicaStatus{}               
 var poolReplicaPolls = map[string]time.Time{}                                    // dir -> master last confirmed
 var poolReplicaPushing = map[string]bool{}                                       // dir -> single flight
 var poolReplicaMembership = Membership                                           // test seam: one validated snapshot per check
+var writePoolBackupPage = vmhost.AtomicWrite
 var errPoolAuthorityReplicaBusy = errors.New("pool authority replica push already in progress")
 
 // ClearPoolReplicaStateForTest drops the process-local replica observations for one store.
@@ -91,6 +93,19 @@ func ClearPoolReplicaPostAcksForTest(s *Store) {
 func poolReplicaFile(s *Store) string { return filepath.Join(s.dir, poolReplicaFileName) }
 
 func loadPoolReplica(s *Store) (*poolReplicaRecord, error) {
+	record, err := loadPoolReplicaUnchecked(s)
+	if err != nil || record == nil {
+		return record, err
+	}
+	if record.Replica.BackupManifest != nil {
+		if err := verifyPoolBackupAuthorityPages(s, record.Replica.BackupManifest); err != nil {
+			return nil, err
+		}
+	}
+	return record, nil
+}
+
+func loadPoolReplicaUnchecked(s *Store) (*poolReplicaRecord, error) {
 	b, err := os.ReadFile(poolReplicaFile(s))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -288,6 +303,27 @@ func buildPoolAuthorityReplicaForMembership(s *Store, membership protocol.PoolMe
 	}
 	if replica.ResourceMutations, err = poolReplicaResourceMutations(s); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
+	}
+	if replica.BackupAuthority, err = PoolBackupAuthorityRefs(s); err != nil {
+		return protocol.PoolAuthorityReplica{}, "", err
+	}
+	if replica.BackupAuthority != nil {
+		if replica.BackupManifest, err = stagePoolBackupAuthority(s, replica.BackupAuthority); err != nil {
+			return protocol.PoolAuthorityReplica{}, "", err
+		}
+		if replica.BackupManifest.TotalBytes <= protocol.PoolBackupPageLimit && len(replica.BackupAuthority.MetadataReceipts) == 0 {
+			// Preserve the v2 inline format for small, receipt-free authorities.
+			inline, marshalErr := json.Marshal(replica.BackupAuthority)
+			if marshalErr != nil {
+				return protocol.PoolAuthorityReplica{}, "", marshalErr
+			}
+			if len(inline) <= protocol.PoolBackupPageLimit {
+				replica.BackupManifest = nil
+			}
+		}
+		if replica.BackupManifest != nil {
+			replica.BackupAuthority = nil
+		}
 	}
 	if replica.Sections, err = replica.SectionDigests(); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
@@ -762,6 +798,11 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {
 		return protocol.PoolReplicaAck{}, err
 	}
+	if replica.BackupManifest != nil {
+		if _, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest); err != nil {
+			return protocol.PoolReplicaAck{}, errors.New("pool authority replica backup pages are incomplete or invalid")
+		}
+	}
 	var localSanlockGeneration uint64
 	if replica.Membership.StorageLease != nil {
 		localSanlockGeneration, err = preparePoolStorageLeaseHost(context.Background(), s, replica.Membership, false)
@@ -808,6 +849,88 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	poolReplicaPolls[s.dir] = record.ReceivedAt
 	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest,
 		SanlockHostGeneration: localSanlockGeneration, Verified: true}, nil
+}
+
+// PoolBackupPageHandler stages a signed replica's bounded backup page. Pages are
+// untrusted until the final replica verifies the complete manifest and is saved.
+func PoolBackupPageHandler(s *Store) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		master, err := AuthenticatePoolMaster(s, r)
+		if err != nil {
+			http.Error(w, "replica peer rejected", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var upload poolBackupPageUpload
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, protocol.PoolReplicaLimit+2*protocol.PoolBackupPageLimit))
+		if decoder.Decode(&upload) != nil || decoder.Decode(new(any)) != io.EOF {
+			http.Error(w, "invalid backup authority page", http.StatusBadRequest)
+			return
+		}
+		poolPeerMu.Lock()
+		state, err := loadPoolPeer(s)
+		poolPeerMu.Unlock()
+		if err != nil || state.Membership.Valid() != nil || state.CAPEM == "" ||
+			upload.Replica.PoolID != state.Membership.PoolID ||
+			upload.Replica.MasterHostID != state.Membership.MasterHostID ||
+			upload.Replica.MasterHostID != master.HostID || upload.Replica.MemberHostID != s.State.HostID ||
+			upload.Replica.Valid() != nil || verifyPoolAuthorityReplica(state.CAPEM, upload.Replica) != nil {
+			http.Error(w, "backup authority page replica is not authorized", http.StatusConflict)
+			return
+		}
+		m := upload.Replica.BackupManifest
+		if m == nil || upload.Index < -1 || upload.Index >= len(m.PageSHA256) {
+			http.Error(w, "backup authority page index is invalid", http.StatusBadRequest)
+			return
+		}
+		if upload.Index >= 0 && (len(upload.Data) != m.PageBytes[upload.Index] || poolBackupHash(upload.Data) != m.PageSHA256[upload.Index]) {
+			http.Error(w, "backup authority page digest does not match", http.StatusBadRequest)
+			return
+		}
+		poolReplicaMu.Lock()
+		current, err := loadPoolReplicaUnchecked(s)
+		poolReplicaMu.Unlock()
+		if err != nil || (current != nil && upload.Replica.Generation < current.Replica.Generation) {
+			http.Error(w, "backup authority page generation is stale", http.StatusConflict)
+			return
+		}
+		if current != nil && upload.Replica.Generation == current.Replica.Generation {
+			digest, digestErr := upload.Replica.ContentDigest()
+			if digestErr != nil || digest != current.Digest {
+				http.Error(w, "backup authority page generation conflicts with the stored replica", http.StatusConflict)
+				return
+			}
+		}
+		if upload.Index == -1 {
+			if len(upload.Data) != 0 {
+				http.Error(w, "backup authority progress request has data", http.StatusBadRequest)
+				return
+			}
+			next := len(m.PageSHA256)
+			for index := range m.PageSHA256 {
+				if _, err := readPoolBackupPage(s, m, index); err != nil {
+					next = index
+					break
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(poolBackupPageProgress{NextIndex: next})
+			return
+		}
+		path := poolBackupPageFile(s, m.SHA256, upload.Index)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err == nil {
+			err = writePoolBackupPage(path, upload.Data, 0600)
+		}
+		if err != nil {
+			http.Error(w, "backup authority page could not be stored", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // boundPoolPeerText bounds peer-facing text that crosses the wire or enters a check.
@@ -1264,12 +1387,11 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		return errors.New("pool member did not report its authority replica")
 	}
 	recordPoolReplicaObservation(s, member.HostID, status)
-	if poolReplicaPostAckMatches(s, member.HostID, replica.Generation, digest) {
+	if poolReplicaPostAckMatches(s, member.HostID, replica.Generation, digest) &&
+		status.Verified && status.Error == "" && status.Generation == replica.Generation && status.Digest == digest {
 		// The member already holds this generation; this read is the fresh acknowledgement,
 		// or the master's check goes stale a minute after every push (BUG-0542).
-		if status.Verified && status.Error == "" && status.Generation == replica.Generation && status.Digest == digest {
-			recordPoolReplicaAck(s, member.HostID, status)
-		}
+		recordPoolReplicaAck(s, member.HostID, status)
 		return nil
 	}
 	key, ok := peerCertificates.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
@@ -1310,6 +1432,53 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	}
 	if err = signPoolAuthorityReplica(signer, &addressed); err != nil {
 		return err
+	}
+	if addressed.BackupManifest != nil {
+		probe, probeErr := json.Marshal(poolBackupPageUpload{Replica: addressed, Index: -1})
+		if probeErr != nil {
+			return probeErr
+		}
+		probeRequest, probeErr := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPagePath, bytes.NewReader(probe))
+		if probeErr != nil {
+			return probeErr
+		}
+		probeRequest.Header.Set("Content-Type", "application/json")
+		probeResponse, probeErr := client.Do(probeRequest)
+		if probeErr != nil {
+			return probeErr
+		}
+		var progress poolBackupPageProgress
+		if probeResponse.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(probeResponse.Body, 1<<12)).Decode(&progress) != nil {
+			_ = probeResponse.Body.Close()
+			return errors.New("pool member did not report backup authority page progress or does not support " + protocol.PoolBackupPagedAuthorityCapability)
+		}
+		_ = probeResponse.Body.Close()
+		if progress.NextIndex < 0 || progress.NextIndex > len(addressed.BackupManifest.PageSHA256) {
+			return errors.New("pool member reported invalid backup authority page progress")
+		}
+		for index := progress.NextIndex; index < len(addressed.BackupManifest.PageSHA256); index++ {
+			page, pageErr := readPoolBackupPage(s, addressed.BackupManifest, index)
+			if pageErr != nil {
+				return pageErr
+			}
+			payload, pageErr := json.Marshal(poolBackupPageUpload{Replica: addressed, Index: index, Data: page})
+			if pageErr != nil {
+				return pageErr
+			}
+			pageRequest, pageErr := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(member.PeerOrigin, "/")+poolBackupPagePath, bytes.NewReader(payload))
+			if pageErr != nil {
+				return pageErr
+			}
+			pageRequest.Header.Set("Content-Type", "application/json")
+			pageResponse, pageErr := client.Do(pageRequest)
+			if pageErr != nil {
+				return pageErr
+			}
+			_ = pageResponse.Body.Close()
+			if pageResponse.StatusCode != http.StatusNoContent {
+				return errors.New("pool member refused a backup authority page or does not support " + protocol.PoolBackupPagedAuthorityCapability)
+			}
+		}
 	}
 	body, err := json.Marshal(addressed)
 	if err != nil {

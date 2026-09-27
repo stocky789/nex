@@ -6,6 +6,7 @@ import type { ConsoleMedia } from "./console";
 import { Stats, formatValue } from "./stats";
 import { TagEditor } from "./vm-edit";
 import { VMSnapshots } from "./vm-snapshots";
+import { VMLastBackup } from "./vm-last-backup";
 import { GuestOS } from "./guest-os";
 import { Activity, Badge, Panel } from "./ui";
 import { Icon } from "./icons";
@@ -72,7 +73,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
             <dt>Networks</dt><dd>{spec.nics?.length ? <ul className="plain">{spec.nics.map((n, i) => { const net = data.networks.find(x => x.id === n.network_id); return <li key={i}>{net?.name || n.network_id}{net?.vlan ? ` (VLAN ${net.vlan})` : ""}</li>; })}</ul> : "None"}</dd>
           </>}
           <dt>Guest agent</dt><dd>{vm.guest ? <Badge value={vm.guest.agent || "unknown"} /> : "Not reported"}</dd>
-          <dt>Last backup</dt><dd className="muted">Available with backups (Phase 6)</dd>
+          <dt>Last backup</dt><VMLastBackup vmID={vm.id} poolID={vm.pool_id} api={api} />
           {spec && <><dt>Firmware</dt><dd>{spec.boot.firmware === "uefi" ? `UEFI · Secure Boot ${spec.boot.secure_boot === "off" ? "off" : "on"}` : spec.boot.firmware?.toUpperCase()}</dd></>}
           <dt>Tags</dt><dd><TagList tags={spec?.tags} /></dd>
         </dl>

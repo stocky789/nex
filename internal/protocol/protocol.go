@@ -4,8 +4,9 @@ package protocol
 import "time"
 
 const (
-	LegacyVersion = 1
-	Version       = 2
+	LegacyVersion    = 1
+	Version          = 2
+	BackupCapability = "backup-v1"
 )
 
 type Site struct {
@@ -155,6 +156,19 @@ type ManagedState struct {
 	// cannot prove it holds the current one. It is reported so an operator sees why a host
 	// starts nothing; it is enforced on Core whether or not anything is reading it.
 	Restricted *PoolRestrictedStatus `json:"restricted,omitempty"`
+	// BackupRepositories is the current master's NFS backup destination catalog.
+	// Reported=true with an empty slice is an authoritative empty list.
+	BackupRepositories         []BackupRepository `json:"backup_repositories,omitempty"`
+	BackupRepositoriesReported bool               `json:"backup_repositories_reported,omitempty"`
+	// BackupCatalog indexes completed recovery points; the repository remains authoritative.
+	BackupCatalog         []BackupRecoveryPoint `json:"backup_catalog,omitempty"`
+	BackupCatalogReported bool                  `json:"backup_catalog_reported,omitempty"`
+	// BackupRuns are retained master-owned backup/restore run records.
+	BackupRuns         []BackupRun `json:"backup_runs,omitempty"`
+	BackupRunsReported bool        `json:"backup_runs_reported,omitempty"`
+	// BackupPolicies are master-owned job/schedule definitions.
+	BackupPolicies         []BackupPolicy `json:"backup_policies,omitempty"`
+	BackupPoliciesReported bool           `json:"backup_policies_reported,omitempty"`
 }
 
 // Ports lists the physical NICs or bonds enslaved to this bridge.
@@ -250,6 +264,16 @@ type Command struct {
 	Media             *Media                          `json:"media,omitempty"`
 	VM                *VMCreateSpec                   `json:"vm,omitempty"`
 	Snapshot          *VMSnapshotRequest              `json:"snapshot,omitempty"`
+	Backup            *BackupNowRequest               `json:"backup,omitempty"`
+	Restore           *RestoreAsNewRequest            `json:"restore,omitempty"`
+	RestoreReplace    *RestoreReplaceRequest          `json:"restore_replace,omitempty"`
+	BackupProtect     *ProtectRecoveryPointRequest    `json:"backup_protect,omitempty"`
+	TestRestore       *TestRestoreRequest             `json:"test_restore,omitempty"`
+	TestRestoreVerify *TestRestoreVerifyRequest       `json:"test_restore_verify,omitempty"`
+	TestRestoreClean  *TestRestoreCleanupRequest      `json:"test_restore_cleanup,omitempty"`
+	CatalogImport     *CatalogImportRequest           `json:"catalog_import,omitempty"`
+	BackupRepository  *BackupRepository               `json:"backup_repository,omitempty"`
+	BackupPolicy      *BackupPolicy                   `json:"backup_policy,omitempty"`
 	Power             *VMPowerRequest                 `json:"power,omitempty"`
 	Delete            *VMDeleteRequest                `json:"delete,omitempty"`
 	VMMedia           *VMMediaRequest                 `json:"vm_media,omitempty"`
@@ -286,11 +310,16 @@ type ReportResponse struct {
 	Consoles               []ConsoleRequest          `json:"consoles,omitempty"`
 	CredentialOffers       []StorageCredentialOffer  `json:"credential_offers,omitempty"`
 	StorageRepositories    *StorageRepositorySupport `json:"storage_repositories,omitempty"`
+	BackupSupport          *BackupSupport            `json:"backup_support,omitempty"`
 	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
 	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
 	PoolRequests           []PoolRequest             `json:"pool_requests,omitempty"`
+}
+
+type BackupSupport struct {
+	Capability string `json:"capability"`
 }
 
 // StorageClusterCapability acknowledges the proof request identifier. A Core

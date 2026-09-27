@@ -1,0 +1,48 @@
+{
+  "summary": "Align OpenAPI schemas and command kinds with Phase 6 backup protocol types.",
+  "paths": [
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "tests/test_api_contract.py",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-backup-api-contract-parity.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Reference and contract parity only; operator workflows and UI labels are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Documents Go protocol types and managed command kinds already implemented for backup/policy/DR; no new runtime endpoints.",
+    "pages": [
+      "docs/api/openapi.json",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Contract documentation catch-up; milestone status unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "OpenAPI and test updates only; durable backup state remains on Core as already recorded for Phase 6 slices."
+  },
+  "verification": {
+    "method": "python3 -m unittest tests.test_api_contract -q; python3 -m unittest discover -s tests -p 'test_*.py' -q; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "tests/test_api_contract.py",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json"
+    ]
+  }
+}

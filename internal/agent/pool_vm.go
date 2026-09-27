@@ -38,12 +38,13 @@ var (
 )
 
 type poolVMRecord struct {
-	PoolID    string `json:"pool_id"`
-	VMID      string `json:"vm_id"`
-	HostID    string `json:"host_id"`
-	State     string `json:"state"` // defined, starting, running, stopped; never inferred from time.
-	Autostart bool   `json:"autostart"`
-	Epoch     uint64 `json:"epoch"`
+	PoolID            string `json:"pool_id"`
+	VMID              string `json:"vm_id"`
+	HostID            string `json:"host_id"`
+	CreateOperationID string `json:"create_operation_id,omitempty"`
+	State             string `json:"state"` // defined, starting, running, stopped; never inferred from time.
+	Autostart         bool   `json:"autostart"`
+	Epoch             uint64 `json:"epoch"`
 	// PendingStartOperationID binds the durable starting state to the exact
 	// admitted owner command until a fresh native observation settles it.
 	PendingStartOperationID string `json:"pending_start_operation_id,omitempty"`
@@ -1332,6 +1333,8 @@ type poolVMRequest struct {
 	// PlacementAccepted is an explicit acknowledgement from a current master
 	// after its fresh target-host preflight and durable definition reservation.
 	PlacementAccepted bool `json:"placement_accepted,omitempty"`
+	PlacementAbsent   bool `json:"placement_absent,omitempty"`
+	PlacementReleased bool `json:"placement_released,omitempty"`
 	SnapshotAccepted  bool `json:"snapshot_accepted,omitempty"`
 	SnapshotSettled   bool `json:"snapshot_settled,omitempty"`
 }
@@ -2203,7 +2206,8 @@ func PoolVMHandler(s *Store) http.Handler {
 			http.Error(w, "invalid VM execution request", http.StatusBadRequest)
 			return
 		}
-		req.PlacementAccepted, req.UpdateAccepted, req.SpecMatch, req.SnapshotAccepted, req.SnapshotSettled = false, false, false, false, false
+		placementAbsent := req.PlacementAbsent
+		req.PlacementAccepted, req.PlacementReleased, req.UpdateAccepted, req.SpecMatch, req.SnapshotAccepted, req.SnapshotSettled = false, false, false, false, false, false
 		// A definition placement is decided by the master for every VM, including
 		// local-storage guests.  Do the bounded target RPC before the durable VM
 		// lock; locks must never span a peer request.
@@ -2246,7 +2250,7 @@ func PoolVMHandler(s *Store) http.Handler {
 		// Keep the peer lock through savePoolVMs so membership cannot change between
 		// the authenticated preflight and durable owner/reservation record.
 		placementMutation := (req.Action == "define" && req.Create) || req.Action == "update-reserve"
-		recoveryMutation := req.Action == "snapshot-settle"
+		recoveryMutation := req.Action == "snapshot-settle" || req.Action == "release-restore-placement"
 		poolPeerLocked := false
 		defer func() {
 			if poolPeerLocked {
@@ -2264,7 +2268,7 @@ func PoolVMHandler(s *Store) http.Handler {
 			}
 			currentMembership = peer.Membership
 			if recoveryMutation && !poolPeerMemberCurrent(currentMembership, member) {
-				http.Error(w, "snapshot settlement owner is no longer a current pool member", http.StatusConflict)
+				http.Error(w, "VM recovery owner is no longer a current pool member", http.StatusConflict)
 				return
 			}
 			if recoveryMutation {
@@ -2289,6 +2293,16 @@ func PoolVMHandler(s *Store) http.Handler {
 			return
 		}
 		switch req.Action {
+		case "release-restore-placement":
+			if !placementAbsent || req.VM == nil || req.VM.HostID != member.HostID || req.OperationID == "" {
+				http.Error(w, "restore placement release is invalid", http.StatusBadRequest)
+				return
+			}
+			if err = releaseRestorePlacementOwnerLocked(s, &state, *req.VM, req.OperationID); err != nil {
+				http.Error(w, placementError(err), http.StatusConflict)
+				return
+			}
+			req.PlacementReleased = true
 		case "snapshot-reserve":
 			ack, reserveErr := reservePoolVMSnapshotLocked(s, member.HostID, req)
 			if reserveErr != nil {
@@ -2404,7 +2418,7 @@ func PoolVMHandler(s *Store) http.Handler {
 					http.Error(w, "VM definition uses a network or media resource with removal pending", http.StatusConflict)
 					return
 				}
-				record = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: member.HostID, State: "defined", Autostart: req.VM.Autostart, Epoch: 1, Spec: *req.VM}
+				record = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: member.HostID, CreateOperationID: req.OperationID, State: "defined", Autostart: req.VM.Autostart, Epoch: 1, Spec: *req.VM}
 				state.VMs[id] = record
 				err = savePoolVMs(s, state)
 			}
@@ -2809,7 +2823,7 @@ func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreate
 		if err := poolVMPlacementStorageMatches(ctx, s, placement, vm); err != nil {
 			return err
 		}
-		return poolVMLocalPlacement(s, vm.ID, "define", nil, true, &vm, nil, &placement)
+		return poolVMLocalPlacementBound(s, vm.ID, "define", operationID, 0, nil, true, &vm, nil, &placement)
 	}
 	master, err := PoolMasterURL(s)
 	if err != nil {
@@ -2840,6 +2854,98 @@ func poolVMDefineRequestPeer(ctx context.Context, s *Store, vm protocol.VMCreate
 		return errors.New("pool master did not acknowledge VM placement")
 	}
 	return nil
+}
+
+// releaseProvenFailedRestorePlacement removes only the provisional owner that
+// this restore created, after the executing host proves no native target exists.
+func releaseProvenFailedRestorePlacement(ctx context.Context, s *Store, spec protocol.VMCreateSpec, operationID string) error {
+	if !protocol.ValidSnapshotOperationID(operationID) || protocol.ValidateVMSpec(spec) != nil ||
+		spec.PoolID != s.State.PoolID || spec.HostID != s.State.HostID {
+		return errors.New("restore placement release is invalid")
+	}
+	engine := vmhost.NewManaged(filepath.Join(s.dir, "managed-vms"))
+	absent, err := engine.RestoreAsNewTargetAbsent(ctx, operationID, spec)
+	if err != nil {
+		return err
+	}
+	if !absent {
+		return errors.New("restore target absence is unproven")
+	}
+	membership, err := Membership(s)
+	if err != nil {
+		return err
+	}
+	if membership.MasterHostID == s.State.HostID {
+		poolVMMu.Lock()
+		defer poolVMMu.Unlock()
+		if err := requirePoolVMAuthorityWritable(s, "release-restore-placement", false); err != nil {
+			return err
+		}
+		state, err := loadPoolVMs(s)
+		if err != nil {
+			return err
+		}
+		return releaseRestorePlacementOwnerLocked(s, &state, spec, operationID)
+	}
+	master, err := PoolMasterURL(s)
+	if err != nil {
+		return err
+	}
+	client, err := PoolPeerClient(s, master)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	body, _ := json.Marshal(poolVMRequest{VMID: spec.ID, Action: "release-restore-placement", OperationID: operationID, VM: &spec, PlacementAbsent: true})
+	work, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(work, http.MethodPost, strings.TrimRight(master, "/")+poolVMPath+spec.ID, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("pool master refused restore placement release")
+	}
+	var reply poolVMRequest
+	if json.NewDecoder(response.Body).Decode(&reply) != nil || reply.VMID != spec.ID || reply.Action != "release-restore-placement" ||
+		reply.OperationID != operationID || !reply.PlacementReleased {
+		return errors.New("pool master did not acknowledge restore placement release")
+	}
+	return nil
+}
+
+func releaseRestorePlacementOwnerLocked(s *Store, state *poolVMState, spec protocol.VMCreateSpec, operationID string) error {
+	if state == nil || !protocol.ValidSnapshotOperationID(operationID) || protocol.ValidateVMSpec(spec) != nil || spec.PoolID != s.State.PoolID {
+		return errors.New("restore placement release is invalid")
+	}
+	run, err := loadPoolBackupRun(s, operationID)
+	if err != nil || (run.Kind != protocol.BackupKindRestoreNew && run.Kind != protocol.BackupKindTestRestore) ||
+		run.Status != "pending" || run.NewVMID != spec.ID || run.HostID != spec.HostID || run.PoolID != spec.PoolID {
+		return errors.New("restore placement run does not match the owner")
+	}
+	for _, inventory := range state.Inventory {
+		for _, vm := range inventory.VMs {
+			if vm.ID == spec.ID {
+				return errors.New("restore target has appeared in host inventory")
+			}
+		}
+	}
+	record, ok := state.VMs[spec.ID]
+	if !ok {
+		return nil // exact retry after a lost acknowledgement
+	}
+	if record.CreateOperationID != operationID || !poolVMRecordMatchesSpec(record, spec) || record.State != "defined" ||
+		record.Epoch != 1 || record.PendingUpdate != nil || record.PendingStartOperationID != "" || poolVMHasSnapshotState(record) {
+		return errors.New("restore placement owner has changed")
+	}
+	delete(state.VMs, spec.ID)
+	return savePoolVMs(s, *state)
 }
 
 func poolVMRequestPeer(ctx context.Context, s *Store, id, action string, permit *string, create bool, vm *protocol.VMCreateSpec, epoch *uint64) error {
@@ -3148,7 +3254,7 @@ func poolVMLocalPlacementBound(s *Store, id, action, operationID string, expecte
 			if vm == nil || vm.ID != id || vm.PoolID != s.State.PoolID || vm.HostID != s.State.HostID || protocol.ValidateVMSpec(*vm) != nil {
 				return errors.New("invalid VM definition")
 			}
-			r = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: s.State.HostID, State: "defined", Autostart: vm.Autostart, Epoch: 1, Spec: *vm}
+			r = poolVMRecord{PoolID: s.State.PoolID, VMID: id, HostID: s.State.HostID, CreateOperationID: operationID, State: "defined", Autostart: vm.Autostart, Epoch: 1, Spec: *vm}
 		}
 	case "delete-check":
 		if !ok || vm == nil || r.PendingUpdate != nil || r.PendingRecovery != nil || r.PendingStartOperationID != "" ||

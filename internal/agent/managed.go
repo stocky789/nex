@@ -25,7 +25,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
 		return true
 	}
 	return false
@@ -896,10 +896,16 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.Media != nil {
 			return cmd.Media.HostID
 		}
-	case "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata":
+	case "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now":
 		if cmd.VM != nil {
 			return cmd.VM.HostID
 		}
+	case "backup-restore-as-new":
+		if cmd.Restore != nil {
+			return "" // restore-as-new targets local host placement chosen later
+		}
+	case "backup-restore-replace", "backup-test-restore":
+		return ""
 	case "vm-power":
 		if cmd.Power != nil {
 			return cmd.Power.HostID

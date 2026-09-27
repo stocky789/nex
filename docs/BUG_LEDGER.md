@@ -9395,3 +9395,497 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: editing the master or operation journal, issuing a new revert to bypass the
   reservation, booting an incompletely verified restore, or dropping metadata checks
   merely to obtain a successful result.
+
+## BUG-0648 — Backup authority refs re-enter poolPeerMu during snapshot reservation
+
+- Date: 2026-09-27. Status: fixed; focused agent regressions passed; disposable-lab
+  product backup path not exercised by this fix.
+- Symptom: Broad `go test ./internal/agent/ -run '…Catalog…'` hung in snapshot reservation after S6 added compact backup authority refs to the pool replica.
+- Root cause: `reservePoolVMSnapshotLocked` holds `poolPeerMu` while `poolVMReplicaFits` → `buildPoolAuthorityReplicaForMembership` → `PoolBackupAuthorityRefs` → `masterBackupPool`/`ListPoolBackupPolicies` → `Membership`, which locks `poolPeerMu` again on the same goroutine.
+- Fix: `PoolBackupAuthorityRefs` loads policy/run files directly and never calls `Membership`; the authority builder already verified this host is master.
+- Regression: `TestPoolBackupAuthorityRefsDoesNotReenterPeerLock` (2s timeout under `poolPeerMu`); Catalog-matching and backup schedule tests under a package timeout.
+- Avoid: calling `Membership` (or any `poolPeerMu` taker) from code reachable while snapshot/authority paths already hold `poolPeerMu`.
+
+## BUG-0649 — Backup-now exact retry failed after a published recovery point
+
+- Date: 2026-09-27. Status: fixed; focused vmhost/agent regressions passed; lab redeploy still outstanding.
+- Symptom: Browser Back up now returned HTTP 202, then the Controller operation settled `failed` with `backup recovery point already exists` while the NFS directory for that operation id already held `manifest.json` and disk artifacts. Catalog GET still showed prior points.
+- Root cause: Controller-dispatched `backup-now` executes without `acceptBackupRequest`, so `pool-backup-runs/{id}.json` was never reserved before publish. Publish succeeded, settle failed (`needs_attention`), and the next heal retry called `PublishBackupRecoveryPoint` again, which refused the existing directory as a hard failure.
+- Fix: `ensureBackupRunReserved` during backup/restore execute (idempotent with Core-local admission). `PublishBackupRecoveryPoint` treats an already-complete matching published point as success for exact same-key retry; mismatched key fields still refuse with `already exists`.
+- Regression: `TestPublishBackupRecoveryPointExactRetrySettlesWithoutRepublish`; `TestBackupNowControllerPathReservesRunAndExactPublishRetrySettles`.
+- Avoid: treating a published recovery-point directory as a failed conflict on exact same-key retry, or settling backup-now without a durable run reservation on the Controller path.
+
+## BUG-0650 — Restore-as-new needs_attention with missing pool-backup-runs journal
+
+- Date: 2026-09-27. Status: fixed; focused agent regression passed; lab redeploy still outstanding.
+- Symptom: Restore as new created the stopped guest and disk on the host (`vm-create` succeeded) while the Controller restore operation settled `needs_attention` because `pool-backup-runs/{id}.json` was missing.
+- Root cause: Same Controller dispatch gap as BUG-0649 — restore-as-new ran `RegisterRestoredAsNew` then `SettlePoolBackupRun` without a reserved run file when the command arrived via the managed journal rather than Core-local `acceptBackupRequest`.
+- Fix: `ensureBackupRunReserved` at the start of restore-as-new (and replace/test-restore) execution so settle always finds the durable run record; exact same-key reserve retries remain idempotent; changed input for the same operation id returns conflict.
+- Regression: `TestRestoreAsNewControllerPathReservesMissingRunBeforeSettle`.
+- Avoid: assuming only Core-local admission creates `pool-backup-runs/` before native restore effects.
+
+## BUG-0651 — Promoted master loses backup policies/catalog/runs (503 backup ops)
+
+- Date: 2026-09-27. Status: fixed; focused agent promote fixtures passed; live nested Campaign B re-run **pass** (same-day overlay redeploy `4f569d0e…4095d9`: survivor retained policies/catalog/runs, restore-as-new from NFS while former master down, fresh Controller adopted same IDs).
+- Symptom: After fence-verified master promotion (Campaign B), the survivor listed empty backup policies/catalog/runs and returned `503 backup operation unavailable` for repository test/catalog rebuild, while the signed authority replica still carried `backup_authority` summaries and NFS still held recovery-point payloads.
+- Root cause: `PoolBackupAuthority` only replicated compact policy/run refs, and `adoptPoolAuthorityFromReplica` never materialized backup repositories, policy definitions, run history or catalog index into the survivor's durable stores. Becoming master alone did not recover those files.
+- Fix: Expand `backup_authority` to carry repositories, full policy definitions, retained run history and catalog index (still no NFS payloads). Adopt that state during promotion activation with rollback; when the catalog index is empty but a repository mount is usable, auto-import validated manifests.
+- Regression: `TestPoolPromotionRetainsBackupAuthority`; `TestPoolPromotionRebuildsCatalogFromNFSWhenIndexEmpty`; `TestAdoptPoolBackupAuthorityAndRebuildFromMount`.
+- Avoid: treating compact backup_authority refs as sufficient for takeover, or advertising backup mutating APIs on a promoted master before durable backup stores are present.
+
+## BUG-0652 — Member peer backup result rejected on Controller heartbeat
+
+- Date: 2026-09-27. Status: fixed in source; focused regressions passed; native
+  member heartbeat retest pending for this changed binary.
+- Symptom: a Core3 member executed a direct backup delegated by Core2's pool
+  master. The master-owned operation succeeded, but Core3's next Controller
+  report included that operation's result. Controller correctly rejected the
+  result as belonging to Core2, so Core3's heartbeat failed and its status
+  became stale.
+- Root cause: authenticated peer admission created an ordinary local journal
+  entry and completion reset its acknowledgement. The report path then treated
+  that entry as a Controller-owned operation. Older member journals also lack
+  any peer-origin marker.
+- Fix: persist a peer-dispatched marker on admission and exact peer replay;
+  omit marked entries from Controller results and synthetic outcomes while
+  retaining the journal for safe peer retry. Before reporting, identify older
+  member entries through matching local backup run records; preserve a former
+  master's own Controller results. Keep Controller's foreign-host result
+  rejection intact.
+- Regression: `go test ./internal/agent -run
+  'TestMemberPeerBackupResultDoesNotBlockControllerReport|TestFormerMasterKeepsControllerOwnedBackupResult|TestPeerBackupAdmissionRetainsJournalForExactReplay'
+  -count=1` passed all three focused cases. `go test ./internal/agent
+  -count=1` passed. A real Core3 report after redeploy has not yet been recorded.
+- Compatibility limit: a pre-marker Controller-direct backup on a current
+  member could match the same local run pattern as a peer command and have its
+  result suppressed. Current Controller sends backup operations to the master;
+  the older journal format cannot prove which caller admitted such an entry.
+- Avoid: weakening Controller operation ownership checks or deleting the
+  member journal to make heartbeat pass; both lose a safety boundary or exact
+  peer replay evidence.
+
+## BUG-0653 — Background restore completion occupied the foreground Run slot
+
+- Date: 2026-09-27. Status: fixed in source; focused and package regressions
+  passed; native retry still pending for the changed candidate.
+- Symptom: Core2 admitted a second Core-local restore and retained its pending
+  journal and reserved backup run, but it produced no staging or target effects.
+  Restarting the agent dispatched that same pending restore immediately.
+- Root cause: multiple background completion branches passed their completed
+  operation ID as the foreground `active` argument to `completeManagedCommand`
+  and assigned its unchanged return to the foreground slot. A successful
+  member restore could block the next restore; a v3 restore entering
+  `needs_attention` also blocked the unrelated v4 restore.
+- Fix: background branches call a dedicated completion wrapper with no
+  foreground ID and do not assign its return to `active`. The selector fences
+  another backup or restore for the same VM while an earlier one needs
+  attention, but lets independent targets proceed. A temporary terminal-ID
+  gate-clearing workaround was removed.
+- Regression: `TestSettledMemberRestoreDoesNotBlockNextLocalRestore` and
+  `TestAttentionRestoreReleasesGateButFencesSameTarget` failed before their
+  respective fixes and passed afterward. `go test ./internal/agent
+  ./internal/protocol ./internal/vmhost -count=1` passed. Native settlement
+  of the second restore is not yet recorded.
+- Avoid: restarting the agent as the recovery procedure for every queued
+  restore, or clearing `needs_attention` gates without reconciling native work.
+
+## BUG-0654 — Definite restore placement refusal stranded a provisional VM owner
+
+- Date: 2026-09-27. Status: fixed for new creator-marked owner records in
+  source; focused agent/vmhost tests passed. The pre-fix Core2 v3 owner record
+  lacks creator provenance and remains `needs_attention` for audited repair.
+- Symptom: a restore-as-new request met a definite native capacity refusal
+  before target effects, but Core reported `needs_attention`, retained the
+  restore pin and left the pool master's provisional VM owner row in place.
+- Root cause: after master placement admission, the error path could not prove
+  that the row belonged to this exact restore or safely remove it. A generic
+  failure settlement would have risked releasing protection while a target
+  definition existed.
+- Fix: new `pool-vms.json` owner records retain `create_operation_id`. The
+  executing Core proves the exact target has no managed journal, libvirt
+  domain, disk directory, NVRAM or TPM state, then uses pinned mTLS action
+  `release-restore-placement` to ask the master to remove only the matching
+  pending restore/test owner. The master checks current member identity,
+  complete spec, pending run, creator ID, epoch and inventory before a durable
+  delete. A successful exact replay is acknowledged; any uncertain or legacy
+  record stays fenced and pinned.
+- Regression: `TestRestorePlacementPeerReleaseRequiresExactOwner` covers
+  missing absence claim, wrong member/spec/operation, legacy blank creator,
+  exact success and replay. `TestRestoreAsNewPreEffectPlacementRefusalFailsAndReleasesPin`
+  and the test-restore counterpart check definite failure and pin release.
+  `TestRestoreAsNewTargetAbsentRequiresNoNativeEffects` checks the local
+  absence proof. Focused `go test ./internal/agent ./internal/vmhost -run
+  'TestRestorePlacementPeerReleaseRequiresExactOwner|TestRestoreAsNewPreEffectPlacementRefusalFailsAndReleasesPin|TestTestRestorePreEffectPlacementRefusalFailsAndReleasesPin|TestRestoreAsNewTargetAbsentRequiresNoNativeEffects'
+  -count=1` passed. Native v4 recovery has not yet been recorded.
+- Avoid: deleting a master VM owner row based on a timeout, a Boolean alone,
+  or a legacy row without the exact creator operation; do not clear the pin
+  before both native absence and durable master release are established.
+
+## BUG-0655 — One restore pin blocked another target using the same point
+
+- Date: 2026-09-27. Status: fixed in source; focused and package tests passed;
+  native rerun pending. The unresolved v3 restore remains pinned.
+- Symptom: the v3 restore's `needs_attention` pin on an immutable recovery
+  point caused a second restore to a different VM ID from that same point to
+  fail admission before its run was created.
+- Root cause: `pool-backup-pins.json` keyed pins by recovery point ID, so only
+  one restore operation could hold that point even when the targets were
+  independent. Pin ownership and prune protection were conflated.
+- Fix: persist pins by operation ID; allow distinct operations to pin the
+  same point, preserve same-target command conflict, and remove only the exact
+  operation's pin at settlement. Reading older point-keyed state reindexes
+  valid values without dropping an unresolved pin and rejects mismatched or
+  duplicate operation keys. Retention and catalog rebuild still treat a point
+  as protected while any pin refers to it. Signed backup authority transfer
+  carries each operation pin and validates unique operation IDs.
+- Regression: `TestDistinctRestoreTargetsSharePointPinsAndSameTargetConflicts`
+  covers legacy pin migration, distinct-target admission, same-target
+  refusal after journal-less promotion, and separate pin clearance.
+  `TestBackupPinStoreRejectsCorruptKeysAndDuplicateOperations` and
+  `TestBackupAuthorityPinsPermitSamePointButRequireUniqueOperations` cover
+  corrupt persisted and replicated pins. Activation and reservation tests
+  also passed. `go test ./internal/agent ./internal/protocol ./internal/vmhost
+  -count=1` and the repository privacy test passed; no native rerun has yet
+  proven the changed binary.
+- Avoid: using recovery point ID as a unique restore identity or clearing
+  every pin for a point when only one restore settles.
+
+## BUG-0656 — Promoted master could replay an inherited uncertain restore
+
+- Date: 2026-09-27. Status: fixed in source; focused and package tests passed;
+  native promotion/retry remains unverified for this changed binary.
+- Symptom: an exact restore request retried after master promotion could find
+  the inherited `needs_attention` run and pin but no executing command in the
+  promoted master's journal. Treating the request as new work risked a second
+  native restore for an outcome that had not been observed.
+- Root cause: admission used the local command journal as its only exact replay
+  boundary; signed authority transferred runs and pins, not the former
+  master's native execution command.
+- Fix: when no local command exists, Core checks the retained restore run and
+  its exact intent before admission. An exact retry returns that durable run
+  outcome without enqueuing native work; changed intent conflicts. A fenced
+  promotion maps inherited pending runs and metadata receipts to
+  `needs_attention` and preserves restore pins. Planned master change/eject
+  refuses unresolved backup journal work, pending runs or pending receipts
+  before freezing authority.
+- Regression: `TestDistinctRestoreTargetsSharePointPinsAndSameTargetConflicts`
+  checks journal-less promotion replay and changed-intent conflict alongside
+  distinct-target admission. `TestAuthorityFreezeRefusesUnresolvedBackup`,
+  `TestPoolTransferRefusesPendingBackupBeforeFreeze` and
+  `TestInheritedPendingBackupNeedsAttentionAndKeepsPin` cover transfer gates
+  and inherited status/pin. `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1` passed as reported by the code owners. No
+  changed-binary native promotion/retry run is claimed.
+- Avoid: reconstructing a former master's execution command from a run or
+  treating a missing local journal as evidence that native effects never
+  started.
+
+## BUG-0657 — Backup history growth could outpace the signed member replica
+
+- Date: 2026-09-27. Status: fixed in source with focused tests; native
+  near-boundary transfer and promotion remain unverified.
+- Symptom: Core could accept more backup metadata than the bounded signed
+  authority could carry to a member. That member then lacked a current
+  complete backup history for promotion. This was identified by source review;
+  no native over-capacity incident is claimed.
+- Root cause: repository, policy, run, catalog, pin and receipt writers did
+  not all check the future signed-authority size before committing. A later
+  replica encode could refuse after master state had grown.
+- Fix: the master now preflights the projected authority before metadata
+  writes, reserves byte headroom for pending run/catalog and receipt outcomes,
+  bounds persisted error text, and serializes scheduler and verification
+  writers with authority changes. Protection preflights before its repository
+  marker changes. A capacity refusal leaves the proposed metadata unaccepted.
+  The byte bound is 64 MiB; the encoder's packing rule prevents the 1024-page
+  count from being reached first for valid records.
+- Regression: five `TestBackupAuthorityCapacity*` tests cover refused new
+  runs, run/catalog settlement, pending outcome headroom and pre-marker
+  protection refusal. `TestPoolBackupAuthoritySparsePagesRemainBelowPageLimit`
+  confirms the packing bound. The code owner ran the focused tests and
+  `go test ./internal/agent ./internal/protocol ./internal/vmhost -count=1`
+  plus repository privacy; all passed. The tests were added after the guard,
+  so no observed pre-fix red run is claimed. No native capacity refusal,
+  near-boundary peer transfer or promotion was exercised.
+- Avoid: accepting an operation merely because the current master can store
+  it locally, or treating the 64 MiB limit as unbounded retained history.
+
+## BUG-0658 — Test restore verification and cleanup trusted a reused VM ID
+
+- Date: 2026-09-27. Status: fixed in source; focused and affected Go package
+  tests passed; current-binary native Verify/Cleanup rerun remains open.
+- Symptom: a successful test run and pool VM owner row could still refer to a
+  VM ID after the original test VM was deleted or replaced. Recording a pass
+  or cleaning by that ID risked attributing a replacement VM to the restore
+  or deleting it. This was found by source review, not a claimed native
+  destructive reproduction.
+- Root cause: master-side run and VM ownership records alone did not prove
+  that the current native definition was created by the exact test-restore
+  operation. Member-host verification lacked a current native proof path,
+  and cleanup needed creator binding through native delete and settlement.
+- Fix: Core requires the exact successful test run, master VM specification,
+  native creator journal and current VM identity. A new current-master
+  authenticated read-only peer `POST /api/v1/pool/backup/verify-test` obtains
+  member proof before recording a result. `passed` requires current disks and
+  firmware; `failed` permits damaged artifacts while requiring unchanged
+  creator and definition. Cleanup keeps that binding through native deletion
+  and master settlement; a lost delete reply reconciles only with an exact
+  successful native receipt and target absence. Blank legacy creator or
+  missing native journal fails closed. A pending verification receipt survives
+  interrupted peer proof for exact retry.
+- Regression: `TestBackupVerificationRequiresMatchingSuccessfulTestRun`,
+  `TestMemberTestVerificationBindsNativeProofAndRun`,
+  `TestRunTestVerificationWaitsForNativeProofWithoutBlockingReports`,
+  `TestTestRestoreCleanupReconcilesLostNativeDeleteReply`,
+  `TestTestRestoreCleanupRefusesReusedPoolVMAtSettlement` and vmhost tests for
+  creator binding and damaged-artifact failed results passed. The owners ran
+  `go test ./internal/agent ./internal/protocol ./internal/vmhost -count=1`,
+  privacy unittest and diff check successfully. No observed pre-fix red test
+  run or native Verify/Cleanup rerun is claimed.
+- Avoid: treating a matching UUID, a historical successful run, or an absent
+  post-delete VM alone as proof of the current VM's restore origin.
+
+## BUG-0659 — First-use TPM restore could not establish the native state root
+
+- Date: 2026-09-27. Status: source correction and focused tests passed;
+  bounded native exact-operation recovery and UEFI firmware boot passed.
+  Guest OS boot and TPM-sealed application-data recovery remain open.
+- Symptom: the disposable member's first UEFI/vTPM restore stopped before
+  guest boot because `/var/lib/libvirt/swtpm` did not yet exist. Its retained
+  native journal stayed at `allocating` and the restore remained
+  `needs_attention`; the target and pin were preserved.
+- Root cause: the TPM placement path assumed libvirt had already created its
+  swtpm root. An initial repair draft also checked ancestor symlinks only
+  after a possible chmod of an empty 0700 leaf, allowing a changed parent
+  symlink to redirect that mutation.
+- Fix: Core creates only the exact missing native root with mode 0711 after
+  validating every ancestor. The allocating journal durably records whether
+  that root was absent; an exact retry may repair only an empty 0700 root
+  owned by the Core process after ancestor validation. A symlink, nonempty
+  root or changed native intent refuses. Core now resumes only the exact
+  retained allocating restore, binds its immutable manifest and disk
+  descriptors, and requires full staged/placed artifact proof before binding
+  older unbound journals. Later ambiguous native stages remain observation
+  only.
+- Native follow-up: the older pending allocation journal carried a null
+  pre-copy disk chain. A newer reader initially refused that legacy shape
+  before reconciliation; the corrected reader accepts only that pending
+  allocating restore form and new pre-copy journals omit the empty chain.
+- Regression: `TestBackupTPMRootAccessibleCreatesOnlyMissingNativeRoot`
+  checks first creation, symlink rejection, empty reserved repair, nonempty
+  refusal and a symlinked ancestor without changing the foreign leaf.
+  `TestAllocatingRestoreResumesOnlyExactRetainedOperation` and
+  `TestBindLegacyRestoreAllocationRequiresCompleteExistingArtifacts` check
+  exact retry, preserved pin on failure and changed-artifact refusal.
+  `TestReadLegacyAllocatingRestoreWithReservedEmptyDiskChain` checks the
+  narrow older journal form. Code
+  owners reported full `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1`, privacy and diff checks passing. No observed
+  pre-fix red regression run is claimed. On the disposable member, the
+  changed Core service restarted and reconciled the original v5 operation
+  without a new restore POST: member journal and master run reached
+  `defined`/`succeeded` and `registered`/`succeeded`; the restored stopped
+  domain used libvirt's default UUID TPM tree. Artifact disk marker, NVRAM
+  and TPM state hashes matched before start. An isolated start reached UEFI
+  firmware with swtpm using that UUID tree; NVRAM and TPM state changed after
+  boot and the disk marker stayed intact. The disk had no guest OS, so this
+  does not prove OS boot or TPM-sealed data recovery. ACPI shutdown timed out
+  and the exact disposable VM was stopped through libvirt. This native retry
+  exercised first-use TPM root creation, legacy null-chain normalization and
+  exact legacy binder; interrupted 0700 root repair remains unit-tested only.
+- Avoid: assuming a host has already run a TPM VM, chmodding a path before
+  checking ancestors, or replaying an uncertain restore with new target or
+  recovery-point content.
+
+## BUG-0660 — Test restore point pin could clear before cleanup
+
+- Date: 2026-09-27. Status: fixed in source with focused and package tests;
+  native member restore and prune rerun remain open.
+- Symptom: a successful member test restore could clear the recovery-point
+  pin as soon as its peer result settled, while its isolated test VM still
+  existed. Retention could then prune that point before verification/cleanup.
+  A separate interruption between terminal settlement and pin clear could
+  leave ordinary restore pins retained longer than intended.
+- Root cause: direct peer settlement treated every successful restore as
+  eligible for pin release; the restart path did not reconcile terminal pin
+  clears. Test restore has a different lifetime: its pin ends only after
+  proven cleanup.
+- Fix: direct peer settlement retains the pin for a successful test restore
+  and for all uncertain results; it clears only failed test or terminal
+  ordinary restore pins. Periodic Core reconciliation clears stale terminal
+  ordinary pins after a durable run proves the exact outcome, while keeping
+  successful test and attention pins until their respective safe endpoints.
+- Regression: `TestMemberTestRestoreSettlementKeepsSuccessfulPin`,
+  `TestSuccessfulTestRestoreStaysPinnedUntilCleanup` and
+  `TestTerminalRestorePinsReconcileAfterRestart` passed. Code owners reported
+  full `go test ./internal/agent ./internal/protocol ./internal/vmhost
+  -count=1`, privacy and diff checks passing. No native member/prune rerun or
+  observed pre-fix red test is claimed.
+- Avoid: treating a successful test restore as finished protection while its
+  test VM remains, or clearing pins from an uncertain run.
+
+## BUG-0661 — Promoted master could strand pending test cleanup receipt
+
+- Date: 2026-09-27. Status: fixed in source with focused and package tests;
+  native promotion/cleanup rerun remains open.
+- Symptom: a promoted master inherited a pending test-cleanup metadata
+  receipt and the successful test run but not the former master's command
+  journal. With no command to drive reconciliation, the test VM and pin could
+  remain indefinitely pending after a lost reply or master loss.
+- Root cause: signed backup authority transfers receipts and runs, not the
+  prior master's execution journal; cleanup recovery previously looked only
+  for an existing local command.
+- Fix: the writable promoted master derives a cleanup command only when one
+  successful test run produces the exact inherited pending receipt intent
+  digest. It durably rehydrates that command and uses the existing
+  authenticated owner-host cleanup and native-origin guards. A mismatch or
+  ambiguous run leaves the receipt and pin untouched. The recovered journal
+  is marked peer-dispatched/internal so the promoted Core does not report the
+  former master's Controller operation as its own. Fresh restore
+  reconciliation now reports the current native failure while preserving
+  the prior reason only when the allocation journal is unavailable.
+- Regression: `TestPromotedMasterRecoversOnlyExactPendingTestCleanup` checks
+  mismatch refusal, exact rehydration, internal result ownership and pin
+  retention before owner proof.
+  Code owners reported full `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1`, privacy and diff checks passing. No native
+  promotion/cleanup replay or observed pre-fix red run is claimed.
+- Avoid: replaying a pending receipt as a new cleanup without an exact run
+  and intent match, or removing the point pin before native deletion and
+  master owner settlement.
+
+## BUG-0662 — Controller kept an old attention row after Core restore succeeded
+
+- Date: 2026-09-27. Status: fixed in source and observed in the disposable
+  changed-binary Controller rerun; wider Phase 6 acceptance remains open.
+- Symptom: the original v5 restore reconciled to `succeeded` in the executing
+  Core journal and master's backup run, and the Core-backed backup-runs API
+  showed that result, but the Controller's generic operation row still showed
+  `needs_attention` after it acknowledged the later authenticated Result.
+- Root cause: Controller report handling allowed only ZFS provisioning to
+  move from `needs_attention` to a later terminal Result. It acknowledged a
+  backup Result for the same host and operation ID without updating that
+  operation row. Once ACKed, Core's managed outcome could also be obscured by
+  a native `vm-create` outcome with the same restore operation ID.
+- Fix: a later `succeeded` or `failed` backup Result from the authenticated
+  operation-owning host may settle the same Controller row. Core backup runs
+  and resource projections alone do not drive this transition; a foreign
+  host result remains rejected. Core continues reporting the durable
+  Controller-owned backup Journal outcome, including repository, policy,
+  protect, catalog and test metadata work, after Result ACK and suppresses a
+  same-ID native `vm-create` outcome; peer-dispatched member work stays
+  excluded. Controller adopts only an explicit same-host, same-kind Core
+  outcome into its own nonterminal row when a late Result is no longer sent.
+  The own-operation lookup now also binds the host and kind in both the
+  operation and managed-resource rows, so a colliding ID from another host or
+  resource kind becomes a separate adopted outcome.
+- Regression: `TestBackupResultRecoversControllerAttention` failed before
+  the fix and passed afterward; existing cross-host rejection remains
+  covered. `TestAcknowledgedBackupRestoreOutcomesRemainInDurableInventory`
+  checks recurring restore history, native same-ID collision and peer
+  exclusion; `TestBackupOutcomeRecoversAcknowledgedControllerAttention`
+  checks Controller catch-up after ACK.
+  `TestAcknowledgedBackupMetadataOutcomesRemainInDurableInventory` checks
+  metadata kinds and peer exclusion;
+  `TestBackupMetadataOutcomeRecoversAcknowledgedControllerAttention` checks
+  Controller test-verification catch-up after ACK.
+  `TestBackupOutcomeAdoptionSurvivesOperationIDCollisions` failed before and
+  passed after the scoped lookup correction. Full affected Go packages,
+  privacy and diff checks passed as reported by the owners. In the disposable
+  v12 rerun, Controller C changed the historical v5 operation row from
+  `needs_attention` to `succeeded` using the recurring authenticated Core
+  outcome. No database edit or new restore POST was used. Core2 and Core3
+  were fresh, and all 14 nested VMs were stopped at the final checkpoint.
+- Avoid: acknowledging a later authoritative Result while leaving an older
+  uncertain UI task row unchanged, or letting an internal native `vm-create`
+  hide the Core-owned restore outcome.
+
+## BUG-0663 — Transient member test-restore reply was treated as a different operation
+
+- Date: 2026-09-27. Status: source fix and focused regression passed; a later
+  disposable member test restore completed, but the original raw peer reply
+  was not captured.
+- Symptom: a member test restore briefly returned a peer error described as a
+  different operation while its durable run and command journal were settling.
+  The exact status pair on that earlier wire reply is unavailable.
+- Root cause: source review found that the master treated a terminal member
+  run paired with a lagging `pending` or `needs_attention` journal Result as a
+  permanent inconsistency. This is a source-based explanation consistent with
+  the observed transient, not a proven reconstruction of the absent reply.
+- Fix: the authenticated peer reply still requires the exact operation ID,
+  intent, pool, executing member host, repository, point and VM target. Only
+  the expected lag of the journal Result behind a terminal run is retryable;
+  reversed or contradictory status, changed identity or target remains a
+  permanent refusal. No peer request or response schema changed.
+- Regression: `TestPeerTestRestoreWaitsForJournalToCatchUpWithRun` failed
+  before the fix and passed afterward as reported by the owner; it checks
+  retryable lag and permanent reverse skew. `TestPeerRestoreReplyRejectsSameOperationDifferentTarget`
+  checks target, pool and host binding. An independent focused run of both
+  tests passed with `go test ./internal/agent -run
+  'TestPeerTestRestoreWaitsForJournalToCatchUpWithRun|TestPeerRestoreReplyRejectsSameOperationDifferentTarget'
+  -count=1`. The owner reported full agent/protocol, privacy and diff checks
+  passing; the primary operator later reported `go test ./...` passing.
+- Native evidence: a separate disposable Core3 BIOS test restore reached a
+  succeeded run with its exact point pin and creator record. The inspected
+  boot screen showed no bootable device, so the operator recorded Failed.
+  Verify and typed-ID Cleanup receipts succeeded; native VM, disk and firmware
+  were absent, and the master owner row and exact pin were removed. This
+  establishes that bounded workflow, not the exact earlier status-skew cause.
+- Avoid: making a status observation race authorize a changed peer identity or
+  target, or replaying a settled native restore as a new effect.
+
+## BUG-0664 — Restore manifest was not bound to the master's catalog point
+
+- Date: 2026-09-27. Status: corrected in source with focused regressions;
+  changed-binary native tamper and member retry checks remain open.
+- Symptom: restore validated the repository owner and internal manifest and
+  artifact digests, but did not compare the selected point's manifest digest
+  with the pool master's catalog. A complete, internally valid replacement
+  payload under the same recovery-point ID could be used for a different VM
+  restore than the catalog point the operator selected.
+- Root cause: the restore run's durable reservation held point identity and
+  command intent, but not the master's catalog `manifest_sha256`. A member
+  started without that catalog entry and therefore could not make the same
+  comparison before native placement.
+- Fix: Core pins the selected master catalog digest in each new restore run.
+  Local as-new, test and replace paths compare that durable digest, current
+  catalog entry and repository manifest before copy or cutover. The current
+  master sends the catalog point over authenticated
+  `POST /api/v1/pool/backup/restore`; the member retains the digest in its
+  run and returns it on GET/POST from that durable run. The master compares
+  member digest and shared payload before accepting success. A changed or
+  missing catalog point, legacy run without a digest and old member lacking
+  the route fail closed; unresolved runs retain their point pins.
+- Regression: independent focused `go test ./internal/agent -run
+  'TestRestoreManifestMustMatchMasterCatalogDigest|TestCleanMemberRestorePeerPersistsMasterCatalogDigest|TestRestorePeerRefusesOlderMemberWithoutCatalogRoute|TestRestoreReplaceRefusesChangedValidCatalogManifestBeforeCopy|TestPoolBackupAuthorityPagesRetainRestoreManifestDigest'
+  -count=1` passed. It covers a valid same-ID payload replacement, all three
+  member restore kinds, old-member route refusal, replace before-copy refusal
+  and signed-authority digest retention. No observed pre-fix red run or native
+  payload-tamper walkthrough is claimed.
+- Avoid: treating an internally valid repository payload as authority for the
+  recovery point selected from the master's catalog, or using a member's
+  current catalog as a substitute for its retained restore-run digest.
+
+## BUG-0665 — Policy tab switch could change an uncertain request's retry body
+
+- Date: 2026-09-27. Status: fixed in UI source with a red/green focused
+  regression; no current-binary browser rewalk for this batch.
+- Symptom: switching from Policies to Recovery points after an uncertain
+  policy create unmounted the local draft, while the parent retained its
+  request ID. Returning to Policies could submit changed fields under the
+  same ID instead of replaying the original request body.
+- Root cause: the policy panel's conditional mount discarded local draft and
+  uncertain-request state across tab changes.
+- Fix: the parent keeps the policy panel mounted and passes an active flag.
+  The off-tab panel returns no visible DOM or listeners after its hooks, while
+  retaining the draft and uncertainty flag for exact retry.
+- Regression: the UI owner reported that the expanded
+  `web/src/backup-policies.test.mjs` failed before the mount correction and
+  passed afterward. Focused source assertions in
+  `web/src/backup-repositories.test.mjs` and `web/src/backups-retry.test.mjs`
+  cover held IDs and frozen or reopened drafts for repository create and
+  restore flows; those two reviewed flows required no production code change.
+  Full web typecheck, tests, build and repository privacy check passed as
+  reported by the UI owner. Browser interaction for this exact tab-switch
+  retry was not rerun.
+- Avoid: retaining a mutation request ID in one component while destroying
+  the only copy of its uncertain body in another.

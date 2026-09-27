@@ -148,7 +148,8 @@ func validateManagedSnapshotRequest(c protocol.Command) error {
 		c.Snapshot.Valid() != nil || protocol.ValidateVMSpec(*c.VM) != nil ||
 		c.Storage != nil || c.Network != nil || c.Media != nil || c.Power != nil || c.Delete != nil ||
 		c.VMMedia != nil || c.StorageLifecycle != nil || c.ResourceLifecycle != nil || c.CredentialRetire != nil ||
-		c.ZFSProvision != nil || c.ZFSReplace != nil || c.Pool != nil || c.ManagementNetwork != nil || c.SystemDiskReplace != nil {
+		c.ZFSProvision != nil || c.ZFSReplace != nil || c.Pool != nil || c.ManagementNetwork != nil || c.SystemDiskReplace != nil ||
+		c.Backup != nil || c.Restore != nil || c.BackupRepository != nil {
 		return errors.New("invalid snapshot creation request")
 	}
 	return nil
@@ -799,7 +800,10 @@ func snapshotFirmwareSources(ctx context.Context, domain managedDomain, vmID, fi
 		artifacts = append(artifacts, managedSnapshotFirmwareArtifact{Kind: "nvram", SourcePath: domain.OS.NVRAM.Path, SnapshotPath: destination, SourceManifest: manifest})
 	}
 	if domain.Devices.TPM != nil && domain.Devices.TPM.Backend.Type == "emulator" {
-		source := filepath.Join("/var/lib/libvirt/swtpm", vmID)
+		source, err := managedTPMStateSource(domain, vmID)
+		if err != nil {
+			return nil, err
+		}
 		manifest, err := managedSnapshotManifest(ctx, source)
 		if err != nil {
 			return nil, err

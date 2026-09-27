@@ -94,6 +94,7 @@
 .ov-tasks .pulse { display: inline-block; margin-right: 6px; }
 .ov-nights { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; }
 .ov-nights i { height: 26px; border: 1px dashed var(--line); border-radius: var(--radius-control); }
+.ov-nights i.on { border-style: solid; background: color-mix(in srgb, var(--s1) 35%, transparent); }
 .ov-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
 .ov-kv dt { color: var(--muted); }
 .ov-kv dd { margin: 0; text-align: right; }

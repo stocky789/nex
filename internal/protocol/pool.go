@@ -237,6 +237,9 @@ const PoolMaintenanceCapability = "pool-maintenance-v1"
 // upgrade-required reason; the master never degrades to an unsigned or partial copy.
 const PoolAuthorityReplicaCapability = "pool-authority-replica-v2"
 
+// PoolBackupPagedAuthorityCapability permits bounded, signed backup authority pages.
+const PoolBackupPagedAuthorityCapability = "pool-backup-authority-pages-v1"
+
 // PoolAuthorityTransferCapability gates a planned master change and a member eject: the
 // transfer command, the two peer endpoints below and the reported transfer status.  It is
 // required on the master, on the target and on every ready member, because a member that
@@ -1208,8 +1211,14 @@ type PoolAuthorityReplica struct {
 	FenceCredentials []PoolWrappedFenceCredential `json:"fence_credentials,omitempty"`
 	// WitnessCredentials contains a separately sealed native PKCS#12 bundle for each member.
 	WitnessCredentials []PoolWrappedWitnessCredential `json:"witness_credentials,omitempty"`
-	Sections           []PoolReplicaSection           `json:"sections"`
-	Signature          string                         `json:"signature,omitempty"`
+	// BackupAuthority carries durable backup repositories, policy/schedule definitions,
+	// retained run history and catalog index entries for master takeover. Full NFS
+	// recovery-point payloads are never embedded. Covered by ContentDigest and signature;
+	// not a PoolReplicaSections entry so older section layout stays compatible when empty.
+	BackupAuthority *PoolBackupAuthority `json:"backup_authority,omitempty"`
+	BackupManifest  *PoolBackupManifest  `json:"backup_manifest,omitempty"`
+	Sections        []PoolReplicaSection `json:"sections"`
+	Signature       string               `json:"signature,omitempty"`
 }
 
 // SigningBytes is everything but the signature: the per-member fields are deliberately
@@ -1300,6 +1309,13 @@ func (r PoolAuthorityReplica) Valid() error {
 	}
 	if err := ValidatePoolResourceMutations(r.ResourceMutations); err != nil {
 		return err
+	}
+	if r.BackupManifest != nil {
+		if r.BackupAuthority != nil || r.BackupManifest.Valid() != nil {
+			return errors.New("pool authority replica backup manifest is invalid")
+		}
+	} else if r.BackupAuthority != nil && r.BackupAuthority.Valid() != nil {
+		return errors.New("pool authority replica backup authority is invalid")
 	}
 	return r.VerifySections()
 }

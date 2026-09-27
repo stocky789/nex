@@ -271,6 +271,8 @@ func poolTransferStatus(record *poolTransferRecord) protocol.PoolTransferStatus 
 		status.Status = "succeeded"
 	case record.Stage == "aborted":
 		status.Status = "failed"
+	case record.Stage == "catalog-rebuild" && record.LastError != "":
+		status.Status = "needs_attention"
 	case record.HandedOff || record.Attempts >= poolTransferMaxAttempts:
 		status.Status = "needs_attention"
 	case record.LastError != "" && (record.Stage == "freeze" || record.Stage == "preflight"):
@@ -681,6 +683,9 @@ func activatePoolAuthority(s *Store, master protocol.PoolMember, request protoco
 			return reply, errors.New("this pool master change was aborted on this host")
 		}
 		if state.Membership.MasterHostID == s.State.HostID {
+			if state.Transfer != nil && state.Transfer.Stage == "catalog-rebuild" {
+				return reply, errors.New("the new pool master's backup catalog import is pending")
+			}
 			// Already activated. Answer with the same signed re-point notice.
 			repoint, noticeErr := poolRepointNotice(s, state, record)
 			if noticeErr != nil {
@@ -796,6 +801,24 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	if err = adoptPoolVMAuthority(s, replica); err != nil {
 		return nil, err
 	}
+	// Backup repositories, policies, retained runs and catalog index land with the same
+	// activation: the survivor must not become master with empty backup authority while
+	// the signed replica still named those jobs (Campaign B).
+	backupAuthority := replica.BackupAuthority
+	if replica.BackupManifest != nil {
+		backupAuthority, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest)
+		if err != nil {
+			return nil, errors.New("the signed backup authority pages are incomplete or invalid")
+		}
+	}
+	backupAuthority = inheritedBackupAuthority(backupAuthority)
+	backupRoot, rollbackBackup, err := stagePoolBackupAuthorityActivation(s, backupAuthority, replica.Generation)
+	if err != nil {
+		poolVMMu.Lock()
+		_ = savePoolVMs(s, vmSnapshot)
+		poolVMMu.Unlock()
+		return nil, err
+	}
 	poolVMMu.Lock()
 	poolPeerMu.Lock()
 	state, err = loadPoolPeer(s)
@@ -803,6 +826,7 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	if err == nil {
 		state.CAKeyPEM, state.Membership = caKeyPEM, membership
 		state.AuthorityGeneration, state.AuthorityDigest = replica.Generation+1, ""
+		state.BackupActiveRoot = backupRoot
 		state.Offers = map[string]poolJoinOffer{}
 		// This host has just proved, by the accepted hand-off or fence evidence, that it
 		// holds this pool's authority. Bind that proof to this boot in the same write that
@@ -819,6 +843,9 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 				state.MasterURL = self.PeerOrigin
 			}
 			record.Stage = "repoint"
+			if backupAuthority != nil && len(backupAuthority.Catalog) == 0 && len(backupAuthority.Repositories) > 0 {
+				record.Stage = "catalog-rebuild"
+			}
 			record.UpdatedAt = time.Now().UTC()
 			stored := *record
 			state.Transfer = &stored
@@ -838,8 +865,18 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	poolPeerMu.Unlock()
 	poolVMMu.Unlock()
 	if err != nil {
+		// savePoolPeer can report a late durability error after its rename.
+		// If the peer record may already select the new backup tree, leave the
+		// adopted VM and resource state intact for transfer reconciliation.
+		observed, readErr := loadPoolPeer(s)
+		if readErr != nil || observed.BackupActiveRoot == backupRoot {
+			return nil, errors.New("the pool master change commit outcome is uncertain; reconcile the recorded transfer")
+		}
 		if rollbackResourceMutations != nil {
 			rollbackResourceMutations()
+		}
+		if rollbackBackup != nil {
+			rollbackBackup()
 		}
 		poolVMMu.Lock()
 		restoreErr := savePoolVMs(s, vmSnapshot)
@@ -848,6 +885,11 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 			return nil, errors.New("the pool master change could not be recorded durably and the VM ownership snapshot could not be restored")
 		}
 		return nil, errors.New("the pool master change could not be recorded durably")
+	}
+	if record.Stage == "catalog-rebuild" {
+		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record); err != nil {
+			return nil, err
+		}
 	}
 	return poolRepointNotice(s, state, record)
 }
@@ -1145,8 +1187,17 @@ func ExecutePoolTransfer(ctx context.Context, s *Store, cmd protocol.Command) pr
 			action = "eject"
 		}
 		record = &poolTransferRecord{OperationID: cmd.OperationID, Action: action, Role: "source", TargetHostID: v.MemberHostID, Stage: "freeze", Status: "pending", Frozen: true}
-		if err = savePoolTransfer(s, record); err != nil {
-			result.Error = "the pool authority transfer could not be recorded durably"
+		// Hold the backup write lock through the first durable freeze. Otherwise
+		// a backup can be admitted between the unresolved-work check and the
+		// transfer record, or be blocked from settling by a refused transfer.
+		poolBackupAuthorityMu.Lock()
+		backupErr := unsettledBackupTransferRefusal(s)
+		if backupErr == nil {
+			backupErr = savePoolTransfer(s, record)
+		}
+		poolBackupAuthorityMu.Unlock()
+		if backupErr != nil {
+			result.Error = poolTransferError(backupErr)
 			return result
 		}
 	}
@@ -1386,6 +1437,9 @@ func advancePoolTransferSource(ctx context.Context, s *Store, record *poolTransf
 }
 
 func advancePoolTransferTarget(ctx context.Context, s *Store, record *poolTransferRecord, timeout time.Duration) error {
+	if record.Stage == "catalog-rebuild" {
+		return reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record)
+	}
 	if record.Stage == "repoint" {
 		return repointPoolMembers(ctx, s, record, timeout)
 	}
@@ -1413,6 +1467,11 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 		if err = poolEjectRefusal(s, membership, target); err != nil {
 			return err
 		}
+	}
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	if err := unsettledBackupTransferRefusal(s); err != nil {
+		return err
 	}
 	// The master's own peer origin is what every member already uses to reach it, and what
 	// a new master needs to reach it back. Record it before the authority is numbered, so
@@ -1493,6 +1552,60 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 		return err
 	}
 	return errors.New("pool authority changed while it was being frozen; retry the master change")
+}
+
+func unsettledBackupTransferRefusal(s *Store) error {
+	if hasUnsettledBackup(s.State.Journal, "") {
+		return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil {
+		return errors.New("backup run history is unavailable while freezing pool authority")
+	}
+	for _, run := range runs {
+		if run.Status == "pending" {
+			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		}
+	}
+	receipts, err := listPoolBackupMetadataReceipts(s)
+	if err != nil {
+		return errors.New("backup operation receipts are unavailable while freezing pool authority")
+	}
+	for _, receipt := range receipts {
+		if receipt.Status == "pending" {
+			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		}
+	}
+	return nil
+}
+
+// A fenced promotion can inherit an operation that the old master was still
+// executing. It has the run and pin, but no execution command or proof of a
+// native outcome; never present that inherited record as work still in flight.
+func inheritedBackupAuthority(authority *protocol.PoolBackupAuthority) *protocol.PoolBackupAuthority {
+	if authority == nil {
+		return nil
+	}
+	copy := *authority
+	copy.History = append([]protocol.BackupRun(nil), authority.History...)
+	copy.MetadataReceipts = append([]protocol.BackupMetadataReceipt(nil), authority.MetadataReceipts...)
+	now := time.Now().UTC()
+	for i := range copy.History {
+		if copy.History[i].Status == "pending" {
+			copy.History[i].Status = "needs_attention"
+			copy.History[i].Stage = "authority_transfer"
+			copy.History[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
+			copy.History[i].UpdatedAt = now
+		}
+	}
+	for i := range copy.MetadataReceipts {
+		if copy.MetadataReceipts[i].Status == "pending" {
+			copy.MetadataReceipts[i].Status = "needs_attention"
+			copy.MetadataReceipts[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
+			copy.MetadataReceipts[i].ObservedAt = now
+		}
+	}
+	return &copy
 }
 
 // recordPoolMasterPeerOrigin records the master's own peer origin in its membership row if

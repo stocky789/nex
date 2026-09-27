@@ -136,24 +136,35 @@
       open: [
         "Product Controller/Core snapshot paths not certified on every S0 backend (NFS/SMB/exclusive iSCSI); S0 native evidence is not product-on-all-backends certification",
         "Physical and production storage and hardware fencing remain untested (disposable nested lab only)",
-        "Memory snapshots are later work, out of Phase 5 scope",
-        "Phase 6 product backups and proven restores are separate and not started"
+        "Memory snapshots are later work, out of Phase 5 scope"
       ]
     },
     {
-      status: "next",
+      status: "testing",
       title: "Backups and proven restores",
       summary:
-        "Phase 6 product backup and restore — not started. Phase 5 snapshots closed 2026-09-27; S4 may begin.",
+        "Phase 6 had a bounded disposable-lab close on 2026-09-27. Follow-up safety and UI fixes are in review for the current candidate; its acceptance remains open.",
       done: [
-        "Bounded disposable-lab native feasibility for independent NFS backup/restore probes"
+        "Core NFS backup repository registration, stopped full backup and restore-as-new APIs",
+        "Controller relay and Backups UI for repositories, recovery points, Back up now and restore as new",
+        "Online full backup (crash-consistent) for running BIOS guests via libvirt push-mode; quiesced and UEFI online refused",
+        "Core-owned backup policies, schedules and retention with Controller/UI relay",
+        "Restore replace exclusive cutover, protect/pins, test restore, catalog import/rebuild and Core-local backup status",
+        "Operator guides for repositories, Back up now, policies, restore-as-new/replace, catalog rebuild and Controller-absent recovery",
+        "Disposable-lab product NFS stopped backup → disks aside → restore-as-new (nex-core-local 0.4.12 + Phase 6 overlay)",
+        "Bounded nested Campaign A (Controller-absent Run now/restore + fresh Controller adoption)",
+        "Bounded nested Campaign B re-run after promote backup-authority fix (continuity, restore-as-new, adoption)",
+        "Browser Backups rail walkthrough; settlement bugs fixed in code; hermetic Phase 6 backup CI regression",
+        "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope"
       ],
       open: [
-        "Backup repositories on storage separate from the VMs they protect, with their own credentials",
-        "Full backups of stopped guests first, then running guests through libvirt's backup support, each with checksums and a manifest that can stand on its own",
-        "Core-owned schedules, jobs, history and retention that continue without Controller, with bandwidth limits, per-VM overrides and visible missed runs",
-        "Restoring as a new VM by default, on an isolated network, and replacing an original only with explicit confirmation and proven ownership",
-        "Rebuilding the backup catalog from the repository itself, so backups outlive the Controller database"
+        "Nested disposable lab is not physical failure-domain certification",
+        "Quiesced online and UEFI online backup remain refused until proven",
+        "Current candidate needs a live browser re-walk of backup, restore, policy and error flows after follow-up fixes",
+        "Post-close safety and cleanup fixes need independent review, relevant checks and current-candidate acceptance",
+        "Full three-host simultaneous join and schedule wall-clock span not fully proven",
+        "Lab used package 0.4.12 plus binary overlay — not ISO install acceptance",
+        "Forge CI on a published push not yet inspected (owner push residual)"
       ]
     },
     {

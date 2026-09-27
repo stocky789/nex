@@ -10,7 +10,7 @@ export const LazyOverview = screen(() => import("./overview").then(m => ({ defau
 export const LazyVMList = screen(() => import("./vm-list").then(m => ({ default: m.VMList })));
 export const LazyHostList = screen(() => import("./host-list").then(m => ({ default: m.HostList })));
 export const LazySettings = screen(() => import("./settings").then(m => ({ default: m.Settings })));
-export const LazyBackups = screen(() => import("./rail-screens").then(m => ({ default: m.Backups })));
+export const LazyBackups = screen(() => import("./backups").then(m => ({ default: m.Backups })));
 export const LazyContainers = screen(() => import("./rail-screens").then(m => ({ default: m.Containers })));
 export const LazyTasks = screen(() => import("./rail-screens").then(m => ({ default: m.Tasks })));
 export const LazyEvents = screen(() => import("./rail-screens").then(m => ({ default: m.Events })));

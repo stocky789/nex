@@ -17,6 +17,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Fixed promoted pool masters losing backup policies, runs and catalog: durable backup authority now transfers with the signed replica, and an empty catalog rebuilds from NFS manifests when the repository mount is present. An import failure keeps promotion at a retryable attention state before members are re-pointed.
+- Fixed backup-now and restore settlement when Controller dispatched the task: Core now reserves the run journal during execution, and an exact same-key republish of an already published recovery point settles succeeded instead of failing.
+- Overview Backups tile shows last recovery point and restore test from the pool catalog instead of Phase 6 placeholder copy.
+- Fixed Core-local backup policy create when `pool_id` is omitted (filled from enrollment).
+- Fixed a host hang when snapshot work ran while backup schedule references were included in the pool authority record.
+- Restore-as-new now registers a new stopped VM from the captured specification instead of reporting success after a local copy only.
+- Restore replace completes exclusive cutover after retaining originals, settles succeeded only after the stopped definition switch, and keeps originals on pre-cutover failure.
+- Backup-now pending checks also wait for restore-replace and test-restore tasks on the same VM.
+- Backup artifact copy and hash refuse symlink sources.
+- Recovery-point directory names must match the manifest recovery point id.
 - Fixed matched libvirt recovery package builds on slim images that lack CA certificates.
 - Fixed matched libvirt source packaging when the readonly-revert patch needed a fuzz-free refresh.
 - Fixed the recovery libvirt CI read-only media revert check so it validates restored media and the post-revert disk chain.
@@ -25,11 +35,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Miscellaneous
 
+- Reassessed the changed Phase 6 candidate after its dated disposable-lab close; current acceptance remains open for focused recovery, promotion and browser reruns. Updated the backup guides and API reference for Core-derived NFS verification, firmware restore refusal, the `backup-v1` acknowledgement and member backup peer calls.
+- Phase 6 (backups, scheduling and restoration) closed for disposable virtual-lab scope.
+- CI now runs a hermetic Phase 6 backup regression for repository registration, stopped publish, corrupt-manifest refusal and restore-as-new registration records.
 - Phase 5 (snapshots and rollback) closed for disposable virtual-lab scope.
 - Recorded a disposable multi-backend snapshot recovery lab pass on local disk, NFS, SMB and iSCSI (native lifecycle and midcommit consolidation).
+- API reference documents backup policy, restore and catalog command kinds and schemas.
 
 ### Minor Feature
 
+- Restore replace, protect recovery points, test restore (verify/cleanup), catalog import/rebuild and Core-local backup status while Controller is absent.
+- Backup policies, schedules and retention on Core (Pause, Run now, Controller-absent dispatch).
+- Online full backup (crash-consistent) for running BIOS guests via libvirt push-mode.
+- Controller API relay for backup repositories, Back up now, recovery catalog/runs and restore as new (Core remains authoritative).
+- Controller UI for NFS backup repositories (Settings), recovery points, Back up now and restore as new (Backups rail); VM Overview shows last successful backup when the catalog is available.
+- Core NFS backup repository registration, stopped full backup and restore-as-new APIs on the host.
 - VMs list **Snapshot** bulk action takes a stopped snapshot for selected shut-off guests.
 - Snapshot Revert and Delete use in-console confirmation dialogs instead of browser prompts.
 - Controller snapshot list, create, rename, revert and delete routes for stopped guests, with
