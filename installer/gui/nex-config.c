@@ -99,8 +99,8 @@ static void validate(GKeyFile *config, gboolean password_required)
         fail("Select a valid timezone from the supplied list.");
     if (strcmp(keymap,"us") && strcmp(keymap,"gb") && strcmp(keymap,"de") && strcmp(keymap,"fr") && strcmp(keymap,"es"))
         fail("Select a supported keyboard layout.");
-    if (password_required && (g_utf8_strlen(password,-1) < 8 || strlen(password) > 512 || strchr(password,'\n') || strchr(password,'\r')))
-        fail("Enter a root password of at least 8 characters, at most 512 bytes, without line breaks.");
+    if (password_required && (!password[0] || strlen(password) > 512 || strchr(password,'\n') || strchr(password,'\r')))
+        fail("Enter a nonempty root password of at most 512 bytes, without line breaks.");
     if (!nex_network_validate(config, &error)) fail(error ? error->message : "Network settings are invalid.");
     if (g_file_test("/cdrom/nex/netinst.tsv", G_FILE_TEST_EXISTS)) {
         char *management = g_key_file_get_string(config, "Network", "management", NULL);

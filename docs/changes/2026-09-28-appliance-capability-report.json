@@ -1,0 +1,36 @@
+{
+  "summary": "Accept Core's negotiated capability report so Controller appliance adoption can finish.",
+  "paths": [
+    "internal/controller/identity.go",
+    "internal/controller/identity_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Deployment troubleshooting now explains how to inspect a stale host report and retry the original saved operation after compatible updates.",
+    "pages": ["docs/guide/deploy-controller-appliance.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Authenticated POST /api/v1/agent/report accepts up to 64 capability names instead of 32; host mTLS, sequence, bounded names, errors for over-limit reports and result/retry semantics are unchanged. Controller must be updated before a Core sends more than 32 names.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The existing appliance deployment path is repaired without changing a milestone or acceptance status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The report limit changes admission of host observations; Core remains their source and no new durable setting is added."
+  },
+  "verification": {
+    "method": "The new report regression failed before and passed after the fix; the handoff test timed out before and passed after. Controller package tests passed. No updated build was deployed to the affected host.",
+    "evidence": ["internal/controller/identity_test.go", "internal/localcore/handoff_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

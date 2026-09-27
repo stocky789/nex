@@ -9989,3 +9989,23 @@ Append resolved defects with their evidence and the approach to avoid.
   checks retained-version backfill; `test_website_hosting.py` checks real nginx HTML
   delivery and a direct package URL. All run in the existing forge test workflow.
 - Avoid: deleting the hash-pinned packages or changing their URLs to clean up the listing.
+
+## BUG-0673 — Controller rejected Core's negotiated capability report
+
+- Date: 2026-09-28.
+- Symptom: a Controller appliance remained at `initializing` / `needs_attention` because
+  Controller did not receive a fresh libvirt observation from its enrolled host.
+- Root cause: Core first reported 29 capabilities, then advertised 35 after negotiation;
+  Controller rejected any report above 32 with HTTP 400. The initial host record became
+  stale and appliance adoption could not proceed.
+- Fix: accept up to 64 capability names in the authenticated Controller report handler,
+  retaining the 100-byte name bound. An affected deployment still needs a matching
+  Controller update and retry of its original saved operation; no new VM is created.
+- Regression: `TestReportAcceptsCurrentCoreCapabilityCount` failed with 400 before the
+  fix and passed after it, including persistence and rejection at 65. The existing
+  `TestHandoffAdoptsObservedApplianceAndResumesOffline` timed out before the fix and
+  passed after it. `go test ./internal/controller -count=1` passed. The forge's
+  `.github/workflows/phase1.yml` and `.gitea/workflows/phase1.yml` run `go test -race
+  -timeout 20m ./...` on pushes and pull requests; no CI run is claimed.
+- Avoid: adding negotiated capabilities without checking the receiver's bounded report
+  count and an actual post-negotiation report.

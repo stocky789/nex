@@ -303,7 +303,7 @@ func TestSeedInjectsUpdateHelperWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(b)
-	for _, want := range []string{"/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
+	for _, want := range []string{"ssh_pwauth: true", "disable_root: false", "/usr/local/lib/nex/apply-update", "/usr/local/lib/nex/appliance-firstboot", "/etc/nex/updates.conf", "nex-controller-update.path", "systemctl, enable, --now, nex-controller-update.path"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("seed missing %q in %s", want, text)
 		}

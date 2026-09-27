@@ -90,7 +90,7 @@ assert '[ -e "$path/partition" ] && continue' in wizard
 assert '"$(read_attr "$path/removable")" = 0' in wizard
 assert '/cdrom' in wizard, 'Installation media is never offered as a target'
 assert 'db_set nex-installer/erase false' in wizard, 'Confirmation must not carry forward'
-assert '${#first}" -lt 8' in wizard
+assert '[ -z "$first" ]' in wizard
 for template in ('nex-installer/hostname', 'nex-installer/keymap', 'nex-installer/timezone',
                  'nex-installer/password', 'nex-installer/management', 'nex-installer/mode',
                  'nex-installer/vlan', 'nex-installer/address', 'nex-installer/gateway',
@@ -186,7 +186,7 @@ assert 'nex-core-local' not in packages, 'Ship nex-core-local via the ISO repo c
 assert all(p.replace('-', '').isalnum() for p in packages), 'Unexpected package argument'
 late = Path('installer/late-install.sh').read_text()
 assert 'Dir::Etc::sourceparts=-' in late and 'file:/var/cache/nex-install/repo' in late
-assert 'PermitRootLogin no' in late
+assert "'PermitRootLogin yes' 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/00-nex-core.conf" in late
 assert 'systemctl disable zfs-import-scan.service' in late, 'Leftover ZFS pools on unselected disks must not be imported at boot'
 # Embedded configure.sh and nex-sync-esp are data to sh -n on late-install.sh; syntax-check them.
 import subprocess as _sp

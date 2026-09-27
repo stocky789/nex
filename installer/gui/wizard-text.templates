@@ -42,9 +42,8 @@ Description: Timezone:
 Template: nex-installer/password
 Type: password
 Description: Root password:
- No ordinary user account is created. Use root at the local console after the
- host reboots; root SSH login stays disabled. The password must be at least
- 8 characters.
+ No ordinary user account is created. Use root at the local console or over
+ SSH after installation.
 
 Template: nex-installer/password-again
 Type: password

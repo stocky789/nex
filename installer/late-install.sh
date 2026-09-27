@@ -193,7 +193,7 @@ printf '%s\n' \
     "$PRETTY_NAME (Debian 13)" \
     'Host: \n  Console: \l' \
     '' > /etc/issue
-printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/00-nex-core.conf
+printf '%s\n' 'PermitRootLogin yes' 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/00-nex-core.conf
 systemctl enable libvirtd.service ssh.service chrony.service nex-core-local.service
 # Default local storage for Controller ISO library and guest disks (registered as "ISO").
 install -d -m 0711 /var/lib/libvirt/images

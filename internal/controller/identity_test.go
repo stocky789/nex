@@ -10,10 +10,34 @@ import (
 	"net/http/httptest"
 	"nex.local/nex/internal/protocol"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestReportAcceptsCurrentCoreCapabilityCount(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	capabilities := make([]string, 35)
+	for i := range capabilities {
+		capabilities[i] = "capability-" + strconv.Itoa(i)
+	}
+	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: protocol.Version, Sequence: 1, Capabilities: capabilities}, cert, 200)
+	var stored string
+	if err := a.c.db.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", host.HostID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	if err := json.Unmarshal([]byte(stored), &reported); err != nil || !slices.Equal(reported, capabilities) {
+		t.Fatalf("stored capabilities = %v, error = %v", reported, err)
+	}
+	for i := len(capabilities); i < 65; i++ {
+		capabilities = append(capabilities, "capability-"+strconv.Itoa(i))
+	}
+	a.call("POST", "/api/v1/agent/report", protocol.ReportRequest{Version: protocol.Version, Sequence: 2, Capabilities: capabilities}, cert, 400)
+}
 
 func TestRevocationBetweenMiddlewareAndTransaction(t *testing.T) {
 	a := newClient(t)

@@ -31,7 +31,7 @@ existing ZFS DKMS package still builds its kernel module locally.
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
   External redistribution remains subject to the [release licensing gates](../LICENSING.md).
-  The current working `0.4.15` tree is not a released artifact.
+  The current working `0.4.16` tree is not a released artifact.
 - An isolated disposable amd64 VM with at least 2 virtual CPUs, 4 GB RAM, and one blank 24 GB
   virtual disk. Do not attach real host disks or existing VM data disks.
 - Hardware virtualization exposed to the VM if you intend to run nested KVM guests.
@@ -73,7 +73,7 @@ existing ZFS DKMS package still builds its kernel module locally.
    immediately. Choose **Timezone area** from its dropdown, then choose **Timezone**
    from the shorter list for that area, for example **Australia** then **Australia/Sydney**.
    No timezone typing is required. **UTC** is the default area and timezone.
-   Enter a root password of at least eight characters and matching confirmation.
+   Enter a nonempty root password and confirm it.
    **Show passwords** lets you check both entries and switches off when you
    leave this page. Successful keyboard setup is silent; an application failure shows an error and blocks continuation.
    Changing the keyboard layout clears both passwords; enter them again
@@ -209,7 +209,7 @@ existing ZFS DKMS package still builds its kernel module locally.
    **static**; Disabled leaves that adapter unconfigured. The last screen reviews every setting, including an **Adapters:** line giving each adapter's
    mode, address, gateway and VLAN, names the disk and asks whether to erase it; it defaults to
    no and resets whenever you change the disk. The same rules apply as in the graphical wizard:
-   at least eight password characters, only writable nonremovable disks of at least 16 GiB,
+   a nonempty root password, only writable nonremovable disks of at least 16 GiB,
    never the installation media, and one VLAN per adapter with the gateway on the management
    adapter only. Answering yes checks the complete settings before anything is written: if they
    are rejected, the reason is shown, nothing is erased, and the questions return with every
@@ -257,8 +257,11 @@ virtual machines.
 Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
 Verification.
 
-Root SSH login is disabled, so a fresh root-only installation has no SSH login account.
-Use the local console. Full-ISO installation can work offline; later package updates require access
+Fresh installs allow root password SSH on the management network. Check the installed
+host key fingerprint at its trusted console with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`,
+then compare it with the key shown by your SSH client before entering the installer root password.
+For example, connect with `ssh root@192.0.2.5` from the private management network or VPN.
+Full-ISO installation can work offline; later package updates require access
 to configured Debian repositories. The installed Nex package configures its default Nex APT
 source; it may have no candidate until a compatible release is actually published.
 
@@ -279,7 +282,7 @@ source; it may have no candidate until a compatible release is actually publishe
   another layout when the question returns. The installation is not affected, and the root
   password is only requested once a layout has actually been applied.
 - **Host settings rejected:** check the hostname, supported timezone and keyboard. Both modes
-  require at least eight password characters with identical confirmation and ask again on a
+  require a nonempty root password with identical confirmation and ask again on a
   mismatch. In minimal installation the rejection names its own reason and nothing is erased;
   the questions come back with your answers still filled in, so correct only the setting named
   and confirm the erase again.

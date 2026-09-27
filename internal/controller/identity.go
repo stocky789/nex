@@ -498,7 +498,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			}
 		}
 	}
-	if len(v.Capabilities) > 32 {
+	if len(v.Capabilities) > 64 {
 		fail(w, 400, "too many capabilities")
 		return
 	}

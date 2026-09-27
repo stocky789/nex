@@ -59,7 +59,7 @@ def main():
                      'tls_private_key': key.read_text(), 'hostname': hostname, 'network_mode': 'dhcp'}
         encoded = base64.b64encode(json.dumps(bootstrap).encode()).decode()
         (seed / 'user-data').write_text('#cloud-config\nhostname: ' + hostname +
-            "\nmanage_etc_hosts: true\nssh_pwauth: false\ndisable_root: true\nwrite_files:\n"
+            "\nmanage_etc_hosts: true\nssh_pwauth: true\ndisable_root: false\nwrite_files:\n"
             "  - path: /etc/nex-controller/bootstrap.json\n    owner: root:root\n"
             "    permissions: '0600'\n    encoding: b64\n    content: " + encoded + '\n')
         (seed / 'meta-data').write_text('instance-id: nex-dhcp-disposable\nlocal-hostname: ' + hostname + '\n')

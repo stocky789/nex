@@ -625,7 +625,7 @@ static gboolean collect(void)
         if (!zone) { message("Select a timezone from the list."); gtk_widget_grab_focus(zone_entry); return FALSE; }
         g_key_file_set_string(config, "Host", "timezone", zone); g_free(zone);
     }
-    if (g_utf8_strlen(value(password), -1) < 8 || strlen(value(password)) > 512 || strcmp(value(password), value(repeat))) { message("Use at least 8 characters and enter the same password twice."); gtk_widget_grab_focus(g_utf8_strlen(value(password), -1) < 8 ? password : repeat); return FALSE; }
+    if (!value(password)[0] || strlen(value(password)) > 512 || strcmp(value(password), value(repeat))) { message("Enter a nonempty password of at most 512 bytes and repeat it exactly."); gtk_widget_grab_focus(!value(password)[0] || strlen(value(password)) > 512 ? password : repeat); return FALSE; }
     g_key_file_set_string(config, "Host", "hostname", value(host));
     g_key_file_set_string(config, "Host", "password", value(password));
     g_key_file_set_string(config, "Host", "keymap", keymaps[MAX(0, gtk_combo_box_get_active(GTK_COMBO_BOX(keymap)))]);
@@ -827,7 +827,7 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), show_password, FALSE, FALSE, 0);
     g_signal_connect(keymap, "changed", G_CALLBACK(keyboard_changed), NULL);
     gtk_widget_set_tooltip_text(zone_entry, "Choose an area, then select your timezone from the list. UTC is universal time.");
-    gtk_widget_set_tooltip_text(password, "At least 8 characters. Root provides local recovery access.");
+    gtk_widget_set_tooltip_text(password, "Root provides local recovery access.");
     gtk_widget_set_tooltip_text(keymap, "Applied immediately. Changing layout clears both password fields.");
     box = page_box(); network_intro = label("Choose an adapter to configure it. Settings apply after installation."); gtk_box_pack_start(GTK_BOX(box), network_intro, FALSE, FALSE, 0);
     network_hostname = gtk_entry_new_with_buffer(gtk_entry_get_buffer(GTK_ENTRY(host))); field(box, "_Hostname", network_hostname);

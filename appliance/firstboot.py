@@ -34,7 +34,7 @@ def validate(config):
 def provision_console_login(password, username=CONSOLE_USER):
     """Give the Controller password to the matching guest console account.
 
-    Unlocks console login as root with that password; SSH password auth stays off.
+    Unlocks console and SSH login as root with that password.
     """
     sudo = False
     try:

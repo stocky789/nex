@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.15. Add an enrolled Nex Core host to another host's pool from Nex
+Development product 0.4.16. Add an enrolled Nex Core host to another host's pool from Nex
 Controller: **Settings** → **Members** (with the pool chosen in the top-bar scope menu) →
 **Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared

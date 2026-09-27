@@ -129,17 +129,24 @@ class NetinstNetwork(unittest.TestCase):
             subprocess.run(['cc', '-I' + str(ROOT / 'installer/gui'), str(compiled),
                             str(ROOT / 'installer/gui/nex-network.c'), '-o', str(root / 'config'),
                             *flags.stdout.split(), '-lcrypt'], check=True, capture_output=True)
-            template = ('[Host]\nhostname=nexcore\ntimezone=UTC\nkeymap=us\npassword=example-pass\n'
+            template = ('[Host]\nhostname=nexcore\ntimezone=UTC\nkeymap=us\npassword={password}\n'
                         'disk=/dev/sda;\ndisk_size=17179869184;\ndisk_serial=example;\ndisk_major_minor=8:0;\n'
                         '[Network]\nmanagement={management}\n[NIC:eth0]\n'
                         'mac=02:00:00:00:00:01\nmode={mode}\nvlan=0\n')
-            def run(management='eth0', mode='dhcp'):
-                config = write('run/nex-installer/config.ini', template.format(management=management, mode=mode))
+            def run(management='eth0', mode='dhcp', password='example-pass'):
+                config = write('run/nex-installer/config.ini', template.format(management=management, mode=mode, password=password))
                 return subprocess.run([str(root / 'config'), '--apply', str(config)], capture_output=True, text=True, timeout=10)
             for management, mode in (('', 'dhcp'), ('eth0', 'disabled')):
                 self.assertNotEqual(run(management, mode).returncode, 0)
                 self.assertFalse((root / 'args').exists())
                 self.assertFalse((state / 'answers.cfg').exists())
+            result = run(password='x')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((state / 'answers.cfg').exists())
+            (state / 'answers.cfg').unlink()
+            result = run(password='')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((state / 'answers.cfg').exists())
             result = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / 'args').read_text().splitlines(), ['6', 'eth0', 'dhcp', '0', '', '', ''])

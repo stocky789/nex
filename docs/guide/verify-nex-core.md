@@ -8,9 +8,8 @@ console checks inspect the standalone host, not a Nex Controller service. [Retur
 ## Prerequisites
 
 - The disposable installed host, booted with its installation ISO ejected.
-- Local console access as `root` with the password chosen during installation. The current
-  installer creates no ordinary user; root SSH is disabled. Run the commands below directly
-  in that local root console.
+- Local console access as `root` with the password chosen during installation. The installer
+  creates no ordinary user. Use the trusted local console for the initial SSH host key check.
 - Hardware virtualization enabled and exposed by the outer hypervisor for nested KVM.
 
 ## Steps
@@ -32,10 +31,13 @@ console checks inspect the standalone host, not a Nex Controller service. [Retur
 
    ```sh
    systemctl --no-pager status libvirtd ssh chrony
-   sshd -T | grep '^permitrootlogin '
+   sshd -T | grep -E '^(permitrootlogin|passwordauthentication) '
    ```
 
-   Services should be active; SSH policy should report `permitrootlogin no`.
+   Services should be active; SSH policy should report `permitrootlogin yes` and
+   `passwordauthentication yes`. Compare the console's
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` output with the SSH client's host
+   key prompt before signing in as `root` from the management network.
 3. Check host virtualization readiness and libvirt connectivity:
 
    ```sh
@@ -80,8 +82,9 @@ They do not certify Secure Boot, physical hardware, a published update, or exter
 
 ## Troubleshooting
 
-- **Permission denied:** verify you are using the local root console; do not enable root SSH
-  or weaken authentication to work around an access problem.
+- **SSH permission denied:** confirm the installed policy with `sshd -T`, that the root
+  account is unlocked, and that you are using the host's current root password. Keep
+  local console access for recovery.
 - **`/dev/kvm` is missing or hardware acceleration fails:** check firmware virtualization
   settings and the outer VM's nested-virtualization configuration. Software emulation is
   not proof of the KVM acceptance gate.
@@ -100,7 +103,7 @@ They do not certify Secure Boot, physical hardware, a published update, or exter
 Steps 1–2 were checked again on `0.2.10~gate5` in the [Phase 2 gate run](../qa/2026-09-17-phase2-gate/checks.md)
 (2026-09-17, disposable nested-KVM lab, by the installation check harness over an SSH session
 pinned against the console host key): the OS release and installed package report the build
-version, the Nex Core services are active, and `permitrootlogin no` was recorded before the test
+version, the Nex Core services are active, and the then-current `permitrootlogin no` was recorded before the test
 key was added. `virt-host-validate qemu` (step 3) was not rerun on gate5; it last passed, apart
 from optional IOMMU and secure-guest warnings, on `0.2.10~gate3`. The gate5 run rebooted the host
 and confirmed its identity and VMs with its own harness, but Step 4 was not repeated from the

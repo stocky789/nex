@@ -66,7 +66,7 @@ against the selected dated `trixie` snapshot and build timestamps change. Retain
 manifest and cache for each tested build. The dated snapshot is already pinned;
 a complete package lock and source bundle remain release requirements.
 
-The current working version is `0.4.15`; it is not a release merely because the build
+The current working version is `0.4.16`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).
@@ -77,7 +77,7 @@ Set `NEX_NETINST_BASE_URL` to the HTTPS directory where this release's Nex paylo
 will be published, then run the same builder:
 
 ```sh
-NEX_NETINST_BASE_URL=https://downloads.example.org/releases/0.4.15 ./installer/build.sh
+NEX_NETINST_BASE_URL=https://downloads.example.org/releases/0.4.16 ./installer/build.sh
 ```
 
 The build creates both the existing full ISO and
@@ -199,8 +199,7 @@ preparation failures remain visible and retryable.
 Both modes install the same headless host with the Nex Core local HTTPS management UI
 and bundled Controller appliance. A mirror is not needed. No ordinary user account is
 created; Debian service accounts remain. Root
-passwords require at least eight characters and matching confirmation in both modes. Use root at the local console after reboot. Root SSH remains disabled,
-so a fresh installation has no SSH login account. Eject the ISO after installation.
+passwords must be nonempty and confirmed in both modes. Use root at the local console or over SSH after reboot. Eject the ISO after installation.
 SSH host keys are generated per installation. Open the local management URL shown at
 the console and follow the [Controller deployment procedure](../docs/guide/deploy-controller-appliance.md).
 Controller deployment creates its VM and enrolls this host using Core's embedded agent;

@@ -1,0 +1,59 @@
+{
+  "summary": "Enable root password SSH by default on new Nex Core installs and Controller appliances deployed from Core, without a minimum password length.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/wizard-text.sh",
+    "tests/test_netinst_network.py",
+    "installer/late-install.sh",
+    "installer/check.sh",
+    "installer/root-account.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/README.md",
+    "tests/integration/wizard-installed.sh",
+    "appliance/build-inside.sh",
+    "appliance/firstboot.py",
+    "appliance/README.md",
+    "tests/test_appliance_build.py",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "web/src/local.tsx",
+    "tests/integration/appliance-dhcp-boot.py",
+    "docs/API.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-09-simple-host-enrollment.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/verify-nex-core.md",
+    "docs/guide/deploy-controller-appliance.md",
+    "docs/qa/2026-09-28-root-ssh-default.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Fresh Core and appliance access steps and expected SSH policy changed. The Core installer no longer requires eight characters; Controller deployment password validation is unchanged.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/verify-nex-core.md",
+      "docs/guide/deploy-controller-appliance.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer password validation, sshd policy, appliance image policy, and cloud-init seed change no Controller/Core or client-facing API contract. Controller deployment password validation is unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This access default changes no milestone status or published roadmap item."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Static installed SSH policy adds no pool setting or durable product model state; each system owns its local sshd configuration."
+  },
+  "verification": {
+    "method": "Source checks passed on 2026-09-28; a fresh disposable install and appliance boot are still required for runtime SSH acceptance.",
+    "evidence": [
+      "docs/qa/2026-09-28-root-ssh-default.md"
+    ]
+  }
+}

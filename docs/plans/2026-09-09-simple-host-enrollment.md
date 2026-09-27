@@ -20,6 +20,8 @@ the host's own local HTTPS API (`nex-core-local`, port 9443), and the host enrol
   [install guide](../guide/install-nex-core.md)), so the Controller cannot reach the host
   by SSH to place them. `nex-core-local` already runs a root-authenticated HTTPS API on
   every Nex Core host; reusing it avoids re-enabling SSH or adding a second transport.
+  The 2026-09-28 [root SSH decision](2026-09-08-nex-platform.md) enables SSH on new installs;
+  enrollment still uses the authenticated host-local HTTPS API and its certificate confirmation.
 - **Why fingerprint confirmation is mandatory:** the Controller has no prior trust
   relationship with an unenrolled host, so the initial TLS connection cannot be verified
   against a CA. Instead, `POST /api/v1/hosts/probe` captures the host's certificate over

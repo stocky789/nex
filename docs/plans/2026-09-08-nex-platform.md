@@ -220,6 +220,18 @@ project owner selected AGPL for original Nex code on 2026-09-08; apply AGPL-3.0-
 
 **Installer account decision, 2026-09-08:** ask only for a root password and its confirmation; skip ordinary user creation using Debian Installer’s native account policy. An installer hook rejects blank root passwords instead of Debian’s ordinary-user fallback; mismatched confirmation retains Debian’s retry. Keep system/service accounts and local root recovery access; root SSH remains disabled. **API impact: none** — boot menu → preseed → Debian account setup affects local OS credentials only; there is no Controller operation, Core agent command/result, or client-facing API in this flow. See the [root-only installer verification](../qa/iso/2026-09-08-root-account.md) for the exact rebuilt image, password-dialog checks, and installation results.
 
+**Root SSH decision, 2026-09-28 (supersedes the SSH portion of the 2026-09-08 account decision):** fresh Nex Core installs and newly built Controller appliances deployed from Core enable root password SSH on their management networks. The Core installer accepts any nonempty root password up to its existing 512-byte limit; the prior eight-character minimum is removed. Controller deployment keeps its existing nonempty password rule and 1024-byte limit. Core uses its installer root password; the appliance uses the Controller administrator password set during deployment after first boot unlocks the guest account. Existing installations and appliances are not changed by rebuilding these artifacts. Keep access on a private management network or VPN and verify the SSH host key before entering a password. The Controller still enrolls hosts through the authenticated Core HTTPS API, not SSH. **API impact: none** — installer and appliance SSH policy and the existing deployment seed change no Controller/Core or client-facing API contract; the deployment password validation remains unchanged. **Guide impact: updated** — installation, host verification and appliance access instructions describe the new defaults. No new pool setting or durable product state is added.
+
+**Appliance report rejection fix, 2026-09-28:** Core's negotiated report can carry 35
+capabilities while Controller accepted only 32. The next report was rejected, leaving the
+host and libvirt observation stale and blocking appliance adoption. Controller now accepts
+up to 64 bounded capability names. **API impact: changed contract** —
+`POST /api/v1/agent/report` accepts 33–64 names with the same host mTLS identity,
+authorization, sequence, errors for invalid reports, and result/retry semantics; update
+Controller before retrying the same saved deployment. **Guide impact: updated** —
+troubleshooting directs operators to inspect report rejection and retain the original VM.
+No new durable pool state is added.
+
 **Installer interface correction, 2026-09-08:** project owner clarified that the GUI must be a
 custom Nex interface, not Debian's stock GUI. Retain the pre-install GUI/minimal choice,
 but replace the graphical presentation with an original Nex shell: brand header,

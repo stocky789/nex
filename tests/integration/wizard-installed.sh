@@ -6,6 +6,8 @@ test "$(hostname)" = nex-lab
 for unit in libvirtd.socket ssh.service chrony.service networking.service; do
     systemctl is-active "$unit"
 done
+sshd -T | grep -qx 'permitrootlogin yes'
+sshd -T | grep -qx 'passwordauthentication yes'
 test -d /sys/class/net/br0/bridge
 test -e /sys/class/net/br0/brif/nex0
 test -z "$(ip -4 -o addr show dev nex0)"

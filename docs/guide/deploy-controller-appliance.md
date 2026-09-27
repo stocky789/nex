@@ -28,8 +28,8 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
 - At least the default guest allocation of **2 virtual CPUs, 4 GiB RAM and a 32 GiB disk**,
   plus capacity for the host and existing workloads. Preflight can reject insufficient capacity.
 - A Controller password for username **root**. Any nonempty password is accepted, up to
-  1024 UTF-8 bytes without line breaks or NUL. Same password for the web UI and the
-  appliance console. You can reuse this host's root password if you want.
+  1024 UTF-8 bytes without line breaks or NUL. The same password grants access to the
+  web UI, appliance console and root SSH. You can reuse this host's root password if you want.
 
 ## Steps
 
@@ -105,6 +105,9 @@ network or VPN, with no direct Internet exposure. Automatic Controller failover 
    appliance remains visible in the host-local **Virtual machines** list and in Controller's
    **VMs** list and host panel. Select its row in **VMs** to inspect its VM identity;
    adoption retains the existing appliance UUID instead of creating another VM.
+   For SSH access, check `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` in the trusted
+   appliance console, compare the key shown by your SSH client, then connect as `root`
+   with the Controller administrator password over the management network or VPN.
 
 7. For local power recovery, return to **Virtual machines** on the host. The appliance this
    page deployed is labelled **Controller appliance**; every other VM libvirt reports,
@@ -152,6 +155,10 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
   also resumes recorded work after restart. A deployment interrupted before its VM existed
   (still copying the disk or preparing its settings) starts again under the same VM ID; one
   interrupted later is only reconciled. Root diagnosis uses `journalctl -u nex-core-local`.
+- **Controller responds but initialization remains at needs attention:** check the host's
+  report status in Controller. If the host is stale and its VM observation is unavailable,
+  inspect `journalctl -u nex-core-local` on the host for report rejection. Update Controller
+  and Core to compatible builds before retrying the saved deployment.
 - **Waiting for network:** allow the guest to boot and obtain its DHCP lease. If it cannot
   find one usable address within five minutes, fix the DHCP/bridge connection and retry
   the original operation; do not create another Controller VM.
@@ -178,11 +185,14 @@ remain read-only here; manage them from Controller. Unknown ownership prevents l
 Controller recovery exports contain database state, identity, TLS private keys and other
 secrets. Store a protected copy outside the hosting server; a same-host VM snapshot is not
 an independent recovery copy. Use the package's host-root recovery helper, which talks to
-this appliance's guest agent; SSH password login stays disabled. First boot unlocks the guest
+this appliance's guest agent. Newly built appliances enable root password SSH after first boot;
+the SSH password is the Controller administrator password entered at deployment. Verify the
+appliance's SSH host key through its trusted VM console before connecting over the private
+management network or VPN. First boot unlocks the guest
 **root** console account with the deploy password and, where a `sudo` group exists on the
 image, adds it to that group, so anyone who knows the Controller administrator password (or
 reads it from the bootstrap record before first boot) has a full root shell at the appliance
-console, not only Controller web access; treat that password and console/hypervisor access
+console and SSH shell, not only Controller web access; treat that password and console/hypervisor access
 with the same care as host root.
 
 1. At the hosting Core server's root console, select the appliance's exact VM UUID from

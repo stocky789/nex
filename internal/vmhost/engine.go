@@ -921,7 +921,7 @@ func (e *Engine) seed(ctx context.Context, j journal, s DeploySpec) error {
 	}
 	data, _ := json.Marshal(map[string]any{"admin_password": s.AdminPassword, "tls_certificate": s.TLSCertificate, "tls_private_key": s.TLSPrivateKey, "hostname": s.Hostname, "network_mode": s.NetworkMode, "address_cidr": s.AddressCIDR, "gateway": s.Gateway, "dns": s.DNS})
 	var b strings.Builder
-	b.WriteString("#cloud-config\nhostname: " + s.Hostname + "\nmanage_etc_hosts: true\nssh_pwauth: false\ndisable_root: true\nwrite_files:\n")
+	b.WriteString("#cloud-config\nhostname: " + s.Hostname + "\nmanage_etc_hosts: true\nssh_pwauth: true\ndisable_root: false\nwrite_files:\n")
 	b.WriteString("  - path: /etc/nex-controller/bootstrap.json\n    owner: root:root\n    permissions: '0600'\n    encoding: b64\n    content: " + base64.StdEncoding.EncodeToString(data) + "\n")
 	if err := e.appendUpdateBootstrap(&b); err != nil {
 		return err

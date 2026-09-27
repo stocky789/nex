@@ -25,6 +25,12 @@ def module(name):
 
 
 class ApplianceTests(unittest.TestCase):
+    def test_guest_enables_root_password_ssh(self):
+        script = (ROOT / 'appliance/build-inside.sh').read_text()
+        self.assertIn('install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd openssh-server', script)
+        self.assertIn('PermitRootLogin yes\\nPasswordAuthentication yes\\n', script)
+        self.assertIn('/etc/ssh/sshd_config.d/00-nex-controller.conf; systemctl enable ssh', script)
+
     def test_both_debian_builders_verify_supported_go_before_extracting(self):
         expected = '63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445'
         for name in ('appliance/Dockerfile', 'packaging/core-local/Dockerfile'):

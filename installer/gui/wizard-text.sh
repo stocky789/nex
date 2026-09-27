@@ -246,9 +246,9 @@ step_password() {
             fail_note nex-installer/password-error "The two entries did not match. Enter the root password again."
             continue
         fi
-        # nex-config rejects the rest; check length here so it is reported in place.
-        if [ "${#first}" -lt 8 ]; then
-            fail_note nex-installer/password-error "Enter a root password of at least 8 characters."
+        # nex-config rejects the rest; report an empty password in place.
+        if [ -z "$first" ]; then
+            fail_note nex-installer/password-error "Enter a nonempty root password."
             continue
         fi
         v_password=$first

@@ -6,12 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.15` →
-> Debian `0.4.15`).
+> development software. Builds use the newest numbered changelog heading (`0.4.16` →
+> Debian `0.4.16`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.16] — 2026-09-28
+
+### Bug Fixes
+
+- Controller now accepts Core's full negotiated capability report, allowing an enrolled
+  host to finish Controller appliance adoption after updating compatible builds.
+
+### Miscellaneous
+
+- New Nex Core installations and Controller appliances deployed from Core allow root
+  password SSH access on the management network. The installer no longer imposes an
+  eight-character minimum on the Core root password.
 
 ## [0.4.15] — 2026-09-28
 

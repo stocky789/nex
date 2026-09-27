@@ -804,7 +804,7 @@ up to 1024 UTF-8 bytes, without CR, LF or NUL. No minimum length or complexity r
 Existing Controller password hashes remain usable. Host-local login uses the current OS
 root password and does not provision a separate credential. Appliance deployment uses the
 same Controller password validation; firstboot also applies that password to the guest
-console account `root` (SSH password auth remains off). This changes
+console account `root` and enables root password SSH on new appliances. This changes
 browser authentication and bootstrap validation, not outbound host certificate identity,
 agent commands or Core protocol version 1.
 
@@ -832,6 +832,11 @@ capability gates below are additive, not a general mixed-version guarantee. The 
 session-monitor extension is the one exception that projects additive fields away until
 acknowledged. Sections below reference this rule rather than restating it. A future incompatible
 change must record migration guidance and update both peers and their contract checks in one slice.
+Reports now accept up to 64 advertised capabilities (previously 32), with each name still
+limited to 100 UTF-8 bytes. Current Core can advertise 35 after capability negotiation;
+an older Controller that rejects that follow-up report leaves the host stale and blocks
+appliance adoption. Upgrade Controller before retrying the original deployment; do not
+create another VM.
 
 ## Execution and observations
 

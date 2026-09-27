@@ -20,7 +20,8 @@ virt-customize -a /output/controller.qcow2 \
  --upload /build/appliance/package-service-policy.sh:/usr/local/lib/nex/package-service-policy \
  --upload /build/appliance/qnetd-runtime-init:/usr/local/lib/nex/qnetd-runtime-init \
  --upload /build/appliance/corosync-qnetd-runtime.conf:/etc/systemd/system/corosync-qnetd.service.d/nex-runtime.conf \
- --run-command '/usr/bin/sh /usr/local/lib/nex/package-service-policy install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd' \
+ --run-command '/usr/bin/sh /usr/local/lib/nex/package-service-policy install cloud-init qemu-guest-agent python3 ca-certificates corosync-qnetd openssh-server' \
+ --run-command 'install -d -m 755 /etc/ssh/sshd_config.d; printf "PermitRootLogin yes\nPasswordAuthentication yes\n" > /etc/ssh/sshd_config.d/00-nex-controller.conf; systemctl enable ssh' \
  --upload /build/nex-controller:/usr/local/lib/nex/nex-controller \
  --upload /usr/local/go/LICENSE:/usr/local/share/nex/go-LICENSE \
  --copy-in /build/web/dist:/usr/local/share/nex \

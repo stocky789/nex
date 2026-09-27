@@ -31,6 +31,6 @@ Type: password
 Description: Root password:
  Choose a nonempty password for the root account on this Nex Core host.
  You will enter it again to confirm. No ordinary user account will be created.
- Use root at the local console; root SSH login is disabled.
+ Use root at the local console or over SSH after installation.
 TEMPLATE
 debconf-loadtemplate user-setup /tmp/nex-root-password.templates

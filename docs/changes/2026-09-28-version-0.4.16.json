@@ -1,0 +1,48 @@
+{
+  "summary": "Start working version 0.4.16 for the appliance adoption fix and root SSH defaults.",
+  "paths": [
+    "CHANGELOG.md",
+    "installer/README.md",
+    "docs/guide/change-management-network.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/software-updates.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Development-version labels now name 0.4.16; operator steps are unchanged.",
+    "pages": [
+      "docs/guide/change-management-network.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/navigate-the-controller-console.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Only the changelog-derived build version and development labels change; client, Controller/Core, and observed-result contracts do not.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version numbering changes no milestone or acceptance gate."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Version labels and release notes create no durable product state."
+  },
+  "verification": {
+    "method": "Changelog-derived version resolution, release-version tests, documentation structure, and repository privacy checks.",
+    "evidence": [
+      "CHANGELOG.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py"
+    ]
+  }
+}
