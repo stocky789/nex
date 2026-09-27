@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.13. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.14. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (**Settings** → **Members** → each host's
 **Authority copy** check), how to **change which host is the pool master**, how to **eject a host
 from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
