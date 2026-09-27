@@ -101,7 +101,9 @@ func RenderPoolClusterWithWitness(poolID string, nodes []PoolClusterNode, witnes
 		entries = append(entries, corosyncNode{address: node.Address, name: node.HostID, id: id})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
-	return renderCorosyncConfig(poolClusterMarker, PoolClusterName(poolID), entries, true, witnessAddress), nil
+	// A two-host witness cluster uses freeze, not SBD. WaitForAll can keep the
+	// survivor inquorate after its witness returns while the other host is down.
+	return renderCorosyncConfig(poolClusterMarker, PoolClusterName(poolID), entries, len(nodes) != 2, witnessAddress), nil
 }
 
 // PoolClusterOwnsCorosync is whether the configuration on this host is the pool's own cluster.
@@ -109,6 +111,13 @@ func RenderPoolClusterWithWitness(poolID string, nodes []PoolClusterNode, witnes
 func PoolClusterOwnsCorosync() bool {
 	config, err := os.ReadFile(corosyncConfigPath)
 	return err == nil && strings.Contains(string(config), poolClusterMarker)
+}
+
+// PoolClusterCanOwnCorosync checks configuration ownership before Core installs
+// the pool key, so a foreign cluster's authentication is never changed.
+func PoolClusterCanOwnCorosync(stateDir string) error {
+	old, err := os.ReadFile(corosyncConfigPath)
+	return checkCorosyncConfigOwner(stateDir, old, err, poolClusterMarker)
 }
 
 // ApplyPoolCluster brings this host's Corosync and Pacemaker to the pool's rendered

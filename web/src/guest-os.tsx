@@ -59,13 +59,18 @@ const icons = new Map<string, [string, string]>([
 ]);
 
 export function GuestOS({ vm }: { vm: VM }) {
-  const label = vm.guest?.os || (vm.spec ? guestNames[vm.spec.guest_os] || "Not recorded" : "—");
+  const configured = vm.spec && guestNames[vm.spec.guest_os];
+  const historical = !vm.guest?.os && vm.detected_os;
+  const detected = vm.guest?.os ? vm.guest : vm.detected_os;
+  const label = detected?.os ? `${detected.os}${historical ? " (last detected)" : ""}` : (configured ? `${configured} (configured)` : "OS unavailable");
   const family = vm.spec?.guest_os;
-  const id = vm.guest?.os_id || (!vm.guest?.os ? (family === "linux" ? "linux" : family === "windows" ? "mswindows" : "") : "");
+  const id = detected?.os_id || (!detected?.os ? (family === "linux" ? "linux" : family === "windows" ? "mswindows" : "") : "");
   const icon = icons.get(id.toLowerCase());
   const src = icon ? `/guest-os/${icon[0]}` : undefined;
   const [failed, setFailed] = useState<string>();
-  return <span className="guest-os">{src && icon && failed !== src ?
+  const explanation = historical ? `Last detected by Core at ${historical.observed_at}. Current OS detection is unavailable; this does not indicate guest health.`
+    : vm.guest?.os ? "Reported by QEMU Guest Agent." : "Detected OS unavailable. The configured family is a VM setting, not a detected distribution. OS details return when QEMU Guest Agent answers and the host reports them.";
+  return <span className="guest-os" title={explanation}>{src && icon && failed !== src ?
     <a className="guest-os-icon" href={icon[1]} target="_blank" rel="noreferrer" aria-label={`${label} website (opens in a new tab)`} onClick={e => e.stopPropagation()}>
       <img src={src} width={18} height={18} alt="" onError={() => setFailed(src)} />
     </a> : <span className="guest-os-icon" aria-hidden="true"><Icon kind="vm" size={18} /></span>}

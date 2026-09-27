@@ -102,21 +102,19 @@ class BrowserArtifactTests(unittest.TestCase):
                 self.assertIn(f'  group: {group}\n', release)
                 self.assertIn('cancel-in-progress: true', release)
 
-    def test_forge_release_only_attaches_netinst_payload_debs(self):
-        # Bare Core/Controller packages remain in APT; netinst needs its exact
-        # hash-named packages available even on forge-only releases.
+    def test_forge_release_only_attaches_isos_and_checksums(self):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 text = (ROOT / provider / 'workflows/release.yml').read_text()
                 create = text.split('- name: Create or replace the release\n', 1)[1]
                 step = create.split('\n      - name:', 1)[0]
                 self.assertIn('scripts/gitea-release.py', step)
-                self.assertIn('dist/netinst/*.deb', step)
-                self.assertNotIn('dist/core-local/', step)
-                self.assertNotIn('dist/controller/', step)
-                self.assertIn('nex-core-${NEX_VERSION}-amd64.iso', step)
-                self.assertIn('nex-core-${NEX_VERSION}-source.tar.gz', step)
-                self.assertIn('nex-core-${NEX_VERSION}-compliance-manifest.json', step)
+                self.assertEqual(step.count('"dist/nex-core-${NEX_VERSION}-'), 4)
+                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64.iso"', step)
+                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64.iso.sha256"', step)
+                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64-netinst.iso"', step)
+                self.assertIn('"dist/nex-core-${NEX_VERSION}-amd64-netinst.iso.sha256"', step)
+                self.assertNotIn('dist/netinst/*.deb', step)
 
 
 class ReleaseDeployCredentialTests(unittest.TestCase):
@@ -163,12 +161,13 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 for token in forbidden:
                     self.assertNotIn(token, text, msg=f'{provider} still references {token!r}')
 
-    def test_no_secrets_skips_quietly_for_a_fork(self):
+    def test_no_secrets_fails_before_publishing(self):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 done, output = self.run_step(provider, {})
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertIn('enabled=false', output)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn('NEX_DEPLOY_HOST', done.stderr)
+                self.assertNotIn('enabled=true', output)
 
     def test_a_missing_secret_fails_the_release_instead_of_skipping(self):
         for provider in PROVIDERS:
@@ -193,17 +192,16 @@ class ReleaseDeployCredentialTests(unittest.TestCase):
                 self.assertIn('npm --prefix website run build', text)
                 self.assertIn('NEX_VERSION: ${{ steps.version.outputs.version }}', text)
 
-    def test_deploy_checks_and_website_build_run_before_the_tag_moves(self):
-        # BUG-0413: a half-set secret or a broken website build used to abort the run
-        # after the tag had moved and the forge release existed, leaving APT and the
-        # download tree behind on the previous version.
+    def test_download_site_is_reachable_before_the_tag_moves(self):
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 text = (ROOT / provider / 'workflows/release.yml').read_text()
                 release = text.index('- name: Create or replace the release')
                 for earlier in ('- name: Check for deploy credentials',
                                 '- name: Set up Node.js for the website',
-                                '- name: Build the static website'):
+                                '- name: Build the static website',
+                                '- name: Publish to the website host',
+                                '- name: Confirm the release is actually reachable'):
                     self.assertLess(text.index(earlier), release, earlier)
 
     def test_website_release_id_is_left_to_the_deploy_script(self):

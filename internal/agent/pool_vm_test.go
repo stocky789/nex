@@ -223,6 +223,7 @@ func setPoolVMAutostartOwner(t *testing.T, owner func(uint32) bool) {
 // requested autostart intent, into a real managed journal this host's own projection reads.
 func autostartFixture(t *testing.T, s *Store, localAutostart, sharedAutostart bool) (local, shared protocol.VMCreateSpec) {
 	t.Helper()
+	t.Cleanup(vmhost.ManagedStorageReadyForTests())
 	dir := filepath.Join(s.dir, "managed-vms")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)

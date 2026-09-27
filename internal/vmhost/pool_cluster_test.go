@@ -60,10 +60,13 @@ func TestTwoHostPoolClusterNeedsTlsQdevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"model: net", "votes: 1", "host: 198.51.100.20", "port: 5403", "algorithm: ffsplit", "tie_breaker: lowest", "tls: required", "wait_for_all: 1"} {
+	for _, want := range []string{"model: net", "votes: 1", "host: 198.51.100.20", "port: 5403", "algorithm: ffsplit", "tie_breaker: lowest", "tls: required"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("qdevice configuration lacks %q:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "wait_for_all: 1") {
+		t.Fatalf("two-host witness config would block requorum after witness recovery:\n%s", rendered)
 	}
 	if _, err := RenderPoolClusterWithWitness("pool-1", labNodes()[:2], "bad address"); err == nil {
 		t.Fatal("accepted malformed qnetd address")
@@ -91,6 +94,9 @@ func TestNeitherClusterTakesOverTheOthersCorosyncConfiguration(t *testing.T) {
 	if !PoolClusterOwnsCorosync() {
 		t.Fatal("the pool's own cluster configuration is not recognised as its own")
 	}
+	if err := PoolClusterCanOwnCorosync(dir); err != nil {
+		t.Fatalf("pool cluster refused its own configuration: %v", err)
+	}
 	storage, err := RenderStorageCluster(protocol.StorageClusterConfig{ClusterID: "sc1",
 		Nodes: []protocol.StorageClusterNode{{HostID: "host-a", CorosyncAddress: "198.51.100.11", CorosyncNodeID: 1},
 			{HostID: "host-b", CorosyncAddress: "198.51.100.12", CorosyncNodeID: 2},
@@ -111,6 +117,9 @@ func TestNeitherClusterTakesOverTheOthersCorosyncConfiguration(t *testing.T) {
 	}
 	if PoolClusterOwnsCorosync() {
 		t.Fatal("clustered storage's configuration was read as the pool's own")
+	}
+	if err := PoolClusterCanOwnCorosync(dir); err == nil {
+		t.Fatal("pool cluster key could overwrite clustered storage's authentication")
 	}
 	if _, err = writeCorosyncConfig(dir, pool, poolClusterMarker); err == nil {
 		t.Fatal("the pool's watchdog cluster replaced clustered storage's configuration")

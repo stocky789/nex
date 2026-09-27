@@ -28,6 +28,7 @@ var (
 	poolWitnessBundle           = vmhost.PoolWitnessBundle
 	poolWitnessImportMaster     = vmhost.PoolWitnessImportMaster
 	poolWitnessImportMember     = vmhost.PoolWitnessImportMember
+	readPoolWitnessStatus       = vmhost.ReadPoolWitnessStatus
 	pushPoolWitnessAuthority    = PushPoolAuthorityReplicas
 )
 

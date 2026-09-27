@@ -32,8 +32,9 @@ flows are available in matching development builds.
    - **Containers** (`#/containers`), a smaller item directly under **VMs** because container
      services run in Nex-managed VMs — not available yet: every control is disabled and the screen reads
      *Available with container services (Phase 10).*
-   - **Hosts** (`#/hosts`) — the host list; selecting a row opens that host's panel
-     (`#/hosts/<id>`).
+   - **Hosts** (`#/hosts`) — the host list shows each host's reported management IPv4 address;
+     selecting a row opens that host's panel (`#/hosts/<id>`). If Core has not reported that
+     address, the list shows **—**.
    - **Storage** (`#/storage`) — the pool's storage repositories with **Type**, **Scope**,
      **Capacity**, **Health**, **Host access**, **Last check** and **Manage**, then the
      **ISO library**. **Host access** has one light per pool host with its name; a hollow
@@ -60,9 +61,10 @@ flows are available in matching development builds.
 2. Open the scope menu at the left of the top bar. It shows a status dot, the site name, the
    pool name (or **All pools**) and the host count. The menu lists each site as
    `<site> · all pools`, followed by that site's pools, then **Create site** and **Add host**.
-   Choose a site to see all of its pools, or a pool to narrow every list, **Overview** and the
-   pool **Settings** to it. A site with one pool is treated as that pool. **Add host** adds to
-   the chosen site and is disabled until a site exists.
+   Choose **All pools** to see site-wide lists and Overview, or a pool to narrow every list,
+   Overview and pool **Settings** to it. If no pool is selected, or a selected pool disappears,
+   the first pool in that site's list is selected automatically. **Add host** adds to the chosen
+   site and is disabled until a site exists.
 3. Use the search field, *Jump to a VM, host, IP or setting*, to go straight to a VM, a host
    (by name or reported IP address), a rail page (for example **Storage**) or a settings
    section. Press `/` anywhere outside a text field to focus it. Use Up and Down to choose a
@@ -177,14 +179,15 @@ figures.
 The theme, the chosen scope, the last time **Events** was opened, the hidden VM columns, the
 collapsed **Overview** sections and the slide-over panel width are stored in this browser only. They are conveniences: they are not Controller state, other browsers
 and administrators do not see them, and a replacement Controller does not need them. Clearing site
-data resets them to the defaults (system theme, first site, every column shown, every section expanded, default panel width).
+data resets them to the defaults (system theme, first site and its first pool, every column shown,
+every section expanded, default panel width).
 
 ## Troubleshooting
 
-- **A pool screen says *Choose a pool in the scope menu to see its …*:** the scope is a site with
-  several pools. Choose one pool in the scope menu.
-- **Create VM is disabled with *Choose a pool in the scope menu first.*:** as above; a VM is
-  created in one pool.
+- **A pool screen says *Choose a pool in the scope menu to see its …*:** the site has no pool,
+  or **All pools** was explicitly chosen while several pools exist. Choose one pool in the menu.
+- **Create VM is disabled with *Choose a pool in the scope menu first.*:** choose a pool; a VM
+  is created in one pool.
 - **The Events dot does not clear on another computer:** the seen time is kept per browser.
 - **A link says *Object not found* or *VM not found*:** the VM, host or section is not known to
   this Controller, or inventory is still loading. Use **Retry** on the inventory alert when the
@@ -203,3 +206,8 @@ Written for the Controller console redesign against the development source (deve
 the source code and was not walked through separately by its author. Slide-over resize was checked
 against the Panel implementation and unit tests; a live browser drag walkthrough was not repeated
 for this page.
+The first-pool default, explicit **All pools** and removed-pool fallback were exercised in a
+[simulated browser regression](../qa/2026-09-25-default-pool-scope.md); no real enrollment
+or host join was performed for that check.
+The Hosts address display was exercised with simulated Core inventory in a
+[browser regression](../qa/2026-09-25-host-management-ip.md); it was not checked on a live host.

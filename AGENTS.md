@@ -46,9 +46,10 @@ A change breaks the invariant if it:
   objects) with no host-side record, on the grounds that it is "not real state".
 
 If a requirement genuinely does not fit the invariant, stop and resolve it with project owner. Do not invent
-an exception, and do not leave the loophole for a later phase to clean up. Every change declares
-where its durable state lives in its `docs/changes/*.json` record (`state.owner`), and both the API
-impact check and phase acceptance gates verify it.
+an exception, and do not leave the loophole for a later phase to clean up. Material changes declare
+where durable state lives in their `docs/changes/*.json` record (`state.owner`), and both the API
+impact check and phase acceptance gates verify it. Small changes covered by the lightweight rule
+below add no durable state.
 
 ## Core-first delivery and acceptance
 
@@ -258,13 +259,22 @@ option as approval. These instructions cannot enable a question UI the client la
 
 ## Living user guide and documentation gate
 
+- **Lightweight changes (project owner decision, 2026-09-25):** A small, local tweak that adds no
+  durable state and does not change an API contract, Core behavior, validation, permissions, or
+  recovery needs no `docs/changes` record, standalone QA report, full test suite, browser walkthrough,
+  or lab run. Examples are CSS, wording, layout, and disabling an existing Controller action while
+  leaving its Core contract unchanged. Inspect the diff and run one focused check when the tweak has
+  logic; a trivial style or copy edit needs only review. Update the guide with a short correction if
+  an operator instruction would otherwise be wrong. Do not claim an unrun check passed. Apply the
+  full gates to new workflows, changed contracts/state, data or security risks, and phase acceptance.
 - Apply [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) to every change. Assess guide impact as
-  `updated` or `none` with a reason, alongside the required API impact decision. Internal refactors
-  do not need invented user instructions; changed user behavior does need guide updates.
+  `updated` or `none` alongside the required API impact decision. For lightweight changes, a brief
+  change summary is enough; no separate assessment file is needed. Internal refactors do not need
+  invented user instructions; changed operator steps need guide updates.
 - Maintain the [user guide](docs/guide/README.md) in the same change as each implemented feature,
   including GUI workflows, CLI/installer behavior, configuration, permissions, errors, and recovery.
   Update or remove obsolete instructions when behavior changes or features are removed.
-- Walk through the documented steps against the actual implementation in a disposable environment.
+- For changes outside the lightweight rule, walk through the documented steps against the actual implementation in a disposable environment.
   Exercise applicable success, failure, and recovery paths; for GUI features use browser interaction
   and inspect captures. Record version/environment, method, actual results, evidence, and untested
   limits. Simulation must be labeled; it cannot establish real hardware or storage correctness.
@@ -272,14 +282,15 @@ option as approval. These instructions cannot enable a question UI the client la
 - Use portable Markdown under `docs/guide/`, stable descriptive filenames, relative links, and the
   required page sections/navigation. This is the future website's source, not a second manual to
   rewrite later. Do not expose contributor implementation details in operator workflows.
-- Add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
+- For material changes, add a scoped `docs/changes/*.json` assessment covering changed paths. Applicable guide/API changes
   must name updated documentation and verification evidence; `none` requires a reviewable reason.
   Every record also declares `state.owner` as `none`, `core`, or `controller` with a reason;
   anything but `none` names the durable record and how a fresh Controller recovers it. Reviewers
   reject a `controller` owner that is not one of the closed Controller-scoped exceptions.
-  Run `python3 scripts/check_docs.py --worktree` before committing: it applies the same gate CI
-  applies, to uncommitted and untracked work, so a missing assessment is caught locally instead of
-  as a red build. Then run the relevant behavior checks and follow the documented CI procedure.
+  Run `python3 scripts/check_docs.py --worktree` before committing: it checks guide structure and
+  any supplied records against uncommitted and untracked work. It does not require a record for
+  every changed path; reviewers must enforce the material-change requirement because the checker
+  cannot infer a change's risk from its paths. Then run checks appropriate to the change.
 - Independent review and every phase gate check guide/API applicability, documentation accuracy,
   and actual walkthrough evidence. Automated structural checks cannot judge semantic completeness
   or prove that a walkthrough ran. No applicable documentation work is deferred to project end.
@@ -288,9 +299,10 @@ option as approval. These instructions cannot enable a question UI the client la
 
 - Nontrivial logic ships with a focused runnable check. Use the repository's existing test tools when
   available. Test observable behavior and failure recovery; do not freeze known-bad prototype output.
-- For bugs, reproduce the failure and add a failing regression check before fixing the root cause where
-  practical. If the check cannot reproduce it, record the limitation and the alternative evidence.
-- Every bug fix must include a regression test and ensure forge CI runs it on pushes and pull
+- For material bugs, reproduce the failure and add a failing regression check before fixing the root
+  cause where practical. If the check cannot reproduce it, record the limitation and alternative evidence.
+  A lightweight tweak needs only the focused check described above when it has logic.
+- Material bug fixes must include a regression test and ensure forge CI runs it on pushes and pull
   requests. The forge executes `.github/workflows/`; keep the `.gitea/workflows/` copies in step
   with it. Hosted github.com minutes are paid for and the forge runs the full suite for free, so
   every job in `.github/workflows/` is skipped on github.com except the single cheap job in
@@ -309,7 +321,7 @@ option as approval. These instructions cannot enable a question UI the client la
   Never claim unrun tests, hardware coverage, restores, migrations, or CI success.
 - After an authorized push, inspect the actual CI run and required job results. Report failing, missing,
   pending, or skipped required checks honestly; a workflow file alone establishes no coverage.
-- UI work needs real browser review: inspect captures and exercise relevant loading, empty, error,
+- Material UI workflows need real browser review: inspect captures and exercise relevant loading, empty, error,
   stale-data, keyboard, and destructive-action states. Fix and recapture material defects.
 - A phase is complete only when its functionality, relevant safety/recovery checks, documentation,
   and UI review pass. Record remaining work explicitly; do not mark partial work complete.

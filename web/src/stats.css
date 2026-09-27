@@ -78,7 +78,7 @@ section.panel.stats { background: var(--sunken); }
 .stats-tooltip-row { display: flex; align-items: center; gap: 6px; line-height: 18px; }
 .stats-tooltip-row strong { margin-left: auto; padding-left: 12px; font-weight: 600; }
 
-.stats-realtime { border-bottom: 1px solid var(--line-soft); }
+.stats-realtime { border-bottom: 1px solid var(--line-soft); container-type: inline-size; }
 .stats-drawer {
   display: flex; align-items: center; gap: 6px; width: 100%;
   min-height: 30px; padding: 4px 10px; border: 0; border-radius: 0;
@@ -95,7 +95,8 @@ section.panel.stats { background: var(--sunken); }
 .stats-realtime-bar label { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
 .stats-note { margin: 0 10px 8px; padding: 6px 10px; border: 1px solid var(--line-soft); background: var(--sunken); color: var(--text); }
 .stats-note button { margin-left: 8px; }
-.stats-grid-live { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.stats-grid-live { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@container (max-width: 700px) { .stats-grid-live { grid-template-columns: minmax(0, 1fr); } }
 .stats-grid-live .stats-chart { padding: 6px 10px; }
 
 /* Same card treatment as .stats-hw-section so the system-disk block matches the panel. */

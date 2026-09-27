@@ -32,7 +32,7 @@
             }
           },
           "400": {
-            "description": "HTTPS required, invalid JSON/input, password outside 1–1024 UTF-8 bytes or containing NUL; invalid password input is rejected before invoking the helper.",
+            "description": "HTTPS required, invalid JSON/input, password outside 1\u20131024 UTF-8 bytes or containing NUL; invalid password input is rejected before invoking the helper.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4275,7 +4275,7 @@
           },
           "address_cidr": {
             "type": "string",
-            "description": "Static usable unicast IPv4 address with /8–/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
+            "description": "Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
           },
           "gateway": {
             "type": "string",
@@ -4573,7 +4573,7 @@
             "type": "string",
             "minLength": 1,
             "writeOnly": true,
-            "description": "Current host root password, set initially during OS installation, 1–1024 UTF-8 bytes without NUL. Local web access does not set or reset the OS password.",
+            "description": "Current host root password, set initially during OS installation, 1\u20131024 UTF-8 bytes without NUL. Local web access does not set or reset the OS password.",
             "x-max-utf8-bytes": 1024
           }
         },
@@ -4738,7 +4738,7 @@
           },
           "address_cidr": {
             "type": "string",
-            "description": "Static usable unicast IPv4 address with /8–/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
+            "description": "Static usable unicast IPv4 address with /8\u2013/30 prefix; subnet and broadcast addresses are refused. Required for static mode; omitted in DHCP mode."
           },
           "gateway": {
             "type": "string",
@@ -5095,7 +5095,7 @@
           },
           "bmc_provisioning_disabled": {
             "type": "boolean",
-            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it — one operator action with one meaning — and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
+            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it \u2014 one operator action with one meaning \u2014 and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
           },
           "watchdog": {
             "anyOf": [
@@ -5438,7 +5438,7 @@
               3,
               17
             ],
-            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself — 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement — either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
+            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself \u2014 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement \u2014 either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
           },
           "provisioned_by_core": {
             "type": "boolean",
@@ -5449,7 +5449,7 @@
           "kind"
         ],
         "x-go-type": "protocol.StorageClusterFence",
-        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages — the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection — identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read — rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
+        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection \u2014 identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read \u2014 rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
       },
       "PoolFenceCheck": {
         "type": "object",
@@ -5601,7 +5601,7 @@
               "no_peer",
               "not_applicable"
             ],
-            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait — a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
+            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait \u2014 a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
           },
           "reason": {
             "type": "string",
@@ -5710,7 +5710,7 @@
               "unknown",
               "none"
             ],
-            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software — a hung kernel does not run it — so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
+            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software \u2014 a hung kernel does not run it \u2014 so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
           },
           "device": {
             "type": "string",
@@ -5825,12 +5825,12 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at — not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
+            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at \u2014 not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
           },
           "armed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog — a reboot, a cluster restart — produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
+            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog \u2014 a reboot, a cluster restart \u2014 produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
           }
         },
         "required": [
@@ -5843,7 +5843,7 @@
       },
       "PoolFenceCluster": {
         "type": "object",
-        "description": "The pool's own Corosync/Pacemaker cluster, which carries no resources and exists only so that a diskless sbd has a quorum to lose. Nex Core forms one for a pool of three or more ready hosts with Host fencing on and no clustered-storage repository; a pool that has clustered storage keeps the cluster clustered storage already owns and is not armed at all in this release. Like the counts beside it, this is the master's memory-only observation over the membership it owns, derived on every report and never stored: the durable facts are the membership and each host's own armed report.",
+        "description": "The pool master's memory-only Corosync/Pacemaker cluster observation. Pools of three to five ready hosts may arm diskless sbd; an eligible two-host pool may instead report a connected and voting qdevice witness while watchdog arming stays withheld. The selected witness and host armed reports remain durable on Core, not in this derived status.",
         "properties": {
           "state": {
             "type": "string",
@@ -5855,11 +5855,22 @@
               "armed",
               "degraded"
             ],
-            "description": "off is the pool's own Host fencing setting. not_available is this pool: clustered storage, fewer than three hosts, more hosts than Nex Core has exercised, or no usable watchdog. forming is a cluster Nex Core has started and is waiting to see quorate. arming is the one-host-at-a-time rollout. degraded is a cluster whose hosts are not all armed."
+            "description": "off is the pool's Host fencing setting; not_available means no applicable cluster. In a two-host pool, forming means qdevice or native quorum is not verified and can coexist with an operating witness; degraded means witness and quorum are operating but watchdogs remain unarmed. Larger pools use forming for Corosync quorum, arming for rollout and degraded when hosts are not all armed."
           },
           "detail": {
             "type": "string",
             "description": "Core's own sentence for the state. A client shows it as written."
+          },
+          "witness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceWitness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool master's current native qdevice observation, separate from watchdog arming. Omitted when no witness is selected."
           },
           "armed": {
             "type": "integer",
@@ -7096,6 +7107,27 @@
           "status",
           "observed_at"
         ]
+      },
+      "PoolFenceWitness": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "forming",
+              "operating"
+            ],
+            "description": "Operating means the pool master verified the selected qdevice's identity, pinned CA, TLS connection and cast vote. It does not imply an armed watchdog or an automatic fence proof."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Core's current native observation or reason the witness is still forming."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "x-go-type": "protocol.PoolFenceWitness"
       }
     }
   },

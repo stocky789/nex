@@ -29,6 +29,11 @@ settings. Every element of the reference ships, and every existing workflow stay
 - Owner review feedback that became design rules: no coloured side stripes on any element, and
   tight corners (2 px controls, 3 px surfaces). See the design guide's
   [rules](../design/controller-console/README.md#rules-that-keep-it-looking-designed).
+- **Decision: project owner, 2026-09-25** — when the saved pool choice is absent or no longer
+  exists, select and remember the first pool in the selected site. Keep **All pools** as an explicit choice.
+  This fixes the Settings view going empty when enrolling a host adds its temporary pool.
+  API impact: none; the scope is a browser preference, and inventory still comes from the
+  existing Controller and Core reports.
 
 ## Architecture invariant check
 

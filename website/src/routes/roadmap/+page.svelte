@@ -17,24 +17,28 @@
     summary: string;
     done: string[];
     open: string[];
+    notes?: string[];
   }[] = [
     {
       status: "shipped",
       title: "The host foundation",
       summary:
-        "Debian, KVM/QEMU and libvirt running a guest we can start, reach and reboot.",
+        "Phase 0 closed by the project owner. Debian, KVM/QEMU and libvirt run a guest in a bounded nested lab.",
       done: [
         "Debian 13 host with libvirt and QEMU from Debian's own packages",
-        "An accelerated guest boots, gets networking and keeps its data across a host reboot",
-        "Local console and serial recovery access to the host"
+        "A nested KVM guest boots, and its definition and host marker persist across a reboot",
+        "Local console and serial recovery access to the host in the disposable lab"
       ],
-      open: []
+      open: [],
+      notes: [
+        "Full guest-network and written-data reboot acceptance was not run; later problems are tracked as bugs"
+      ]
     },
     {
       status: "shipped",
       title: "One host, managed from a browser",
       summary:
-        "A Controller that enrolls a host, and everything needed to run a VM on it. Phase 2 closed 2026-09-17.",
+        "Phases 1–2 closed: a Controller that enrolls a host and manages a VM through its lifecycle.",
       done: [
         "Administrator login, sites, and automatic pools — each enrolled host becomes the master of its own pool",
         "Host enrollment by short-lived token, or by address and root password after you confirm the host's fingerprint; revoke and re-enroll without losing identity",
@@ -56,10 +60,10 @@
       open: []
     },
     {
-      status: "testing",
+      status: "shipped",
       title: "An installable host that brings up its own Controller",
       summary:
-        "One empty server, one ISO, a browser — and a working Controller at the end of it.",
+        "Phase 3 closed by the project owner after the disposable install-to-first-VM lab chain.",
       done: [
         "A Nex Core ISO with our own graphical installer: welcome, host identity, per-interface networking with VLAN and static or DHCP addressing, an explicit disk choice, and a review page whose erase confirmation names the disk",
         "Installation with no internet connection at all; the local development 0.3.2 snapshot passed offline BIOS installation, first boot and reboot in a disposable VM",
@@ -76,7 +80,9 @@
         "An installation with the network cable unplugged, and a power cut during installation followed by a clean reinstall",
         "A Controller deployment interrupted part-way on a freshly installed host, which now starts again and finishes"
       ],
-      open: [
+      open: [],
+      notes: [
+        "The published 0.4.12 network installer fails graphical UEFI installation after its network preflight; a corrected temporary overlay passed, but a rebuilt release ISO still needs verification",
         "Fresh signed Windows/Linux guest boot under Debian stable OVMF, and existing guest firmware state across the package switch, still need disposable-lab verification",
         "Real Intel and AMD hardware — every installation so far has been a disposable virtual machine",
         "Connecting a host to an existing Controller from the host's own interface; today the Controller reaches out and adds the host",
@@ -87,7 +93,7 @@
       status: "shipped",
       title: "More than one host, and shared storage",
       summary:
-        "A pool that spans hosts, with storage they can all reach and honest placement rules. Phase 4 closed 2026-09-20 for disposable virtual-lab scope; permanent physical, five-host and package-install limits remain documented.",
+        "Phase 4 closed by the project owner. The earlier multi-host acceptance remains limited to its recorded virtual-lab scope; fencing testing stays open.",
       done: [
         "Joining another host to an existing pool as a member under its master; the master keeps the membership, and a join with a lost reply is safe to retry",
         "Storage repositories owned by Nex Core: local directories, existing OpenZFS datasets and single-host iSCSI LUNs stay with the host that owns them, while NFS and SMB3 storage is shared across the pool",
@@ -106,12 +112,14 @@
         "Phase 4 gate closed for disposable virtual-lab scope on 2026-09-20",
         "Master-owned VM placement: lost replies, storage loss, membership races, interrupted changes and Controller replacement passed in a disposable multi-host lab (2026-09-23)"
       ],
-      open: [
+      open: [],
+      notes: [
+        "Per-host uplink maps for pool VLANs: decided, not implemented; a member with differently named uplinks can still join with failed network convergence",
         "Physical/BMC fencing and five-host scale — not claimed for disposable virtual-lab acceptance",
         "Package-installed libvirt hook and AppArmor enforcement — lab overlay only so far",
         "Authentic owner-conflict S6-12/16 fixture — unavailable; contradictory-owner subcase not exercised",
         "Broader duplicate-writer, workload-continuity and fault-matrix evidence — permanent limits for this lab class",
-        "Automatic master succession: requires quorum majority and verified fencing; separate from VM restart policies",
+        "Automatic master succession: a narrow two-host BMC path has simulated checks; storage lease, witness and physical fence proof remain open, separate from VM restart policies",
         "Clustered iSCSI storage shared by several hosts with fencing: built for development, not yet for real use",
         "ZFS provisioning from selected disks: in development; external image delivery remains open",
         "G2 maintenance reboot/autostart walkthrough and remaining browser coverage for transfer/recovery views"
@@ -262,9 +270,9 @@
       <p class="eyebrow"><span class="small-line"></span> Where the project stands</p>
       <h1 id="roadmap-title">Roadmap.</h1>
       <p class="roadmap-description">
-        Built in order — no milestone counts as done until it works end to end. No
-        dates. Where an item has release or development evidence, it says so.
-        Development checks do not establish publication.
+        Phases 0–4 are closed by project-owner decision. Phase 5 snapshots closed for disposable-lab scope; Phase 6 backups are in testing.
+        Earlier test limits and known issues remain visible; fencing still needs
+        proper safety testing. Development checks do not establish publication.
       </p>
     </div>
     <dl class="counts">
@@ -281,7 +289,7 @@
     <dl>
       <div>
         <dt><span class="mark shipped" aria-hidden="true">●</span> Built</dt>
-        <dd>Checks passed for the stated scope</dd>
+        <dd>Completed or accepted by the project owner; see evidence limits</dd>
       </div>
       <div>
         <dt><span class="mark testing" aria-hidden="true">◐</span> In testing</dt>
@@ -339,6 +347,14 @@
               <h3>{milestone.done.length > 0 ? "Still to do" : "What this covers"}</h3>
               <ul class="list open-list">
                 {#each milestone.open as item}
+                  <li>{item}</li>
+                {/each}
+              </ul>
+            {/if}
+            {#if milestone.notes?.length}
+              <h3>Known issues and separate gates</h3>
+              <ul class="list open-list">
+                {#each milestone.notes as item}
                   <li>{item}</li>
                 {/each}
               </ul>

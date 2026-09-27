@@ -13,6 +13,7 @@ export type ManagementNIC = { name: string; mac: string; mode: string; vlan?: nu
 export type Spec = { interfaces: ManagementNIC[]; dns?: string[] };
 export type ManagementRecord = {
   revision: number; stage: string; operation_id?: string; spec?: Spec; current?: Spec;
+  observed_gateway?: string;
   deadline?: string; window_seconds?: number; seconds_remaining?: number; last_error?: string;
   requested_rollback?: boolean; observed_at?: string;
 };
@@ -143,7 +144,7 @@ export function specFromRows(rows: Row[], management: string, dns: string): Spec
   };
 }
 
-function EditForm({ view, busy, submitReady, onStage }: { view: HostNetworkView; busy: boolean; submitReady: boolean; onStage: (spec: Spec, windowSeconds: number) => void }) {
+function EditForm({ view, busy, submitReady, fresh, onStage }: { view: HostNetworkView; busy: boolean; submitReady: boolean; fresh: boolean; onStage: (spec: Spec, windowSeconds: number) => void }) {
   const seed = editSeed(view.management_network);
   const [rows, setRows] = useState<Row[]>(() => rowsFromHost(view.nics, seed));
   const [management, setManagement] = useState(() => (seed?.interfaces || []).find(i => i.management)?.name || manageableNICs(view.nics)[0]?.name || "");
@@ -153,6 +154,8 @@ function EditForm({ view, busy, submitReady, onStage }: { view: HostNetworkView;
   const edit = (name: string, patch: Partial<Row>) => setRows(current => current.map(row => (row.name === name ? { ...row, ...patch } : row)));
   const spec = specFromRows(rows, management, dns);
   const windowProblem = windowError(Number(minutes));
+  const liveDHCP = view.management_network?.current?.interfaces.find(nic => nic.management && nic.mode === "dhcp");
+  const liveAddress = view.nics?.find(nic => nic.name === "br0")?.addresses?.find(address => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(address)) || "";
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setShowWindowError(true);
@@ -165,7 +168,9 @@ function EditForm({ view, busy, submitReady, onStage }: { view: HostNetworkView;
       <legend>Interfaces</legend>
       <div className="table-scroll"><table>
         <thead><tr><th>Interface</th><th>Management</th><th>Addressing</th><th>VLAN</th><th>Address</th><th>Gateway</th></tr></thead>
-        <tbody>{rows.map(row => <tr key={row.name}>
+        <tbody>{rows.map(row => {
+          const showDHCP = fresh && row.mode === "dhcp" && liveDHCP?.name === row.name;
+          return <tr key={row.name}>
           <th scope="row"><span className="host-network-nic"><b>{row.name}</b><small className="mono">{row.mac || "no MAC reported"}</small></span></th>
           <td className="host-network-mgmt"><label><input type="radio" name="management-nic" value={row.name} checked={management === row.name} onChange={() => setManagement(row.name)} /> <span className="sr-only">Use {row.name} for management</span></label></td>
           <td>
@@ -182,13 +187,13 @@ function EditForm({ view, busy, submitReady, onStage }: { view: HostNetworkView;
           </td>
           <td>
             <label className="sr-only" htmlFor={`address-${row.name}`}>IPv4 address and prefix for {row.name}</label>
-            <input id={`address-${row.name}`} inputMode="text" autoComplete="off" placeholder="192.0.2.10/24" disabled={row.mode !== "static"} value={row.address} onChange={event => edit(row.name, { address: event.target.value })} />
+            <input id={`address-${row.name}`} inputMode="text" autoComplete="off" placeholder={row.mode === "dhcp" ? "Not reported" : "192.0.2.10/24"} disabled={row.mode !== "static"} value={showDHCP ? liveAddress : row.address} onChange={event => edit(row.name, { address: event.target.value })} />
           </td>
           <td>
             <label className="sr-only" htmlFor={`gateway-${row.name}`}>Default gateway for {row.name}</label>
-            <input id={`gateway-${row.name}`} inputMode="text" autoComplete="off" placeholder="192.0.2.1" disabled={row.mode !== "static" || management !== row.name} value={row.gateway} onChange={event => edit(row.name, { gateway: event.target.value })} />
+            <input id={`gateway-${row.name}`} inputMode="text" autoComplete="off" placeholder={row.mode === "dhcp" ? "Not reported" : "192.0.2.1"} disabled={row.mode !== "static" || management !== row.name} value={showDHCP ? view.management_network?.observed_gateway || "" : row.gateway} onChange={event => edit(row.name, { gateway: event.target.value })} />
           </td>
-        </tr>)}</tbody>
+        </tr>})}</tbody>
       </table></div>
       <p className="help">Exactly one interface carries management. Only that interface may have a gateway, and a static address is an IPv4 address with its prefix, for example 192.0.2.10/24.</p>
     </fieldset>
@@ -423,7 +428,7 @@ export function HostNetworkPanel({ view, loading, error, busy, submitError, noti
         {!fresh && <p className="help">Applying needs a freshly connected host. Discarding does not: it is a durable command the host runs when it next reports.</p>}
       </div>}
 
-      {view.connection === "fresh" && !staged && !applied && <EditForm key={`${view.host_id}:${record?.revision ?? 0}:${flow}`} view={view} busy={busy} submitReady={submitReady} onStage={(spec, windowSeconds) => onStep("stage", { spec, window_seconds: windowSeconds, expected_revision: record?.revision || 0 }, "The change is staged on the host. Review it below, then apply it.")} />}
+      {view.connection === "fresh" && !staged && !applied && <EditForm key={`${view.host_id}:${record?.revision ?? 0}:${flow}`} view={view} busy={busy} submitReady={submitReady} fresh={fresh} onStage={(spec, windowSeconds) => onStep("stage", { spec, window_seconds: windowSeconds, expected_revision: record?.revision || 0 }, "The change is staged on the host. Review it below, then apply it.")} />}
     </>}
     {loading && !view && <p className="empty" role="status">Asking the host for its management network…</p>}
     {applying && view && record?.spec && <ApplyDialog view={view} spec={record.spec} minutes={windowMinutes} busy={busy} submitError={submitError} submitReady={submitReady} readError={error}

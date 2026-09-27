@@ -1,11 +1,19 @@
 # Production-readiness handoff
 
-Created: 2026-09-14. Updated: 2026-09-20. Status: **not production-ready**.
+Created: 2026-09-14. Updated: 2026-09-25. Status: **not production-ready**.
+This handoff retains dated implementation snapshots and earlier work queues. For the
+current phase position, use the [platform plan](2026-09-08-nex-platform.md); the
+published 0.4.12 network-installer UEFI defect and corrected-overlay limits are in
+the [installer plan](2026-09-24-net-installer.md).
+Project-owner decision, 2026-09-25: Phases 0–4 are finished; subsequent defects
+are bugs. Fencing testing is the exception and stays open. This handoff records
+historical evidence and separate supported-release work, not reopened phase gates.
 
 ## Current status
 
-**Phase 4 is closed for disposable virtual-lab scope (2026-09-20); production remains open.** S1–S6
-are implemented in the dirty working tree. The final `f714` source-validation run passed Go race
+**Phase 4 was accepted for disposable virtual-lab scope (2026-09-20) and is now closed
+as a phase by project-owner decision (2026-09-25); production remains open.** S1–S6
+were implemented in the then-dirty working tree. The final `f714` source-validation run passed Go race
 checks and the 374-test Python suite; it is not a release. Reviewed native evidence includes the
 repeated G1 lifecycle and missing-uplink recovery/cleanup, and S6-14 boot restriction, autostart
 suppression, refusal, rejoin and post-clear normal start/stop. `BUG-0372`–`BUG-0381` are fixed and
@@ -18,7 +26,9 @@ Phase 4 and the initial manual-recovery gate are accepted for disposable virtual
 OD-6 is decided: the strict unreachable-ready-member rule is approved (fence or fail-closed).
 Permanent limits stay open forever for this lab class: physical/BMC, five-host, package-install,
 authentic owner-conflict S6-12/16, OD-5 no-escape, and broader duplicate-writer/workload evidence.
-These results make no production or release claim.
+These results make no production or release claim. The later
+[per-host uplink-map decision](2026-09-24-pool-vlan-host-uplink-maps.md) found a
+mixed-uplink join gap outside that accepted lab scope.
 
 The BUG-0173 clean build (with BUG-0172) and the later storage-cluster refactor
 rebuild each passed guarded three-Core rollout, a clean 150-sample idle health
@@ -43,13 +53,14 @@ was already closed before this work; the review corrected stale status wording.
 |---|---|---|
 | Release publication checked package metadata but could miss a Controller that exits at startup (BUG-0246). | Both release workflows now extract and start the exact Controller package, check SQLite, UI/source and authenticated sessions before publication. Real CGO-enabled and CGO-disabled fixture packages prove acceptance and rejection locally and in Debian 13. | Exact 0.3.2 package startup and installed systemd restart/crash/reinstall/reboot checks passed in the [artifact lab](../qa/2026-09-18-release-artifact-lab.md). Hosted acceptance remains open: inspected Gitea HEAD jobs failed, GitHub evidence was unavailable, and the tested snapshot is uncommitted. |
 | Controller resource/capacity mirrors still decided VM placement. | Core master now approves create/update and media definition changes, obtains authenticated target preflight and persists owner/specification or update reservation. Local-storage definitions are included; ordinary local-only power remains independent of the master. | Bounded two-host KVM/NFS lab now passes local master/member create/edit/start and retries; replacement, storage-identity faults and interrupted-operation acceptance remain open. See [placement QA](../qa/2026-09-18-master-vm-placement.md). |
-| README and handoff mixed historical gaps with current implementation. | Phase 2 closure and published package history are reconciled. API contracts, guide prerequisites/retries, changelog and roadmap distinguish implementation from acceptance. | Phase 3/4 and production gates remain open; no new acceptance was inferred from documentation. |
+| README and handoff mixed historical gaps with current implementation. | Phase 2 closure and published package history are reconciled. API contracts, guide prerequisites/retries, changelog and roadmap distinguish implementation from acceptance. | At this 2026-09-18 review, Phase 3/4 and production gates remained open; later owner decisions closed Phases 3/4 without adding test evidence. |
 | Verification needed to match the new behavior. | Full Go race checks and final agent/vmhost race checks passed; API generation, 29 contract checks, simulated browser workflows, docs/privacy checks and independent review passed. Exact retry and stale-membership checks preserve durable records; refused replay cannot enter native reconciliation. | Native commands and browser Core responses use fixtures where stated. The late namespace-dependent test was removed and replaced with portable admission checks. Native two-node KVM/NFS evidence is now recorded separately; no hosted CI or physical-host proof is claimed. |
 
-## Recommended next work
+## Historical recommended next work (2026-09-18)
 
-This orders the existing gates below; it does not expand scope or reopen accepted
-Phase 2 work. The immediate objective is **one exact current build, with delivery
+This records the work order recommended at the time; it is not the current phase
+priority. It did not expand scope or reopen accepted Phase 2 work. The objective was
+**one exact current build, with delivery
 and Phase 3 installation evidence**, followed by native placement acceptance. Items 1 to 3 are
 closed as of 2026-09-23 (items 2 and 3 for disposable virtual-lab scope); physical hardware
 remains open.
@@ -150,8 +161,9 @@ unexecuted items are kept apart.
 | Storage placement transitions | BUG-0132's stopped local → NFS → local walkthrough passed. Broader transitions and native disk-placement conversion remain open. |
 | Activation failure/replay | The selected BUG-0135 master fence/replay passed. The remaining failure modes are open. |
 | Five-host scale and soak | Three-host results do not certify five hosts, long-duration load or repeated fault recovery. |
+| Mixed-uplink pool VLAN join | Per-host uplink maps are decided but not implemented; a member with a differently named NIC can join with failed network convergence. |
 | Member authority replica | **Implemented in the dirty working tree; full acceptance open.** The master signs its durable pool authority with the pool CA key, seals it per member, declares per-section digests and pushes it to ready members; members store it read-only and act on none of it. Reviewed G1/S5/S6 lifecycle evidence observes signed replicas, while complete replica-push/master-restart, fault and browser acceptance remains open. It is a recoverable copy, not independent authority. See [pool authority transfer](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession) and the [pool authority guide](../guide/pool-authority-and-recovery.md). |
-| Authority transfer / automatic succession | **Closed for disposable virtual-lab scope (2026-09-20).** Planned master change, member eject, fence-verified promotion and safe rejoin are implemented; scoped reviewed native/browser evidence covers selected eject, transfer, promotion and rejoin cases with external `virsh` power-off. It does not establish physical fencing, workload continuity, duplicate-writer safety, authentic owner-conflict handling or all recovery paths. S6-14 boot restriction, autostart suppression, rejoin and post-clear start/stop were independently reviewed. The final `f714` S6-18 strict harness is partial/FAIL; its older scoped result is separate. Only a `virsh` fence profile can be recorded. OD-5 remains restricted/no-escape; OD-6 strict unreachable-member rule is approved. Automatic succession is still planned and not implemented. |
+| Authority transfer / automatic succession | **Closed for disposable virtual-lab scope (2026-09-20).** Planned master change, member eject, fence-verified promotion and safe rejoin are implemented; scoped reviewed native/browser evidence covers selected eject, transfer, promotion and rejoin cases with external `virsh` power-off. It does not establish physical fencing, workload continuity, duplicate-writer safety, authentic owner-conflict handling or all recovery paths. S6-14 boot restriction, autostart suppression, rejoin and post-clear start/stop were independently reviewed. The final `f714` S6-18 strict harness is partial/FAIL; its older scoped result is separate. BMC profiles and a narrow automatic two-host BMC promotion path now have focused simulated checks; storage lease, witness and full physical acceptance remain open. OD-5 remains restricted/no-escape; OD-6 strict unreachable-member rule is approved. |
 | Master-owned VM placement acceptance | **Closed for disposable virtual-lab scope, 2026-09-23.** The full fault matrix (lost replies, shared edits, storage loss and identity change, membership races, interrupted create/update, Controller replacement) passed on ISO-installed hosts; BUG-0535 to BUG-0539 were fixed ([lab record](../qa/2026-09-23-phase3-placement-lab.md)). Earlier record: **Implemented, acceptance open.** Core now approves create/update and VM media definition changes from the pool master's records using a fresh target-host preflight; Controller mirrors no longer grant or reject placement. Focused tests, browser review and bounded two-node nested-KVM/NFS checks passed ([native evidence](../qa/2026-09-18-native-placement-lab.md)). Controller replacement, storage-identity faults, membership races and interrupted multi-host recovery remain open; the Phase 4 closure lab exercised the join/convergence matrix on the old build but has not yet run the placement fault matrix at all. One related defect was found and fixed there: a create aimed at a member whose shared-storage access the master last reported as stale sat `dispatched` with no operator signal, and now carries an advisory warning that refuses nothing and clears itself (`BUG-0326`). |
 | Physical SAN/NAS and fence devices | Needs an explicitly disposable supported hardware profile covering durability, power loss and exclusion. Nested virsh fencing does not certify physical devices. |
 | Recovery, mobility and HA | Snapshots, verified backup/restore, permanent host/master loss, migration, upgrades and separately gated automatic HA/failback keep their platform gates. Shared storage does not provide them. |

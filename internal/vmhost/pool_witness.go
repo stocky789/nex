@@ -67,7 +67,7 @@ func PoolWitnessCSR(ctx context.Context, stateDir, poolID string, witness protoc
 	nss := PoolWitnessNSSPath(stateDir, witness.FencingGeneration)
 	csrPath := filepath.Join(root, "qdevice-net-node.crq")
 	if csr, err := os.ReadFile(csrPath); err == nil {
-		return csr, nil
+		return canonicalPoolWitnessCSR(csr)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -98,7 +98,15 @@ func PoolWitnessCSR(ctx context.Context, stateDir, poolID string, witness protoc
 	if err != nil || len(csr) == 0 {
 		return nil, errors.New("native qdevice CSR was not created")
 	}
-	return csr, nil
+	return canonicalPoolWitnessCSR(csr)
+}
+
+func canonicalPoolWitnessCSR(csr []byte) ([]byte, error) {
+	block, _ := pem.Decode(csr)
+	if block == nil || (block.Type != "NEW CERTIFICATE REQUEST" && block.Type != "CERTIFICATE REQUEST") {
+		return nil, errors.New("native qdevice CSR is invalid")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: block.Bytes}), nil
 }
 
 // PoolWitnessImportMaster installs the qnetd-signed certificate into the staged native NSS
@@ -297,27 +305,31 @@ func ReadPoolWitnessStatus(ctx context.Context, stateDir, poolID string, witness
 	if err := witness.Valid(poolID); err != nil {
 		return PoolWitnessStatus{Error: "pool witness record is invalid"}
 	}
-	out, err := clusterRun(ctx, "corosync-qdevice-tool", "-s")
+	out, err := clusterRun(ctx, "corosync-qdevice-tool", "-s", "-v")
 	if len(out) == 0 {
 		return PoolWitnessStatus{Error: "qdevice status is unavailable"}
 	}
 	status := parsePoolWitnessStatus(out)
 	if err != nil || !status.Connected || !status.TLSActive || !status.VoteCast || status.ClusterName != witness.ClusterName || status.QNetdHost != witness.Address {
+		status.Observed = false
 		status.Error = "qdevice is not connected with its pinned witness vote"
 		return status
 	}
 	ca, err := clusterRun(ctx, "certutil", "-L", "-r", "-d", "sql:"+PoolWitnessNSSPath(stateDir, witness.FencingGeneration), "-n", "QNet CA")
 	if err != nil {
+		status.Observed = false
 		status.Error = "qdevice CA pin could not be verified"
 		return status
 	}
 	cert, err := x509.ParseCertificate(ca)
 	if err != nil {
+		status.Observed = false
 		status.Error = "qdevice CA pin could not be verified"
 		return status
 	}
 	digest := sha256.Sum256(cert.Raw)
 	if hex.EncodeToString(digest[:]) != witness.CASHA256 {
+		status.Observed = false
 		status.Error = "qdevice is using a different witness CA"
 		return status
 	}

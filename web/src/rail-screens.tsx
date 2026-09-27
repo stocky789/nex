@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Rail screens outside pool settings: Containers, Tasks and Events. Backups lives in backups.tsx.
-import type { Audit, Data, Operation } from "./types";
+import type { Audit, Data, ISODownloadProgress, Operation } from "./types";
 import { auditLabel, operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { auditTarget, AttentionList, Badge, Section, badgeTone, date, size, type Attention } from "./ui";
@@ -49,6 +49,7 @@ const rate = (bytes: number) =>
   bytes >= 1024 ** 2
     ? `${(bytes / 1024 ** 2).toFixed(1)} MiB/s`
     : `${Math.max(0, Math.round(bytes / 1024))} KiB/s`;
+const downloadSize = (bytes: number) => bytes >= 1024 ** 3 ? size(bytes) : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
 // The hosts report no percentage for a task, so progress is the stage it is in; the pulse marks
 // the ones still running, as the top bar's activity pill counts them.
 const progress: Record<string, string> = { pending: "Running on the host", dispatched: "Awaiting agent result" };
@@ -63,6 +64,17 @@ export function UploadProgress({ upload, onCancel }: { upload: Upload; onCancel?
       {running && onCancel && <button type="button" onClick={onCancel}>Cancel</button>}
     </div>
   );
+}
+export function isoDownload(hosts: { id: string; connection: string; inventory?: { managed?: { iso_downloads?: ISODownloadProgress[] | null } | null } | null }[], hostID: string, operationID: string) {
+  const host = hosts.find(h => h.id === hostID && h.connection === "fresh");
+  return host?.inventory?.managed?.iso_downloads?.find(d => d.operation_id === operationID);
+}
+export function DownloadProgress({ name, download }: { name: string; download: ISODownloadProgress }) {
+  const percent = download.total_bytes ? Math.min(100, Math.round(100 * download.received_bytes / download.total_bytes)) : undefined;
+  return <div className="upload-progress">
+    <progress max={100} value={percent} aria-label={`Download progress for ${name}`} />
+    <small className="mono">{percent === undefined ? `${downloadSize(download.received_bytes)} downloaded · size unknown` : `${percent}% · ${downloadSize(download.received_bytes)} of ${downloadSize(download.total_bytes!)}`}</small>
+  </div>;
 }
 // UploadRow covers only the browser-to-Controller transfer. The host import that follows it
 // is a durable task and stays in the task list and the ISO library.
@@ -105,6 +117,7 @@ export function Tasks({ data, upload, onCancelUpload }: { data: Data; upload: Up
               {upload && <UploadRow upload={upload} onCancel={onCancelUpload} />}
               {operations.map((o) => {
                 const timestamp = taskTimestamp(o);
+                const download = o.kind === "iso-import" && (o.status === "queued" || o.status === "dispatched") && isoDownload(hosts, o.host_id, o.id);
                 return <tr key={o.id}>
                   <td>
                     {dot(o.status)}<strong>{operationLabel(o.kind)}</strong>
@@ -115,7 +128,9 @@ export function Tasks({ data, upload, onCancelUpload }: { data: Data; upload: Up
                   <td>{o.actor}</td>
                   <td className="muted">{timestamp.reobserved ? <><strong>Reobserved from Core history</strong><small>{timestamp.value}</small><small>Original outcome time was not reported.</small></> : <time dateTime={timestamp.iso} title={timestamp.value}>{relativeTime(timestamp.iso)}</time>}</td>
                   <td><Badge value={o.status} /></td>
-                  <td className="muted">{progress[o.status] ? <><span className="pulse" aria-hidden="true" />{progress[o.status]}</> : o.status === "queued" ? "Waiting to be sent" : "—"}</td>
+                  <td className="muted">{download
+                    ? <DownloadProgress name={data.media.find(m => m.operation_id === o.id)?.name || "ISO"} download={download} />
+                    : progress[o.status] ? <><span className="pulse" aria-hidden="true" />{progress[o.status]}</> : o.status === "queued" ? "Waiting to be sent" : "—"}</td>
                 </tr>;
               })}
             </tbody>

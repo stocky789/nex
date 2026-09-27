@@ -18,7 +18,7 @@
         "summary": "Get administrator session",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Returns CSRF token for same-origin mutations. All authenticated administrator operations have controller-wide scope. Does not extend the idle deadline. A 401 requires sign-in again; session JSON fields are unchanged and contain no expiry timestamps.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -58,7 +58,7 @@
         "summary": "Sign in as administrator",
         "description": "Validates existing administrator credentials and browser origin. Sets __Host-nex_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. Existing password hashes remain valid; new administrator bootstrap passwords must be nonempty valid UTF-8, at most 1024 UTF-8 bytes, without CR, LF or NUL; there is no minimum length or complexity rule. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [],
         "responses": {
@@ -153,7 +153,7 @@
         "summary": "End administrator session",
         "description": "Implemented in development product 0.1.0, protocol v1. Invalidates the current session and clears its cookie. Repeated calls after logout require reauthentication.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -219,7 +219,7 @@
         "summary": "List sites",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -275,7 +275,7 @@
         "summary": "Create a site",
         "description": "Implemented in development product 0.1.0, protocol v1. Creates desired configuration immediately. No agent command. Not idempotent: inspect sites after an ambiguous response before creating again.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -377,7 +377,7 @@
         "summary": "List pools",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Pools are never created by administrators: each enrolling Core host becomes the master of a new pool named after its hostname (master_host_id). Membership itself is owned by the pool master: this list and POST /api/v1/pools/{id}/members relay and display it, and the Controller never authorizes or persists membership intent of its own. The Core local API keeps the same authenticated member join flow as a host-local recovery path. Master change and member eject remain unavailable. Results represent persisted controller state.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -435,7 +435,7 @@
         "summary": "Show the pool master's reported membership and convergence",
         "description": "Administrator session. Read-only projection of what the pool master reports: its inventory.managed.membership, each member's connection freshness, its four convergence checks (pool-storage-reconciliation, pool-network-reconciliation, pool-media-reconciliation, pool-authority-replica) and counts of the master's member_access rows that are healthy, pending, failed or stale. It stores nothing and computes no membership of its own. authoritative is true only while the master's connection is fresh; when it is not, status, error, checks, access counts, failures, maintenance and maintenance_since are reported as unknown, null or empty rather than presenting the last mirror as current, and the client must show them as unknown. peer_origin is part of the master's durable record rather than an observation of it and is reported either way. Each member also carries its own reported staged join, its own reported guest list (known false when that host is not fresh), the newest pool-maintenance operation this Controller holds for it, and the authority replica as the member and the master each report it. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -513,7 +513,7 @@
         "summary": "Add an enrolled host to this pool",
         "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. Both hosts must advertise pool-join-v1. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master's and is relayed verbatim. master_url is an optional override that the web UI never sends: the master's own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://<its default-route source address>:9444), as the master's own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -667,7 +667,7 @@
         "summary": "Drain a pool member, or take it out of maintenance",
         "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable pool-maintenance command to the pool master, which owns the flag inside the membership record it already keeps; the Controller records no drain of its own and the command is never sent to the host being drained. Maintenance refuses new VM placement, definition and start admission on that host and skips it in autostart; it stops no running guest and never blocks stop, shutdown or force-stop, so there is nothing to confirm and no confirmation field. The refusals below are only what the Controller can already see from host reports: the master is fresh, active and advertises pool-maintenance-v1, it has reported a membership, the host is a non-ejected member of it, and expected_version matches what it last reported. Core checks every one of them again against its own record, and its refusals arrive as a failed operation with conflict marked in GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -794,7 +794,7 @@
         "summary": "Preview which hosts could join this pool",
         "description": "Administrator session. Read-only presentation of host-reported facts for the \"Add host to pool\" dialog: enrolled, non-revoked hosts in the same site that are not already in this pool, each with a compatibility preview composed from both hosts' own reported inventory (connection, agent version, capability lists, existing membership, managed VMs, non-local storage, NIC names against each pool VLAN's uplink, CPU baseline). Each row is compatible, will_not_converge or refuses_join; eligible is false if and only if some row is refuses_join, and will_not_converge rows do not block a join. This is a preview, not an authorization: every refusal is decided again by Core when the join is submitted, and a candidate listed as eligible can still be refused. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -874,7 +874,7 @@
         "summary": "List hosts",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -932,7 +932,7 @@
         "summary": "List operations",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. A still-dispatched vm-create additionally carries advisory warnings, recomputed from the current mirror on every read and stored nowhere, naming each pool-shared repository, network or ISO whose access on the target host the pool master's last report does not show as current. They are a signal, never a verdict: the master decides, and the warnings clear by themselves when it reports working access.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -990,7 +990,7 @@
         "summary": "List audit",
         "description": "Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. For vm-create, vm-power, vm-media, vm-update, vm-delete and console.open, resource_id is the VM ID; rows written before this change keep the operation ID (or an internal row ID for vm-update) for power, media, update and delete.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1048,7 +1048,7 @@
         "summary": "Issue a site-bound enrollment token",
         "description": "Implemented in development product 0.1.0, protocol v1. Creates a short-lived single-use secret bound to a site; the enrolling host becomes the master of a new pool in that site. Unknown site_id returns 400. Optional host_id binds re-enrollment to an existing revoked host whose pool belongs to this site (409 otherwise). Keep the returned token out of logs. Token issuance is immediate; never retry enrollment blindly after an ambiguous outcome. Token expires after ten minutes.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1163,7 +1163,7 @@
         "summary": "Probe a host's local API TLS certificate",
         "description": "Implemented in development product 0.1.0, protocol v1. Performs an insecure TLS 1.3 handshake to the given address (default port 9443) purely to capture the leaf certificate nex-core-local presents; it establishes no trust and stores nothing. The operator compares the returned fingerprint, subject and expiry against the physical host before confirming add-host. This never contacts the Controller-to-Core enrollment contract; it only inspects the host's existing local API listener.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1263,9 +1263,9 @@
       "post": {
         "operationId": "addSiteHost",
         "summary": "Add a host by address and root password",
-        "description": "Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host's root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host — a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host's local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host's local enrollment endpoint together with the Controller's own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host's own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id — retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment. One host-side enrollment refusal is a normal wait rather than a failure and is answered as such: a host that relays this Controller's own \"pool identity is held; the pool master has not reported this ready member\" gets 409 with retryable true and the host's own words preserved in host_error, not the 502 every other host-side failure keeps. It happens while a pool member is added to a replacement Controller before its pool master has reported it; connect the master first, or retry once it has reported the member.",
+        "description": "Implemented in development product 0.1.0, protocol v1. Replaces manual token enrollment for a reachable host: the operator first confirms the certificate fingerprint returned by probeHost, then submits it here alongside the host's root password. The Controller re-verifies that same fingerprint with a constant-time comparison during its own outbound TLS handshake to the host \u2014 a mismatch fails the handshake and returns 502 before the password is ever sent. On a verified connection the Controller signs in to the host's local API (POST /api/local/v1/session), mints a fresh site-bound enrollment token (the same token contract createEnrollmentToken uses), and pushes it to the host's local enrollment endpoint together with the Controller's own served HTTPS certificate (the -tls-cert file, not the host-identity CA) as the trust the host pins for its Controller connection; the host then enrolls with this Controller through the existing agent-enrollment contract and becomes the master of a new pool in this site. The root password is used once for that single sign-in and is never stored, logged, or echoed back, including in error messages. Unknown site_id returns 400. Optional host_id re-enrolls a revoked host whose pool belongs to this site (409 otherwise, checked before any network attempt). A wrong password returns 401; a login rate limit returns 429 with the host's own message. If the host reports it is already enrolled under a different identity, this returns 409 with that host_id \u2014 retrying the same add-host call after a lost response is safe and resolves the same way: fetch inventory to see the enrolled host. Any other host-side failure returns 502 naming the controller_url the host was asked to reach, and any token minted for the attempt is deleted. If the Controller process has no served certificate configured, 503 is returned before any host contact; use manual enrollment. One host-side enrollment refusal is a normal wait rather than a failure and is answered as such: a host that relays this Controller's own \"pool identity is held; the pool master has not reported this ready member\" gets 409 with retryable true and the host's own words preserved in host_error, not the 502 every other host-side failure keeps. It happens while a pool member is added to a replacement Controller before its pool master has reported it; connect the master first, or retry once it has reported the member.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1323,7 +1323,7 @@
             }
           },
           "409": {
-            "description": "The host refused enrollment with a refusal an operator retries unchanged: {\"error\": \"this host belongs to a pool whose master has not reported it yet; connect the pool master first, or retry once the master has reported this member — usually within one report interval\", \"retryable\": true, \"host_error\": \"<the host's own error text>\"}. retryable and host_error appear only on this answer. Every other host-side enrollment failure, including the enrollment endpoint's other 409s such as \"host identity already enrolled\" and \"presented pool name does not match the Core-reported pool\", keeps the existing 502.",
+            "description": "The host refused enrollment with a refusal an operator retries unchanged: {\"error\": \"this host belongs to a pool whose master has not reported it yet; connect the pool master first, or retry once the master has reported this member \u2014 usually within one report interval\", \"retryable\": true, \"host_error\": \"<the host's own error text>\"}. retryable and host_error appear only on this answer. Every other host-side enrollment failure, including the enrollment endpoint's other 409s such as \"host identity already enrolled\" and \"presented pool name does not match the Core-reported pool\", keeps the existing 502.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1430,7 +1430,7 @@
         "summary": "Revoke host credentials",
         "description": "Implemented in development product 0.1.0, protocol v1. Immediately prevents host authentication. Does not stop guests, erase state, or remove local recovery. Re-enrollment requires a new token bound to this host.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1531,7 +1531,7 @@
         "summary": "Request fresh host inventory",
         "description": "Implemented in development product 0.1.0, protocol v1. The only supported command is read-only refresh-inventory. Persist a stable request_id before sending; retry the same host/kind/request_id to recover the same durable operation. Poll operations for completion. Conflicting active work is serialized. Delivery may repeat after disconnect; agent persists completed results and reports them until acknowledged. This route remains inventory-only; managed creation uses its separate resource endpoints. No cancellation or central power operation exists.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1678,7 +1678,7 @@
         "summary": "Read a host's management network and any change in flight",
         "description": "Administrator session required. Every field is a host report or this Controller's own operation history: the host's durable record (stage, spec, rollback deadline and time remaining), its reported interface inventory, its management-network health check and the newest management-network operation. The Controller stores none of it, so a replacement Controller returns the same answer as soon as the host reports. While the host is not fresh, state is \"unknown\" and check is null, but the record itself is still returned so a running rollback deadline stays visible instead of reading as success or failure. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1756,7 +1756,7 @@
         "summary": "Stage, apply, confirm or cancel a host's management network change",
         "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable management-network command per step to the host, which renders, applies, times and rolls back its own configuration; the Controller computes nothing and keeps no copy of the change. stage writes nothing into /etc. apply swaps the three rendered files and bounces the management bridge, and starts the host's own rollback timer: unless a confirm arrives before the deadline, or if the host reboots first, the host restores the previous configuration by itself, with no Controller involved. confirm keeps the new configuration and is refused by Core until the host has observed its own connectivity over it. cancel discards a staged change, or immediately rolls back an applied, unconfirmed change. The refusals below are only what the Controller can already see from this host's reports; Core checks every one of them again, including the confirmation, which it alone can bind to itself, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -1846,7 +1846,7 @@
             }
           },
           "409": {
-            "description": "The Controller can already see from this host's reports that the step cannot be taken: \"this host is revoked\"; \"staged management network edits need management-network-v1 on this host; upgrade Nex Core\"; \"the host must be freshly connected before a management network change is staged or applied\"; \"the host has not reported since the change was applied; it cannot be confirmed until it reaches this Controller again\" (cancel has no freshness requirement, so a staged change can be discarded and an applied, unconfirmed change can be rolled back); \"this host reports management network revision <n>; reload the host network page and retry\"; \"this host reports no management network change to <action>; reload the host network page\"; \"this host reports management network change <id>, not the one you asked to <action>; it changed since you loaded it — reload the host network page and retry\". Also the shared idempotency refusals \"request_id already used with another payload\" and \"request_id already used for another operation\". Nothing was queued.",
+            "description": "The Controller can already see from this host's reports that the step cannot be taken: \"this host is revoked\"; \"staged management network edits need management-network-v1 on this host; upgrade Nex Core\"; \"the host must be freshly connected before a management network change is staged or applied\"; \"the host has not reported since the change was applied; it cannot be confirmed until it reaches this Controller again\" (cancel has no freshness requirement, so a staged change can be discarded and an applied, unconfirmed change can be rolled back); \"this host reports management network revision <n>; reload the host network page and retry\"; \"this host reports no management network change to <action>; reload the host network page\"; \"this host reports management network change <id>, not the one you asked to <action>; it changed since you loaded it \u2014 reload the host network page and retry\". Also the shared idempotency refusals \"request_id already used with another payload\" and \"request_id already used for another operation\". Nothing was queued.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1874,7 +1874,7 @@
         "summary": "Enroll a Core host",
         "description": "Implemented in development product 0.1.0, protocol v1. Outbound HTTPS; agent must verify Controller identity before transmitting its site-bound token. Provide a signed PEM ECDSA P-256 CSR and nonblank hostname (maximum 200 UTF-8 bytes, no CR/LF/NUL). Identity is host-owned: the host presents the host_id it generated and, as its pool's master, the pool_id and pool_name it keeps, and the Controller adopts them unchanged, so a replacement Controller recovers the pool with its original ID and name. host_id and pool_id must be canonical lowercase UUIDs (or the 64-hex form issued to hosts enrolled before host-owned identity) and pool_name a valid name, else 400. A fresh enrollment creates the pool in the token site with this host as its master, then records the host in that pool in the same transaction (audit pool.create and host.enroll); older agents that present no identity get Controller-minted IDs and a pool named after the hostname, which the response reports for the host to keep. A presented host_id already on record, or a pool_id already held by another master host, is 409: only a token bound to a revoked host may re-issue that host, and it must present that host and its pool (409 otherwise). A separate authenticated Core-local peer flow can subsequently join a member; this enrollment endpoint neither joins members nor changes master. The same key is the same host: a request whose CSR matches a recorded active credential (a retry after a lost response, even with a new token) returns that credential unchanged. Issues a 90-day host-specific client certificate and CA. The token binds to its first CSR; an identical token/CSR retry before token expiry returns the same identity without duplicate enrollment. A different CSR returns 409. After expiry or revocation obtain a new site-bound token; replacement requires explicit revoked host selection. Enrollment has no VM side effects. Compatibility: an older Controller rejects the new fields with 400 (unknown field); upgrade Controller and Core together.",
         "tags": [
-          "Core agent → Controller"
+          "Core agent \u2192 Controller"
         ],
         "security": [],
         "responses": {
@@ -1961,7 +1961,7 @@
         "summary": "Get qdevice witness candidates",
         "description": "Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Only a fresh current pool master may retrieve candidates. Same-site other pool masters are returned without CA trust or a pin and are unusable by current Core; the Controller candidate carries the runtime qnetd CA PEM and DER SHA-256 pin. Controller qnetd CA state is volatile under /run and is recreated after runtime loss. The request stores no pool data.",
         "tags": [
-          "Core agent → Controller"
+          "Core agent \u2192 Controller"
         ],
         "security": [
           {
@@ -2030,7 +2030,7 @@
         "summary": "Register a qdevice witness certificate",
         "description": "Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, a reported membership matching pool_id/master/fencing_generation, and pool-witness-v1. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.",
         "tags": [
-          "Core agent → Controller"
+          "Core agent \u2192 Controller"
         ],
         "security": [
           {
@@ -2119,7 +2119,7 @@
         "summary": "Report observations and reconcile commands",
         "description": "Implemented in development product 0.1.0. Outbound mutual TLS authenticates exactly one enrolled, unrevoked host. Versions 1 and 2 are accepted; version 2 starts repository negotiation without storage-repositories-v1, waits for the Controller storage_repositories acknowledgement, persists it, then advertises that capability. Clustered storage has its own v2 acknowledgement: a Core sends neither clustered results nor storage-clustered-iscsi-v2 until it receives storage_clusters_support with that exact capability. The Controller sends that acknowledgement on every v2 preflight. A newly reconnected Core may offer the session-monitor preflight while withholding storage-clustered-iscsi-v2; before its acknowledged follow-up report, Controller clustered routes return retryable 503 negotiation pending without dispatching work or falling back. Core resets this readiness on start, Controller replacement/enrollment and report disconnect, so an older strict Controller sees only the clean preflight; queued Core results remain durable until a matching Controller acknowledges. Persist a strictly increasing sequence across restarts; discard superseded reports. Null/omitted inventory is heartbeat only and never makes old checks healthy. Results refer only to this host operations; acknowledge persisted results before deleting local journal entries. Commands can redeliver and must be reconciled by operation_id. Controller reconnect requires fresh inventory; no automatic VM restart is permitted. Sequence range is 1 through 9223372036854775807. Superseded sequences receive 200 but do not update last-seen or inventory; operation results and command redelivery still reconcile. At most 100 results per report; result error is at most 4096 UTF-8 bytes. Results for queued, undelivered operations return 409; known operation IDs belonging to another host return 400. Valid results for unknown operation IDs from a former Controller are acknowledged without creating operations or resource state. Terminal results are acknowledged without rewriting the original outcome, except an authoritative succeeded result for the same host and operation may settle a prior needs_attention outcome after Core recovery. At most 100 pending commands return, in creation order. Inventory fields merge only when inventory observed_at increases; individual checks merge only when their observed_at increases. Controller derives per-check freshness independently from heartbeat freshness. Health changes are recorded as debounced audit transitions (default debounce five seconds, configurable). Reports advertise at most 32 capabilities of up to 100 UTF-8 bytes each. managed-vm-v1 gates new commands; omission prevents managed delivery and a newer sequence clears stored capabilities. Result states include needs_attention for uncertain host effects. Automatic two-host BMC promotion reports the optional automatic=true flag in managed.transfer and managed.promotion; older Core versions omit it, and clients treat omission as false. A later authenticated terminal backup Result from the same host and operation ID can settle an earlier needs_attention Controller operation; backup inventory alone cannot, and cross-host Results remain rejected. After a Result is acknowledged, Core continues reporting the Controller-owned backup Journal outcome; a same-ID native vm-create cannot replace it, and peer-dispatched member work is excluded. Controller updates only its own matching nonterminal host/kind/operation row from this explicit outcome. Recurring backup metadata outcomes use the same rule; Controller adoption binds own operation and resource rows to the reporting host and kind before updating a nonterminal task, so colliding IDs from other hosts or kinds are mirrored separately.",
         "tags": [
-          "Core agent → Controller"
+          "Core agent \u2192 Controller"
         ],
         "security": [
           {
@@ -2210,7 +2210,7 @@
         "summary": "Rotate a host certificate",
         "description": "Implemented in development product 0.1.0, protocol v1. Outbound mutual TLS requires the current valid, unrevoked host certificate. CSR binds the next certificate to the same host. Persist identity atomically; retain recovery access on an ambiguous response. No VM side effects. Requires signed PEM ECDSA P-256 CSR. The new certificate lasts 90 days; previous certificates overlap for at most ten minutes. Repeating the same CSR while authenticated returns the existing unexpired certificate. After the overlap expires, use persisted new identity or explicitly revoke and re-enroll.",
         "tags": [
-          "Core agent → Controller"
+          "Core agent \u2192 Controller"
         ],
         "security": [
           {
@@ -2664,7 +2664,7 @@
       "post": {
         "operationId": "createVM",
         "summary": "Create a stopped guest VM",
-        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1–8 disks of 1–2048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets × cores × threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host's observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry's start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (<operation-id>:start, 'VM created but not started: <reason>') in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 \"the selected host agent does not support a driver disc drive; upgrade Nex Core\") and a succeeded ISO import on the same host and pool (404 \"the driver disc ISO is not registered and verified on the selected host and pool\"); both are checked after the replay check. Nonempty cpu.features requires vm-cpu-baseline-v1 after idempotent replay (409 on older Core). Core validates the explicit named CPU definition with native hypervisor-cpu-compare against the actual machine before creation/stopped edits/Core-mediated starts. Existing model-only definitions retain prior semantics; no guest-OS-specific CPU filtering. The 202 body may carry an optional warnings array. It is advisory and nothing else — the request was accepted, the pool master still decides, and every refusal, timeout and status is unchanged — and it names each required pool-shared repository, network or ISO whose access on the selected host this Controller's 30-second-old mirror does not show as current. The Controller deliberately does not veto on its mirror: that would make it a second placement authority and would refuse placements the master would accept. Nonempty tags require vm-tags-v1 on the selected host and its pool master after idempotent replay (409 on older Core).",
+        "description": "Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. Shared bounds, enforced identically on Controller and Core: 1\u20138 disks of 1\u20132048 GiB on virtio, sata or scsi with names unique in the VM; at most 8 NICs on virtio or e1000e with unicast lower-case manual MACs; at least 1 vCPU with sockets \u00d7 cores \u00d7 threads equal to the count when a topology is given; at least 512 MiB in memory mode dedicated or maximum; uefi or bios; boot orders unique and positive across disks and install media (gaps are allowed, since ejecting media leaves one), with at least one boot device. Controller additionally caps CPU at 64 and memory at 262144 MiB, assigns the UUID and refuses capacity above the host's observed CPU or memory. The host decides everything its own record answers: VM name and MAC uniqueness against its managed journal and libvirt domains, and dedicated-memory admission against total host memory, are reported as a failed vm-create result with the reason (visible in Task history), not as an HTTP refusal. Storage, network and ISO must have succeeded on this host and pool. The install ISO may be on any verified storage on that host; it need not share a repository with the VM disks. Core journals effects and reconciles per-disk ownership before replay; needs_attention preserves uncertain resources for manual recovery. start_after_create is honoured by the host inside the same creation: once the definition is verified the creation has succeeded, and Core starts the guest once, recording the outcome in the journal entry's start field so a retry never starts it twice. A failed automatic start keeps the VM as a normal stopped managed VM and is reported as a separate failed vm-power outcome (<operation-id>:start, 'VM created but not started: <reason>') in Task history; start it from the Power controls. autostart is a libvirt property set while the stopped VM is defined. No console, overwrite, automatic cleanup of ambiguous disks or guest installation. Core requires 2 GiB available host RAM reserve and verifies KVM/x86-64 and machine-type libvirt capabilities; uefi requires advertised EFI firmware. Failed/uncertain VM names remain reserved; there is no retry/deletion endpoint. A non-empty drivers_media_id requires the host to report vm-media-drivers-drive-v1 (409 \"the selected host agent does not support a driver disc drive; upgrade Nex Core\") and a succeeded ISO import on the same host and pool (404 \"the driver disc ISO is not registered and verified on the selected host and pool\"); both are checked after the replay check. Nonempty cpu.features requires vm-cpu-baseline-v1 after idempotent replay (409 on older Core). Core validates the explicit named CPU definition with native hypervisor-cpu-compare against the actual machine before creation/stopped edits/Core-mediated starts. Existing model-only definitions retain prior semantics; no guest-OS-specific CPU filtering. The 202 body may carry an optional warnings array. It is advisory and nothing else \u2014 the request was accepted, the pool master still decides, and every refusal, timeout and status is unchanged \u2014 and it names each required pool-shared repository, network or ISO whose access on the selected host this Controller's 30-second-old mirror does not show as current. The Controller deliberately does not veto on its mirror: that would make it a second placement authority and would refuse placements the master would accept. Nonempty tags require vm-tags-v1 on the selected host and its pool master after idempotent replay (409 on older Core).",
         "security": [
           {
             "AdminSession": []
@@ -4325,9 +4325,9 @@
       "delete": {
         "operationId": "removeNetworkRegistration",
         "summary": "Remove a pool VLAN guest network",
-        "description": "Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master's Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member's published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller's own request row, audits network.discard and answers 200 {\"id\", \"deleted\": true} — a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 \"a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\". Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.",
+        "description": "Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master's Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member's published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller's own request row, audits network.discard and answers 200 {\"id\", \"deleted\": true} \u2014 a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 \"a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\". Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -4473,7 +4473,7 @@
         "summary": "Rename a pool VLAN guest network",
         "description": "Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required. Same relay and same body as the removal plus name, which must be nonblank, at most 200 UTF-8 bytes and free of slashes and control characters. Renaming is the only change this call makes: the bridge name is derived from the uplink and VLAN tag and appears in every VM's domain XML, so changing an uplink or VLAN tag means removing the network and registering a new one, which gives it a new identity. The pool master records the new name at generation + 1 and rewrites its interfaces.d stanza; each member steps its own generation forward on its next pull pass, and a member whose uplink or VLAN differs reports pool network <id> changed uplink or VLAN; remove and re-add it instead of re-plumbing a bridge. Only kind vlan networks can be renamed (409 only pool VLAN networks can be removed). 202 is acceptance; the new name appears when the master reports it.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -4933,7 +4933,7 @@
         "summary": "Issue a single-use console ticket for a running VM",
         "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The VM must be an adopted appliance or a successfully created guest, its assigned host must be freshly connected, unrevoked and report capability console-v1, and the VM must be observed running in fresh libvirt inventory. The ticket is bound to the requesting session user and VM, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response and is consumed by the first matching WebSocket. The action is audited as console.open. No power operation is implied; a Controller restart ends open consoles without affecting the guest.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5055,7 +5055,7 @@
         "summary": "Open the browser console WebSocket",
         "description": "Implemented in development product 0.1.0. WebSocket upgrade (RFC 6455, binary frames carrying raw RFB/VNC bytes for noVNC) authenticated by the administrator session cookie; the Origin header must equal the Controller origin and the ticket must be unconsumed, unexpired and issued to this session user for this VM. Controller waits up to 20 seconds for the host's outbound tunnel, then relays bytes both ways until either side closes. HTTP/1.1 is negotiated for this route; no other transport is offered. The ticket is consumed on first use.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5160,7 +5160,7 @@
         "summary": "Attach the host's outbound console tunnel",
         "description": "Implemented in development product 0.1.0, protocol v1. Core sends this over its enrolled, hostname-verified mTLS connection with Connection: Upgrade and Upgrade: nex-console after receiving a console request in a report response and dialing the running VM's local VNC UNIX socket. The token must name an unexpired session for this exact host that has no tunnel yet. The response is 101 and the connection then carries raw VNC bytes both ways until the browser or VM side closes. Other hosts, unknown or expired tokens and duplicate tunnels receive 404. No browser session or CSRF token is used on this agent route; Core never listens for inbound console connections.",
         "tags": [
-          "Core → Controller"
+          "Core \u2192 Controller"
         ],
         "security": [
           {
@@ -5226,7 +5226,7 @@
         "summary": "Check Controller software updates",
         "description": "Implemented in development product 0.1.0. Refreshes a signed Controller-owned APT index cache at most every 5 minutes and reports apt's candidate version for nex-controller against the installed version. The configured repo URL (NEX_UPDATE_REPO or /etc/nex/updates.conf, else https://nexvirtualization.com/apt) is written to that cache and verified with the packaged archive keyring; this keeps the unprivileged Controller service out of the system APT state. A refresh failure or package no configured source offers is returned in the error field with HTTP 200 so operators can still see the installed version. Administrator session required. Read-only; safe to retry.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5281,7 +5281,7 @@
         "summary": "Request Controller package update",
         "description": "Writes pending-update.json under the Controller state directory for the privileged nex-controller-update path unit. Returns 202 scheduled; the helper runs apt-get update then apt-get install --only-upgrade nex-controller, so dependencies resolve and the package signature is verified, and restarts nex-controller. A failed upgrade restarts the service before reporting. Returns 503 when apply-update or the path unit is missing. Controller cannot run apt itself (ProtectSystem=strict, NoNewPrivileges). Audits update.apply. Empty JSON body. CSRF and same-origin required.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5373,7 +5373,7 @@
         "summary": "Request a VM power action on its assigned host",
         "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different action under the same id is 409. The VM must be an adopted appliance or a successfully created guest; its assigned host must be freshly connected, unrevoked and report managed-vm-v1 and vm-power-v1, and queued power requires vm-power-queue-v1. With this capability, a pending power/edit/media request becomes a same-VM prerequisite instead of a busy refusal. Core persists FIFO admission order and executes after the prerequisite succeeds; failed, uncertain or missing prerequisites fail before effects. Without queue capability another pending task is 409. The request is audited as vm-power and delivered to the host in its next report; poll operations for the result. A succeeded shutdown or reboot means the ACPI request was issued, not that the guest honored it: the VM's observed state is the truth. Controller outage never stops a guest. Core-received commands survive agent restart and Controller replacement. Inventory.managed.outcomes exposes queued and terminal tasks for passive adoption without redispatch. Queue order concerns task completion, not guest ACPI completion; actual failures are not automatically retried.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5493,7 +5493,7 @@
         "summary": "Issue a single-use console ticket for a host",
         "description": "Requires an administrator session, same Origin and X-CSRF-Token, and an empty JSON object body. The host must be freshly connected, unrevoked and report capability host-console-v1 (distinct from console-v1, which only ever covers VM consoles; an agent without host-console-v1 gets 409 rather than a ticket it can never fulfil). The ticket is bound to the requesting session user and host, lives 60 seconds in Controller memory only, is delivered once to the host in its next report response with an empty vm_id (host console), and is consumed by the first matching WebSocket. Audited as host.console.open.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5615,7 +5615,7 @@
         "summary": "Browser WebSocket for a host console ticket",
         "description": "Upgrades to a WebSocket that relays raw RFB for the host console. Requires the same session user, matching host id, unconsumed ticket and same-origin Origin. Pairs with the agent nex-console tunnel.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5720,7 +5720,7 @@
         "summary": "Insert or eject ISO media on a VM CDROM",
         "description": "Queues a durable vm-media command on the VM assigned host. Requires administrator session, CSRF, stable request_id, action insert|eject, and media_id for insert of a verified ISO on that host. Host must report vm-media-v1. Both actions apply to a running VM, on pool-shared storage too: the record changes media_id only, so no boot order changes and no stop is required. Audited; operation appears in the operations list. Optional drive selects install (default) or drivers; drivers requires vm-media-drivers-drive-v1.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5872,7 +5872,7 @@
         "summary": "Replace a VM's definition on its assigned host",
         "description": "Implemented in development product 0.1.0, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. The body is the complete desired definition (the same shape as creation); Controller validates its shape and references like creation, refuses immutable changes (an existing disk's storage, size or provisioning), and, when the VM is observed running, changes that need it stopped (name, CPU, memory, firmware, machine type, any boot order, an existing disk's bus, an existing interface's network, model, MAC or MTU, or adding a SATA disk); interfaces are matched by effective MAC: when the request names any current interface by its effective MAC (as the VM list reports it, and as the bundled editor sends every existing interface), every interface with an empty MAC is new; when it names none, an empty MAC is matched by position and the request is refused with 400 if it removes, reorders or changes an interface at an existing index, while an unchanged interface keeps the current address at its position. Clients that send any existing interface's MAC must send all of them, or an omitted one is replaced by a new interface. Controller freezes every automatic MAC into the definition before its stop-first check, drawing new ones from the VM's derived range at the first index above the highest one the current definition uses that no requested or current interface holds, or the lowest free index when none above is free, so a new interface never takes the address of one removed in the same edit, nor, unless the highest-index interface was removed or index 255 is in use, of one removed in an earlier edit; then it queues a vm-update command at revision current + 1 for the host's next report. Name and MAC uniqueness against other VMs and dedicated-memory admission are checked by the host against its journal and libvirt, as for creation. Core applies live what a running guest can take (adding or removing VirtIO/SCSI disks and interfaces, inserting, swapping or ejecting the ISO, description, guest OS hint and autostart) and redefines a shut-off guest from the regenerated XML; removed disks are detached and their files retained, never deleted. While validating a running guest's edit, before allocating any disk or changing any device, Core compares the live and persistent domains and reports the vm-update operation failed, changing nothing, with \"network interface MAC <mac> is still attached to the running VM; wait for the guest to release it or stop the VM, then save again\" when an added interface's MAC is still on a live interface that the guest has not released, changing nothing. The host reports the new definition as current and Controller refreshes its mirror from that report; poll operations for the result. One vm-update, vm-power or vm-media request per VM may be in flight. Nonempty cpu.features requires vm-cpu-baseline-v1 after idempotent replay (409 on older Core). Core validates the explicit named CPU definition with native hypervisor-cpu-compare against the actual machine before creation/stopped edits/Core-mediated starts. Existing model-only definitions retain prior semantics; no guest-OS-specific CPU filtering. Nonempty tags require vm-tags-v1 on the VM's host and its pool master after idempotent replay (409 on older Core); an edit that omits tags clears them.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -5991,7 +5991,7 @@
         "summary": "Delete a stopped guest VM on its assigned host",
         "description": "Implemented in development product 0.2.6, protocol v1. Requires an administrator session, same Origin and X-CSRF-Token. Persist request_id before sending; the same id replays the same durable operation, a different body under the same id is 409. Body delete_disks=false retains guest disk files on storage after undefine; delete_disks=true unlinks them after undefine. Requires observed shut off with fresh host report, vm-delete-v1 on the host, and refuses the Controller appliance. One vm-update, vm-power, vm-media or vm-delete request per VM may be in flight. Core journals the delete, reports a DeletedVMs tombstone, and Controller drops its vm-create mirror. Poll operations for the result; HTTP 202 is not proof the domain is gone. A new delete for a VM whose earlier delete was interrupted finishes that earlier delete when both requests make the same delete_disks choice, then fails with 'VM is already deleted on this host: an earlier interrupted delete has now finished' (or 'an earlier interrupted delete for this VM is still unresolved: <reason>'); with a different delete_disks choice Core refuses the new request without finishing the earlier one, so disks a later request asked to keep are never wiped.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -6264,7 +6264,7 @@
         "summary": "Discard a failed ISO import, or remove an imported ISO",
         "description": "Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller's library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client's bodyless call still gets the upgrade answer). 404 for an unknown id.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -6394,7 +6394,7 @@
       "get": {
         "operationId": "vmStats",
         "summary": "Read a VM's usage history",
-        "description": "Administrator session; read-only and safe to retry. Relays the query to the VM’s assigned host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.",
+        "description": "Administrator session; read-only and safe to retry. Relays the query to the VM\u2019s assigned host over a stats channel the host dials out (first query waits up to one report heartbeat, then the channel is reused and closes after 5 minutes idle). The history is recorded and kept by Nex Core; the Controller stores nothing. Requires the host to be fresh, not revoked and to report usage-history-v1.",
         "security": [
           {
             "AdminSession": []
@@ -6660,7 +6660,7 @@
         "summary": "Attach the host's outbound stats channel",
         "description": "Core sends this over its enrolled mTLS connection with Connection: Upgrade and Upgrade: nex-stats after receiving stats_channels in a report response. The token must name a pending channel for this exact host. After 101 the Controller writes HTTP/1.1 GET /stats?object=vm&id=<uuid>&range=<range> or GET /stats?object=host&range=<range> requests on the connection and Core answers each in order with a StatsHistory (200) or {\"error\"} (400 invalid query, 404 no history). Either side closes the connection on idle, restart or protocol error. Core never listens for inbound stats connections.",
         "tags": [
-          "Core → Controller"
+          "Core \u2192 Controller"
         ],
         "security": [
           {
@@ -6734,9 +6734,9 @@
       "post": {
         "operationId": "changePoolMaster",
         "summary": "Change the pool master of a pool",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Hands the pool authority from the current pool master to a ready member of the same pool, keeping the pool, its networks, its storage registrations, its ISO library and its virtual machines with their identities and their names. While the change runs the pool master refuses every pool authority write — placements, definitions, start admission, joins, maintenance and pool resource registrations — with a message asking the operator to retry; nothing is queued behind it. Running guests are unaffected, stop and force-stop are never refused, and storage reservation releases are deliberately never frozen. This route has no automatic action: it is an operator request against a cooperating master. Core separately supports automatic promotion in eligible two-host pools using a recorded usable BMC fence profile with Host fencing enabled. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Hands the pool authority from the current pool master to a ready member of the same pool, keeping the pool, its networks, its storage registrations, its ISO library and its virtual machines with their identities and their names. While the change runs the pool master refuses every pool authority write \u2014 placements, definitions, start admission, joins, maintenance and pool resource registrations \u2014 with a message asking the operator to retry; nothing is queued behind it. Running guests are unaffected, stop and force-stop are never refused, and storage reservation releases are deliberately never frozen. This route has no automatic action: it is an operator request against a cooperating master. Core separately supports automatic promotion in eligible two-host pools using a recorded usable BMC fence profile with Host fencing enabled. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -6852,9 +6852,9 @@
       "post": {
         "operationId": "cancelPoolMasterChange",
         "summary": "Cancel a master change or eject that has not handed the authority over",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one pool-transfer command with action transfer-cancel to the current pool master. Core decides whether it is still possible: before the hand-off it clears the freeze and the current master stays master; after the hand-off it is allowed only when the target proves, under its own lock, that it never activated and never will for that operation, and otherwise refuses with \"the target has already activated this pool authority; the master change can only go forward\". Nothing is ever cancelled by a timeout. A cancel is not refused for a transfer already being in progress — that is what it cancels — and it gates on no host but the master. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one pool-transfer command with action transfer-cancel to the current pool master. Core decides whether it is still possible: before the hand-off it clears the freeze and the current master stays master; after the hand-off it is allowed only when the target proves, under its own lock, that it never activated and never will for that operation, and otherwise refuses with \"the target has already activated this pool authority; the master change can only go forward\". Nothing is ever cancelled by a timeout. A cancel is not refused for a transfer already being in progress \u2014 that is what it cancels \u2014 and it gates on no host but the master. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -6972,7 +6972,7 @@
         "summary": "Eject a member from a pool",
         "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Removes a member from the pool; the ejected host re-initializes itself as the pool master of a new single-host pool named after its hostname, keeping its host ID, its enrollment, its local storage and its local virtual machines, and the Controller adopts that new pool from the host's own report under the same site. Its certificate stops being an admitted pool peer, and the pool's shared networks, storage registrations and ISO library are no longer available to it. Core refuses the eject while the host still owns any pool VM record or still holds a pool-shared storage reservation; those two refusals are deliberately not pre-checked here, because they are Core's decision, and they arrive on the operation. A member that is not reporting can be ejected: neither its freshness nor its capability list is gated, and it learns of the eject when it returns. The pool master cannot be ejected; change the pool master first. The Controller relays exactly one durable pool-transfer command to the pool's current master and stores nothing else: no stage, no timer, no generation, no membership. Core runs the whole transfer by itself, so a Controller restarted, replaced or disconnected mid-transfer changes nothing and re-projects the transfer from the hosts' next reports. The refusals below are only what the Controller can already see from host reports; Core checks every one of them again against its own record, and its own refusals arrive as a failed operation with conflict marked in last_transfer of GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7096,7 +7096,7 @@
     "/api/v1/pools/{id}/master/promote/preflight": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7234,7 +7234,7 @@
     "/api/v1/pools/{id}/master/promote": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7245,7 +7245,7 @@
         "x-audience": "client",
         "operationId": "promotePoolMaster",
         "summary": "Promote a surviving member after Nex Core fences the old pool master",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The operator action for a pool master that is gone. Exactly one durable pool-promote command is journaled, addressed to the candidate — the one pool command besides pool-join that does not go to the master, because the master is the host that is gone. confirmation is the pool's name, typed; fence_confirmed must be literally true and is the operator's separate acknowledgement that the old pool master will be powered off. Neither is evidence: Core produces and verifies the fence proof itself, no proof crosses the wire, and the acknowledgement is a precondition only. There is no expected_version, because the generation to check against is the dead master's and the candidate re-proves the whole verdict immediately before it activates. Nothing about the old master is pre-refused here — whether it answers, whether this Controller can reach it, when it was last seen — and neither is a missing or unusable fence profile, a lagging replica, a VM ownership conflict or a member holding a higher authority: all of those are Core's decision at run time and arrive asynchronously on the operation, surfaced verbatim in last_promotion. The Controller stores no verdict, fence proof, restriction, stage, candidate or generation, so a Controller restarted or replaced mid-promotion knows nothing about it until the hosts report and then re-projects it. This route remains an explicit manual promotion. Separately, Core supports a narrow automatic promotion for eligible two-host pools using a recorded BMC fence profile; it requires Host fencing enabled and does not use watchdog, storage lease or Nex Witness. The automatic path is owned and resumed by Core, not triggered by this route. No force, override, \"declare host lost\" or timeout-based path exists or may be added. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The operator action for a pool master that is gone. Exactly one durable pool-promote command is journaled, addressed to the candidate \u2014 the one pool command besides pool-join that does not go to the master, because the master is the host that is gone. confirmation is the pool's name, typed; fence_confirmed must be literally true and is the operator's separate acknowledgement that the old pool master will be powered off. Neither is evidence: Core produces and verifies the fence proof itself, no proof crosses the wire, and the acknowledgement is a precondition only. There is no expected_version, because the generation to check against is the dead master's and the candidate re-proves the whole verdict immediately before it activates. Nothing about the old master is pre-refused here \u2014 whether it answers, whether this Controller can reach it, when it was last seen \u2014 and neither is a missing or unusable fence profile, a lagging replica, a VM ownership conflict or a member holding a higher authority: all of those are Core's decision at run time and arrive asynchronously on the operation, surfaced verbatim in last_promotion. The Controller stores no verdict, fence proof, restriction, stage, candidate or generation, so a Controller restarted or replaced mid-promotion knows nothing about it until the hosts report and then re-projects it. This route remains an explicit manual promotion. Separately, Core supports a narrow automatic promotion for eligible two-host pools using a recorded BMC fence profile; it requires Host fencing enabled and does not use watchdog, storage lease or Nex Witness. The automatic path is owned and resumed by Core, not triggered by this route. No force, override, \"declare host lost\" or timeout-based path exists or may be added. Implemented in development product 0.1.0.",
         "parameters": [
           {
             "name": "id",
@@ -7362,7 +7362,7 @@
     "/api/v1/pools/{id}/members/{host_id}/fence-profile": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7373,7 +7373,7 @@
         "x-audience": "client",
         "operationId": "setPoolFenceProfile",
         "summary": "Record or clear how a member of this pool would be power-fenced",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The profile is a field of the durable membership record the pool master owns, so this is the one promotion route relayed to the master and the one that needs a fresh one. One durable pool-fence-profile command is journaled; a null fence clears the profile. An optional credential is never stored by this Controller: it is handed to Core over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command — nothing reaches SQLite, the audit trail, the response or any log, and the stored replay payload is the profile as sent, so an exact retry stays byte-identical. Core then refuses asynchronously to record a profile whose material it does not hold, and refuses at record time any profile it could not verify. Recording a redfish profile is a live operation on Core: it connects to the controller, pins the certificate it presents, and proves the machine before the profile enters the membership, so an unreachable or wrong controller is refused now rather than during a promotion. Before any power-off Nex Core asks the management controller which machine it manages — IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. A management controller is therefore recordable for a host that has reported its system UUID, which is how a physical pool is fenced; the virsh profile remains for a Nex Core running as a virtual machine in a disposable lab. Recording a usable profile for the pool master itself is what opts a pool into fence-verified promotion, and with it into the restart rule a restricted master follows. Implemented in development product 0.1.0.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. The profile is a field of the durable membership record the pool master owns, so this is the one promotion route relayed to the master and the one that needs a fresh one. One durable pool-fence-profile command is journaled; a null fence clears the profile. An optional credential is never stored by this Controller: it is handed to Core over the existing one-time encrypted credential handoff, Core allocates its own private reference, and only that opaque reference is written into the command \u2014 nothing reaches SQLite, the audit trail, the response or any log, and the stored replay payload is the profile as sent, so an exact retry stays byte-identical. Core then refuses asynchronously to record a profile whose material it does not hold, and refuses at record time any profile it could not verify. Recording a redfish profile is a live operation on Core: it connects to the controller, pins the certificate it presents, and proves the machine before the profile enters the membership, so an unreachable or wrong controller is refused now rather than during a promotion. Before any power-off Nex Core asks the management controller which machine it manages \u2014 IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. A management controller is therefore recordable for a host that has reported its system UUID, which is how a physical pool is fenced; the virsh profile remains for a Nex Core running as a virtual machine in a disposable lab. Recording a usable profile for the pool master itself is what opts a pool into fence-verified promotion, and with it into the restart rule a restricted master follows. Implemented in development product 0.1.0.",
         "parameters": [
           {
             "name": "id",
@@ -7509,7 +7509,7 @@
     "/api/v1/pools/{id}/members/{host_id}/bmc-probe": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7520,7 +7520,7 @@
         "x-audience": "client",
         "operationId": "probePoolBMC",
         "summary": "Detect how a member's management controller answers",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself — HTTPS Redfish and IPMI RMCP+ — from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile's gates: a fresh pool master with pool-authority-transfer-v1 whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself \u2014 HTTPS Redfish and IPMI RMCP+ \u2014 from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile's gates: a fresh pool master with pool-authority-transfer-v1 whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.",
         "parameters": [
           {
             "name": "id",
@@ -7666,7 +7666,7 @@
     "/api/v1/storage/{id}": {
       "delete": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7876,7 +7876,7 @@
     "/api/v1/pools/{id}/members/{host_id}/bmc-provisioning": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -7887,7 +7887,7 @@
         "x-audience": "client",
         "operationId": "setPoolBMCProvisioning",
         "summary": "Let a host configure its own management controller for fencing again",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Whether a host may configure its own management controller is a field of the durable membership record the pool master owns, so this is relayed to the master and takes the same membership and capability check a fence profile does. One durable pool-bmc-provisioning command is journaled for the master, which clears the host's bmc_provisioning_disabled flag and drops its last management-controller report; the host reads the decision from the pool records it already holds and creates the account on its next reconcile pass, because reporting a fence device before it exists would claim one that is not there. It is a desired state, not a transition: a host that is already allowed answers succeeded. There is no request to turn it off — clearing the host's fence device through POST /api/v1/pools/{id}/members/{host_id}/fence-profile with a null fence is what withdraws a Core-provisioned device, removes the account from the controller and stops this host configuring it again, so one operator action has one meaning. Nex Controller stores nothing of its own: the decision lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Whether a host may configure its own management controller is a field of the durable membership record the pool master owns, so this is relayed to the master and takes the same membership and capability check a fence profile does. One durable pool-bmc-provisioning command is journaled for the master, which clears the host's bmc_provisioning_disabled flag and drops its last management-controller report; the host reads the decision from the pool records it already holds and creates the account on its next reconcile pass, because reporting a fence device before it exists would claim one that is not there. It is a desired state, not a transition: a host that is already allowed answers succeeded. There is no request to turn it off \u2014 clearing the host's fence device through POST /api/v1/pools/{id}/members/{host_id}/fence-profile with a null fence is what withdraws a Core-provisioned device, removes the account from the controller and stops this host configuring it again, so one operator action has one meaning. Nex Controller stores nothing of its own: the decision lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
         "parameters": [
           {
             "name": "id",
@@ -8013,7 +8013,7 @@
     "/api/v1/pools/{id}/host-fencing": {
       "post": {
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8024,7 +8024,7 @@
         "x-audience": "client",
         "operationId": "setPoolHostFencing",
         "summary": "Turn this pool's host fencing on or off",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does, plus pool-host-fencing-v1 on the master. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool's records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself — Nex Core arms a host's watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does, plus pool-host-fencing-v1 on the master. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool's records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself \u2014 Nex Core arms a host's watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master's membership and a fresh Controller recovers it from the master's reported inventory. Implemented in development product 0.4.2.",
         "parameters": [
           {
             "name": "id",
@@ -8144,7 +8144,7 @@
         "summary": "Replace a failed disk of a host's system mirror",
         "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable host-system-disk-replace command to the host, which revalidates the array and the disk against its own observation and then clears the replacement, copies the partition table from the surviving member's disk with sgdisk --replicate and randomises its identifiers, adds the new member with mdadm --add, and makes the disk bootable the way the installer does for that firmware: on BIOS grub-install --target=i386-pc on the disk itself (firmware branch on /sys/firmware/efi; the installer still places an ESP on every mirror member, but that path does not format it), and on UEFI mkfs.vfat on the replacement's copy of the surviving disk's ESP followed by the host's own nex-sync-esp copier, or the same copy of /boot/efi/EFI including the removable fallback path when that helper is absent or copied nothing. The kernel rebuilds the mirror afterwards; the host and its VMs keep running and nothing waits on the Controller. The Controller computes nothing and stores nothing but the task: the mirror's state comes from the host hardware report. The refusals below are only what the Controller can already see from this host's reports; Core checks the array, the disk, its size and the erase confirmation again, and its own refusals arrive as a failed operation rather than as an HTTP status here. Implemented in development product 0.4.4.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8272,7 +8272,7 @@
         "summary": "List retained snapshots for a VM",
         "description": "Returns the pool master's compact snapshot catalog for one VM. Requires an administrator session. Controller does not invent an empty catalog when the master has not reported one.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8353,7 +8353,7 @@
         "summary": "Create a VM snapshot",
         "description": "Queues a durable snapshot-create command on the VM's owner host. Requires administrator session, CSRF and a stable request_id. Optional mode follows Core rules: omitted/stopped for shut-off guests; crash or quiesced for a running guest. Controller only relays; Core owns capture and catalog settlement.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8489,7 +8489,7 @@
         "summary": "Revert a VM to a retained snapshot",
         "description": "Queues a durable snapshot-revert command on the VM's owner host. Guest must be shut off. request_id must be distinct from snapshot_id. Controller only relays; Core owns reservation and settlement.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8617,7 +8617,7 @@
         "summary": "Delete a retained leaf snapshot",
         "description": "Queues a durable snapshot-delete command on the VM's owner host. Guest must be shut off. Leaf-only delete. Controller only relays; Core owns reservation and settlement.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8745,7 +8745,7 @@
         "summary": "Rename or describe a retained snapshot",
         "description": "Queues a durable snapshot-metadata command to update the pool master's catalog name and description only. Capture digests and creation time stay fixed.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8880,7 +8880,7 @@
         "summary": "List pool backup repositories",
         "description": "Returns the pool master's NFS backup destination list from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -8951,7 +8951,7 @@
         "summary": "Register a pool backup repository",
         "description": "Queues backup-repository-register on the pool master. Requires administrator session, CSRF and a stable request_id. External NFS only. Controller only relays; Core owns the durable registration.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9109,7 +9109,7 @@
         "summary": "Test backup repository access",
         "description": "Queues backup-repository-test on the pool master. Requires administrator session, CSRF and a stable request_id distinct from repo_id.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9229,7 +9229,7 @@
         "summary": "List pool backup recovery points",
         "description": "Returns the pool master's completed recovery-point catalog from retained inventory. Requires backup_catalog_reported; never invents an empty catalog.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9302,7 +9302,7 @@
         "summary": "List pool backup runs",
         "description": "Returns the pool master's retained backup/restore run records from inventory. Requires backup_runs_reported; never invents an empty list.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9375,7 +9375,7 @@
         "summary": "Restore a recovery point as a new VM",
         "description": "Queues backup-restore-as-new on the pool master with the selected executing host. Requires administrator session, CSRF, stable request_id and host_id. Controller only relays; the master dispatches member work over the authenticated Core peer route, and the executing Core copies artifacts locally then creates the stopped guest.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9513,7 +9513,7 @@
         "summary": "Back up a VM now",
         "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9649,7 +9649,7 @@
         "summary": "List backup policies",
         "description": "Master inventory; 503 when backup_policies_reported is false.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9710,7 +9710,7 @@
         "summary": "Create a backup policy",
         "description": "Queues backup-policy-upsert on the pool master.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9800,7 +9800,7 @@
         "operationId": "updateBackupPolicy",
         "summary": "Update a backup policy",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -9899,7 +9899,7 @@
         "operationId": "pauseBackupPolicy",
         "summary": "Pause or resume a backup policy",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10010,7 +10010,7 @@
         "operationId": "runNowBackupPolicy",
         "summary": "Run a backup policy for one VM now",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10122,7 +10122,7 @@
         "summary": "Restore replace",
         "description": "Queues backup-restore-replace. Requires confirm_replace; retains originals; refuses unsafe in-place overwrite. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10260,7 +10260,7 @@
         "summary": "Protect recovery point",
         "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker).",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10402,7 +10402,7 @@
         "summary": "Test restore",
         "description": "Queues backup-test-restore as a new VM for verification. Controller queues on the pool master with the selected executing host; member work uses the authenticated Core peer route.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10540,7 +10540,7 @@
         "summary": "Record test restore result",
         "description": "Records the operator's passed/failed observation only after Core proves the current VM belongs to the exact successful test restore. Passed requires intact current disks and firmware; failed permits damaged artifacts if the native creator and definition still match. A member-owned VM is checked through authenticated Core peer origin proof. Missing or changed provenance is refused; uncertain transport retains a retryable Core metadata receipt.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10690,7 +10690,7 @@
         "summary": "Clean up test restore",
         "description": "Removes only the selected stopped test VM and copied artifacts after Core proves its exact test-restore creator and current identity. A changed or reused VM ID is refused; ambiguous native deletion remains a retained Core result for safe reconciliation.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10832,7 +10832,7 @@
         "summary": "Import recovery points",
         "description": "Imports validated repository manifests into the catalog.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -10965,7 +10965,7 @@
         "summary": "Rebuild backup catalog",
         "description": "Rebuilds catalog entries for one repository from validated manifests.",
         "tags": [
-          "Client → Controller"
+          "Client \u2192 Controller"
         ],
         "security": [
           {
@@ -13142,6 +13142,28 @@
               }
             ],
             "description": "Controller acknowledgement of backup-v1 after a protocol-v2 Core offers the capability; Core withholds backup inventory until acknowledged."
+          },
+          "iso_download_progress": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True only in a v2 response to a Core offering iso-download-progress-v1. Core withholds ManagedState.iso_downloads until acknowledged, and clears readiness on disconnect, restart or Controller replacement."
+          },
+          "detected_os": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True only in a v2 response to a Core offering detected-os-v1. Core withholds ManagedState.detected_os until acknowledged; startup and re-enrollment clear readiness without erasing retained history."
           }
         },
         "required": [
@@ -13755,6 +13777,17 @@
               }
             ],
             "description": "Host observation of a running VM's resource consumption; absent for VMs that are not running, from Core builds that predate usage observation, and whenever the host could not sample the VM within its probe deadline."
+          },
+          "detected_os": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetectedOS"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Historical OS identity from the pool master; may remain available when the VM is stopped or its live guest observation is absent. Display as last detected when no live OS is reported. Older Core builds omit it."
           }
         },
         "required": [
@@ -14263,7 +14296,7 @@
               3,
               17
             ],
-            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself — 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement — either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
+            "description": "The RMCP+ cipher suite an ipmilan fence must use, as the controller's own LAN channel offers it. Core selects it itself \u2014 17 where the controller offers it, otherwise 3, the suite every IPMI 2.0 controller must implement \u2014 either while provisioning the account in-band or while proving a profile an operator entered. Suite 0 asks for no authentication, no integrity and no confidentiality, so it is never selected and never accepted here. Absent means none was recorded and ipmitool's own default is used. A client never supplies it; a request that does is refused with 400."
           },
           "provisioned_by_core": {
             "type": "boolean",
@@ -14274,7 +14307,7 @@
           "kind"
         ],
         "x-go-type": "protocol.StorageClusterFence",
-        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages — the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection — identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read — rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
+        "description": "Closed Core fence profile. credential_ref and ssh_host_key_ref are opaque names for root-only Core secrets, never secret bytes; arbitrary commands and arguments are not accepted. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. A Redfish fence is performed by Core itself over the pinned connection \u2014 identity GET, ComputerSystem.Reset ForceOff, then a separate PowerState read \u2014 rather than by fence_redfish, which cannot be bound to the recorded certificate. virsh is for a Nex Core running as a virtual machine in a disposable lab and remains unaccepted for native production use."
       },
       "StorageClusterNode": {
         "type": "object",
@@ -15960,7 +15993,7 @@
           "replica_error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\", \"pool member reported invalid backup authority page progress\", or a refusal to report/stage a signed backup authority page."
+            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member acknowledged the replica without the Corosync key\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\", \"pool member reported invalid backup authority page progress\", or a refusal to report/stage a signed backup authority page."
           },
           "replica_observed_at": {
             "type": "string",
@@ -16011,7 +16044,7 @@
           },
           "bmc_provisioning_disabled": {
             "type": "boolean",
-            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it — one operator action with one meaning — and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
+            "description": "The operator's own decision, recorded by the master, that this host must not configure its management controller for fencing. Clearing a fence device Nex Core provisioned sets it \u2014 one operator action with one meaning \u2014 and the host removes the account it created when it sees it. It is a decision, not an observation, so it lives with the fence profile in the replicated membership and a host cannot set or clear it by reporting about itself."
           },
           "watchdog": {
             "anyOf": [
@@ -16303,7 +16336,7 @@
           },
           "authoritative": {
             "type": "boolean",
-            "description": "True only while master_connection is fresh. When false, every observational master-reported field — status, error, checks, access counts, failures, maintenance and maintenance_since — is blank, null or unknown and must be presented as unknown rather than as the last known good state. peer_origin, the member's own reported join, its guests and the Controller's own last_maintenance are not master observations and are still reported."
+            "description": "True only while master_connection is fresh. When false, every observational master-reported field \u2014 status, error, checks, access counts, failures, maintenance and maintenance_since \u2014 is blank, null or unknown and must be presented as unknown rather than as the last known good state. peer_origin, the member's own reported join, its guests and the Controller's own last_maintenance are not master observations and are still reported."
           },
           "maintenance_supported": {
             "type": "boolean",
@@ -16380,7 +16413,7 @@
                 "type": "null"
               }
             ],
-            "description": "The newest pool-promote command this Controller relayed for the pool, so an asynchronous Core refusal is visible where the operator acted. conflict marks refusals a synchronous route would have answered with 409; retryable is always false for a promotion, because nothing about one is retried unchanged — the blocking condition has to change first."
+            "description": "The newest pool-promote command this Controller relayed for the pool, so an asynchronous Core refusal is visible where the operator acted. conflict marks refusals a synchronous route would have answered with 409; retryable is always false for a promotion, because nothing about one is retried unchanged \u2014 the blocking condition has to change first."
           },
           "members": {
             "type": [
@@ -16582,7 +16615,7 @@
                 "type": "null"
               }
             ],
-            "description": "This host's own Core-enforced refusal to act on pool authority. It is the host's own report, so it is shown whenever that host is fresh, whatever the pool master is doing — a restricted old master is precisely a host reporting for itself in a pool whose master changed. null when the host is not fresh or reports no restriction."
+            "description": "This host's own Core-enforced refusal to act on pool authority. It is the host's own report, so it is shown whenever that host is fresh, whatever the pool master is doing \u2014 a restricted old master is precisely a host reporting for itself in a pool whose master changed. null when the host is not fresh or reports no restriction."
           }
         },
         "required": [
@@ -17469,7 +17502,7 @@
           "model"
         ],
         "x-go-type": "protocol.VMCPU",
-        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets × cores × threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
+        "description": "vCPU count, optional topology and CPU model. Sockets, cores and threads all 0 select the default topology of one socket, count cores and one thread; otherwise each must be at least 1 and sockets \u00d7 cores \u00d7 threads must equal count. JSON Schema cannot express that product, so Controller and Core both enforce it in protocol.ValidateVMSpec."
       },
       "VMMemory": {
         "type": "object",
@@ -18488,6 +18521,28 @@
           },
           "backup_policies_reported": {
             "type": "boolean"
+          },
+          "iso_downloads": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ISODownloadProgress"
+            },
+            "maxItems": 16,
+            "description": "Live Core-observed byte counts for active URL ISO imports only, sent after Controller acknowledgement. Omitted after completion or interruption. Controller retains the latest report under the host inventory; display it as live only while the host connection is fresh."
+          },
+          "detected_os": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DetectedOS"
+            },
+            "maxProperties": 10000,
+            "description": "VM UUID to durable last detected OS, reported by the pool master from its Core-owned VM records. Optional; missing history does not mean the configured OS is a detected identity. Sent only after Controller acknowledgement of detected-os-v1."
           }
         },
         "required": [],
@@ -19166,7 +19221,7 @@
         "properties": {},
         "required": [],
         "x-go-type": "protocol.StatsTier",
-        "description": "Not serialized. Range-to-resolution table shared by Core and Controller: 10m = 5 s × 120, 24h = 1 min × 1440, 30d = 1 h × 720, 1y = 1 day × 365."
+        "description": "Not serialized. Range-to-resolution table shared by Core and Controller: 10m = 5 s \u00d7 120, 24h = 1 min \u00d7 1440, 30d = 1 h \u00d7 720, 1y = 1 day \u00d7 365."
       },
       "StatsSeries": {
         "type": "object",
@@ -19558,6 +19613,17 @@
               }
             ],
             "description": "Full paged backup authority reference; mutually exclusive with inline backup_authority."
+          },
+          "corosync_key_wrapped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolWrappedKey"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pool Corosync authentication key sealed for this member and replica generation; required when the pool forms its own cluster."
           }
         },
         "required": [
@@ -19601,6 +19667,10 @@
             "type": "integer",
             "minimum": 0,
             "description": "Native host generation in the configured authority lockspace after this member joined it; absent or zero means no sanlock preparation acknowledgement."
+          },
+          "corosync_key_ready": {
+            "type": "boolean",
+            "description": "True only after the addressed Corosync key was opened and durably stored; required by the master for a pool cluster replica."
           },
           "error": {
             "type": "string",
@@ -19820,7 +19890,7 @@
               "behind",
               "current"
             ],
-            "description": "First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now, and freshness deliberately outranks capability, because a stale host's capability list is a memory too); unsupported when the master or this member does not advertise pool-authority-replica-v2; refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master's observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master's reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master's authority record can itself be an older report than a member's. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves — unsupported, refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member's own copy cannot stand in for it."
+            "description": "First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now, and freshness deliberately outranks capability, because a stale host's capability list is a memory too); unsupported when the master or this member does not advertise pool-authority-replica-v2; refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master's observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master's reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master's authority record can itself be an older report than a member's. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves \u2014 unsupported, refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member's own copy cannot stand in for it."
           }
         },
         "required": [
@@ -19970,7 +20040,7 @@
           },
           "requested_rollback": {
             "type": "boolean",
-            "description": "True when this rollback was the operator asking for it — a cancel submitted against an applied, unconfirmed change — rather than the host undoing an unconfirmed change at its deadline or after a reboot. It is durable, so a rollback interrupted before the previous configuration came back up resumes as the same operator rollback. The host emits no failing management-network health check for an operator rollback: it is an outcome, not a failure."
+            "description": "True when this rollback was the operator asking for it \u2014 a cancel submitted against an applied, unconfirmed change \u2014 rather than the host undoing an unconfirmed change at its deadline or after a reboot. It is durable, so a rollback interrupted before the previous configuration came back up resumes as the same operator rollback. The host emits no failing management-network health check for an operator rollback: it is an outcome, not a failure."
           },
           "observed_at": {
             "type": "string",
@@ -19986,6 +20056,11 @@
               }
             ],
             "description": "What the host's Nex-managed /etc files say right now. Independent of spec: spec is the staged, applied or last change; current is parsed from disk so a Controller can show live addressing before any change has been staged. Absent when the files are missing or were not written by Nex."
+          },
+          "observed_gateway": {
+            "type": "string",
+            "format": "ipv4",
+            "description": "Optional live default IPv4 gateway on br0, read from the host route table. Observed state only; absent if no gateway is reported. DHCP configuration specs still omit address and gateway."
           }
         },
         "required": [
@@ -20989,7 +21064,7 @@
           },
           "retryable": {
             "type": "boolean",
-            "description": "Marks exactly one sentence — \"pool authority is frozen for a master change; retry when it completes\" — which an operator retries unchanged once the current transfer finishes."
+            "description": "Marks exactly one sentence \u2014 \"pool authority is frozen for a master change; retry when it completes\" \u2014 which an operator retries unchanged once the current transfer finishes."
           }
         },
         "required": [
@@ -21397,7 +21472,7 @@
           "credential_version": {
             "type": "integer",
             "minimum": 0,
-            "description": "The pool master's own counter for the private material behind this profile, mirrored verbatim from PoolMember.fence_credential_version; 0 means no material is recorded. The material itself never reaches this Controller — the number is only what tells an operator that a rotation has actually been replicated."
+            "description": "The pool master's own counter for the private material behind this profile, mirrored verbatim from PoolMember.fence_credential_version; 0 means no material is recorded. The material itself never reaches this Controller \u2014 the number is only what tells an operator that a rotation has actually been replicated."
           },
           "username": {
             "type": "string",
@@ -21416,7 +21491,7 @@
                 "type": "null"
               }
             ],
-            "description": "The host's own report about its own management controller, mirrored verbatim from the master's membership record. It is present on a host that has no profile at all — which is exactly the host whose row offers Set BMC access… instead — so this object is non-null whenever there is a profile, a controller report or an identity conflict to show."
+            "description": "The host's own report about its own management controller, mirrored verbatim from the master's membership record. It is present on a host that has no profile at all \u2014 which is exactly the host whose row offers Set BMC access\u2026 instead \u2014 so this object is non-null whenever there is a profile, a controller report or an identity conflict to show."
           },
           "system_uuid_conflict_host_id": {
             "type": "string",
@@ -21586,7 +21661,7 @@
           },
           "fence_confirmed": {
             "type": "boolean",
-            "description": "Must be literally true: the operator's separate, explicit acknowledgement that the hosts named in fence_host_ids will be powered off. A precondition only — Core still produces and verifies every fence proof itself. Omitted from required because the Go request type omits it when false; the route refuses the request with 400 when it is not true."
+            "description": "Must be literally true: the operator's separate, explicit acknowledgement that the hosts named in fence_host_ids will be powered off. A precondition only \u2014 Core still produces and verifies every fence proof itself. Omitted from required because the Go request type omits it when false; the route refuses the request with 400 when it is not true."
           },
           "fence_host_ids": {
             "type": "array",
@@ -21620,7 +21695,7 @@
                 "type": "null"
               }
             ],
-            "description": "The profile to record; null clears it. redfish and ipmilan take {endpoint, target_id, username}; virsh takes the pinned SSH fields. A client never supplies tls_fingerprint: for a redfish profile Core connects when it records it, captures the certificate the controller presents, writes that fingerprint into the profile itself and proves over that pinned connection that the controller manages this host's machine before recording anything. Before any power-off Core asks the management controller which machine it manages — the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. Core refuses a BMC profile whose host reports no unique hardware identity or which names no username, and refuses SCSI-PR outright. A refused profile's delivered password is released from the master's credential store."
+            "description": "The profile to record; null clears it. redfish and ipmilan take {endpoint, target_id, username}; virsh takes the pinned SSH fields. A client never supplies tls_fingerprint: for a redfish profile Core connects when it records it, captures the certificate the controller presents, writes that fingerprint into the profile itself and proves over that pinned connection that the controller manages this host's machine before recording anything. Before any power-off Core asks the management controller which machine it manages \u2014 the Redfish ComputerSystem.UUID, compared exactly, or IPMI Get System GUID, where either documented byte order counts \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a host with no unique hardware identity and an unreadable controller each refuse the fence and power nothing off. Redirects are never followed, so the identity cannot be read from one machine while another is powered off. Core refuses a BMC profile whose host reports no unique hardware identity or which names no username, and refuses SCSI-PR outright. A refused profile's delivered password is released from the master's credential store."
           },
           "credential": {
             "anyOf": [
@@ -22368,7 +22443,7 @@
               "no_peer",
               "not_applicable"
             ],
-            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait — a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
+            "description": "ready: another ready host has a fresh successful check against this device. not_ready: Nex Core knows it would not work, and says why. unknown: Nex Core could not observe it, typically because nothing has checked this host yet. no_peer: this pool has no other host to be checked from, which is not a wait \u2014 a pool of one host also has nothing to promote over and needs no fence device. not_applicable: this pool cannot use this method at all, as a watchdog cannot be used below three hosts, and that is not something an operator can fix. Readiness is an observation shown to an operator: nothing here decides a promotion, which is decided by the live fence proof alone."
           },
           "reason": {
             "type": "string",
@@ -22477,7 +22552,7 @@
           "request_id"
         ],
         "additionalProperties": false,
-        "description": "Let this host configure its own management controller for fencing again. There is no “off” here: clearing the fence device is what turns it off, through the one route that clears a profile."
+        "description": "Let this host configure its own management controller for fencing again. There is no \u201coff\u201d here: clearing the fence device is what turns it off, through the one route that clears a profile."
       },
       "PoolFencePrerequisite": {
         "type": "object",
@@ -22536,7 +22611,7 @@
               "unknown",
               "none"
             ],
-            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software — a hung kernel does not run it — so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
+            "description": "Only a device that resets the machine independently of the kernel can count: hardware, and emulated where the host is itself a virtual machine and the hypervisor really does reset it. The kernel's softdog is software \u2014 a hung kernel does not run it \u2014 so it is reported and reported as not counting. A driver Nex Core does not recognise is unknown and counts as nothing until it is classified."
           },
           "device": {
             "type": "string",
@@ -22625,12 +22700,12 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at — not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
+            "description": "When this finding last changed, in the manner of PoolHostBMC.observed_at \u2014 not when it was last confirmed. Nothing decides anything from it: staleness is fencing_generation, which is durable and replicated and therefore still readable by a candidate whose master has gone."
           },
           "armed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog — a reboot, a cluster restart — produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
+            "description": "The host's own clock when it started feeding this device, carried over unchanged while it goes on feeding the same one. Nothing compares it with another host's clock. It exists so that a host which stopped and started its watchdog \u2014 a reboot, a cluster restart \u2014 produces a record that differs from the one before it: an identical record is never written and never replicated, and a survivor would otherwise be unable to tell \"armed since before it left\" from \"was armed once, and has been up unarmed since\". A survivor refuses a watchdog proof against a target that rejoined its Corosync partition after the last armed record it holds."
           }
         },
         "required": [
@@ -22665,7 +22740,7 @@
           "held_seconds": {
             "type": "integer",
             "minimum": 0,
-            "description": "How long this host has continuously been in a quorate partition without the target, on a monotonic clock. Any flap — the target reappearing, quorum lost, or this agent restarting — restarts it from zero."
+            "description": "How long this host has continuously been in a quorate partition without the target, on a monotonic clock. Any flap \u2014 the target reappearing, quorum lost, or this agent restarting \u2014 restarts it from zero."
           },
           "bound_seconds": {
             "type": "integer",
@@ -22707,11 +22782,22 @@
               "armed",
               "degraded"
             ],
-            "description": "off is the pool's Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice is not verified and degraded can mean it is connected and voting; two-host watchdog arming remains withheld in either state."
+            "description": "off is the pool's Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice or native quorum is not verified; it can coexist with an operating witness when Corosync is nonquorate. Degraded means the witness and quorum are operating but two-host watchdog arming remains withheld."
           },
           "detail": {
             "type": "string",
             "description": "Core's own sentence for the state. A client shows it as written."
+          },
+          "witness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoolFenceWitness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pool master's current native qdevice observation, separate from watchdog arming. Omitted when no witness is selected."
           },
           "armed": {
             "type": "integer",
@@ -24555,6 +24641,79 @@
           "metadata_receipts"
         ],
         "additionalProperties": false
+      },
+      "ISODownloadProgress": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "description": "Active dispatched URL iso-import operation on this reporting host."
+          },
+          "received_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes received from the public ISO server when Core last saved a sample."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "HTTP Content-Length when positive; omitted when the source does not provide a length."
+          }
+        },
+        "required": [
+          "operation_id",
+          "received_bytes"
+        ],
+        "x-go-type": "protocol.ISODownloadProgress"
+      },
+      "PoolFenceWitness": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "forming",
+              "operating"
+            ],
+            "description": "Operating means the pool master verified the selected qdevice's identity, pinned CA, TLS connection and cast vote. It does not imply an armed watchdog or an automatic fence proof."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Core's current native observation or reason the witness is still forming."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "x-go-type": "protocol.PoolFenceWitness"
+      },
+      "DetectedOS": {
+        "type": "object",
+        "properties": {
+          "os": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Last successful guest-get-osinfo display name; 1\u20134096 UTF-8 bytes.",
+            "pattern": "\\S"
+          },
+          "os_id": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Optional guest-reported OS identifier; at most 200 UTF-8 bytes."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Nonzero Core timestamp of the successful guest-agent OS observation, not the inventory/report time."
+          }
+        },
+        "required": [
+          "os",
+          "observed_at"
+        ],
+        "x-go-type": "protocol.DetectedOS",
+        "description": "Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health."
       }
     }
   },
@@ -24722,7 +24881,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Remove a pool VLAN guest network (kind vlan only; anything else is the failed result \"only pool VLAN networks can be removed\"). Core checks the expected generation, then refuses while any VM definition on that host references the network, running or stopped (\"network cannot be removed while used by VM <uuid>\"). On the pool master the agent additionally refuses while any VM in any member's published inventory uses it (\"… on host <host>\"), and fails closed when membership or that inventory cannot be read or a ready member has not published at the current membership generation (\"pool VM inventory is incomplete; wait for every member to report before removing this network\"). Teardown proves ownership from the /etc/network/interfaces.d/nex-<bridge> stanza Nex itself wrote (\"bridge <b> was not created by Nex; remove it by hand\"), refuses a bridge carrying any port but its own guest port (\"network still has attached interfaces\"), deletes the bridge, deletes <uplink>.<vlan> only when it is a VLAN device with no master that no other Nex stanza names, and removes the stanza. The uplink, the management bridge, host addresses, routes and /etc/network/interfaces are never touched. Teardown is idempotent, so an interrupted removal settles on replay and there is no needs_attention outcome. Success journals a tombstone: the network leaves Inventory.managed.networks as a tombstone row, the host stops rebuilding the bridge, and the Core ID can never be re-registered — re-adding the same uplink and VLAN mints a new network with a new identity, so VM NICs must be re-pointed."
+      "semantics": "Remove a pool VLAN guest network (kind vlan only; anything else is the failed result \"only pool VLAN networks can be removed\"). Core checks the expected generation, then refuses while any VM definition on that host references the network, running or stopped (\"network cannot be removed while used by VM <uuid>\"). On the pool master the agent additionally refuses while any VM in any member's published inventory uses it (\"\u2026 on host <host>\"), and fails closed when membership or that inventory cannot be read or a ready member has not published at the current membership generation (\"pool VM inventory is incomplete; wait for every member to report before removing this network\"). Teardown proves ownership from the /etc/network/interfaces.d/nex-<bridge> stanza Nex itself wrote (\"bridge <b> was not created by Nex; remove it by hand\"), refuses a bridge carrying any port but its own guest port (\"network still has attached interfaces\"), deletes the bridge, deletes <uplink>.<vlan> only when it is a VLAN device with no master that no other Nex stanza names, and removes the stanza. The uplink, the management bridge, host addresses, routes and /etc/network/interfaces are never touched. Teardown is idempotent, so an interrupted removal settles on replay and there is no needs_attention outcome. Success journals a tombstone: the network leaves Inventory.managed.networks as a tombstone row, the host stops rebuilding the bridge, and the Core ID can never be re-registered \u2014 re-adding the same uplink and VLAN mints a new network with a new identity, so VM NICs must be re-pointed."
     },
     "network-update": {
       "transport": "POST /api/v1/agent/report response.commands",
@@ -24755,7 +24914,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Remove an imported ISO. Core checks the expected generation (\"ISO generation is no longer current; refresh and retry\"), refuses while any VM definition on that host names the ISO as media_id or drivers_media_id, running or stopped (\"ISO cannot be removed while attached to VM <uuid>\"), and on the pool master also refuses for any VM in a member's published inventory (\"… on host <host>\") and fails closed on incomplete member inventory. Teardown unlinks the published file <storage>/nex-media/<id>.iso and nothing else; a file already gone is success, which is also what the second host on shared storage observes. No VM disk is touched. Success journals a tombstone: the ISO leaves Inventory.managed.media as a tombstone row, and neither VM creation nor a member's shared-media adoption resolves it any more."
+      "semantics": "Remove an imported ISO. Core checks the expected generation (\"ISO generation is no longer current; refresh and retry\"), refuses while any VM definition on that host names the ISO as media_id or drivers_media_id, running or stopped (\"ISO cannot be removed while attached to VM <uuid>\"), and on the pool master also refuses for any VM in a member's published inventory (\"\u2026 on host <host>\") and fails closed on incomplete member inventory. Teardown unlinks the published file <storage>/nex-media/<id>.iso and nothing else; a file already gone is success, which is also what the second host on shared storage observes. No VM disk is touched. Success journals a tombstone: the ISO leaves Inventory.managed.media as a tombstone row, and neither VM creation nor a member's shared-media adoption resolves it any more."
     },
     "vm-create": {
       "transport": "POST /api/v1/agent/report response.commands",
@@ -24842,17 +25001,17 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Addressed to the pool's current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running — the hosts finish it\". Core refusals include \"only the pool master starts a master change or an eject\", \"no such member of this pool\", \"only a ready member with a peer endpoint can become the pool master\", \"another pool authority transfer is already in progress on this pool\", \"pool authority is frozen for a master change; retry when it completes\", \"pool authority was handed to another host; this host is no longer the pool master\", \"host <id> still owns pool VM records (<ids>); move or delete them before ejecting it\", \"host <id> still holds a pool-shared storage reservation on <repo>; let it finish before ejecting it\", \"no pool authority transfer is in progress on this pool\", \"the pool authority transfer in progress has another target\" and \"the target has already activated this pool authority; the master change can only go forward\", \"host <id> is already removed from this pool's membership; the eject can only go forward\" and \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". A cancelled eject records \"the pool member eject was cancelled by an operator\"; a cancelled master change records \"the pool master change was cancelled by an operator\". A cancel is accepted only before the transfer's first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen. Before a planned master change or eject records its first freeze, Core refuses unresolved backup journal work, pending backup runs and pending metadata receipts with \"backup operation is unresolved; finish or reconcile it before changing pool authority\"; the check and first durable freeze hold the same backup authority lock. Fenced promotion may inherit pending backup authority and reports those runs/receipts needs_attention, retaining restore pins instead of queuing their native work on the new master.",
+      "semantics": "Addressed to the pool's current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running \u2014 the hosts finish it\". Core refusals include \"only the pool master starts a master change or an eject\", \"no such member of this pool\", \"only a ready member with a peer endpoint can become the pool master\", \"another pool authority transfer is already in progress on this pool\", \"pool authority is frozen for a master change; retry when it completes\", \"pool authority was handed to another host; this host is no longer the pool master\", \"host <id> still owns pool VM records (<ids>); move or delete them before ejecting it\", \"host <id> still holds a pool-shared storage reservation on <repo>; let it finish before ejecting it\", \"no pool authority transfer is in progress on this pool\", \"the pool authority transfer in progress has another target\" and \"the target has already activated this pool authority; the master change can only go forward\", \"host <id> is already removed from this pool's membership; the eject can only go forward\" and \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". A cancelled eject records \"the pool member eject was cancelled by an operator\"; a cancelled master change records \"the pool master change was cancelled by an operator\". A cancel is accepted only before the transfer's first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen. Before a planned master change or eject records its first freeze, Core refuses unresolved backup journal work, pending backup runs and pending metadata receipts with \"backup operation is unresolved; finish or reconcile it before changing pool authority\"; the check and first durable freeze hold the same backup authority lock. Fenced promotion may inherit pending backup authority and reports those runs/receipts needs_attention, retaining restore pins instead of queuing their native work on the new master.",
       "capability": "pool-authority-transfer-v1 on the pool master, on the selected host and on every ready member. The Controller offers no master change or eject without it on the master, because a member that cannot re-point would keep following a host that is no longer the pool master."
     },
     "pool-promote": {
       "summary": "Promote a surviving member to pool master after fencing the old one",
-      "target": "The promotion candidate itself — the one pool command besides pool-join that is not addressed to the master, because the master is the host that is gone.",
+      "target": "The promotion candidate itself \u2014 the one pool command besides pool-join that is not addressed to the master, because the master is the host that is gone.",
       "payload": {
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the promotion candidate. S6 adds no new capability string.",
-      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them — the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced — an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". This command is the manual promotion path. A separate Core-owned automatic path is limited to eligible two-host pools with Host fencing enabled and a recorded usable BMC profile; no automatic watchdog, storage lease or Nex Witness path exists. There is no election; no force, override, \"declare host lost\" or timeout-based path exists or may be added."
+      "semantics": "One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict's fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\"this promotion will power off other hosts; confirm the hosts this pool reports before it can run\") and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \"this promotion must power off <ids>, which is not what was confirmed; confirm the hosts this pool reports and try again\" and \"this promotion no longer needs to power off any host; review the pool and try again\". A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \"durable and still running\". Core's own refusals arrive on the operation and are surfaced verbatim in last_promotion: \"the pool master <id> is reachable and holds this pool's authority; change the pool master with a planned master change instead of promoting\", \"the pool master <id> has no recorded fence profile; record one before promoting\", \"the pool master <id> has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\", \"this promotion has no fence proof for the old pool master\", \"this fence proof excludes another host\", \"this fence proof belongs to another promotion\", \"this fence proof is not bound to this promotion\", \"this fence proof is older than 15m0s; fence the old pool master again\", \"the old pool master was not excluded: <native reason>\", \"pool host <ids> holds a newer pool authority than this host; promote it instead\", \"pool VM <ids> is recorded differently by the host that owns it; resolve that before promoting\", \"this host holds no pool authority replica; it cannot be promoted\", \"this host's pool authority replica was never verified\", \"this host holds no fence credential for <host>; it cannot fence it, so it cannot be promoted over it\", \"the replicated fence credential is not addressed to this host\", \"the replicated fence credential is unreadable\", \"this host already holds different material under that fence credential reference\", \"this host is already the master of its pool\", \"promoting this host powers the old pool master off; confirm that before the promotion can run\" and \"a pool promotion is performed by the candidate itself\". A cancel is never accepted: \"this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\". This command is the manual promotion path. A separate Core-owned automatic path is limited to eligible two-host pools with Host fencing enabled and a recorded usable BMC profile; no automatic watchdog, storage lease or Nex Witness path exists. There is no election; no force, override, \"declare host lost\" or timeout-based path exists or may be added."
     },
     "pool-fence-profile": {
       "summary": "Record or clear how a member of this pool would be power-fenced",
@@ -24861,7 +25020,7 @@
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the pool master.",
-      "semantics": "Payload: PoolCommand{request_id, action: fence-profile, membership.master_host_id, member_host_id, fence}. A null fence clears the profile. The profile is written into the master's durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it from the master's reported inventory. No credential material travels on this command: credential_ref names a file the existing one-time encrypted fence-credential handoff has already delivered to the master, and Core refuses to record a profile whose material it does not hold — \"this host holds no fence credential for <host>; deliver it to this host before recording the profile\" and \"this host's fence credential material for <host> is larger than this pool replicates; shorten it before recording the profile\". Core also refuses at record time any profile it could not verify, in the shape \"this fence profile cannot be verified by this host: <reason>\", releasing the delivered credential when it does: \"this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own\", \"this management controller did not answer, so the machine behind it could not be identified\", \"this management controller rejected the recorded account, so the machine behind it could not be identified\", \"the management controller at this address reports a different machine than the host it is recorded for; nothing was powered off\", \"a management controller fence device needs the account Nex Core signs in with\", \"virsh fencing needs an immutable domain UUID target\" and \"SCSI persistent-reservation fencing is unsupported\". Before any power-off Nex Core asks the management controller which machine it manages — IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID — and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. Other refusals: \"only the pool master records a fence profile\", \"no such member of this pool\", \"an ejected host has no fence profile\". Recording a usable profile for the master itself is what opts a pool into fence-verified promotion, and therefore into the boot rule of a restarted master; clearing it is durable and is only released once every ready member has acknowledged a replica built without it."
+      "semantics": "Payload: PoolCommand{request_id, action: fence-profile, membership.master_host_id, member_host_id, fence}. A null fence clears the profile. The profile is written into the master's durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it from the master's reported inventory. No credential material travels on this command: credential_ref names a file the existing one-time encrypted fence-credential handoff has already delivered to the master, and Core refuses to record a profile whose material it does not hold \u2014 \"this host holds no fence credential for <host>; deliver it to this host before recording the profile\" and \"this host's fence credential material for <host> is larger than this pool replicates; shorten it before recording the profile\". Core also refuses at record time any profile it could not verify, in the shape \"this fence profile cannot be verified by this host: <reason>\", releasing the delivered credential when it does: \"this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own\", \"this management controller did not answer, so the machine behind it could not be identified\", \"this management controller rejected the recorded account, so the machine behind it could not be identified\", \"the management controller at this address reports a different machine than the host it is recorded for; nothing was powered off\", \"a management controller fence device needs the account Nex Core signs in with\", \"virsh fencing needs an immutable domain UUID target\" and \"SCSI persistent-reservation fencing is unsupported\". Before any power-off Nex Core asks the management controller which machine it manages \u2014 IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID \u2014 and compares it with the target host's own SMBIOS system UUID in the master's membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. Other refusals: \"only the pool master records a fence profile\", \"no such member of this pool\", \"an ejected host has no fence profile\". Recording a usable profile for the master itself is what opts a pool into fence-verified promotion, and therefore into the boot rule of a restarted master; clearing it is durable and is only released once every ready member has acknowledged a replica built without it."
     },
     "pool-bmc-provisioning": {
       "summary": "Let a host configure its own management controller for fencing again",
@@ -24870,7 +25029,7 @@
         "$ref": "#/components/schemas/PoolCommand"
       },
       "capability": "pool-authority-transfer-v1 on the pool master.",
-      "semantics": "Payload: PoolCommand{request_id, action: bmc-provisioning, membership.master_host_id, member_host_id}. It says one thing — this host may configure its own management controller again — and re-sending it is a success, because it is a desired state and not a transition. The master clears PoolMember.bmc_provisioning_disabled and the host's last management-controller report, and the host creates the account on its own next pass. The opposite direction is not a command: clearing a Core-provisioned fence profile sets the flag, removes the account and stops provisioning, in the one path that clears a profile. Refusals: \"this command carries no management controller request\", \"only the pool master records whether a host configures its own management controller\", \"pool membership is unavailable\", \"no such member of this pool\", and the authority-write refusals a fence profile takes while a master change is in flight."
+      "semantics": "Payload: PoolCommand{request_id, action: bmc-provisioning, membership.master_host_id, member_host_id}. It says one thing \u2014 this host may configure its own management controller again \u2014 and re-sending it is a success, because it is a desired state and not a transition. The master clears PoolMember.bmc_provisioning_disabled and the host's last management-controller report, and the host creates the account on its own next pass. The opposite direction is not a command: clearing a Core-provisioned fence profile sets the flag, removes the account and stops provisioning, in the one path that clears a profile. Refusals: \"this command carries no management controller request\", \"only the pool master records whether a host configures its own management controller\", \"pool membership is unavailable\", \"no such member of this pool\", and the authority-write refusals a fence profile takes while a master change is in flight."
     },
     "pool-host-fencing": {
       "summary": "Turn this pool's host fencing on or off",

@@ -1204,6 +1204,9 @@ type PoolAuthorityReplica struct {
 	StorageClusters   []StorageClusterConfig `json:"storage_clusters"`
 	ResourceMutations []PoolResourceMutation `json:"resource_mutations"`
 	CAKeyWrapped      *PoolWrappedKey        `json:"ca_key_wrapped,omitempty"`
+	// CorosyncKeyWrapped is the pool's shared Corosync key sealed for this member.
+	// It is installed before the member starts its pool-owned cluster.
+	CorosyncKeyWrapped *PoolWrappedKey `json:"corosync_key_wrapped,omitempty"`
 	// FenceCredentials are the pool's fence credential material, sealed for this member
 	// alone.  Like CAKeyWrapped they are covered by the signature and excluded from
 	// ContentDigest, so the digest stays the same for every member of one generation; what
@@ -1235,6 +1238,7 @@ func (r PoolAuthorityReplica) SigningBytes() ([]byte, error) {
 // them, so nothing excluded here can be altered in transit.
 func (r PoolAuthorityReplica) ContentDigest() (string, error) {
 	r.MemberHostID, r.CreatedAt, r.CAKeyWrapped, r.Signature, r.Generation = "", time.Time{}, nil, "", 0
+	r.CorosyncKeyWrapped = nil
 	r.FenceCredentials = nil
 	r.WitnessCredentials = nil
 	b, err := json.Marshal(r)
@@ -1336,6 +1340,7 @@ type PoolReplicaAck struct {
 	Generation            uint64 `json:"generation"`
 	Digest                string `json:"digest,omitempty"`
 	SanlockHostGeneration uint64 `json:"sanlock_host_generation,omitempty"`
+	CorosyncKeyReady      bool   `json:"corosync_key_ready,omitempty"`
 	Verified              bool   `json:"verified"`
 	Error                 string `json:"error,omitempty"`
 }
@@ -1783,12 +1788,20 @@ type PoolFenceSummary struct {
 type PoolFenceCluster struct {
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	// Witness is the master's current qdevice observation, independent of whether
+	// either host has an armed watchdog.
+	Witness *PoolFenceWitness `json:"witness,omitempty"`
 	// Armed and Total are how many of this pool's ready hosts are feeding a watchdog, and
 	// how many should be.  ArmingHostID is the host whose turn it is: arming means a
 	// controlled cluster restart, and exactly one host at a time may take one.
 	Armed        int    `json:"armed"`
 	Total        int    `json:"total"`
 	ArmingHostID string `json:"arming_host_id,omitempty"`
+}
+
+type PoolFenceWitness struct {
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // The states a pool's watchdog cluster can be in.  Closed: the Controller and the UI switch on

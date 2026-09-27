@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -18,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,27 @@ import (
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 )
+
+func TestReportAdvertisesWitnessRegistration(t *testing.T) {
+	reports := make(chan protocol.ReportRequest, 1)
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		reports <- request
+		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s := testStore(t)
+	s.State = identity
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if request := <-reports; !slices.Contains(request.Capabilities, protocol.PoolWitnessCapability) {
+		t.Fatal("Core omitted the witness capability required by Controller registration")
+	}
+}
 
 func TestPoolWitnessRegistrationRetryRotationAndReplicaRetry(t *testing.T) {
 	s := testStore(t)
@@ -222,6 +245,31 @@ func TestPoolWitnessPendingDoesNotArmTwoHostWatchdogs(t *testing.T) {
 	if armed || !strings.Contains(why, "two-host watchdog fencing is withheld") {
 		t.Fatalf("pending witness allowed SBD arming: armed=%v reason=%q", armed, why)
 	}
+	previous := readPoolWitnessStatus
+	t.Cleanup(func() { readPoolWitnessStatus = previous })
+	readPoolWitnessStatus = func(context.Context, string, string, protocol.PoolWitnessRecord) vmhost.PoolWitnessStatus {
+		return vmhost.PoolWitnessStatus{Error: "qdevice disconnected"}
+	}
+	forming := PoolFenceClusterFor(s, membership, vmhost.PoolQuorum{})
+	if forming.Witness == nil || forming.Witness.State != "forming" || forming.Witness.Detail != "registration is pending" || forming.State != protocol.PoolClusterForming {
+		t.Fatalf("pending witness did not report forming separately from watchdogs: %#v", forming)
+	}
+	membership.Witness.CredentialsReady = true
+	readPoolWitnessStatus = func(context.Context, string, string, protocol.PoolWitnessRecord) vmhost.PoolWitnessStatus {
+		return vmhost.PoolWitnessStatus{Observed: true}
+	}
+	operating := PoolFenceClusterFor(s, membership, vmhost.PoolQuorum{Observed: true, Quorate: true})
+	if operating.Witness == nil || operating.Witness.State != "operating" || operating.State != protocol.PoolClusterDegraded || operating.Armed != 0 {
+		t.Fatalf("voting witness was conflated with unavailable watchdog protection: %#v", operating)
+	}
+	blocked := PoolFenceClusterFor(s, membership, vmhost.PoolQuorum{Observed: true})
+	if blocked.Witness == nil || blocked.Witness.State != "operating" || blocked.State != protocol.PoolClusterForming || !strings.Contains(blocked.Detail, "not quorate") {
+		t.Fatalf("voting witness hid the missing pool quorum: %#v", blocked)
+	}
+	unknown := PoolFenceClusterFor(s, membership, vmhost.PoolQuorum{})
+	if unknown.Witness == nil || unknown.Witness.State != "operating" || unknown.State != protocol.PoolClusterForming || !strings.Contains(unknown.Detail, "not yet observed") {
+		t.Fatalf("voting witness turned unknown quorum into a known failure: %#v", unknown)
+	}
 }
 
 func TestPoolWitnessCredentialIsSealedImportedBeforeMemberAck(t *testing.T) {
@@ -235,6 +283,11 @@ func TestPoolWitnessCredentialIsSealedImportedBeforeMemberAck(t *testing.T) {
 	state, err := loadPoolPeer(master)
 	if err == nil {
 		state.Membership.Witness = &witness
+		for i := range state.Membership.Members {
+			if state.Membership.Members[i].HostID == master.State.HostID {
+				state.Membership.Members[i].PeerOrigin = "https://192.0.2.11:9444"
+			}
+		}
 		err = savePoolPeer(master, state)
 	}
 	poolPeerMu.Unlock()
@@ -265,6 +318,11 @@ func TestPoolWitnessCredentialIsSealedImportedBeforeMemberAck(t *testing.T) {
 	if !imported {
 		t.Fatal("member acknowledged a witness replica without importing its PKCS#12 bundle")
 	}
+	masterKey, masterKeyErr := os.ReadFile(filepath.Join(master.dir, "storage-cluster", "corosync-authkey"))
+	memberKey, memberKeyErr := os.ReadFile(filepath.Join(member.dir, "storage-cluster", "corosync-authkey"))
+	if masterKeyErr != nil || memberKeyErr != nil || len(masterKey) != 128 || !bytes.Equal(masterKey, memberKey) {
+		t.Fatalf("member acknowledged witness without the shared Corosync key: master=%v member=%v", masterKeyErr, memberKeyErr)
+	}
 	record := storedReplica(t, member)
 	if record == nil || !record.Verified || record.Replica.Membership.Witness == nil || !record.Replica.Membership.Witness.CredentialsReady {
 		t.Fatalf("member did not retain a verified witness replica: %#v", record)
@@ -277,6 +335,35 @@ func TestPoolWitnessCredentialIsSealedImportedBeforeMemberAck(t *testing.T) {
 	}
 	if addressed == nil || addressed.Wrapped == nil || addressed.Wrapped.Ciphertext == "" || strings.Contains(addressed.Wrapped.Ciphertext, string(bundle)) {
 		t.Fatalf("member replica did not carry a sealed, addressed credential: %#v", addressed)
+	}
+	peer, err := PoolPeerTLSConfig(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentHandler := PoolPeerHandler(member)
+	oldPeer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != poolReplicaPath {
+			currentHandler.ServeHTTP(w, r)
+			return
+		}
+		response := httptest.NewRecorder()
+		currentHandler.ServeHTTP(response, r)
+		var ack protocol.PoolReplicaAck
+		if err := json.Unmarshal(response.Body.Bytes(), &ack); err != nil {
+			t.Error(err)
+			return
+		}
+		ack.CorosyncKeyReady = false // An older Core ignores the new field and omits its receipt.
+		w.WriteHeader(response.Code)
+		_ = json.NewEncoder(w).Encode(ack)
+	}))
+	oldPeer.TLS = peer
+	oldPeer.StartTLS()
+	t.Cleanup(oldPeer.Close)
+	setMemberPeerOrigin(t, master, member.State.HostID, oldPeer.URL)
+	ClearPoolReplicaPostAcksForTest(master)
+	if err := PushPoolAuthorityReplicas(context.Background(), master, 10*time.Second); err == nil || !strings.Contains(err.Error(), "without the Corosync key") {
+		t.Fatalf("master accepted an older member's replica acknowledgement: %v", err)
 	}
 }
 

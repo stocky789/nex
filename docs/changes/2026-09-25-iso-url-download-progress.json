@@ -1,0 +1,54 @@
+{
+  "summary": "Report live Core ISO URL download bytes and show progress in Storage and Tasks",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/protocol/managed.go",
+    "internal/vmhost/iso_download.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/iso_download_test.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/agent/client.go",
+    "internal/agent/storage_protocol_test.go",
+    "internal/agent/client_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/monitor.go",
+    "internal/controller/iso_progress_test.go",
+    "web/src/types.ts",
+    "web/src/managed.tsx",
+    "web/src/rail-screens.tsx",
+    "web/src/managed.test.mjs",
+    "tests/integration/site_selector_browser.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/create-virtual-machine.md",
+    "docs/plans/2026-09-09-first-managed-vm.md",
+    "docs/qa/2026-09-25-iso-url-progress.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can now read live URL download bytes and a percentage when the public server provides a total.",
+    "pages": ["docs/guide/create-virtual-machine.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Core reports ManagedState.iso_downloads after a v2 iso_download_progress acknowledgement; Controller mirrors validated samples in GET /api/v1/hosts inventory. ISO submission, command, outcome and retry contracts stay the same.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This corrects progress reporting for an existing ISO import capability and changes no milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The active transfer and byte samples belong to Nex Core. Controller only mirrors the latest observation.",
+    "record": "The host managed journal records the ISO import and bounded byte samples. A fresh Controller adopts the completed ISO with its identity, name, size and hash through Core managed inventory; it ignores progress for an operation it never submitted."
+  },
+  "verification": {
+    "method": "Run focused Core and Controller progress/recovery regressions, the UI test and typecheck/build, API contract and documentation gates, and a simulated Chromium walkthrough of Storage and Tasks; inspect its capture.",
+    "evidence": ["internal/vmhost/iso_download_test.go", "internal/agent/storage_protocol_test.go", "internal/controller/iso_progress_test.go", "web/src/managed.test.mjs", "tests/integration/site_selector_browser.py", "docs/qa/2026-09-25-iso-url-progress.md"]
+  }
+}

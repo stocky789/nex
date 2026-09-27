@@ -17,6 +17,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Bug Fixes
 
+- Pool cluster reconcile on the master creates the Corosync key when missing instead of
+  waiting for a later authority push.
+- Two-host witness fencing reports forming until quorum is observed, instead of treating a
+  voting witness as a degraded cluster on its own.
+- Guest OS history keeps the prior observation time when the detected OS is unchanged, and
+  skips a corrupt entry without dropping the rest.
+- Saved “all pools” console scope from older builds is restored instead of snapping to the
+  first pool.
 - Fixed promoted pool masters losing backup policies, runs and catalog: durable backup authority now transfers with the signed replica, and an empty catalog rebuilds from NFS manifests when the repository mount is present. An import failure keeps promotion at a retryable attention state before members are re-pointed.
 - Fixed backup-now and restore settlement when Controller dispatched the task: Core now reserves the run journal during execution, and an exact same-key republish of an already published recovery point settles succeeded instead of failing.
 - Overview Backups tile shows last recovery point and restore test from the pool catalog instead of Phase 6 placeholder copy.
@@ -44,6 +52,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
+- Managed VMs keep their last known guest OS on Nex Core after the guest agent disconnects
+  or the Controller is replaced, and the console labels that history clearly.
+- URL ISO imports show live download progress in Storage and Tasks from bytes Core reports.
+- Two-host pools can register a Controller qdevice witness so the member forms the cluster
+  and reports native witness status.
+- Hosts list and panel show each host's reported management IPv4 address.
+- Management network DHCP fields show the address and gateway Core currently observes.
+- Network throughput charts use decimal bits per second, with a clearer VM console layout.
+- After enrollment, the console keeps a useful pool selected; **All pools** stays an
+  explicit choice.
+- The graphical installer labels the automated package step as installing system software.
 - Restore replace, protect recovery points, test restore (verify/cleanup), catalog import/rebuild and Core-local backup status while Controller is absent.
 - Backup policies, schedules and retention on Core (Pause, Run now, Controller-absent dispatch).
 - Online full backup (crash-consistent) for running BIOS guests via libvirt push-mode.

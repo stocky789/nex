@@ -571,6 +571,24 @@ console.log("pool-members.test.mjs: ok");
   }));
   assert.match(unavailable, /this pool runs clustered storage/);
   assert.match(unavailable, /not available/);
+  const witnessCluster = { state: "degraded", detail: "two-host watchdog fencing is withheld", armed: 0, total: 2,
+    witness: { state: "operating", detail: "qdevice is connected and voting" } };
+  const operating = withSetting({ ...summary, cluster: witnessCluster });
+  const operatingChecks = Object.fromEntries(poolChecks(operating).map(check => [check.label, check]));
+  assert.equal(operatingChecks.Witness.result, "Operating");
+  assert.equal(operatingChecks.Witness.tone, "ok");
+  assert.equal(operatingChecks["Watchdog cluster"].result, "Degraded");
+  const operatingPanel = renderToStaticMarkup(createElement(HostFencingSetting, { report: operating }));
+  assert.match(operatingPanel, /<strong>Witness<\/strong> <span class="badge ok">operating<\/span> qdevice is connected and voting/);
+  assert.match(operatingPanel, /two-host watchdog fencing is withheld/);
+  const forming = withSetting({ ...summary, cluster: { ...witnessCluster, state: "forming", witness: { state: "forming", detail: "qdevice has no vote" } } });
+  assert.equal(poolChecks(forming).find(check => check.label === "Witness").result, "Forming");
+  assert.match(renderToStaticMarkup(createElement(HostFencingSetting, { report: forming })), /<strong>Witness<\/strong> <span class="badge warn">forming<\/span> qdevice has no vote/);
+  const noQuorum = withSetting({ ...summary, cluster: { ...witnessCluster, state: "forming", witness: witnessCluster.witness } });
+  assert.equal(poolChecks(noQuorum).find(check => check.label === "Witness").result, "Operating");
+  assert.equal(poolChecks(noQuorum).find(check => check.label === "Watchdog cluster").result, "Forming");
+  assert.equal(poolChecks(withSetting({ ...summary, cluster: { ...witnessCluster, witness: undefined } })).some(check => check.label === "Witness"), false);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(HostFencingSetting, { report: withSetting({ ...summary, cluster: { ...witnessCluster, witness: undefined } }) })), /<strong>Witness<\/strong>/);
 }
 
 // A refused Host fencing toggle is a panel action, not a failed membership read: its refusal

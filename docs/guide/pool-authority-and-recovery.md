@@ -80,16 +80,30 @@ lease configuration or native evidence shape does not enable sanlock setup or a 
 proof.
 
 To inspect the result, open **Settings** → **Members** → **Pool status** and expand **About**.
-The master reports this through the existing pool cluster status:
+The pool master reports **Witness** separately from **Watchdog cluster**:
 
-- **Forming** means the qdevice is not yet confirmed by Core. The detail names the current native
-  status or registration problem. It is not a vote and must not be treated as a fence check.
-- **Degraded** can report that qdevice is connected, TLS-authenticated against the pinned CA,
-  identifies the expected cluster and qnetd host, and is casting a vote. Core still reports zero
-  watchdog-armed hosts and explicitly says two-host watchdog fencing is withheld because witness
-  loss could remove quorum; survivor behavior after witness loss has not been tested.
-- **Not available** or a missing status means the current pool/Core does not report an applicable
-  witness cluster. Older Core versions may omit this status entirely.
+- **Witness · forming** means the qdevice is not yet confirmed by Core. The detail shows
+  pending registration or the current native status; check Core logs for a registration error.
+  It is not a vote or a fence check.
+- **Witness · operating** means the pool master verified the qdevice's pinned CA, TLS connection,
+  expected cluster and qnetd identity, and cast vote. It counts wherever the witness runs.
+  **Watchdog cluster · degraded** still reports zero watchdog-armed hosts. Two-host watchdog
+  fencing remains withheld because the surviving host must keep its VMs running if the witness
+  disappears while the other host is unavailable. A separate witness address alone does not
+  establish that behavior or a safe fence proof.
+- **Witness · operating** with **Watchdog cluster · forming** means the witness is connected
+  and is casting a vote, but Corosync has not restored quorum. The witness vote alone does not
+  mean the cluster can act. Check Corosync quorum and the missing host before treating the pool
+  as recovered.
+- A missing **Witness** line means the current pool/Core does not report a selected qdevice;
+  older Core versions may omit the separate status even when their cluster detail mentions one.
+
+When upgrading an already running two-host witness cluster from a build that enabled
+Corosync `WaitForAll`, Core writes the new configuration but a reload does not clear the
+old runtime flag. Arrange a controlled Corosync service restart while both hosts are
+available, after confirming neither host feeds a watchdog and the cluster has no
+resources. Until then **Witness · operating** can coexist with **Watchdog cluster ·
+forming** after a witness outage; check native quorum before treating it as recovered.
 
 This status comes from Core's native Corosync/qdevice and certificate checks. The Controller only
 shows the master's report; it does not configure qdevice or infer readiness from a successful HTTP
@@ -100,6 +114,7 @@ survivor remained quorate. It did not test witness loss or physical hosts. Contr
 and native signer checks are also not a complete browser,
 systemd-appliance, or physical failover acceptance. See the
 [witness lab record](../qa/2026-09-24-two-host-witness-lab.md),
+[two-host formation repair](../qa/2026-09-25-two-host-witness-registration.md),
 [Controller registration checks](../qa/2026-09-24-controller-witness-registration.md) and
 [runtime CA checks](../qa/2026-09-24-qnetd-runtime-ca.md).
 
@@ -923,6 +938,10 @@ change** panel in its own words. What each one means:
 - **"Host `<id>` still holds a pool-shared storage reservation on `<repository>`; let it finish
   before ejecting it."** Something on that host is still using pool-shared storage. Let it finish;
   do not force it.
+- **"The pool must stop feeding every host watchdog before an eject leaves fewer than three ready hosts."**
+  Turn off Host fencing and wait until every host reports its watchdog stopped before ejecting.
+- **"Stop every host watchdog before draining a three-host pool to its two-host witness."**
+  Turn off Host fencing and wait until every host reports its watchdog stopped before enabling maintenance.
 - **"Host `<id>` has local VMs that depend on resources leaving with the pool (...); detach them
   from the pool network or ISO before ejecting it."** Edit the named VM to remove that pool VLAN
   or eject that pool ISO from its CD drive, then eject the host.

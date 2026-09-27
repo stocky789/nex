@@ -1,0 +1,46 @@
+{
+  "summary": "Show host-reported DHCP address and gateway in the management network form.",
+  "paths": [
+    "internal/protocol/hostnetwork.go",
+    "internal/vmhost/management_network.go",
+    "internal/vmhost/management_network_test.go",
+    "internal/controller/hostnetwork_test.go",
+    "web/src/host-network.tsx",
+    "web/src/host-network.test.mjs",
+    "tests/test_api_contract.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/change-management-network.md",
+    "docs/qa/2026-09-25-management-dhcp-display.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The disabled DHCP fields now show the host's observed address and gateway when available.",
+    "pages": ["docs/guide/change-management-network.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Core inventory management_network adds optional observed_gateway from br0's default IPv4 route; GET /api/v1/hosts/{id}/network passes it through with existing NIC addresses. POST and management-network commands are unchanged. Older Core omits the field; upgrade Controller first for strict report decoding.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The display improvement changes no milestone scope or acceptance status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only live Core observations are added. Existing host network files and the Core management-network record remain the durable configuration, recovered in inventory by a fresh Controller."
+  },
+  "verification": {
+    "method": "Focused Go, UI and contract checks passed; a simulated browser fixture exercised fresh DHCP, Static switching, report error and stale host states. The fixture did not obtain a real DHCP lease.",
+    "evidence": [
+      "internal/vmhost/management_network_test.go",
+      "internal/controller/hostnetwork_test.go",
+      "web/src/host-network.test.mjs",
+      "tests/test_api_contract.py",
+      "docs/qa/2026-09-25-management-dhcp-display.md"
+    ]
+  }
+}

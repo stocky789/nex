@@ -25,6 +25,12 @@ export function formatValue(unit: string, v: number | null | undefined): string 
   if (unit === "iops") return `${v.toFixed(v < 10 ? 1 : 0)} IOPS`;
   if (unit === "load") return v.toFixed(2);
   if (unit === "celsius") return `${v.toFixed(0)} °C`;
+  if (unit === "network_rate") {
+    const names = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"];
+    let i = 0, n = Math.abs(v * 8);
+    while (n >= 1000 && i < names.length - 1) { n /= 1000; i++; }
+    return `${(Math.sign(v) * n).toFixed(i && n < 10 ? 1 : 0)} ${names[i]}`;
+  }
   const suffix = unit === "bytes_per_second" ? "/s" : "";
   const names = ["B", "KiB", "MiB", "GiB", "TiB"];
   let i = 0, n = Math.abs(v);
@@ -37,6 +43,13 @@ export function formatValue(unit: string, v: number | null | undefined): string 
 export function formatTicks(unit: string, ticks: number[], incr: number): string[] {
   const suffix = { percent: "%", iops: " IOPS", bytes: " B", bytes_per_second: " B/s", celsius: " °C" }[unit] ?? "";
   let divisor = 1, name = suffix;
+  if (unit === "network_rate") {
+    const names = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"];
+    const top = Math.max(0, ...ticks.map(t => Math.abs(t * 8)));
+    const i = Math.min(names.length - 1, Math.max(0, Math.floor(Math.log(top || 1) / Math.log(1000))));
+    divisor = 1000 ** i / 8;
+    name = ` ${names[i]}`;
+  }
   if (unit === "bytes" || unit === "bytes_per_second") {
     const names = ["B", "KiB", "MiB", "GiB", "TiB"];
     const top = Math.max(0, ...ticks.map(Math.abs));
@@ -130,7 +143,7 @@ export function vmSparkRows(history: StatsHistory) {
     const values = Array.from({ length }, (_, i) => parts.some(s => s.values[i] != null) ? parts.reduce((sum, s) => sum + (s.values[i] ?? 0), 0) : null);
     const known = values.filter((v): v is number => v != null);
     const top = unit === "percent" ? 100 : Math.max(0, ...known) || 1;
-    return { label, series, detail: parts.map(s => s.label).join(" + "), values: known.map(v => (v / top) * 100), text: formatValue(unit, lastValue(values)) };
+    return { label, series, detail: parts.map(s => s.label).join(" + "), values: known.map(v => (v / top) * 100), text: formatValue(group === "network" ? "network_rate" : unit, lastValue(values)) };
   });
 }
 /** @deprecated use vmSparkRows */
@@ -471,7 +484,7 @@ export function RealtimeStats({ kind, id, api, stacked, limitMS = REALTIME_LIMIT
       {error && <div className="alert" role="alert">{history ? `Realtime update failed; showing the last samples. ${error}` : error} <button type="button" onClick={() => setError("")}>Retry</button></div>}
       {on && !ready && !error && <p className="empty">Collecting realtime samples…</p>}
       {history && ready && (on || error) && <div className="stats-grid stats-grid-live">
-        {charts(history, stacked ?? localStacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`live-${kind}-${id}`} hidden={hidden.current} plots={plots.current} height={kind === "vm" ? 100 : 120} zoom={false} />)}
+        {charts(history, stacked ?? localStacked).map(c => <StatsChart key={c.group} chart={c} history={history} syncKey={`live-${kind}-${id}`} hidden={hidden.current} plots={plots.current} height={190} zoom={false} />)}
       </div>}
       <p className="panel-note">Realtime is off until you turn it on. Closing this drawer or leaving the tab turns realtime off, and it turns itself off after 10 minutes. It pauses while this page is hidden.</p>
     </div>}
@@ -624,7 +637,7 @@ function tooltip(raw: { current: StatsSeries[] }, color: (i: number) => string):
           label.textContent = s.label;
           const value = document.createElement("strong");
           const v = s.values[idx];
-          value.textContent = v == null ? "no sample" : formatValue(s.unit, v);
+          value.textContent = v == null ? "no sample" : formatValue(s.group === "network" ? "network_rate" : s.unit, v);
           row.append(swatch, label, value);
           tip.appendChild(row);
         });
@@ -673,7 +686,7 @@ function StatsChart({ chart, history, syncKey, hidden, plots, height = 220, zoom
     shape.current = signature;
     const style = getComputedStyle(el);
     const color = (i: number) => style.getPropertyValue(`--series-${i % PALETTE_SIZE + 1}`).trim() || "#2456d9";
-    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: style.getPropertyValue("--line-soft").trim() }, values: (_u, ticks, _axis, _space, incr) => formatTicks(unit, ticks, incr), ...(unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
+    const axis = (unit: string, side: 1 | 3): uPlot.Axis => ({ scale: unit, side, size: 70, stroke: style.getPropertyValue("--muted").trim(), grid: { show: side === 3, stroke: style.getPropertyValue("--line-soft").trim() }, values: (_u, ticks, _axis, _space, incr) => formatTicks(chart.group === "network" && unit === "bytes_per_second" ? "network_rate" : unit, ticks, incr), ...(chart.group !== "network" && unit.startsWith("bytes") ? { incrs: byteIncrs } : {}) });
     const opts: uPlot.Options = {
       width: el.clientWidth || 400,
       height,

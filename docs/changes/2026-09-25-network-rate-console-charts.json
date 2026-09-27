@@ -1,0 +1,38 @@
+{
+  "summary": "Show Core-reported network throughput in decimal bits per second and give VM console realtime charts a readable two-column layout. API impact: none; presentation only over existing stats responses.",
+  "paths": [
+    "web/src/stats.tsx",
+    "web/src/stats.css",
+    "web/src/stats.test.mjs",
+    "web/src/host-list.test.mjs",
+    "web/src/host-panel.tsx",
+    "tests/integration/console_controls_browser.py",
+    "docs/guide/usage-history.md",
+    "docs/plans/2026-09-16-usage-history.md",
+    "docs/qa/2026-09-25-network-rate-console-charts.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now read network throughput in decimal bits per second and disk throughput in bytes per second.",
+    "pages": ["docs/guide/usage-history.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "GET /api/v1/{vms,hosts}/{id}/stats, the Controller-to-Core stats query, and Core bytes_per_second samples and results are unchanged; the Controller only converts network display labels. No client or Core contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This corrects presentation of an existing feature without changing milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Unit formatting and chart layout persist no new state; Core retains the existing sampled history."
+  },
+  "verification": {
+    "method": "Focused stats and host-list unit tests, UI typecheck and build, and the simulated Chromium console flow passed; desktop and mobile captures were inspected. No physical Core or forge run was performed.",
+    "evidence": ["web/src/stats.test.mjs", "tests/integration/console_controls_browser.py", "docs/qa/2026-09-25-network-rate-console-charts.md"]
+  }
+}

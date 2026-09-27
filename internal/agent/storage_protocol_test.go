@@ -298,7 +298,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	s.State.StorageClusterProtocolReady = true // persisted acknowledgement from a replaced Controller
 	result.PoolID, result.HostID = s.State.PoolID, s.State.HostID
 	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
-	if err := resetStorageClusterProtocol(s); err != nil {
+	if err := resetReportExtensions(s); err != nil {
 		t.Fatal(err)
 	}
 	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
@@ -314,7 +314,7 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 		t.Fatalf("old Controller acknowledgement was not safely retained: reports=%d state=%+v", oldReports, s.State)
 	}
 	// The withheld result remains available for a matching Controller after reconnect.
-	if err := resetStorageClusterProtocol(s); err != nil {
+	if err := resetReportExtensions(s); err != nil {
 		t.Fatal(err)
 	}
 	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
@@ -363,6 +363,61 @@ func TestClusteredStoragePreflightProtectsStrictOlderControllerAndReconnect(t *t
 	transientStorageClusters.append(s, []protocol.StorageClusterResult{result})
 	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestISODownloadProgressRequiresControllerAcknowledgement(t *testing.T) {
+	progress := protocol.ISODownloadProgress{OperationID: "download", ReceivedBytes: 4096, TotalBytes: 8192}
+	managed := &protocol.ManagedState{ISODownloads: []protocol.ISODownloadProgress{progress}}
+	legacy := managedExtensionsForController(managed, false, false)
+	if len(legacy.ISODownloads) != 0 || len(managed.ISODownloads) != 1 {
+		t.Fatal("compatibility projection changed Core observation")
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var old struct {
+		Outcomes []protocol.ManagedOutcome `json:"outcomes,omitempty"`
+	}
+	if err := decoder.Decode(&old); err != nil {
+		t.Fatalf("old Controller rejected projected inventory: %v", err)
+	}
+	if got := managedExtensionsForController(managed, true, false).ISODownloads; len(got) != 1 || got[0] != progress {
+		t.Fatalf("acknowledged progress missing: %+v", got)
+	}
+
+	reports := 0
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if !contains(request.Capabilities, protocol.ISODownloadProgressCapability) {
+			t.Error("progress extension not offered")
+		}
+		reports++
+		ack := reports == 1
+		json.NewEncoder(w).Encode(protocol.ReportResponse{ISODownloadProgress: &ack})
+	}))
+	s := testStore(t)
+	s.State = identity
+	for i := 0; i < 2; i++ {
+		if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		if s.State.ISODownloadProgressReady != (i == 0) {
+			t.Fatalf("acknowledgement state after report %d: %+v", i+1, s.State)
+		}
+	}
+	if err := resetReportExtensions(s); err != nil {
+		t.Fatal(err)
+	}
+	if s.State.ISODownloadProgressReady {
+		t.Fatal("acknowledgement survived disconnect")
 	}
 }
 

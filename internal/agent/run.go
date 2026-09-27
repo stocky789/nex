@@ -142,13 +142,34 @@ var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterRe
 // Nothing here is durable: the master's own offer record is the authority.
 var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
 
-func resetStorageClusterProtocol(s *Store) error {
-	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady {
+func resetReportExtensions(s *Store) error {
+	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
 		return nil
 	}
 	s.State.StorageClusterProtocolReady = false
 	s.State.StorageClusterSessionMonitorProtocolReady = false
+	s.State.ISODownloadProgressReady = false
+	s.State.DetectedOSReady = false
 	return s.Save()
+}
+
+func managedExtensionsForController(managed *protocol.ManagedState, isoReady, osReady bool) *protocol.ManagedState {
+	if managed == nil {
+		return nil
+	}
+	isoOK := isoReady || len(managed.ISODownloads) == 0
+	osOK := osReady || len(managed.DetectedOS) == 0
+	if isoOK && osOK {
+		return managed
+	}
+	copy := *managed
+	if !isoReady {
+		copy.ISODownloads = nil
+	}
+	if !osReady {
+		copy.DetectedOS = nil
+	}
+	return &copy
 }
 
 // storageClusterResultsForController is a report-only compatibility
@@ -374,6 +395,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// written back into the record it owns.
 		managed.Membership = PoolFenceCheckMembership(s, managed.Membership)
 	}
+	detectedOS, detectedOSErr := poolDetectedOS(s)
+	managed.DetectedOS = detectedOS
+	if detectedOSErr != nil {
+		checks = append(checks, protocol.Check{Name: "guest-os-history", Status: "failed", Error: "retained guest OS is unavailable", ObservedAt: time.Now().UTC()})
+	}
 	// This host's own stored replica, and the honest freshness of it on both sides. The
 	// replica is reported, never acted on, and no other check is derived from it.
 	managed.Replica = PoolReplicaReport(s)
@@ -481,7 +507,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.PoolBackupPagedAuthorityCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability, protocol.BackupCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.PoolBackupPagedAuthorityCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability, protocol.PoolWitnessCapability, protocol.BackupCapability}
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -491,6 +517,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		legacy.CPUBaseline = nil
 		legacy.ManagementNetwork = nil
 		inv = &legacy
+	}
+	if inv.Managed != nil {
+		copy := *inv
+		copy.Managed = managedExtensionsForController(inv.Managed, s.State.ISODownloadProgressReady, s.State.DetectedOSReady)
+		inv = &copy
 	}
 	if s.State.StorageProtocolReady {
 		// System-disk replace opens storage/discover for the spare list, so it shares the
@@ -531,7 +562,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	if version == protocol.Version {
 		// Offer the additive extension during every v2 preflight. An older
 		// Controller ignores it and acknowledges the base capability instead.
-		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability)
+		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
 	}
 	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
@@ -583,6 +614,15 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// connectivity over the configuration under test; a staged change cannot be confirmed
 	// without such an observation. A no-op unless one is applied.
 	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
+	ready := response.ISODownloadProgress != nil && *response.ISODownloadProgress
+	osReady := response.DetectedOS != nil && *response.DetectedOS
+	if s.State.ISODownloadProgressReady != ready || s.State.DetectedOSReady != osReady {
+		s.State.ISODownloadProgressReady = ready
+		s.State.DetectedOSReady = osReady
+		if err = s.Save(); err != nil {
+			return persistenceError{fmt.Errorf("persist managed report extensions preflight: %w", err)}
+		}
+	}
 	if response.StorageRepositories != nil && response.StorageRepositories.ProtocolVersion == protocol.Version && (response.StorageRepositories.Capability == protocol.StorageRepositoryCapability || response.StorageRepositories.Capability == protocol.ZFSProvisionCapability || response.StorageRepositories.Capability == protocol.ZFSReplaceCapability) {
 		if !s.State.StorageProtocolReady {
 			s.State.StorageProtocolReady = true
@@ -941,9 +981,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	}
 	c.CloseIdleConnections()
 	// A stored acknowledgement belongs to the prior Controller connection. Never
-	// send a newer clustered-storage envelope until this connection acknowledges
-	// its exact capability again.
-	if err := resetStorageClusterProtocol(s); err != nil {
+	// send additive report fields until this connection acknowledges
+	// their exact capabilities again.
+	if err := resetReportExtensions(s); err != nil {
 		return err
 	}
 	// A restarted connection must receive the Controller's backup-v1 acknowledgement
@@ -975,6 +1015,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	sampler := newUsageSampler(cfg.history)
 	probes := NativeProbes(version.Version, sampler)
 	probes["cpu-baseline"] = PoolCPUProbe(s)
+	probes["guest"] = recordingGuestProbe(func(ctx context.Context, detected map[string]protocol.DetectedOS) { recordGuestOS(ctx, s, detected) })
 	m := NewMonitor(cfg.ProbeTimeout, probes)
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	s.storageMonitor.Store(storage)
@@ -1603,7 +1644,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			if errors.As(err, &diskError) {
 				return err
 			}
-			if resetErr := resetStorageClusterProtocol(s); resetErr != nil {
+			if resetErr := resetReportExtensions(s); resetErr != nil {
 				return persistenceError{resetErr}
 			}
 			log.Printf("agent report: %v", err)

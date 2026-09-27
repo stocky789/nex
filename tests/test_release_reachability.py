@@ -57,7 +57,7 @@ class ReleaseReachabilityTests(unittest.TestCase):
             for provider in ('.github', '.gitea'):
                 workflow = (ROOT / provider / 'workflows/release.yml').read_text()
                 step = workflow.split('      - name: Confirm the release is actually reachable\n', 1)[1]
-                script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+                script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
                 for unauthorized, missing_version, settling in ((False, False, 0), (True, False, 0), (False, True, 0), (False, False, 1)):
                     with self.subTest(provider=provider, unauthorized=unauthorized, missing_version=missing_version, settling=settling):
                         requests.clear()

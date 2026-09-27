@@ -3,6 +3,10 @@
 Date: 2026-09-19. Status: **Phase 4 acceptance closed 2026-09-20 for disposable virtual-lab
 scope.** S1–S6 are implemented in the working tree; S7 recorded reviewed native and browser
 evidence within that scope. Owner: project owner.
+**Final phase status, 2026-09-25:** project owner closed Phase 4 as finished. Later
+issues in this phase are bugs. The earlier lab evidence retains its stated limits;
+fencing remains a separate open safety/testing gate and this decision does not
+claim physical fence proof or automatic-recovery acceptance.
 Parent: [platform plan](2026-09-08-nex-platform.md), section
 [4. Multi-host pools and shared storage](2026-09-08-nex-platform.md#4-multi-host-pools-and-shared-storage)
 and [Pool authority transfer and master succession](2026-09-08-nex-platform.md#pool-authority-transfer-and-master-succession).

@@ -1,0 +1,33 @@
+{
+  "summary": "Attach only the offline and netinst ISOs and their SHA-256 sidecars to forge releases; publish required source, manifests and netinst packages through the website download tree.",
+  "paths": [
+    ".github/workflows/release.yml",
+    ".gitea/workflows/release.yml",
+    "tests/test_ci_security.py",
+    "tests/test_netinst_release.py",
+    "tests/test_release_reachability.py",
+    "docs/guide/publish-a-release.md",
+    "docs/plans/2026-09-24-net-installer.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "pages": ["docs/guide/publish-a-release.md"],
+    "reason": "The forge asset list, required website deployment and publication order change the maintainer's release steps."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Release CI and installer artifact hosting change no client-facing API, Controller operation, Core command or observed-state/result contract."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This changes artifact placement and release checks, not milestone status."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new pool or Controller state is stored."
+  },
+  "verification": {
+    "method": "The new four-asset and required-deployment regression checks failed before the workflow change and passed afterward. The release test discovery passed 44 tests; the CI-security and controller-package checks passed 15 tests; the documentation worktree check and repository privacy test passed. No forge release or ISO build was performed.",
+    "evidence": ["tests/test_ci_security.py", "tests/test_netinst_release.py", "tests/test_release_reachability.py", "docs/guide/publish-a-release.md"]
+  }
+}

@@ -736,6 +736,36 @@ func SaveClusterCorosyncAuthKey(s *Store, poolID string, key []byte) error {
 	return err
 }
 
+// ReadClusterCorosyncAuthKey never creates a key: a member may only install the
+// one delivered by its master in a verified authority replica.
+func ReadClusterCorosyncAuthKey(s *Store) ([]byte, error) {
+	if s == nil || s.State.PoolID == "" {
+		return nil, errors.New("invalid Corosync key scope")
+	}
+	clusterSecretMu.Lock()
+	defer clusterSecretMu.Unlock()
+	_, key, err := openClusterCorosyncAuthKey(s)
+	return key, err
+}
+
+func openClusterCorosyncAuthKey(s *Store) (string, []byte, error) {
+	dir := filepath.Join(s.dir, "storage-cluster")
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return "", nil, errors.New("cluster state directory must be private")
+	}
+	path := filepath.Join(dir, "corosync-authkey")
+	info, err = os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return "", nil, errors.New("Corosync key must be private")
+	}
+	key, err := os.ReadFile(path)
+	if err != nil || len(key) != 128 {
+		return "", nil, errors.New("Corosync key is invalid")
+	}
+	return path, key, nil
+}
+
 func clusterCorosyncAuthKey(s *Store, supplied []byte) ([]byte, error) {
 	dir := filepath.Join(s.dir, "storage-cluster")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -746,12 +776,12 @@ func clusterCorosyncAuthKey(s *Store, supplied []byte) ([]byte, error) {
 		return nil, errors.New("cluster state directory must be private")
 	}
 	path := filepath.Join(dir, "corosync-authkey")
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-			return nil, errors.New("Corosync key must be private")
+	if _, err := os.Lstat(path); err == nil {
+		_, key, err := openClusterCorosyncAuthKey(s)
+		if err != nil {
+			return nil, err
 		}
-		key, err := os.ReadFile(path)
-		if err != nil || len(key) != 128 || len(supplied) != 0 && !hmac.Equal(key, supplied) {
+		if len(supplied) != 0 && !hmac.Equal(key, supplied) {
 			return nil, errors.New("Corosync key is invalid")
 		}
 		return key, nil

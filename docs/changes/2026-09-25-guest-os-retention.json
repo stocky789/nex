@@ -1,0 +1,59 @@
+{
+  "summary": "Retain managed VM OS identity on Core and label historical guest information",
+  "paths": [
+    "internal/protocol/guest.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/guest_os.go",
+    "internal/agent/guest_os_test.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/probes.go",
+    "internal/agent/probes_test.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/agent/client.go",
+    "internal/agent/client_test.go",
+    "internal/agent/storage_protocol_test.go",
+    "internal/controller/appliance.go",
+    "internal/controller/identity.go",
+    "internal/controller/monitor.go",
+    "internal/controller/detected_os_test.go",
+    "web/src/managed.tsx",
+    "web/src/guest-os.tsx",
+    "web/src/guest-os.test.mjs",
+    "tests/test_api_contract.py",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/guide/guest-tools.md",
+    "docs/plans/2026-09-24-guest-os-icons.md",
+    "docs/BUG_LEDGER.md",
+    "docs/qa/2026-09-25-guest-os-retention.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Explain last-detected OS, configured fallback, QEMU Guest Agent recovery and mixed-version limits.",
+    "pages": ["docs/guide/guest-tools.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Add bounded DetectedOS records to peer and master inventory and client VM responses, gated by the detected-os-v1 Controller acknowledgement. Existing authentication and host ownership rules apply.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/peer-openapi.json", "docs/api/index.html", "docs/api/peer.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects OS display persistence without changing phase status or expanding VM power workflows.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Historical OS is pool resource information; Controller adds no private durable state.",
+    "record": "The pool master's pool-vms.json vms[VM ID].detected_os record, included in authority replication and adoption. Assigned hosts retain local_detected_os in their pool-vms.json for retry through master outages. A fresh Controller recovers the master's authenticated managed.detected_os inventory and exposes it on the existing VM API."
+  },
+  "verification": {
+    "method": "Executed focused Go persistence, mTLS peer publication/retry, fresh Controller adoption and capability checks; UI regression failed before and passed after, followed by UI suite/typecheck/build and simulated browser review. The QA report records final check results and unverified live-guest limits.",
+    "evidence": ["docs/qa/2026-09-25-guest-os-retention.md", "internal/agent/guest_os_test.go", "internal/controller/detected_os_test.go", "web/src/guest-os.test.mjs"]
+  }
+}

@@ -24,6 +24,24 @@ var (
 	fakeUptime time.Duration
 )
 
+func TestObservedManagementGateway(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "route")
+	routes := "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n" +
+		"eth0 00000000 010200C0 0003 0 0 100 00000000 0 0 0\n" +
+		"br0 00000000 020200C0 0003 0 0 100 00000080 0 0 0\n" +
+		"br0 00000000 010200C0 0001 0 0 100 00000000 0 0 0\n" +
+		"br0 00000000 010200C0 0003 0 0 100 00000000 0 0 0\n"
+	if err := os.WriteFile(path, []byte(routes), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := observedManagementGateway(path); got != "192.0.2.1" {
+		t.Fatalf("gateway = %q", got)
+	}
+	if got := observedManagementGateway(path + "-missing"); got != "" {
+		t.Fatalf("missing route = %q", got)
+	}
+}
+
 // recordCommands fakes every command the engine may run through PATH — the seam vlan_test.go
 // already uses — and returns a reader for the log of what was actually run. Tests assert on
 // both what ran and, for the management bridge, what never did.

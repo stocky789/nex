@@ -155,6 +155,19 @@ passed. These fixture changes do not alter the product images.
 
 ## Acceptance still required
 
+### Automated software-step wording, 2026-09-25
+
+The Nex GTK shell now shows **Installing system software** where Debian labels
+its automated package step **Select and install software**. The compiled C
+integration check exercised the exact title mapping and an unchanged partition
+label. The Debian builder compiled the updated GTK frontend, and a local test
+ISO (`nex-core-0.4.12-amd64-netinst-localfix3.iso`, SHA-256
+`34540063fb694a438381afb539ddc6f6794ce13a5a43f5a78dc8ff52cda9f5d7`)
+was remastered with that frontend. Its checksum and embedded boot files were
+checked, and its source preflight passed from the build host. The new label has
+not yet been visually inspected in a running
+installer or exercised through a complete installation from this image.
+
 ### Published 0.4.12 UEFI regression, 2026-09-25
 
 The published netinst ISO (`SHA-256 abe135e52c14ea5accd1fa2d8a6637f4f6cbfb5a59d69ded91ed7ac19fede5af`)

@@ -42,7 +42,12 @@ def main():
             route.fulfill(json={'object': 'vm' if path.startswith('vms/') else 'host', 'id': path.split('/')[1],
                 'range': 'live' if live else '10m', 'step_seconds': 1 if live else 10,
                 'start': (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat(),
-                'series': [{'key': 'cpu.vcpu.0', 'group': 'cpu', 'label': 'CPU', 'unit': 'percent', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [25, 50] * 60}]})
+                'series': [
+                    {'key': 'cpu.vcpu.0', 'group': 'cpu', 'label': 'CPU', 'unit': 'percent', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [25, 50] * 60},
+                    {'key': 'memory.host', 'group': 'memory', 'label': 'Host resident', 'unit': 'bytes', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [1024 ** 3] * 120},
+                    {'key': 'net.nic0.rx', 'group': 'network', 'label': 'NIC 0 rx', 'unit': 'bytes_per_second', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [125_000, 250_000] * 60},
+                    {'key': 'disk.vda.read', 'group': 'disk', 'label': 'vda read', 'unit': 'bytes_per_second', 'values': [None] * 120 if live and mode['stats'] == 'collecting' else [1024, 2048] * 60},
+                ]})
         elif path in ('vms/vm-demo/console', 'hosts/host-demo/console'):
             tickets.append(path)
             route.fulfill(status=502 if mode['failure'] else 200, json={'error': 'Simulated console unavailable'} if mode['failure'] else {'websocket': '/mock-console'})
@@ -173,6 +178,10 @@ def main():
             expect(page.locator('.stats-grid-live canvas')).to_have_count(0)
             mode['stats'] = 'ready'
             expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
+            page.locator('.stats-chart-network .u-over').hover(position={'x': 200, 'y': 60})
+            expect(page.locator('.stats-chart-network .stats-tooltip')).to_contain_text('Mbps')
+            page.locator('.stats-chart-disk .u-over').hover(position={'x': 200, 'y': 60})
+            expect(page.locator('.stats-chart-disk .stats-tooltip')).to_contain_text('KiB/s')
             page.wait_for_timeout(1200)
             assert len(live_requests) >= before + 2
             page.get_by_label('Stacked', exact=True).check()
@@ -191,14 +200,19 @@ def main():
             page.screenshot(path=str(args.evidence / 'mock-console-realtime.png'), full_page=True)
             assert stats_box['y'] >= screen_box['y'] + screen_box['height'] - 1, ('stats must follow console', screen_box, stats_box)
             chart_box = page.locator('.stats-grid-live figure').first.bounding_box()
+            second_box = page.locator('.stats-grid-live figure').nth(1).bounding_box()
             drawer_box = page.locator('.stats-realtime').bounding_box()
             assert chart_box['y'] + chart_box['height'] <= drawer_box['y'] + drawer_box['height'] + 1, 'desktop realtime chart or legend clipped'
+            assert chart_box['height'] >= 220 and abs(chart_box['y'] - second_box['y']) < 2, 'desktop realtime charts need a readable two-column row'
             assert screen_box['height'] >= 80, 'realtime hid the console'
             console_box = page.locator('section.console').bounding_box()
             assert screen_box['y'] + screen_box['height'] <= console_box['y'] + console_box['height'] + 1, 'console viewport clipped'
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.locator('.stats-grid-live canvas').first).to_be_visible()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'console stats overflow'
+            first_mobile = page.locator('.stats-grid-live figure').first.bounding_box()
+            second_mobile = page.locator('.stats-grid-live figure').nth(1).bounding_box()
+            assert second_mobile['y'] > first_mobile['y'] + 100, 'narrow console charts need one column'
             page.screenshot(path=str(args.evidence / 'mock-console-realtime-mobile.png'), full_page=True)
             drawer.click()
             before = len(live_requests)

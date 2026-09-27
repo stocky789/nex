@@ -246,13 +246,15 @@ func TestEnrollWithReplacementController(t *testing.T) {
 	s.State.Journal["op-old"] = JournalEntry{Status: "pending"}
 	s.State.StorageClusterProtocolReady = true
 	s.State.StorageClusterSessionMonitorProtocolReady = true
+	s.State.ISODownloadProgressReady = true
+	s.State.DetectedOSReady = true
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", host, ""); err == nil {
 		t.Fatal("replace-host accepted against a different Controller")
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "", ""); err != nil {
 		t.Fatal("switching Controller refused:", err)
 	}
-	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 || s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady {
+	if s.State.HostID != host || s.State.PoolID != pool || s.State.PoolName != poolName || s.State.Controller != second.URL || s.State.TrustPEM != secondTrust || s.State.KeyPEM == oldKey || len(s.State.Journal) != 0 || s.State.StorageClusterProtocolReady || s.State.StorageClusterSessionMonitorProtocolReady || s.State.ISODownloadProgressReady || s.State.DetectedOSReady {
 		t.Fatalf("replacement did not keep identity with a fresh credential: %+v", s.State)
 	}
 	if err := Enroll(context.Background(), s, second.URL, secondTrust, "token", "", ""); err == nil {

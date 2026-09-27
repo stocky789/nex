@@ -44,6 +44,13 @@ static int nex_question_stage(const char *tag)
     return -1;
 }
 
+static const char *nex_step_label(const char *text)
+{
+    if (text != NULL && !strcmp(text, "Select and install software"))
+        return "Installing system software";
+    return text;
+}
+
 static GtkWidget *nex_label(const char *text, const char *name)
 {
     GtkWidget *label = gtk_label_new(text);
@@ -274,7 +281,7 @@ static void nex_update_shell(struct frontend *fe)
 
     /* Set plain text before applying markup so installer titles cannot inject it. */
     gtk_label_set_text(GTK_LABEL(data->title), nex_has_failure(fe) ? "Installation needs attention" : complete ? "Nex Core installation complete" :
-        (fe->title ? fe->title : "Install Nex Core"));
+        (fe->title ? nex_step_label(fe->title) : "Install Nex Core"));
     for (i = 0; i < G_N_ELEMENTS(nex_stages); i++) {
         gchar *key = g_strdup_printf("nex-stage-%u", i);
         label = g_object_get_data(G_OBJECT(data->window), key);
@@ -416,7 +423,7 @@ void cdebconf_gtk_nex_progress(struct frontend *fe, const char *step,
     struct frontend_data *data = fe->data;
     cdebconf_gtk_nex_set_waiting(fe, TRUE);
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(data->window),
-        "nex-progress-step")), step ? step : "Installing Nex Core");
+        "nex-progress-step")), step ? nex_step_label(step) : "Installing Nex Core");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(data->window),
         "nex-progress-info")), info ? info : "");
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(g_object_get_data(G_OBJECT(data->window),

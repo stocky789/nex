@@ -12,7 +12,8 @@ pool, named after its hostname. [VM creation](create-virtual-machine.md) has sep
 prerequisites. Controller-driven [member join](join-a-pool.md),
 [planned master change, promotion and eject](pool-authority-and-recovery.md) are available as
 development workflows. Their native acceptance and recovery evidence remain incomplete, so they
-do not establish the Phase 4 release gate.
+do not establish physical fencing or automatic-recovery acceptance. Phase 4 is
+closed by project-owner decision; later defects are tracked as bugs.
 
 Use one Controller process with its SQLite database on local disk. It is authoritative only for
 sites, administrator accounts, audit history, enrollment tokens, the Controller CA and backup

@@ -886,6 +886,21 @@ func TestPoolEjectRefusesAHostThatStillOwnsSomething(t *testing.T) {
 	lab.requireSingleMaster("after the second refused eject", "master-1")
 }
 
+func TestPoolEjectRefusesThreeToTwoWhileWatchdogsFeed(t *testing.T) {
+	lab, _ := labArmedPool(t)
+	master := lab.host("master-1")
+	result := ExecutePoolTransfer(context.Background(), master, transferCommand("op-armed-eject", "eject", "member-2", "master-1"))
+	if result.Status != "failed" || !strings.Contains(result.Error, "stop feeding every host watchdog") {
+		t.Fatalf("armed three-to-two eject = %#v", result)
+	}
+	if row := memberRow(t, master, "member-2"); row.Status != "ready" {
+		t.Fatalf("armed member was removed: %#v", row)
+	}
+	if err := removePoolMembership(master, &poolTransferRecord{Action: "eject", Role: "source", Stage: "remove", TargetHostID: "member-2"}); err == nil || !strings.Contains(err.Error(), "stop feeding every host watchdog") {
+		t.Fatalf("durable removal ignored a feeding watchdog: %v", err)
+	}
+}
+
 // A host ejected while it was unreachable does not keep acting as a member when it returns:
 // the pool it followed tells it, over its own pinned connection, that its certificate is no
 // longer admitted at a newer membership generation.

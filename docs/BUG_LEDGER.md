@@ -9889,3 +9889,87 @@ Append resolved defects with their evidence and the approach to avoid.
   retry was not rerun.
 - Avoid: retaining a mutation request ID in one component while destroying
   the only copy of its uncertain body in another.
+## BUG-0666 — Enrolling a member cleared the pool Settings view
+
+- Date: 2026-09-25.
+- Symptom: after a second host enrolled, **Settings** showed **All pools** and asked
+  for a pool choice until the operator refreshed or selected a pool manually.
+- Root cause: the UI displayed a site's sole pool without saving or retaining that
+  choice. Enrollment introduced a second, temporary single-host pool; the next
+  inventory update then removed the implicit selection.
+- Fix: default an absent or removed pool choice to the first pool in the site's
+  inventory and save that choice before inventory can reorder. Keep **All pools**
+  as a separate explicit choice.
+- Regression: the runnable
+  `.cache/phase1-qa-venv/bin/python tests/integration/site_selector_browser.py --evidence .cache/site-selector-browser-scope-regression`
+  check failed on the original UI with **All pools** after the second pool appeared;
+  a second red run exposed a switch to the newly enrolled pool when it sorted first.
+  It passed seven reported groups after the fix. It also checks explicit **All
+  pools** and fallback when a selected pool disappears. The script had no entry
+  point before this change; the fix makes the existing **Verify searchable site
+  selection** step in both `.github/workflows/phase1.yml` and
+  `.gitea/workflows/phase1.yml` execute the check. See the
+  [browser report](qa/2026-09-25-default-pool-scope.md). No forge run is claimed.
+- Avoid: deriving a sole-pool selection only from the current pool count, or
+  removing the operator's explicit site-wide **All pools** view.
+
+## BUG-0667 — Hosts list showed loopback instead of management IP
+
+- Date: 2026-09-25.
+- Symptom: the Hosts page and host panel displayed `127.0.0.1` for enrolled hosts.
+- Root cause: the shared UI address helper took the first address from all reported NICs; Core reports `lo` before its management bridge `br0`.
+- Fix: display the reported IPv4 address on `br0`, or **—** when absent.
+- Regression: `node web/src/host-list.test.mjs` failed before the fix and passed after it with loopback first. `tests/integration/site_selector_browser.py` passed nine groups with a simulated Core report and a browser assertion for the list and panel. The forge Phase 1 UI job runs both checks on pushes and pull requests. See [browser evidence](qa/2026-09-25-host-management-ip.md). No forge run or live-host check is claimed.
+- Avoid: treating the first address on any NIC as the management address.
+
+## BUG-0668 — Two-host witness cluster stayed forming
+
+- Date: 2026-09-25. Status: two-host cluster formation repaired in an isolated lab and on the authorized original test hosts; physical fencing acceptance remains open.
+- Symptom: Core selected the Controller as witness but the pool stayed `forming` with qdevice status unavailable.
+- Root cause: Core omitted the `pool-witness-v1` capability; native CSR output had a preamble and `NEW CERTIFICATE REQUEST` label; a member ignored the verified witness replica while reading stale local membership; Corosync started without the shared authentication key; and Core requested short qdevice status that omitted TLS and vote fields.
+- Fix: advertise the capability, canonicalize the CSR, use signed replica witness settings on members, seal and deliver one durable Corosync key before native start with an explicit member receipt, and request verbose qdevice status with identity and CA verification.
+- Regression: the report, native CSR, sealed-key delivery and old-peer receipt, member witness and key ordering, and native verbose/identity tests failed before their respective fixes and passed afterward. Focused agent, vmhost and Controller tests and both Go builds passed. A disposable Debian 13 qnetd/NSS probe checked the credential chain; a separate isolated two-Core/Controller lab reproduced forming and, after a clean patched retest, reported two hosts plus a connected voting qdevice with 3/3 votes and Controller status **degraded**, armed 0/2. The authorized original test hosts then reported the same native quorum and Controller state after patched Core-local service restarts, while both VMs remained running. See [the test record](qa/2026-09-25-two-host-witness-registration.md). The forge Go suite includes these regressions on pushes and pull requests. No forge run, watchdog reset, or physical acceptance is claimed.
+- Avoid: testing only hand-written Controller reports and canonical CSRs; using local member join state instead of the signed witness replica; starting secure Corosync without the shared key; inferring qdevice health from its short native status.
+- Follow-up display: Core now reports the master's verified qdevice observation separately from watchdog arming. The UI shows **Witness · operating** when it votes and keeps **Watchdog cluster · degraded** with 0/2 armed. Focused Core and UI regressions cover forming/operating and absence. An isolated Chromium fixture exercised operating, forming, absent field, stale master, HTTP error and loading with inspected captures and no page errors. Witness placement does not determine whether a vote counts; no live deployment of this display follow-up is claimed.
+- Follow-up recovery: an isolated one-host-down/qnetd-loss test kept the survivor and its Controller VM running, but qnetd return left Corosync blocked by `WaitForAll` at 2/3 votes. A second isolated candidate run omitted `wait_for_all` only for the two-host witness cluster; after a controlled Corosync restart, qnetd return restored quorum in about nine seconds while the other host stayed off. A one-host service cold start with no qnetd remained inquorate. The renderer regression checks that two-host witness config omits `wait_for_all` while three-host watchdog config retains it. A config reload alone did not clear the old runtime flag; existing clusters need a planned Corosync restart. No physical reset or takeover is claimed.
+- Avoid for recovery: treating a connected qdevice vote as proof of native quorum, or assuming a Corosync config reload clears a runtime `WaitForAll` block.
+- Follow-up safety: an armed three-host pool could eject or drain into a two-host witness pool before SBD stopped feeding. The two-host arming branch withheld the teardown turn, and cluster reconciliation could apply the new config and `freeze` policy over an armed cluster. Core records a conservative feeding intent before it starts SBD, the master refuses new intent after a drain or fencing decision, eject and maintenance refuse two-host transitions while any watchdog feeds, removal rechecks before its durable write, and two-host config/policy refuse live feeds. Focused eject, drain, arming and cluster transition regressions run in the forge Go suite. A simulated transition is not physical watchdog proof.
+
+## BUG-0669 — URL ISO downloads had no progress bar
+
+- Date: 2026-09-25.
+- Symptom: the ISO library and Tasks showed only a running host task for URL downloads, while local uploads showed a byte progress bar.
+- Root cause: Core copied the HTTP response without reporting in-flight byte counts or the server's `Content-Length`; the existing meter measured only browser-to-Controller uploads.
+- Fix: Core journals bounded byte samples and reports active URL download progress after Controller acknowledgement. Controller validates and mirrors the host observation; Storage and Tasks show a percentage with a known total or an indeterminate bar with received bytes otherwise. Stale and terminal observations are not presented as live progress.
+- Regression: focused Core, agent and Controller Go tests cover known and unknown totals, interrupted and terminal cleanup, older Controller compatibility, report ownership and same-report terminal results. `web/src/managed.test.mjs` covers rendering and stale/terminal behavior. The simulated Chromium site-selector suite passed nine groups, including Storage and Tasks meters. The forge Go and Phase 1 UI suites include these checks on pushes and pull requests. See [progress evidence](qa/2026-09-25-iso-url-progress.md). No forge run or live public download is claimed.
+- Avoid: displaying a guessed percentage or making Controller drive the transfer to supply progress.
+
+## BUG-0670 — Network rates used byte labels and console live charts were compressed
+
+- Date: 2026-09-25.
+- Symptom: network charts and summary rows showed B/s, while the VM console placed four 100px-high live plots in one row on wide screens.
+- Root cause: shared byte formatting was used for network and disk samples; the live grid had no column cap and VM plots were fixed at 100px high.
+- Fix: format network byte samples as decimal bits per second only at display points; use taller plots in at most two columns, or one in a narrow drawer. Core sampling and the stats API remain bytes per second.
+- Regression: `node web/src/stats.test.mjs` checks Mbps/Gbps and tick conversion. The forge Phase 1 UI job already runs the updated simulated `console_controls_browser.py`, which checks network and disk tooltip units and desktop/mobile chart geometry. Local unit, typecheck, build and browser checks passed; see [browser evidence](qa/2026-09-25-network-rate-console-charts.md). No forge run or physical Core check is claimed.
+- Avoid: changing the Core wire unit for a presentation request or using binary byte tick spacing on bit-labelled axes.
+
+## BUG-0671 — VM OS identification disappeared when guest facts became unavailable
+
+- Date: 2026-09-25.
+- Symptom: a VM previously showing its distribution reverted to generic Linux after its
+  guest tools stopped answering; sleep was suspected, not established on the reported VM.
+- Root cause: Core's live guest cache intentionally drops unavailable facts, but no durable
+  OS identity existed and the UI silently substituted the configured guest family.
+- Fix: retain the successful OS name, ID and detection time in Core's pool VM record,
+  with durable assigned-host publication through master outages. A replacement Controller
+  reads the master report. UI keeps the saved icon/name with **(last detected)**; configured
+  family remains an explicit fallback. Live guest health and addresses are never restored
+  from historical identity. Negotiate the added field before sending it to Controller.
+- Regression: `node web/src/guest-os.test.mjs` failed before the UI change and passed after.
+  `go test ./internal/agent ./internal/controller -run 'TestDetectedOS|TestGuestProbe' -count=1`
+  covers durable retention, peer publication/retry, authentication, adoption, invalid input
+  and old-Controller negotiation; see [actual results and limits](qa/2026-09-25-guest-os-retention.md).
+  Existing forge Go and UI suites run these checks on pushes and pull requests; no workflow
+  expansion or forge run is claimed.
+- Avoid: caching pool identity only in Controller/browser, treating a saved OS as live agent
+  health, blaming SPICE for QEMU Guest Agent facts, or advising a reboot just to refresh a label.

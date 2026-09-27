@@ -13,6 +13,7 @@ export type Check = {
   last_success?: string;
   error?: string;
 };
+export type ISODownloadProgress = { operation_id: string; received_bytes: number; total_bytes?: number };
 export type Inventory = {
   observed_at: string;
   hostname: string;
@@ -26,6 +27,7 @@ export type Inventory = {
   uptime_seconds?: number;
   disks: { name: string; size_bytes: number }[];
   checks: Check[];
+  managed?: { iso_downloads?: ISODownloadProgress[] | null } | null;
 };
 export type Host = {
   id: string;

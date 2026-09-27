@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1337,13 +1339,14 @@ func ReadManagementNetworkStatus(dir string) (*ManagementNetworkStatus, error) {
 			return nil, nil
 		}
 		return &ManagementNetworkStatus{
-			Revision: 0, Stage: protocol.ManagementNetworkNone, Current: &current, ObservedAt: time.Now().UTC(),
+			Revision: 0, Stage: protocol.ManagementNetworkNone, Current: &current, ObservedGateway: observedManagementGateway("/proc/net/route"), ObservedAt: time.Now().UTC(),
 		}, nil
 	}
 	status := &ManagementNetworkStatus{
 		Revision: rec.Revision, Stage: rec.Stage, OperationID: rec.OperationID, WindowSeconds: rec.WindowSeconds,
 		Spec: &rec.Spec, Deadline: rec.Deadline, LastError: rec.Error, RequestedRollback: rec.RequestedRollback,
-		ObservedAt: time.Now().UTC(),
+		ObservedGateway: observedManagementGateway("/proc/net/route"),
+		ObservedAt:      time.Now().UTC(),
 	}
 	if hasCurrent {
 		status.Current = &current
@@ -1360,6 +1363,30 @@ func ReadManagementNetworkStatus(dir string) (*ManagementNetworkStatus, error) {
 		}
 	}
 	return status, nil
+}
+
+func observedManagementGateway(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 8 || fields[0] != managementBridge || fields[1] != "00000000" || fields[7] != "00000000" {
+			continue
+		}
+		flags, err := strconv.ParseUint(fields[3], 16, 16)
+		if err != nil || flags&3 != 3 {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[2], 16, 32)
+		if err == nil && value != 0 {
+			return netip.AddrFrom4([4]byte{byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24)}).String()
+		}
+	}
+	return ""
 }
 
 // readKernelBootID reads and validates the kernel boot identity shared by management-network

@@ -79,8 +79,8 @@ What this workflow is **not**, in this release:
    - **Management** — the radio that marks the one interface carrying management. Exactly one.
    - **Addressing** — *Not configured*, *DHCP* or *Static*.
    - **VLAN** — the management VLAN tag, or blank for untagged.
-   - **Address** — an IPv4 address with its prefix, for example `192.0.2.10/24`. Static only.
-   - **Gateway** — only on the management interface, and only inside its own subnet.
+   - **Address** — enter an IPv4 address with its prefix, for example `192.0.2.10/24`, for Static. With DHCP, the disabled box shows the host's currently reported address when available.
+   - **Gateway** — enter one only on the management interface, inside its own subnet, for Static. With DHCP, the disabled box shows the host's currently reported default gateway when available. An unreported value says *Not reported*; refresh after a lease change. The boxes do not set DHCP values.
 3. Under **Name servers and rollback**, enter **DNS servers** (IPv4, space- or comma-separated, at
    most eight) and the **Rollback window (minutes)**: a whole number from 2 to 30. Leave DNS blank
    for DHCP to use its normal resolver handling; Nex Core preserves the current resolver file until
@@ -296,6 +296,10 @@ captured on the earlier layout and still applies to the behaviour it describes.
   360 px captures were inspected, including the typed-hostname apply dialog, countdown and restored
   state. This covers operator-requested rollback only. Deadline expiry and reboot recovery remain
   separate native C7/C12 evidence, not part of the browser walkthrough.
+- **DHCP display check (2026-09-25).** A browser fixture using the actual panel and a simulated
+  fresh Core report showed the disabled address and gateway boxes populated, cleared them on a
+  failed report, and hid the form for a stale host. It did not obtain a physical DHCP lease or
+  exercise a full Controller/Core connection. See the [DHCP display QA note](../qa/2026-09-25-management-dhcp-display.md).
 - **The namespace test has never executed.** The check that would run real interface commands on
   dummy interfaces skips on every machine used so far, because `ifupdown` is not installed there.
   Final-candidate native evidence separately covers DHCP with no DNS override, operator rollback,
@@ -325,7 +329,8 @@ captured on the earlier layout and still applies to the behaviour it describes.
   same change with a different configuration being a conflict, crash windows before and after the
   file swap, and the refusals for a foreign, missing, symlinked or non-regular file. A cross-layer test drives stage → apply → confirm and
   stage → cancel through the real Controller HTTP handlers into the real Nex Core engine on a
-  scratch `/etc`. The UI is covered by server-rendered component tests only.
+  scratch `/etc`. The earlier UI behavior was covered by server-rendered component tests; the
+  DHCP display check above adds a narrow browser fixture.
 - Offline contract checks in `tests/test_api_contract.py` hold the two routes, their refusals, the
   command and the inventory projection to the implementation; see the
   [API reference](../API.md#staged-management-network-edits-getpost-apiv1hostsidnetwork).

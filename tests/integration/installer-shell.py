@@ -43,6 +43,8 @@ int main(int argc, char **argv) {
     assert_stage("partman-auto/select_disk", "Disk");
     assert_stage("base-installer/progress", "Install");
     assert(nex_question_stage("unknown/question") == -1);
+    assert(strcmp(nex_step_label("Select and install software"), "Installing system software") == 0);
+    assert(strcmp(nex_step_label("Partition disks"), "Partition disks") == 0);
     return 0;
 }
 '''

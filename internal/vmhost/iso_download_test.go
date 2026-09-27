@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -203,6 +204,69 @@ func TestURLDownloadPublicationAndRecovery(t *testing.T) {
 	}
 }
 
+func TestURLDownloadReportsLiveBytes(t *testing.T) {
+	data, m := managedTestISO()
+	m.URL, m.SizeBytes, m.SHA256 = "http://example.org/disc.iso", 0, ""
+	for _, known := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unknown-length", true: "known-length"}[known], func(t *testing.T) {
+			e := NewManaged(t.TempDir())
+			j := managedJournal{Command: protocol.Command{OperationID: "download", Kind: "iso-import", Media: &m}, Result: protocol.Result{OperationID: "download", Status: "pending"}, Stage: "receiving", MediaPath: filepath.Join(t.TempDir(), "disc.iso")}
+			if err := e.save(j); err != nil {
+				t.Fatal(err)
+			}
+			first, resume := make(chan struct{}), make(chan struct{}, 1)
+			defer close(resume)
+			client := testISOClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if known {
+					w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+				}
+				w.Write(data[:4096])
+				w.(http.Flusher).Flush()
+				close(first)
+				<-resume
+				w.Write(data[4096:])
+			})
+			inFlight.Lock()
+			inFlight.ids[j.Command.OperationID] = true
+			inFlight.Unlock()
+			defer func() { inFlight.Lock(); delete(inFlight.ids, j.Command.OperationID); inFlight.Unlock() }()
+			done := make(chan error, 1)
+			go func() { done <- e.downloadISO(context.Background(), &j, client, int64(len(data))) }()
+			<-first
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				state, _ := e.Applied(context.Background())
+				if len(state.ISODownloads) == 1 && state.ISODownloads[0].ReceivedBytes > 0 {
+					want := int64(0)
+					if known {
+						want = int64(len(data))
+					}
+					if state.ISODownloads[0].TotalBytes != want {
+						t.Fatalf("total: %+v", state.ISODownloads[0])
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("missing live progress: %+v", state.ISODownloads)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			resume <- struct{}{}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			j.Result.Status = "succeeded"
+			if err := e.save(j); err != nil {
+				t.Fatal(err)
+			}
+			state, _ := e.Applied(context.Background())
+			if len(state.ISODownloads) != 0 {
+				t.Fatalf("terminal progress: %+v", state.ISODownloads)
+			}
+		})
+	}
+}
+
 func TestURLDownloadFailuresNeverPublish(t *testing.T) {
 	data, m := managedTestISO()
 	expected := m
@@ -275,7 +339,7 @@ func TestURLDownloadFailuresNeverPublish(t *testing.T) {
 				t.Fatal(err)
 			}
 			applied, _ := e.Applied(context.Background())
-			if len(applied.Media) != 0 || len(applied.Outcomes) != 1 || applied.Outcomes[0].Status != "needs_attention" {
+			if len(applied.Media) != 0 || len(applied.ISODownloads) != 0 || len(applied.Outcomes) != 1 || applied.Outcomes[0].Status != "needs_attention" {
 				t.Fatalf("incomplete adoption: %+v", applied)
 			}
 			if _, err := os.Stat(j.MediaPath + ".partial"); !errors.Is(err, os.ErrNotExist) {

@@ -562,6 +562,14 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		if slices.Contains(v.Capabilities, protocol.BackupCapability) {
 			out.BackupSupport = &protocol.BackupSupport{Capability: protocol.BackupCapability}
 		}
+		if slices.Contains(v.Capabilities, protocol.DetectedOSCapability) {
+			supported := true
+			out.DetectedOS = &supported
+		}
+		if slices.Contains(v.Capabilities, protocol.ISODownloadProgressCapability) {
+			supported := true
+			out.ISODownloadProgress = &supported
+		}
 		repositoryCapability := protocol.StorageRepositoryCapability
 		// Reuse the established support capability handshake: a Core must not send
 		// ZFS-only inventory to a strict older Controller until this acknowledgement.
@@ -595,6 +603,14 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	// it; a host that advertises neither is never asked anything.
 	if v.Version == protocol.Version && (slices.Contains(v.Capabilities, protocol.PoolJoinCapability) || slices.Contains(v.Capabilities, protocol.PoolAuthorityTransferCapability)) {
 		out.PoolRequests = c.takePoolRequests(host)
+	}
+	if v.Sequence > seq && v.Inventory != nil && v.Inventory.Managed != nil {
+		known, filterErr := filterISODownloadProgress(tx, host, v.Inventory.Managed.ISODownloads, v.Results)
+		if filterErr != nil {
+			fail(w, filterErr.status, filterErr.message)
+			return
+		}
+		v.Inventory.Managed.ISODownloads = known
 	}
 	for _, res := range v.Results {
 		var status, kind string
@@ -660,6 +676,11 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		out.AcknowledgedResults = append(out.AcknowledgedResults, res.OperationID)
 	}
 	if v.Sequence > seq {
+		if v.Inventory != nil && v.Inventory.Managed != nil {
+			v.Inventory.Managed.ISODownloads = slices.DeleteFunc(v.Inventory.Managed.ISODownloads, func(progress protocol.ISODownloadProgress) bool {
+				return slices.ContainsFunc(v.Results, func(result protocol.Result) bool { return result.OperationID == progress.OperationID })
+			})
+		}
 		capabilities, _ := json.Marshal(v.Capabilities)
 		if _, err = tx.Exec("INSERT INTO host_capabilities VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET capabilities=excluded.capabilities", host, string(capabilities)); err != nil {
 			fail(w, 500, "capability storage failed")
@@ -751,7 +772,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			// Membership is retained only as the master's latest Core report so a
 			// replacement Controller can enroll a proven peer. Other managed state is
 			// projected into managed_resources and must not be duplicated in inventory.
-			if merged.Managed != nil && (merged.Managed.Membership != nil || merged.Managed.Join != nil || merged.Managed.Replica != nil || merged.Managed.Transfer != nil || merged.Managed.Authority != nil || merged.Managed.Promotion != nil || merged.Managed.Restricted != nil || len(merged.Managed.ZFSProvisions) != 0 || merged.Managed.PeerOrigin != "") {
+			if merged.Managed != nil && (merged.Managed.Membership != nil || merged.Managed.Join != nil || merged.Managed.Replica != nil || merged.Managed.Transfer != nil || merged.Managed.Authority != nil || merged.Managed.Promotion != nil || merged.Managed.Restricted != nil || len(merged.Managed.ZFSProvisions) != 0 || merged.Managed.PeerOrigin != "" || len(merged.Managed.ISODownloads) != 0 || len(merged.Managed.DetectedOS) != 0) {
 				// These are Core's master-journal outcomes, retained only as the latest
 				// host observation so the Controller can render per-host status. A fresh
 				// Controller re-adopts them from the next Core inventory report.
@@ -776,7 +797,8 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,
 					BackupCatalog: merged.Managed.BackupCatalog, BackupCatalogReported: merged.Managed.BackupCatalogReported,
 					BackupRuns: merged.Managed.BackupRuns, BackupRunsReported: merged.Managed.BackupRunsReported,
-					BackupPolicies: merged.Managed.BackupPolicies, BackupPoliciesReported: merged.Managed.BackupPoliciesReported}
+					BackupPolicies: merged.Managed.BackupPolicies, BackupPoliciesReported: merged.Managed.BackupPoliciesReported,
+					ISODownloads: merged.Managed.ISODownloads, DetectedOS: merged.Managed.DetectedOS}
 			} else {
 				stored.Managed = nil
 			}
@@ -888,6 +910,81 @@ func storageRepositoryCommand(cmd protocol.Command) bool {
 		return true
 	}
 	return cmd.Kind == "storage-register" && cmd.Storage != nil && cmd.Storage.StorageKind() != protocol.StorageKindLocal
+}
+
+type isoProgressFilterError struct {
+	status  int
+	message string
+}
+
+func (e *isoProgressFilterError) Error() string { return e.message }
+
+func isoDownloadProgressBelongs(host, operationID, owner, kind, status string, results []protocol.Result) bool {
+	if owner != host || kind != "iso-import" {
+		return false
+	}
+	if status == "dispatched" {
+		return true
+	}
+	if status != "succeeded" && status != "failed" && status != "needs_attention" {
+		return false
+	}
+	return slices.ContainsFunc(results, func(result protocol.Result) bool { return result.OperationID == operationID })
+}
+
+// filterISODownloadProgress keeps progress that belongs to this host's URL imports.
+// One batched lookup covers the report (capped at 16 entries) instead of one query per row.
+func filterISODownloadProgress(tx *sql.Tx, host string, progress []protocol.ISODownloadProgress, results []protocol.Result) ([]protocol.ISODownloadProgress, *isoProgressFilterError) {
+	if len(progress) == 0 {
+		return progress, nil
+	}
+	query := "SELECT o.id,o.host_id,o.kind,o.status,coalesce(r.command,'') FROM operations o LEFT JOIN managed_resources r ON r.operation_id=o.id WHERE o.id IN ("
+	args := make([]any, 0, len(progress))
+	for i, entry := range progress {
+		if i > 0 {
+			query += ","
+		}
+		query += "?"
+		args = append(args, entry.OperationID)
+	}
+	query += ")"
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, &isoProgressFilterError{status: 500, message: "ISO download operation lookup failed"}
+	}
+	defer rows.Close()
+	type row struct {
+		owner, kind, status, raw string
+	}
+	byID := map[string]row{}
+	for rows.Next() {
+		var id string
+		var r row
+		if rows.Scan(&id, &r.owner, &r.kind, &r.status, &r.raw) != nil {
+			return nil, &isoProgressFilterError{status: 500, message: "ISO download operation lookup failed"}
+		}
+		byID[id] = r
+	}
+	if rows.Err() != nil {
+		return nil, &isoProgressFilterError{status: 500, message: "ISO download operation lookup failed"}
+	}
+	known := progress[:0]
+	for _, entry := range progress {
+		r, ok := byID[entry.OperationID]
+		if !ok {
+			// Core may still be downloading an ISO started under a replaced Controller.
+			continue
+		}
+		if !isoDownloadProgressBelongs(host, entry.OperationID, r.owner, r.kind, r.status, results) {
+			return nil, &isoProgressFilterError{status: 400, message: "ISO download progress does not belong to an active host operation"}
+		}
+		var cmd protocol.Command
+		if json.Unmarshal([]byte(r.raw), &cmd) != nil || cmd.Media == nil || cmd.Media.URL == "" {
+			return nil, &isoProgressFilterError{status: 400, message: "ISO download progress requires a URL import"}
+		}
+		known = append(known, entry)
+	}
+	return known, nil
 }
 
 func transactionIdentity(tx *sql.Tx, r *http.Request, host string) bool {

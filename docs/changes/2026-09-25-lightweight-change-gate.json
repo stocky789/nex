@@ -1,0 +1,32 @@
+{
+  "summary": "Allow small local tweaks without full verification or standalone paperwork",
+  "paths": [
+    "AGENTS.md",
+    "docs/DOCUMENTATION.md",
+    "scripts/check_docs.py",
+    "tests/test_check_docs.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor process only; operator steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Documentation-gate tooling changes no client, Controller/Core, or host contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No product milestone or delivered capability changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Contributor process and checker behavior persist no product state."
+  },
+  "verification": {
+    "method": "The documentation checker tests passed (29 tests), the worktree gate and repository privacy check passed, and the wording received independent review.",
+    "evidence": ["tests/test_check_docs.py"]
+  }
+}

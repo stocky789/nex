@@ -112,6 +112,7 @@ export type FencePrerequisite = { name: string; state: "met" | "unmet" | "unknow
 export type FenceCluster = {
   state: "off" | "not_available" | "forming" | "arming" | "armed" | "degraded";
   detail?: string; armed: number; total: number; arming_host_id?: string;
+  witness?: { state: "operating" | "forming"; detail?: string };
 };
 export type FenceSummary = { ready: number; total: number; unready?: string[]; host_fencing: boolean; prerequisites?: FencePrerequisite[]; cluster?: FenceCluster | null };
 export type FenceReadiness = { ready: boolean; methods?: FenceMethod[] };

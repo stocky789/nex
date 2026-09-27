@@ -1,6 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 package protocol
 
+import (
+	"errors"
+	"strings"
+	"time"
+)
+
+// DetectedOS is the last successful guest OS observation retained by Core.
+// It is historical identity information, never evidence of guest health.
+type DetectedOS struct {
+	OS         string    `json:"os"`
+	OSID       string    `json:"os_id,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+func (v DetectedOS) Valid() error {
+	if strings.TrimSpace(v.OS) == "" || len(v.OS) > 4096 || len(v.OSID) > 200 || v.ObservedAt.IsZero() {
+		return errors.New("invalid detected OS")
+	}
+	return nil
+}
+
 // GuestInfo is what the host observed inside a running VM through its host-local
 // virtio channels. Facts come from the QEMU guest agent when it answers; channel
 // states come from the live libvirt definition. It is observation, never proof of

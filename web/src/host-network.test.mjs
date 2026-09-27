@@ -163,6 +163,18 @@ const currentOnly = panel({ view: {
 } });
 assert.match(currentOnly, /value="static"/);
 assert.match(currentOnly, /value="192\.0\.2\.10\/24"/);
+
+const dhcpView = {
+  ...view, state: "none",
+  management_network: {
+    revision: 0, stage: "none", observed_gateway: "192.0.2.1",
+    current: { interfaces: [{ name: "nex0", mac: nics[0].mac, mode: "dhcp", management: true }] },
+  },
+};
+const dhcpForm = panel({ view: dhcpView });
+assert.match(dhcpForm, /id="address-nex0"[^>]*disabled=""[^>]*value="192\.0\.2\.10\/24"/);
+assert.match(dhcpForm, /id="gateway-nex0"[^>]*disabled=""[^>]*value="192\.0\.2\.1"/);
+assert.doesNotMatch(panel({ view: dhcpView, error: "read failed" }), /id="gateway-nex0"[^>]*value="192\.0\.2\.1"/, "a failed report must not show the old lease as current");
 assert.match(currentOnly, /value="192\.0\.2\.1"/);
 assert.match(currentOnly, /id="host-network-dns"[^>]*value="192\.0\.2\.53 192\.0\.2\.54"/);
 

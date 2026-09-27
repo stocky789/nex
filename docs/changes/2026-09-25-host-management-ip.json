@@ -1,0 +1,35 @@
+{
+  "summary": "Show Nex Core's reported management IPv4 address in the Hosts list and panel",
+  "paths": [
+    "web/src/host-panel.tsx",
+    "web/src/host-list.test.mjs",
+    "tests/integration/site_selector_browser.py",
+    "docs/API.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/qa/2026-09-25-host-management-ip.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Hosts list and panel now show the reported management IPv4 address or an unknown marker.",
+    "pages": ["docs/guide/navigate-the-controller-console.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The Hosts view already receives NIC addresses from Core inventory through GET /api/v1/hosts; the reference clarifies how the view selects the management address. No Controller/Core or client API changes.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This corrects an existing Hosts display and changes no milestone status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The view selects an existing Core-reported address and persists nothing."
+  },
+  "verification": {
+    "method": "Run the host list regression, UI typecheck/build, and the simulated Chromium site-selector suite; inspect the Hosts capture.",
+    "evidence": ["web/src/host-list.test.mjs", "tests/integration/site_selector_browser.py", "docs/qa/2026-09-25-host-management-ip.md"]
+  }
+}

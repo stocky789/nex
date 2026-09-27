@@ -1,0 +1,40 @@
+{
+  "summary": "Reconcile the project and public roadmaps with bounded phase acceptance and current open gaps",
+  "paths": [
+    "README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Only project status and future work are clarified; operator steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The caller, Controller operation, Core command and observed result flows are unchanged; no client or Controller/Core API contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The public board now distinguishes bounded host-foundation evidence and names the published net installer defect, the mixed-uplink join gap and bounded automatic-promotion evidence.",
+    "pages": ["website/src/routes/roadmap/+page.svelte"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Status documentation creates no durable product state."
+  },
+  "verification": {
+    "method": "Compared the roadmap with the linked phase acceptance, installer, uplink-map and fencing records; ran the documentation and repository privacy checks.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-alpha1.md",
+      "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
+      "docs/qa/2026-09-23-phase3-placement-lab.md",
+      "docs/qa/2026-09-19-phase4-native-acceptance.md",
+      "docs/plans/2026-09-24-net-installer.md",
+      "docs/plans/2026-09-24-pool-vlan-host-uplink-maps.md",
+      "docs/plans/2026-09-22-two-host-pool-fencing.md"
+    ]
+  }
+}

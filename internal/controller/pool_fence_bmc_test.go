@@ -170,6 +170,8 @@ func TestHostFencingIsRelayedAndTheChecklistIsMirrored(t *testing.T) {
 	membership.Members[0].Generation = 2
 	membership.Members[0].Watchdog = &protocol.PoolHostWatchdog{Kind: protocol.PoolWatchdogSoftware, Driver: "softdog"}
 	membership.FenceSummary = &protocol.PoolFenceSummary{Ready: 0, Total: 1, Unready: []string{l.master.id}, HostFencing: true,
+		Cluster: &protocol.PoolFenceCluster{State: protocol.PoolClusterDegraded, Total: 2,
+			Witness: &protocol.PoolFenceWitness{State: "operating", Detail: "connected and voting"}},
 		Prerequisites: []protocol.PoolFencePrerequisite{
 			{Name: protocol.PoolFencePrerequisiteHosts, State: protocol.PoolFencePrerequisiteUnmet, Detail: "a watchdog needs three or more hosts"},
 			{Name: protocol.PoolFencePrerequisiteQuorum, State: protocol.PoolFencePrerequisiteUnknown, Detail: "this pool has no quorum service yet"},
@@ -200,6 +202,11 @@ func TestHostFencingIsRelayedAndTheChecklistIsMirrored(t *testing.T) {
 	}
 	if checklist, _ := fence["prerequisites"].([]any); len(checklist) != 2 {
 		t.Fatalf("Core's prerequisite checklist did not reach the client: %+v", fence["prerequisites"])
+	}
+	cluster, _ := fence["cluster"].(map[string]any)
+	witness, _ := cluster["witness"].(map[string]any)
+	if witness["state"] != "operating" {
+		t.Fatalf("Core's witness observation did not reach the client: %+v", cluster)
 	}
 	// The host's own watchdog report is mirrored on its row, verbatim.
 	row := rawMember(t, l.rawMembers(t), l.master.id)

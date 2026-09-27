@@ -143,6 +143,15 @@ func ExecutePoolMaintenance(s *Store, cmd protocol.Command) protocol.Result {
 		result.Error = "an ejected host has no maintenance state"
 		return result
 	}
+	if v.Enabled && !state.Membership.Members[index].Maintenance && state.Membership.Witness != nil && readyPoolMemberCount(state.Membership) == 3 {
+		for _, member := range state.Membership.Members {
+			if poolWatchdogFeeding(member) {
+				unlock()
+				result.Error = "stop every host watchdog before draining a three-host pool to its two-host witness"
+				return result
+			}
+		}
+	}
 	changed := false
 	if state.Membership.Members[index].Maintenance != v.Enabled {
 		state.Membership.Members[index].Maintenance = v.Enabled

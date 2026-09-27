@@ -325,7 +325,9 @@ type guestObservation struct {
 
 // guestProbe observes the console channels and guest agent of every running VM. It is
 // separate from the libvirt probe so a slow guest never hides VM power states.
-func guestProbe() Probe {
+func guestProbe() Probe { return recordingGuestProbe(nil) }
+
+func recordingGuestProbe(record func(context.Context, map[string]protocol.DetectedOS)) Probe {
 	// ponytail: facts are cached per VM in memory; a VM that leaves the running list is dropped.
 	type cached struct {
 		at    time.Time
@@ -372,12 +374,21 @@ func guestProbe() Probe {
 			due = append(due, len(out)-1)
 		}
 		sort.SliceStable(due, func(i, j int) bool { return cache[out[due[i]].VMID].at.Before(cache[out[due[j]].VMID].at) })
+		detected := map[string]protocol.DetectedOS{}
 		for _, i := range due {
 			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < guestAgentBudget {
 				break // asked on a later tick; the VM stays unresponsive until then
 			}
 			vmhost.GuestFacts(ctx, out[i].VMID, out[i].Guest)
 			cache[out[i].VMID] = cached{time.Now(), out[i].Guest}
+			g := out[i].Guest
+			facts := protocol.DetectedOS{OS: g.OS, OSID: g.OSID, ObservedAt: time.Now().UTC()}
+			if g.Agent == "connected" && facts.Valid() == nil {
+				detected[out[i].VMID] = facts
+			}
+		}
+		if record != nil && len(detected) != 0 {
+			record(ctx, detected)
 		}
 		for id := range cache {
 			if !seen[id] {

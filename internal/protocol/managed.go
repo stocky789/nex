@@ -97,6 +97,13 @@ type ManagedOutcome struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// ISODownloadProgress is a live Core observation, absent once the import settles.
+type ISODownloadProgress struct {
+	OperationID   string `json:"operation_id"`
+	ReceivedBytes int64  `json:"received_bytes"`
+	TotalBytes    int64  `json:"total_bytes,omitempty"`
+}
+
 type StorageRegistration struct {
 	ID          string `json:"id"`
 	PoolID      string `json:"pool_id"`

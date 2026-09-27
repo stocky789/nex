@@ -64,8 +64,11 @@ type ManagementNetworkStatus struct {
 	// Spec: Spec is the staged, applied or last change record; Current is parsed from disk so
 	// a Controller can show the live addressing before any change has been staged. Absent when
 	// the files are missing or were not written by Nex.
-	Current  *ManagementNetworkSpec `json:"current,omitempty"`
-	Deadline time.Time              `json:"deadline,omitempty"`
+	Current *ManagementNetworkSpec `json:"current,omitempty"`
+	// ObservedGateway is the live default IPv4 gateway on br0, including a DHCP lease.
+	// It is observation only and must not be sent back in a configuration spec.
+	ObservedGateway string    `json:"observed_gateway,omitempty"`
+	Deadline        time.Time `json:"deadline,omitempty"`
 	// WindowSeconds is the rollback window the operator chose when the change was staged. It
 	// is reported because "how long will I have" must survive a reload: the deadline only
 	// exists once the change is applied, and the default is not the operator's choice.

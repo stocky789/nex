@@ -15,7 +15,17 @@ const stubbed = code
   .replace('from "./ui"', 'from "data:text/javascript,export const About=()=>null;export const AccessLights=()=>null;export const Badge=()=>null;export const MiniBar=()=>null;export const Section=()=>null;export const badgeTone=()=>\'neutral\';export const size=(b)=>b+\' B\';"')
   .replace('from "./labels"', 'from "data:text/javascript,export const relativeTime=()=>\'\';"');
 writeFileSync(file, stubbed);
-const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText, storageScope, storageHostAccess } = await import(`file://${file}`);
+const { zfsPoolSummary, zfsScanProgress, zfsSizeBytes, storageServesData, storageUsable, storageSource, storageChecked, storageLifecycleReady, storageOwnerFresh, storageObservationFresh, clusterStatusView, clusterSetupAvailable, registrationDiscardable, discardConfirmText, storageScope, storageHostAccess, defaultLocalStorage } = await import(`file://${file}`);
+
+assert.equal(defaultLocalStorage({ kind: "local", path: "/var/lib/libvirt/images", name: "Renamed by operator" }), true);
+assert.equal(defaultLocalStorage({ path: "/var/lib/libvirt/images", name: "ISO" }), true, "legacy default registration");
+assert.equal(defaultLocalStorage({ kind: "local", path: "/srv/images", name: "Local storage" }), false);
+assert.equal(defaultLocalStorage({ kind: "nfs", path: "/var/lib/libvirt/images" }), false);
+assert.match(src, /disabled=\{[^}]*defaultLocalStorage\(s\)\}/);
+assert.match(src, /Default host storage cannot be detached/);
+assert.match(src, /Host default; cannot detach/);
+assert.match(src, /lockLocalPath=\{Boolean\(edit && defaultLocalStorage\(edit\)\)\}/);
+assert.match(src, /path: edit && defaultLocalStorage\(edit\) \? edit\.path : draft\.path/);
 
 // D1: only a registration the pool master refused is a discardable Controller request record.
 // A queued one has no id to address and is still the host's business; a succeeded one is a
@@ -33,7 +43,7 @@ assert.match(discardConfirmText("network", "guests"), /removes only Nex Controll
 assert.match(src, /await api\(`storage\/\$\{encodeURIComponent\(s\.id\)\}`, "DELETE"\);/);
 assert.match(src, /catch \(e\) \{ setError\(\(e as Error\)\.message\); \}/);
 // A failed row offers the discard instead of the repository actions, never beside them.
-assert.match(src, /registrationDiscardable\(s\) \? <button type="button"[\s\S]*?>Discard failed registration<\/button> : <>[\s\S]*?>Recheck<\/button>[\s\S]*?>Detach<\/button><\/>\}/);
+assert.match(src, /registrationDiscardable\(s\) \? <button type="button"[\s\S]*?>Discard failed registration<\/button> : <>[\s\S]*?>Recheck<\/button>[\s\S]*?>Detach<\/button>[\s\S]*?<\/>\}/);
 
 // Scope never calls a local disk shared: only NFS, SMB and clustered GFS2 iSCSI are.
 assert.equal(storageScope({ kind: "nfs" }), "Shared");

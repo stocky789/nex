@@ -45,6 +45,13 @@ def acceptance(url, evidence):
     assets = {name: hashlib.sha256((ROOT / 'web/dist' / name).read_bytes()).hexdigest()
               for name in ('app.js', 'app.css')}
     data = inventory(500)
+    data['hosts'][0]['inventory'] = {'hostname': 'host-000', 'cpu_model': 'Example CPU', 'cpu_count': 8,
+        'memory_bytes': 8 * 1024 ** 3, 'virtualization': ['kvm'], 'os_version': 'Nex Core 0.4.13', 'agent_version': '0.4.13',
+        'disks': [], 'checks': [], 'nics': [
+        {'name': 'lo', 'addresses': ['127.0.0.1/8', '::1/128']},
+        {'name': 'eno1', 'kind': 'physical', 'mac': '02:00:5e:00:53:01', 'addresses': [], 'state': 'up'},
+        {'name': 'br0', 'addresses': ['fe80::1/64', '192.0.2.10/24']},
+    ]}
     update_status = {'package': 'nex-controller', 'installed_version': '1.0', 'available_version': '1.1',
                      'update_available': True, 'repo_url': 'https://updates.example.invalid'}
     with sync_playwright() as p:
@@ -71,6 +78,10 @@ def acceptance(url, evidence):
                 route.fulfill(status=409, json={'error': 'already enrolled', 'host_id': 'host-enrolled'})
             elif path == 'updates' and route.request.method == 'GET':
                 route.fulfill(json=update_status)
+            elif path == 'storage/cluster' and route.request.method == 'GET':
+                route.fulfill(json={'status': 'succeeded', 'pool_id': 'pool-000', 'operations': []})
+            elif path == 'storage/credentials' and route.request.method == 'GET':
+                route.fulfill(json=[])
             elif path == 'updates/apply' and route.request.method == 'POST':
                 update_status.update(phase='failed', error='fixture apt failure')
                 route.fulfill(status=202, json={})
@@ -88,7 +99,8 @@ def acceptance(url, evidence):
                     'master_connection': 'fresh',
                     'generation': 1,
                     'authoritative': True,
-                    'members': [{'host_id': host_id, 'status': 'active', 'maintenance': False}],
+                    'members': [{'host_id': host_id, 'name': host_id, 'role': 'master',
+                                 'connection': 'fresh', 'status': 'active', 'maintenance': False}],
                 })
             elif route.request.method == 'GET' and path.endswith('/stats'):
                 # Lists and Overview read each online host's usage history; the fixture has none.
@@ -145,6 +157,39 @@ def acceptance(url, evidence):
         expect(menu).not_to_have_attribute('open', '')
         listed(0)
         capture('desktop-500-sites')
+        page.goto(url + '/#/hosts')
+        expect(page.locator('table.list tbody tr')).to_contain_text('192.0.2.10')
+        expect(page.locator('table.list tbody tr')).not_to_contain_text('127.0.0.1')
+        page.get_by_role('link', name='host-000', exact=True).click()
+        expect(page.get_by_role('region', name='host-000')).to_contain_text('192.0.2.10')
+        capture('host-management-ip')
+        passed('Hosts list and panel show the reported management IPv4 address, ignoring loopback and IPv6 link-local addresses')
+        data['hosts'][0]['inventory']['managed'] = {'iso_downloads': [{'operation_id': 'iso-task', 'received_bytes': 50_000_000, 'total_bytes': 100_000_000}]}
+        data['media'].append({'id': 'iso-1', 'pool_id': 'pool-000', 'host_id': 'host-000', 'storage_id': 'storage-1',
+                              'name': 'guest.iso', 'operation_id': 'iso-task', 'status': 'dispatched', 'size_bytes': 0, 'sha256': ''})
+        data['operations'].append({'id': 'iso-task', 'host_id': 'host-000', 'kind': 'iso-import', 'request_id': 'iso-request',
+                                   'status': 'dispatched', 'actor': 'operator', 'created_at': '2026-09-25T00:00:00Z', 'updated_at': '2026-09-25T00:00:00Z'})
+        page.goto(url + '/#/storage')
+        page.reload()
+        expect(page.get_by_role('progressbar', name='Download progress for guest.iso')).to_have_attribute('value', '50')
+        capture('iso-url-download-progress')
+        page.goto(url + '/#/tasks')
+        expect(page.get_by_role('progressbar', name='Download progress for guest.iso')).to_have_attribute('value', '50')
+        capture('iso-url-download-task')
+        data['hosts'][0]['inventory']['managed']['iso_downloads'][0]['total_bytes'] = 0
+        page.reload()
+        expect(page.get_by_role('progressbar', name='Download progress for guest.iso')).not_to_have_attribute('value', re.compile('.+'))
+        expect(page.get_by_text('size unknown')).to_be_visible()
+        data['hosts'][0]['connection'] = 'stale'
+        page.reload()
+        expect(page.get_by_role('progressbar', name='Download progress for guest.iso')).to_have_count(0)
+        passed('ISO URL download shows known and unknown size progress in Storage and Tasks, but no live meter for a stale host')
+        data['hosts'][0]['connection'] = 'fresh'
+        data['hosts'][0]['inventory'].pop('managed')
+        data['media'].clear()
+        data['operations'].clear()
+        page.goto(url + '/#/vms')
+        page.reload()
         open_menu()
         expect(items.get_by_role('button', name=re.compile(r' · all pools$'))).to_have_count(500)
         expect(items.locator('button.indent')).to_have_count(500)
@@ -219,6 +264,7 @@ def acceptance(url, evidence):
         # to enter a fresh host's address, so an empty dialog must say what it is for, offer no
         # address field, and lead to the site's Add host form.
         page.goto(url + '/#/settings/members')
+        selected(55)
         members = page.get_by_role('region', name='Members', exact=True)
         members.get_by_role('button', name='Add host to pool', exact=True).first.click()
         dialog = page.get_by_role('dialog', name='Add host to pool', exact=True)
@@ -260,3 +306,50 @@ def acceptance(url, evidence):
         expect(dialog).to_have_count(0)
         passed('Choosing a host prefills its reported address and enables the confirm button; a pasted origin is refused and an empty address disables it')
 
+        # Enrolling a member first creates its own pool. The original implicit selection must
+        # survive even when the new pool sorts first in the next inventory report.
+        page.evaluate("localStorage.removeItem('nex.scope')")
+        page.goto(url + '/#/settings/overview')
+        page.reload()
+        selected(0)
+        data['pools'].insert(0, {'id': 'pool-new', 'site_id': 'site-000', 'name': 'A Pool', 'master_host_id': 'host-new'})
+        data['hosts'].append({'id': 'host-new', 'pool_id': 'pool-new', 'hostname': 'host-new',
+                              'revoked': False, 'connection': 'fresh', 'last_seen': None, 'inventory': None})
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        open_menu()
+        expect(items.get_by_role('button', name='A Pool', exact=True)).to_be_visible()
+        page.keyboard.press('Escape')
+        selected(0)
+        expect(page.get_by_role('region', name='Members', exact=True)).to_be_visible()
+        capture('first-pool-after-enrollment')
+        pick('Site 000 · all pools')
+        expect(scope).to_have_accessible_name('Scope: Site 000, all pools. Change scope')
+        expect(scope).to_contain_text('2 hosts')
+        page.reload()
+        expect(scope).to_have_accessible_name('Scope: Site 000, all pools. Change scope')
+        pick('A Pool')
+        expect(scope).to_have_accessible_name('Scope: Site 000, A Pool. Change scope')
+        data['pools'][:] = [pool for pool in data['pools'] if pool['id'] != 'pool-new']
+        data['hosts'][:] = [host for host in data['hosts'] if host['id'] != 'host-new']
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        open_menu()
+        expect(items.get_by_role('button', name='A Pool', exact=True)).to_have_count(0)
+        page.keyboard.press('Escape')
+        selected(0)
+        passed('Enrollment retains the original pool when a new pool sorts first, explicit All pools remains available, and a removed pool falls back to the first pool')
+        assert not errors, f'Browser page errors: {errors}'
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--evidence', type=Path, default=ROOT / '.cache/site-selector-browser')
+    args = parser.parse_args()
+    args.evidence.mkdir(parents=True, exist_ok=True)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=str(ROOT / 'web/dist')))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        acceptance(f'http://127.0.0.1:{server.server_port}', args.evidence)
+    finally:
+        server.shutdown()
+        server.server_close()

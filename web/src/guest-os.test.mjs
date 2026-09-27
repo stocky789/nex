@@ -75,9 +75,32 @@ for (const id of [undefined, "unknown", "__proto__", "../../private", "https://e
 assert.match(render({ spec: { guest_os: "linux" } }), /src="\/guest-os\/linux.svg"/);
 assert.match(render({ spec: { guest_os: "linux" } }), /Linux/);
 assert.doesNotMatch(render({ guest: { os: "FreeBSD" }, spec: { guest_os: "linux" } }), /<img/);
-assert.match(render({}), /—/);
+assert.match(render({}), /OS unavailable/);
+// Losing live facts must not present the configured family as a detected OS.
+for (const guest of [undefined, { agent: "disconnected" }, { agent: "unresponsive" }]) {
+  const html = render({ guest, spec: { guest_os: "linux" } });
+  assert.match(html, /Linux \(configured\)/);
+  assert.match(html, /Detected OS unavailable/);
+}
+const detected = render({ guest: { os: "Debian GNU/Linux 13", os_id: "debian" }, spec: { guest_os: "linux" } });
+assert.match(detected, /Debian GNU\/Linux 13/);
+assert.doesNotMatch(detected, /\(configured\)/);
 assert.match(render({ guest: { os: "<script>" } }), /&lt;script&gt;/);
 console.log("guest OS icons: local assets, canonical IDs, generic fallback and escaped labels passed");
 
 assert.match(render({ guest: { os_id: "Deepin", os: "deepin" } }), /deepin.ico/);
 assert.match(render({ spec: { guest_os: "windows" } }), /windows.svg/);
+
+const saved = { os: "Debian GNU/Linux 13", os_id: "debian", observed_at: "2026-09-25T01:02:03Z" };
+for (const state of ["running", "pmsuspended", "shut off", "unknown"]) {
+  const html = render({ state, detected_os: saved, spec: { guest_os: "linux" } });
+  assert.match(html, /Debian GNU\/Linux 13 \(last detected\)/);
+  assert.match(html, /debian.svg/);
+  assert.match(html, /2026-09-25T01:02:03Z/);
+  assert.doesNotMatch(html, /Linux \(configured\)/);
+}
+// A reinstall replaces both the old name and icon; never borrow the old ID.
+const replaced = render({ guest: { os: "FreeBSD" }, detected_os: saved });
+assert.match(replaced, /FreeBSD/);
+assert.doesNotMatch(replaced, /Debian|debian.svg|last detected/);
+assert.match(render({ detected_os: { ...saved, os: "<script>", os_id: "../../private" } }), /&lt;script&gt; \(last detected\)/);

@@ -15,7 +15,7 @@ import { Activity, Badge, Banner, Meter, Panel, Sparkline, date } from "./ui";
 import { Icon } from "./icons";
 import "./hosts.css";
 
-export const addresses = (host: Host) => host.inventory?.nics?.flatMap(n => n.addresses || []).map(a => a.replace(/\/\d+$/, "")) || [];
+export const addresses = (host: Host) => host.inventory?.nics?.find(n => n.name === "br0")?.addresses?.filter(a => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(a)).map(a => a.replace(/\/\d+$/, "")) || [];
 
 // Online / Stale / Revoked / Unknown: the host's own connection state in the words the console uses.
 // While the inventory cannot be reloaded the last report is not current, so it is Unknown.
@@ -53,7 +53,7 @@ export function hostSparkRows(history: StatsHistory) {
     { label: "CPU", series: 1 as const, values: usage.cpuValues, text: formatValue("percent", usage.cpu) },
     { label: "Memory", series: 2 as const, values: usage.memoryValues, text: formatValue("percent", usage.memory) },
     { label: "Disk", series: 3 as const, values: scaled(disk), text: formatValue("bytes_per_second", lastValue(disk)) },
-    { label: "Network", series: 4 as const, values: scaled(network), text: formatValue("bytes_per_second", lastValue(network)) },
+    { label: "Network", series: 4 as const, values: scaled(network), text: formatValue("network_rate", lastValue(network)) },
   ];
 }
 /** @deprecated use hostSparkRows */

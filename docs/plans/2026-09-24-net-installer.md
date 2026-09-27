@@ -78,6 +78,14 @@ modified packages and payloads need their own matching source and notices.
 
 ## Release availability limit
 
+A release now attaches only the offline and netinst ISOs and their SHA-256 sidecars
+to the forge. The matching source, compliance manifests and hash-pinned netinst
+packages remain in the versioned website download directory. Website deployment
+credentials are required; the workflow stops before publishing if they are absent.
+This changes release packaging only. API impact: none — the local installer download
+flow has no Controller/Core or client API. Guide impact: updated in the release guide.
+State owner: none — no pool or Controller state is added.
+
 A netinst ISO depends on its referenced release payloads remaining hosted. The existing
 release pruning policy and a replacement build of the same version can make an older
 ISO's pinned payloads unavailable. Content-addressed names prevent accepting different

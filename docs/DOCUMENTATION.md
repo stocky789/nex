@@ -1,9 +1,9 @@
 # Maintaining the Nex documentation
 
-Every change assesses documentation impact, and every implemented user workflow gets instructions
-and verification alongside its code, using the same version control, review and automated checks
-as implementation ([docs as code](https://www.writethedocs.org/guide/docs-as-code/)). The contributor
-rules behind this gate are in [AGENTS.md](../AGENTS.md#living-user-guide-and-documentation-gate).
+Material changes assess documentation impact, and implemented user workflows get instructions
+and verification alongside their code. Small local tweaks follow the lightweight rule in
+[AGENTS.md](../AGENTS.md#living-user-guide-and-documentation-gate); they need no standalone change
+record or QA report.
 
 ## Where information belongs
 
@@ -16,7 +16,7 @@ rules behind this gate are in [AGENTS.md](../AGENTS.md#living-user-guide-and-doc
 - `docs/BUG_LEDGER.md`: bug symptoms, root causes, fixes and regression evidence.
 - [Changelog](../CHANGELOG.md): short user-facing entries.
 - [Development](development.md): build and developer instructions, kept out of the operator guide.
-- `docs/changes/`: small review records tying changed files to guide/API applicability and evidence.
+- `docs/changes/`: review records for material changes, tying files to guide/API applicability and evidence.
 
 Keep one owner for each fact. Guide pages link to API details or evidence rather than copying
 endpoint tables and raw logs.
@@ -40,7 +40,7 @@ text and useful alt text. Avoid framework-specific components and a second websi
 future static site renders these same files. Keep versioned documentation with release tags; label
 development guidance.
 
-Walk through the page against the actual feature in a disposable environment, covering relevant
+For changes outside the lightweight rule, walk through the page against the actual feature in a disposable environment, covering relevant
 success, invalid-input, permission, failure and recovery paths; for GUI work use the browser and
 inspect screenshots. Record exact version or artifact digest, environment, actions, observed results
 and evidence inspected; identify simulated hardware or mocked services. Existing evidence may be
@@ -48,9 +48,9 @@ reused for a docs-only change once inspected and its limits stated. An automated
 not prove interactive UI steps were walked through. If verification cannot run, record why and
 leave that acceptance item open.
 
-## Record each change
+## Record material changes
 
-Create a uniquely named `docs/changes/YYYY-MM-DD-short-description.json` in the same change.
+For material changes, create a uniquely named `docs/changes/YYYY-MM-DD-short-description.json` in the same change.
 Assess all changed files, including tooling and docs. One record can cover a coherent batch;
 multiple records can cover a larger PR. Use exact repository-relative paths, not glob patterns.
 Change records themselves do not need recursive assessment records.
@@ -158,8 +158,8 @@ verification for new changes.
 Run from the repository root:
 
 ```sh
-# Run this BEFORE committing: the full gate, including changed-file coverage,
-# over uncommitted and untracked work.
+# Run this before committing to check guide structure and supplied records
+# against uncommitted and untracked work.
 python3 scripts/check_docs.py --worktree
 
 python3 scripts/check_docs.py --all
@@ -168,9 +168,9 @@ python3 -m unittest discover -s tests -p 'test_check_docs.py'
 python3 scripts/check_docs.py --base <full-base-sha> --head "$(git rev-parse HEAD)"
 ```
 
-`--worktree` runs CI's coverage check over `git status` and treats untracked records as added.
-`--all` checks guide structure/links and assessment schemas, not historical references or
-changed-file coverage. Range mode requires a clean checkout at the given head; ignored build/cache
+`--worktree` checks the guide and any records present in `git status`, treating untracked records
+as added. `--all` checks guide structure/links and record schemas, not historical references.
+Range mode requires a clean checkout at the given head; ignored build/cache
 artifacts do not block it. For a PR use its merge base; CI selects ranges automatically.
 
 Forge CI runs the checker and its tests on every push and pull request; on github.com only
@@ -179,7 +179,7 @@ branch push is compared with its merge base against the fetched default branch (
 ref fails); a first default-branch push assesses the full tree. The baseline assessment covers only
 pre-gate files.
 
-The gate checks changed-path coverage, reasons, evidence references, `state.owner` (with the
+The gate checks supplied records' reasons, evidence references, `state.owner` (with the
 closed-list rule for `controller`), applicable guide/API page changes, `roadmap.impact` from the
 cutoff onward, guide structure, local links and navigation. External URLs are not fetched and
 reference-style links are unsupported. It does not infer whether code needs an API change or judge
@@ -189,4 +189,6 @@ alongside it.
 Hosted enforcement needs Actions enabled, a compatible runner, and the documentation job as a
 required branch-protection check; inspect a real run on each host before claiming enforcement. On
 self-hosted Gitea, use isolated runners for untrusted PR code without production credentials.
-Independent review still checks the diff, impact decisions, guide accuracy and walkthrough evidence.
+The checker validates records that are supplied but cannot detect an omitted record for a material
+change. Independent review must decide whether a change qualifies for the lightweight rule and
+whether its guide and verification fit the actual behavior.

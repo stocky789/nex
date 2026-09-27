@@ -558,6 +558,10 @@ func poolReplicaKeyContext(poolID, memberHostID string, generation uint64) strin
 	return "nex pool authority replica v1\x00" + poolID + "\x00" + memberHostID + "\x00" + strconv.FormatUint(generation, 10)
 }
 
+func poolCorosyncKeyContext(poolID, memberHostID string, generation uint64) string {
+	return "nex pool corosync key v1\x00" + poolID + "\x00" + memberHostID + "\x00" + strconv.FormatUint(generation, 10)
+}
+
 // wrapPoolCAKey seals the pool CA private key for one member with a fresh ephemeral key.
 // Nothing here is ever logged: the caller carries the sealed bytes only.
 func wrapPoolCAKey(caKeyPEM, poolID, memberHostID string, generation uint64, member *ecdsa.PublicKey) (*protocol.PoolWrappedKey, error) {
@@ -841,6 +845,21 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 			return protocol.PoolReplicaAck{}, err
 		}
 	}
+	corosyncKeyReady := false
+	if _, want, _ := poolClusterIntent(s, replica.Membership); want {
+		if replica.CorosyncKeyWrapped == nil {
+			return protocol.PoolReplicaAck{}, errors.New("pool authority replica omitted the Corosync key")
+		}
+		key, openErr := openForMember(state.KeyPEM, *replica.CorosyncKeyWrapped,
+			poolCorosyncKeyContext(replica.PoolID, replica.MemberHostID, replica.Generation))
+		if openErr != nil {
+			return protocol.PoolReplicaAck{}, openErr
+		}
+		if err = SaveClusterCorosyncAuthKey(s, replica.PoolID, key); err != nil {
+			return protocol.PoolReplicaAck{}, err
+		}
+		corosyncKeyReady = true
+	}
 	record := poolReplicaRecord{Replica: replica, Digest: digest, ReceivedAt: time.Now().UTC(), Verified: true}
 	if err = savePoolReplica(s, record); err != nil {
 		return protocol.PoolReplicaAck{}, errors.New("pool authority replica could not be stored")
@@ -848,7 +867,7 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	delete(poolReplicaRefusals, s.dir)
 	poolReplicaPolls[s.dir] = record.ReceivedAt
 	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest,
-		SanlockHostGeneration: localSanlockGeneration, Verified: true}, nil
+		SanlockHostGeneration: localSanlockGeneration, CorosyncKeyReady: corosyncKeyReady, Verified: true}, nil
 }
 
 // PoolBackupPageHandler stages a signed replica's bounded backup page. Pages are
@@ -1214,12 +1233,19 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 	// master's own store and sealed separately for each member below. A member that may one
 	// day have to fence a host cannot be given the material after that host is gone.
 	material := poolFenceCredentialMaterial(s, replica.Membership)
+	var corosyncKey []byte
+	if _, want, _ := poolClusterIntent(s, replica.Membership); want {
+		corosyncKey, err = ClusterCorosyncAuthKey(s, replica.PoolID)
+		if err != nil {
+			return err
+		}
+	}
 	var failed error
 	for _, member := range replica.Membership.Members {
 		if member.HostID == s.State.HostID || member.Status != "ready" || member.PeerOrigin == "" {
 			continue
 		}
-		if err = pushPoolReplicaToMember(ctx, s, member, replica, digest, caKeyPEM, material, signer, timeout); err != nil {
+		if err = pushPoolReplicaToMember(ctx, s, member, replica, digest, caKeyPEM, corosyncKey, material, signer, timeout); err != nil {
 			recordPoolReplicaAck(s, member.HostID, protocol.PoolReplicaStatus{Error: poolReplicaError(err)})
 			if poolAuthorityReplicaAckRequired(member) {
 				failed = err
@@ -1353,7 +1379,7 @@ func markPoolStorageLeasePrepared(s *Store, generation uint64, digest string) er
 	return savePoolPeer(s, state)
 }
 
-func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.PoolMember, replica protocol.PoolAuthorityReplica, digest, caKeyPEM string, material map[string]map[string][]byte, signer *ecdsa.PrivateKey, timeout time.Duration) error {
+func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.PoolMember, replica protocol.PoolAuthorityReplica, digest, caKeyPEM string, corosyncKey []byte, material map[string]map[string][]byte, signer *ecdsa.PrivateKey, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
@@ -1402,6 +1428,13 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 	addressed.MemberHostID, addressed.CreatedAt = member.HostID, time.Now().UTC()
 	if addressed.CAKeyWrapped, err = wrapPoolCAKey(caKeyPEM, replica.PoolID, member.HostID, replica.Generation, key); err != nil {
 		return err
+	}
+	if len(corosyncKey) != 0 {
+		addressed.CorosyncKeyWrapped, err = sealForMember(corosyncKey,
+			poolCorosyncKeyContext(replica.PoolID, member.HostID, replica.Generation), key)
+		if err != nil {
+			return err
+		}
 	}
 	addressed.FenceCredentials = nil
 	for _, fenced := range replica.Membership.Members {
@@ -1507,6 +1540,9 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 			refusal = errors.New(ack.Error)
 		}
 		return refusal
+	}
+	if len(corosyncKey) != 0 && !ack.CorosyncKeyReady {
+		return errors.New("pool member acknowledged the replica without the Corosync key")
 	}
 	if replica.Membership.StorageLease != nil {
 		if ack.SanlockHostGeneration == 0 {

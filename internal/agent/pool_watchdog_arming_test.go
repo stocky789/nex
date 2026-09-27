@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,45 @@ import (
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 )
+
+func TestUnreadableSBDKeepsPendingFeedingIntent(t *testing.T) {
+	lab := newTransferLab(t, 2)
+	master := lab.host("master-1")
+	pending := protocol.PoolWatchdogArmed{Feeding: true, Detail: "this host is preparing to arm its watchdog"}
+	if err := reportPoolWatchdogArmed(context.Background(), master, pending); err != nil {
+		t.Fatal(err)
+	}
+	previous := localWatchdogArmed
+	localWatchdogArmed = func(context.Context) (bool, error) { return false, errors.New("sbd status unavailable") }
+	t.Cleanup(func() { localWatchdogArmed = previous })
+	if err := ReconcilePoolWatchdogArming(context.Background(), master); err == nil {
+		t.Fatal("unreadable SBD was reported as disarmed")
+	}
+	if row := memberRow(t, master, master.State.HostID).WatchdogArmed; row == nil || !row.Feeding {
+		t.Fatalf("pending feeding intent was cleared without observing SBD: %#v", row)
+	}
+}
+
+func TestMasterRefusesNewFeedingIntentAfterMaintenance(t *testing.T) {
+	lab := newTransferLab(t, 2)
+	master := lab.host("master-1")
+	generation := memberRecord(t, master, "member-2").Generation
+	if result := ExecutePoolMaintenance(master, maintenanceCommand("master-1", "member-2", true, generation)); result.Status != "succeeded" {
+		t.Fatalf("maintenance = %#v", result)
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		err = applyPoolWatchdogArmedReport(master, &state, "member-1", protocol.PoolWatchdogArmed{Feeding: true, Detail: "this host is preparing to arm its watchdog"})
+	}
+	poolPeerMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "no longer permits") {
+		t.Fatalf("stale member was permitted to start feeding after drain: %v", err)
+	}
+	if row := memberRow(t, master, "member-1").WatchdogArmed; row != nil && row.Feeding {
+		t.Fatalf("refused arming intent changed the pool record: %#v", row)
+	}
+}
 
 // labArming stands in for sbd on every host: one armed flag per host, and a record of every
 // arm and disarm, so a test can assert that a host was never asked to do either.

@@ -259,12 +259,7 @@ def name_status(output):
 
 
 def worktree_paths(root):
-    """Uncommitted and untracked paths, so the same gate can run before committing.
-
-    CI can only check a pushed range, which is far too late to be useful: the first
-    signal that a change lacks its assessment is a red build. This runs the identical
-    coverage check against work in progress.
-    """
+    """Uncommitted and untracked paths for checking changed guide pages and records."""
     output = git(root, 'status', '--porcelain', '-z', '--untracked-files=all',
                  '--no-renames').decode()
     changed, added = set(), set()
@@ -284,21 +279,16 @@ def check(root, changed=None, added=None):
     record_paths = set() if changed is None else {p for p in changed if re.fullmatch(r'docs/changes/[^/]+\.json', p)}
     records = sorted((root / 'docs/changes').glob('*.json')) if changed is None else [
         root / p for p in sorted(record_paths) if (root / p).is_file()]
-    covered = set()
     for record in records:
         relative = record.relative_to(root).as_posix()
         # added=None means the caller could not tell new records from edited ones.
         # Treat every record as new, so an unknown caller gets the strict check.
-        covered |= check_record(root, record, changed, new=added is None or relative in added)
-    if changed is not None:
-        missing = changed - record_paths - covered
-        if missing:
-            raise ValueError('changed paths missing documentation assessment: ' + ', '.join(sorted(missing)))
+        check_record(root, record, changed, new=added is None or relative in added)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--all', action='store_true', help='validate current tree; does not check change coverage')
+    parser.add_argument('--all', action='store_true', help='validate current guide and records')
     parser.add_argument('--worktree', action='store_true',
                         help='check uncommitted and untracked work; run this before committing')
     parser.add_argument('--base')
@@ -326,12 +316,12 @@ def main():
         print(f'Documentation check failed: {error}', file=sys.stderr)
         return 1
     if args.all:
-        print('Documentation structure passed; historical references not resolved and diff coverage NOT checked (--all).')
+        print('Documentation structure passed; historical references not resolved (--all).')
     elif not changed:
         print('No uncommitted or untracked changes to assess.')
     else:
         scope = 'uncommitted' if args.worktree else 'changed'
-        print(f'Documentation structure and impact records passed for {len(changed)} {scope} paths; '
+        print(f'Documentation structure and supplied impact records passed for {len(changed)} {scope} paths; '
               'semantic review still required.')
     return 0
 

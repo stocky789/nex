@@ -1,0 +1,41 @@
+{
+  "summary": "Record project-owner closure of Phases 0–4 with fencing acceptance still open",
+  "paths": [
+    "README.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/plans/2026-09-14-production-readiness-handoff.md",
+    "docs/plans/2026-09-19-phase4-closure.md",
+    "docs/guide/manage-controller.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Corrected the enrollment guide's Phase 4 status without changing operator steps.",
+    "pages": ["docs/guide/manage-controller.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "This status decision changes no client, Controller/Core or peer operation, command, observation or result contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "The public board marks Phases 0–4 closed by owner decision, makes Phase 5 next, and retains fencing as a separate open safety gate.",
+    "pages": ["website/src/routes/roadmap/+page.svelte"]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The decision changes documentation only and adds no durable Controller or Core state."
+  },
+  "verification": {
+    "method": "Reviewed historical phase evidence and the owner's closure decision, then ran the worktree documentation gate, repository privacy check and website type check. No phase or fencing tests were rerun.",
+    "evidence": [
+      "docs/qa/iso/2026-09-08-alpha1.md",
+      "docs/qa/2026-09-17-phase2-gate/CLOSED.md",
+      "docs/qa/2026-09-23-phase3-placement-lab.md",
+      "docs/qa/2026-09-19-phase4-native-acceptance.md",
+      "docs/plans/2026-09-22-automatic-host-fencing.md",
+      "docs/plans/2026-09-22-two-host-pool-fencing.md"
+    ]
+  }
+}

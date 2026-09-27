@@ -17,6 +17,7 @@ const moduleURL = bundleTestModule(new URL("./managed.tsx", import.meta.url), "m
 let pending = {};
 globalThis.sessionStorage = { getItem: () => JSON.stringify(pending), setItem() {} };
 const { ManagedVMs, VMDetails, VMDelete, InstallMedia, VMUsage, staleNote, deleteBlocker, formTab, isoNameFromURL, isoTransferNotice, mediaDiscardable, ejectInstallOffer, guestResizeText, guestCapabilities, networkHostAccess, sentence, GuestTools, powerActions, powerConfirmText, powerBlocker, stateText } = await import(moduleURL);
+const { Tasks, isoDownload } = await import(bundleTestModule(new URL("./rail-screens.tsx", import.meta.url), "rail-screens", true));
 
 const props = {
   account: "operator", poolID: "pool-1", poolName: "pool", hosts: [], storage: [], networks: [],
@@ -105,6 +106,21 @@ assert.match(uploadOnLibrary, /to Controller/);
 assert.doesNotMatch(uploadOnLibrary, /Upload running · see Tasks/);
 assert.equal((uploadOnLibrary.match(/aria-label="ISO upload to Controller"/g) || []).length, 1, "form closed: progress under the ISO library");
 assert.match(railSource, /export function UploadProgress/);
+
+const downloading = { operation_id: "op-download", received_bytes: 50_000_000, total_bytes: 100_000_000 };
+const downloadHost = { id: "host-1", pool_id: "pool-1", connection: "fresh", inventory: { managed: { iso_downloads: [downloading] } } };
+const downloadMedia = { id: "iso-1", pool_id: "pool-1", host_id: "host-1", storage_id: "storage-1", name: "guest.iso", operation_id: "op-download", status: "dispatched", size_bytes: 0, sha256: "" };
+assert.deepEqual(isoDownload([downloadHost], "host-1", "op-download"), downloading);
+assert.equal(isoDownload([{ ...downloadHost, connection: "stale" }], "host-1", "op-download"), undefined, "stale bytes are not live progress");
+const downloadLibrary = renderToStaticMarkup(createElement(ManagedVMs, { ...props, tab: "Storage", hosts: [downloadHost], media: [downloadMedia] }));
+assert.match(downloadLibrary, /Download progress for guest\.iso/);
+assert.match(downloadLibrary, /value="50"/);
+const operation = { id: "op-download", host_id: "host-1", kind: "iso-import", request_id: "req-1", status: "dispatched", actor: "operator", updated_at: "2026-09-25T00:00:00Z" };
+const tasks = (host, op = operation) => renderToStaticMarkup(createElement(Tasks, { data: { ...props, hosts: [host], operations: [op], media: [downloadMedia], audit: [] }, upload: null, onCancelUpload() {} }));
+assert.match(tasks(downloadHost), /Download progress for guest\.iso/);
+assert.doesNotMatch(tasks({ ...downloadHost, connection: "stale" }), /Download progress for/);
+assert.doesNotMatch(tasks(downloadHost, { ...operation, status: "succeeded" }), /Download progress for/);
+assert.match(tasks({ ...downloadHost, inventory: { managed: { iso_downloads: [{ ...downloading, total_bytes: 0 }] } } }), /size unknown/);
 
 // BUG-0203: only an import that never became host-held media can be discarded. The confirmation
 // action uses the existing DELETE contract, reconciles an ambiguous response, then reloads.

@@ -159,13 +159,20 @@ history" instead of charts.
   series out.
 - Live refresh: every 5 s at 10 minutes and every 60 s at 24 hours, only while the tab is
   visible. Longer ranges refresh on demand.
-- Gaps are drawn as gaps. Units scale automatically (%, B/s → GiB/s, IOPS); a chart mixing byte rates and IOPS gets a
+- Gaps are drawn as gaps. Units scale automatically (%, network bps → Gbps, disk B/s → GiB/s, IOPS); a chart mixing byte rates and IOPS gets a
   second axis on full-size charts (compact realtime charts keep IOPS on an unlabelled scale so the
   time axis stays readable). Stacked CPU weights each vCPU/core by 1/N so the stack top is total
   CPU; hosts keep at most 64 per-core series.
+
 - States: connecting, host stale (last history still shown with a stale banner if already
   loaded), no data yet, capability missing, error with retry. Keyboard focus reaches the range
   picker and toggle. The app has no dark theme yet; series colors are CSS variables on `.stats`.
+
+Display correction, 2026-09-25: network chart axes, tooltips and summary rows show decimal
+bits per second, while Core continues to sample and return bytes per second. Console live charts
+use two columns with taller plots, or one column when the drawer is narrow. API impact: none —
+`GET /api/v1/{vms,hosts}/{id}/stats` and the Core stats query/response are unchanged. Guide
+impact: updated. State owner: none — the change only formats transient host-reported samples.
 
 ## Realtime drawer, owner request 2026-09-16
 

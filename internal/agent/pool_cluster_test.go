@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -12,6 +13,200 @@ import (
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 )
+
+func TestPoolClusterUsesVerifiedMemberReplicaForWitness(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
+	local := labMembership(t, member)
+	if local.Witness != nil || local.Members[1].PeerOrigin != "" {
+		t.Fatalf("test needs stale member membership: %#v", local)
+	}
+	ca, pin := witnessTestCA(t, "pool-witness")
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		state.Membership.Generation = 5
+		for i := range state.Membership.Members {
+			state.Membership.Members[i].Generation = 5
+		}
+		state.Membership.Witness = &protocol.PoolWitnessRecord{Kind: "controller", Address: "192.0.2.10:5403", CAPEM: ca, CASHA256: pin,
+			FencingGeneration: state.Membership.Generation, ClusterName: protocol.PoolWitnessClusterName(state.Membership.PoolID), CredentialsReady: true}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica, _, err := buildPoolAuthorityReplica(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica.Generation, replica.MemberHostID = 1, member.State.HostID
+	replica.WitnessCredentials = []protocol.PoolWrappedWitnessCredential{{HostID: member.State.HostID,
+		FencingGeneration: replica.Membership.Witness.FencingGeneration, Wrapped: &protocol.PoolWrappedKey{}}}
+	signer, err := poolCASigner(master)
+	if err == nil {
+		err = signPoolAuthorityReplica(signer, &replica)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := replica.ContentDigest()
+	if err == nil {
+		err = savePoolReplica(member, poolReplicaRecord{Replica: replica, Digest: digest, Verified: true})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousApply, previousReady, previousActivate, previousDeactivate := applyPoolClusterWithWitness, poolWitnessCredentialsReady, activatePoolWitness, deactivatePoolWitness
+	previousRead, previousMint, previousInstall := readPoolClusterAuthKey, mintPoolClusterAuthKey, installPoolClusterAuthKey
+	t.Cleanup(func() {
+		applyPoolClusterWithWitness, poolWitnessCredentialsReady, activatePoolWitness, deactivatePoolWitness = previousApply, previousReady, previousActivate, previousDeactivate
+		readPoolClusterAuthKey, mintPoolClusterAuthKey, installPoolClusterAuthKey = previousRead, previousMint, previousInstall
+	})
+	applied := false
+	installed := false
+	readPoolClusterAuthKey = func(*Store) ([]byte, error) { return make([]byte, 128), nil }
+	mintPoolClusterAuthKey = func(*Store, string) ([]byte, error) { return make([]byte, 128), nil }
+	installPoolClusterAuthKey = func(key []byte) error { installed = len(key) == 128; return nil }
+	applyPoolClusterWithWitness = func(_ context.Context, _, _ string, nodes []vmhost.PoolClusterNode, address string) (bool, error) {
+		applied = installed && len(nodes) == 2 && address == "192.0.2.10:5403"
+		return true, nil
+	}
+	poolWitnessCredentialsReady = func(context.Context, string, string, protocol.PoolWitnessRecord) bool { return true }
+	activatePoolWitness = func(context.Context, string, string, protocol.PoolWitnessRecord) error { return nil }
+	deactivatePoolWitness = func(context.Context) error { return errors.New("witness was unexpectedly deactivated") }
+	if err := ReconcilePoolCluster(context.Background(), member); err != nil || !applied {
+		t.Fatalf("verified replica witness was not applied: applied=%v err=%v", applied, err)
+	}
+	poolPeerMu.Lock()
+	state, err = loadPoolPeer(member)
+	if err == nil {
+		state.Membership.Generation = 5
+		for i := range state.Membership.Members {
+			state.Membership.Members[i].Generation = 5
+		}
+		err = savePoolPeer(member, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied = false
+	if err := ReconcilePoolCluster(context.Background(), member); err != nil || !applied {
+		t.Fatalf("same-generation signed witness was not applied: applied=%v err=%v", applied, err)
+	}
+	applied, installed = false, false
+	installPoolClusterAuthKey = func([]byte) error { return errors.New("key install failed") }
+	if err := ReconcilePoolCluster(context.Background(), member); err == nil || applied {
+		t.Fatalf("cluster started without its key: %v", err)
+	}
+	installPoolClusterAuthKey = func([]byte) error { return nil }
+	replica.Signature = "invalid"
+	if err := savePoolReplica(member, poolReplicaRecord{Replica: replica, Digest: digest, Verified: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcilePoolCluster(context.Background(), member); err == nil || applied {
+		t.Fatalf("cluster accepted an invalid replica signature: %v", err)
+	}
+}
+
+func TestTwoHostWitnessDoesNotReplaceClusterWhileWatchdogFeeds(t *testing.T) {
+	lab, _ := labArmedPool(t)
+	master := lab.host("master-1")
+	setMemberStatus(t, master, "member-2", "ejected")
+	ca, pin := witnessTestCA(t, "pool-witness")
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		state.Membership.Witness = &protocol.PoolWitnessRecord{Kind: "controller", Address: "192.0.2.10:5403", CAPEM: ca, CASHA256: pin,
+			FencingGeneration: state.Membership.Generation, ClusterName: protocol.PoolWitnessClusterName(state.Membership.PoolID), CredentialsReady: true}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership := labMembership(t, master)
+	nodes, wanted, _ := poolClusterIntent(master, membership)
+	self, _ := poolMemberByID(membership, master.State.HostID)
+	if !wanted || !poolWatchdogShouldDisarm(master, membership, nodes, self) {
+		t.Fatal("a two-host witness transition did not ask an already armed host to disarm")
+	}
+	if err := ReconcilePoolCluster(context.Background(), master); err == nil || !strings.Contains(err.Error(), "disarm this host first") {
+		t.Fatalf("armed cluster was allowed to change to two-host witness: %v", err)
+	}
+	if err := poolClusterPolicy(context.Background(), master); err == nil || !strings.Contains(err.Error(), "disarm") {
+		t.Fatalf("armed cluster was allowed to switch to the two-host freeze policy: %v", err)
+	}
+}
+
+func TestFrozenAuthorityBlocksWatchdogBeforeSBDStarts(t *testing.T) {
+	lab, pool := labFencingPool(t)
+	pool.round()
+	pool.settle()
+	master := lab.host("master-1")
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		state.Transfer = &poolTransferRecord{Action: "eject", Role: "source", Stage: "freeze", Frozen: true}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.current = master.State.HostID
+	if err := ReconcilePoolWatchdogArming(context.Background(), master); err == nil {
+		t.Fatal("arming proceeded without a durable feeding intent")
+	}
+	if pool.feeding[master.State.HostID] || pool.enabled[master.State.HostID] {
+		t.Fatal("SBD started while authority could not record feeding intent")
+	}
+}
+
+func TestArmedThreeHostPoolRefusesDrainToTwoHostWitness(t *testing.T) {
+	lab, _ := labArmedPool(t)
+	master := lab.host("master-1")
+	ca, pin := witnessTestCA(t, "pool-witness")
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(master)
+	if err == nil {
+		state.Membership.Witness = &protocol.PoolWitnessRecord{Kind: "controller", Address: "192.0.2.10:5403", CAPEM: ca, CASHA256: pin,
+			FencingGeneration: state.Membership.Generation, ClusterName: protocol.PoolWitnessClusterName(state.Membership.PoolID), CredentialsReady: true}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := memberRecord(t, master, "member-2").Generation
+	result := ExecutePoolMaintenance(master, maintenanceCommand("master-1", "member-2", true, generation))
+	if result.Status != "failed" || !strings.Contains(result.Error, "stop every host watchdog") {
+		t.Fatalf("armed witness drain = %#v", result)
+	}
+	if memberRecord(t, master, "member-2").Maintenance {
+		t.Fatal("armed member entered maintenance")
+	}
+	poolPeerMu.Lock()
+	state, err = loadPoolPeer(master)
+	if err == nil {
+		for i := range state.Membership.Members {
+			if state.Membership.Members[i].HostID == "member-2" {
+				state.Membership.Members[i].Maintenance = true
+				state.Membership.Members[i].MaintenanceSince = time.Now().UTC()
+			}
+		}
+		err = savePoolPeer(master, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry := ExecutePoolMaintenance(master, maintenanceCommand("master-1", "member-2", true, generation)); retry.Status != "succeeded" {
+		t.Fatalf("an already recorded drain did not accept an exact retry: %#v", retry)
+	}
+}
 
 // labWatchdogPool models the three things the earlier fakes flattened, and each of them hid a way
 // to reset a healthy host:
@@ -49,6 +244,10 @@ func newLabWatchdogPool(t *testing.T, lab *transferLab) *labWatchdogPool {
 	previousApply, previousLeave, previousRestart := applyPoolCluster, leavePoolCluster, restartPoolCluster
 	previousProperties, previousReady := applyPoolClusterProperties, poolClusterPropertiesReady
 	previousBound, previousQuorum := poolClusterBoundSet, localQuorum
+	previousRead, previousMint, previousInstall := readPoolClusterAuthKey, mintPoolClusterAuthKey, installPoolClusterAuthKey
+	readPoolClusterAuthKey = func(*Store) ([]byte, error) { return make([]byte, 128), nil }
+	mintPoolClusterAuthKey = func(*Store, string) ([]byte, error) { return make([]byte, 128), nil }
+	installPoolClusterAuthKey = func([]byte) error { return nil }
 
 	armLocalWatchdog = func(context.Context, protocol.PoolHostWatchdog) error {
 		if !p.running[p.current] {
@@ -101,6 +300,7 @@ func newLabWatchdogPool(t *testing.T, lab *transferLab) *labWatchdogPool {
 		applyPoolCluster, leavePoolCluster, restartPoolCluster = previousApply, previousLeave, previousRestart
 		applyPoolClusterProperties, poolClusterPropertiesReady = previousProperties, previousReady
 		poolClusterBoundSet, localQuorum = previousBound, previousQuorum
+		readPoolClusterAuthKey, mintPoolClusterAuthKey, installPoolClusterAuthKey = previousRead, previousMint, previousInstall
 		for _, host := range lab.hosts {
 			ClearPoolQuorumForTest(host)
 		}

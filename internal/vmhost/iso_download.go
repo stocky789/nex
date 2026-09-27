@@ -69,7 +69,12 @@ func publicISOClient() *http.Client {
 	}
 }
 
-func fetchPublicISO(ctx context.Context, client *http.Client, source string, limit int64) (io.ReadCloser, error) {
+type isoDownloadResponse struct {
+	io.ReadCloser
+	total int64
+}
+
+func fetchPublicISO(ctx context.Context, client *http.Client, source string, limit int64) (*isoDownloadResponse, error) {
 	if err := protocol.ValidateISOURL(source); err != nil {
 		return nil, err
 	}
@@ -97,7 +102,7 @@ func fetchPublicISO(ctx context.Context, client *http.Client, source string, lim
 		resp.Body.Close()
 		return nil, errors.New("ISO exceeds available storage including reserve")
 	}
-	return resp.Body, nil
+	return &isoDownloadResponse{ReadCloser: resp.Body, total: resp.ContentLength}, nil
 }
 
 func (e *ManagedEngine) downloadISO(ctx context.Context, j *managedJournal, client *http.Client, limit int64) error {
@@ -106,8 +111,38 @@ func (e *ManagedEngine) downloadISO(ctx context.Context, j *managedJournal, clie
 		return err
 	}
 	defer body.Close()
-	return receiveISOContent(ctx, j.MediaPath, *j.Command.Media, body, limit, func(resolved protocol.Media) error {
+	if body.total > 0 {
+		j.DownloadTotal = body.total
+		if err := e.save(*j); err != nil {
+			return err
+		}
+	}
+	reader := &isoProgressReader{reader: body, save: func(n int64) error {
+		j.DownloadedBytes = n
+		return e.save(*j)
+	}}
+	return receiveISOContent(ctx, j.MediaPath, *j.Command.Media, reader, limit, func(resolved protocol.Media) error {
 		j.DownloadedMedia = &resolved
 		return e.save(*j)
 	})
+}
+
+// isoProgressReader persists a first byte sample, then at most once every five seconds.
+type isoProgressReader struct {
+	reader   io.Reader
+	save     func(int64) error
+	received int64
+	last     time.Time
+}
+
+func (r *isoProgressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.received += int64(n)
+	if n > 0 && (r.last.IsZero() || time.Since(r.last) >= 5*time.Second) {
+		if saveErr := r.save(r.received); saveErr != nil {
+			return n, saveErr
+		}
+		r.last = time.Now()
+	}
+	return n, err
 }

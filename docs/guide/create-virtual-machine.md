@@ -133,9 +133,11 @@ Navigation on this page follows the development build 0.4.8 console layout; see
      download continues if Controller disconnects. This source requires a freshly connected
      host with URL download support; upgrade Nex Core if the form requests it.
 
-   Wait for the host task to show `succeeded` before using either source. URL download size
-   and SHA-256 appear after the host verifies the completed image; there is no byte-progress
-   or cancel control for host downloads in this build. Each request targets the selected
+   Wait for the host task to show `succeeded` before using either source. During a URL download,
+   **Storage** → **ISO library** and **Tasks** show Core's received bytes. If the server supplies
+   a total size, the bar also shows a percentage; otherwise the bar moves without a percentage.
+   Progress is hidden when the host is stale, and there is no cancel control for host downloads.
+   URL download size and SHA-256 appear after the host verifies the completed image. Each request targets the selected
    host's storage; it does not copy the image to every host. Disks can use any VM-ready
    repository on that host; they do not need to share storage with the ISO library.
    To check one host, select **Hosts** in the rail, select the host's row, open its panel's
@@ -403,6 +405,10 @@ failed and uncertain transfers show their own status.
   not published as usable ISOs. After a definite failure, correct the cause and submit a
   new download. If the submission response was lost, keep the original entries and retry
   to reconcile that request before starting another.
+- **URL download progress is absent:** check whether the host is freshly connected and
+  whether **Tasks** still shows the import running. A server without `Content-Length`
+  produces a moving bar and received bytes, without a percentage. A finished or interrupted
+  import has no live progress; read its task result before retrying.
 - **Core restarts during a download:** partial transfers are not resumed. Inspect
   **Tasks** after reconnecting; a complete published image is checked against its
   durable size/hash record before success is reported. For an incomplete transfer, resolve
@@ -588,6 +594,8 @@ Recorded checks and their limits:
   single-interface form.
 - [URL ISO downloads](../qa/iso-url/checks.md), [host ISO visibility](../qa/host-isos/checks.md)
   and [storage repositories](../qa/storage-repositories/checks.md).
+- [URL download progress](../qa/2026-09-25-iso-url-progress.md) — synthetic Core transfer,
+  Controller report, and simulated browser; no live public download was run.
 - [Pool VLAN networks](../qa/pool-vlan-networks/checks.md) — simulated browser and namespace
   checks; VLAN connectivity through a real switch is unverified.
 - [Pool master](../qa/pool-master/checks.md) and its [lab run](../qa/pool-master/lab/checks.md).

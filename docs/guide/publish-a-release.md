@@ -11,16 +11,16 @@ build as that evidence.
 
 Once those gates are recorded as complete, every push to `main` on the configured Git forge
 builds the full and network installer ISOs and both Debian packages at the newest `CHANGELOG.md` version and publishes the
-ISOs, shared matching source bundle, separate compliance manifests and hash-named netinst
-payloads as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous
+two ISOs and their SHA-256 sidecars as the repository release for tag `vX.Y.Z[-preN]`, replacing that version's previous
 release. The two `.deb` payloads supply Nex Core (including its Controller appliance) and the
 custom DLM build to netinst. Core is installed through the installer; Controller is not offered
 as a bare package install. Enrolled hosts continue to update through APT. One version identifies a release: the changelog heading, the tag and the
 Debian package version are the same number. No tag is pushed by hand; the workflow creates or
 moves it.
 
-If the website deploy secrets are set, the same Release run publishes the packages to the signed
-APT archive, both ISOs, source and netinst payloads to the download tree, and the static website pages. A separate
+The same Release run publishes the packages to the signed APT archive, both ISOs, source,
+compliance manifests and netinst payloads to the download tree, and the static website pages.
+All four website deploy secrets are required because the netinst ISO downloads from that tree. A separate
 Website workflow still exists for website-only pushes that skip the ISO build; see
 [operate the website](operate-website.md).
 [Return to the guide](README.md).
@@ -30,12 +30,8 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 - The exact release has completed every external-distribution requirement in
   [Nex licensing](../LICENSING.md#release-evidence), with reviewable evidence. A successful build,
   existing website content or a configured deployment secret does not satisfy this prerequisite.
-  The current working version, `0.4.13`, may publish its full offline ISO to the private
-  forge for internal labs. With deploy secrets unset, netinst downloads its Nex payloads
-  from the forge release,
-  which must allow anonymous HTTPS access; a private forge requiring login cannot serve
-  a working netinst release. CI no longer blocks public publication, so leave the deploy
-  secrets unset until evidence is recorded for this exact version: the `debian/copyright`
+  Do not configure deployment or publish a new release until evidence is recorded for the
+  exact version: the `debian/copyright`
   and matching source for
   `ipmitool` and `sbd` are still marked outstanding in
   [Nex licensing](../LICENSING.md#release-evidence), which records exact-artifact evidence for
@@ -91,14 +87,14 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
    (`0.1.6-alpha1 0.1.6~alpha1`).
 3. After the exact-artifact evidence is complete, push to `main`. Watch the **Release** workflow: it resolves the version, builds the
    appliance, both packages and both ISOs, checks artifact versions and source/payload bindings,
-   builds the static website when deploy secrets are set, then creates the release and
-   publishes packages to APT, both ISOs and netinst payloads to the download tree and those pages. A failing website
-   build or a half-set deploy secret stops the run before the tag moves. A second push at the
+   builds the static website, publishes packages to APT and both ISOs, source, manifests
+   and netinst payloads to the download tree, verifies those downloads, then creates the
+   forge release. A failing website
+   build or a missing deploy secret stops the run before the tag moves. A second push at the
    same version runs again and replaces the release; a newer push cancels a release build
    still in progress.
    The artifact verification step prints each output's byte size so packaging growth
-   is visible before publication. The netinst ISO embeds the actual publishing destination:
-   the configured website when deployment is enabled, otherwise the forge release URL.
+   is visible before publication. The netinst ISO embeds the configured website download URL.
 
 ## Expected result
 
@@ -108,12 +104,9 @@ marked prerelease. The changelog section supplies the notes. The release include
 
 - `nex-core-<Debian-version>-amd64.iso` and its `.sha256` sidecar
 - `nex-core-<Debian-version>-amd64-netinst.iso` and its `.sha256` sidecar
-- `nex-core-<Debian-version>-source.tar.gz` and its `.sha256` sidecar
-- `nex-core-<Debian-version>-compliance-manifest.json` and its `.sha256` sidecar
-- `nex-core-<Debian-version>-netinst-compliance-manifest.json` and its `.sha256` sidecar
-- `nex-core-local-<SHA256>.deb` and `dlm-controld-<SHA256>.deb`, pinned by the netinst ISO
 
-Standalone `nex-core-local_*.deb` and `nex-controller_*.deb` files are not attached.
+The versioned website download directory holds the matching source bundle,
+compliance manifests and hash-pinned netinst `.deb` files with checksums.
 
 The tag points at the commit that built the release. Pushing the same version again deletes
 the previous release, moves the tag to the new commit and uploads fresh assets, so a version
@@ -123,7 +116,7 @@ rather than failing the run. On Gitea, the replacement stays a draft until every
 that check, then is published. A handled upload failure deletes the draft; the previous
 release has already been removed, so rerun publication to restore that version.
 
-With deploy secrets set, `https://<site>/apt/` also serves the new packages in the signed
+`https://<site>/apt/` also serves the new packages in the signed
 `Release`/`Packages` index, so enrolled hosts see the update under **Updates**. The publisher
 copies both ISOs, their shared source bundle, separate manifests and netinst payloads into
 `https://<site>/downloads/<Debian-version>/`, writes a SHA-256 sidecar for each, and moves
@@ -186,9 +179,9 @@ the package index does not list the released version.
   bypass a fixed size limit.
 - **A throwaway signing key warning** — set the `NEX_APPLIANCE_SIGNING_KEY` secret so every
   release is signed with the operator key.
-- **Deploy secrets are not set** — the workflow publishes to the forge only and verifies
-  anonymous payload access. A 401 or HTML login page fails this check. To use a website
-  instead, configure the deploy secrets and rebuild so the netinst ISO embeds that destination.
+- **Deploy secrets are not set** — the workflow stops before creating a release because
+  the netinst ISO requires the website's package downloads. Configure all four secrets
+  after the exact-artifact distribution review is complete.
 - **Nothing published and no error** — check the runner can reach the website host; the host
   is on a private address and the runner must be on a network with a route to it.
 - **Disk pressure on the website host** — the APT archive keeps every package version and each

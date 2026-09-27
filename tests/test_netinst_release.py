@@ -2,7 +2,6 @@
 """Publish both installer variants with their exact downloadable Nex inputs."""
 import json
 import os
-import textwrap
 from pathlib import Path
 import subprocess
 import tempfile
@@ -76,34 +75,12 @@ class NetinstReleaseTests(unittest.TestCase):
             relative = apt.copy_deb(canonical, staging / 'apt', 'main')
             self.assertEqual(publish.sha256(staging / 'apt' / relative), digest)
 
-    def test_forge_only_check_rejects_auth_and_login_pages(self):
-        workflow = (ROOT / '.github/workflows/release.yml').read_text()
-        step = workflow.split('      - name: Verify anonymous netinst downloads on forge-only releases\n', 1)[1]
-        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            payloads = directory / 'dist/netinst'
-            payloads.mkdir(parents=True)
-            (payloads / 'nex-core-local-fixture.deb').write_bytes(b'fixture')
-            curl = directory / 'curl'
-            curl.write_text('#!/bin/sh\nprintf "%s" "$CURL_RESPONSE"\n')
-            curl.chmod(0o755)
-            for response, succeeds in [('200 application/octet-stream', True),
-                                       ('401 text/html', False), ('200 text/html', False)]:
-                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
-                    cwd=directory, text=True, capture_output=True,
-                    env={**os.environ, 'PATH': f'{directory}:' + os.environ['PATH'],
-                         'GITHUB_SERVER_URL': 'https://forge.example.org',
-                         'GITHUB_REPOSITORY': 'example/nex', 'NEX_TAG': 'v1.0.0',
-                         'CURL_RESPONSE': response})
-                self.assertEqual(result.returncode == 0, succeeds, result.stderr)
-
-    def test_workflows_build_and_publish_netinst_on_forge(self):
+    def test_workflows_build_netinst_for_download_site(self):
         for provider in ('.gitea', '.github'):
             workflow = (ROOT / provider / 'workflows/release.yml').read_text()
             self.assertIn('export NEX_NETINST_BASE_URL=', workflow)
             self.assertLess(workflow.index('export NEX_NETINST_BASE_URL='), workflow.index('bash installer/build.sh'))
-            self.assertIn('${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}/releases/download/${NEX_TAG}', workflow)
+            self.assertIn('${NEX_PUBLIC_URL%/}/downloads/${NEX_VERSION}', workflow)
             self.assertIn('--netinst-iso', workflow)
             self.assertIn('dist/netinst/*.deb', workflow)
             transfer = workflow.split('          scp $ssh_opts', 1)[1].split('"$target:$staging/"', 1)[0]

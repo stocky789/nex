@@ -54,9 +54,8 @@ class DocumentationGateTests(unittest.TestCase):
         self.git('commit', '-qm', 'fixture')
         return self.git('rev-parse', 'HEAD')
 
-    def test_missing_impact_record_fails(self):
-        with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
-            docs.check(self.root, {'app.py'})
+    def test_small_change_without_impact_record_passes(self):
+        docs.check(self.root, {'app.py'})
 
     def test_updated_guide_and_changed_api_must_change_in_range(self):
         record = self.record(['app.py'], guide={'impact': 'updated', 'reason': 'New workflow', 'pages': ['docs/guide/install.md']},
@@ -274,14 +273,13 @@ class DocumentationGateTests(unittest.TestCase):
         self.assertNotIn('app.py', added, 'app.py existed before this range')
         docs.check(self.root, changed, added)
 
-    def test_worktree_mode_checks_uncommitted_work_before_committing(self):
+    def test_worktree_mode_checks_supplied_records_before_committing(self):
         self.init()
         self.write('app.py', 'print("uncommitted")\n')
         changed, added = docs.worktree_paths(self.root)
         self.assertIn('app.py', changed)
         self.assertNotIn('app.py', added, 'a tracked edit is not an addition')
-        with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
-            docs.check(self.root, changed, added)
+        docs.check(self.root, changed, added)
         record = self.record(['app.py'])
         changed, added = docs.worktree_paths(self.root)
         self.assertIn(record, added, 'an untracked record counts as added')
@@ -330,11 +328,10 @@ class DocumentationGateTests(unittest.TestCase):
         self.record(['app.py'])
         head = self.commit()
         docs.check(self.root, *docs.changed_paths(self.root, base, head))
-        # A later unrelated record must not hide an uncovered change in the range.
+        # An unrelated small change needs no record; a supplied record remains checked.
         self.write('new.py', 'print("new")\n')
         head = self.commit()
-        with self.assertRaisesRegex(ValueError, 'new.py'):
-            docs.check(self.root, *docs.changed_paths(self.root, base, head))
+        docs.check(self.root, *docs.changed_paths(self.root, base, head))
 
     def test_pr_merge_base_ignores_base_branch_only_change(self):
         base = self.init()
@@ -398,16 +395,14 @@ class DocumentationGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'clean worktree'):
             docs.changed_paths(self.root, head, head)
 
-    def test_record_directory_is_not_a_coverage_escape(self):
+    def test_unassessed_non_record_files_do_not_trigger_a_record_check(self):
         for path in ('docs/changes/helper.py', 'docs/changes/nested/record.json'):
-            with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
-                docs.check(self.root, {path})
+            docs.check(self.root, {path})
 
-    def test_deleted_path_requires_coverage(self):
+    def test_deleted_path_needs_no_record(self):
         file = self.record(['deleted.py'])
         docs.check(self.root, {'deleted.py', file})
-        with self.assertRaisesRegex(ValueError, 'missing documentation assessment'):
-            docs.check(self.root, {'deleted.py'})
+        docs.check(self.root, {'deleted.py'})
 
 
 if __name__ == '__main__':

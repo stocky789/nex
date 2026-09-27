@@ -1636,6 +1636,9 @@ func recordPoolMasterPeerOrigin(s *Store) error {
 // own durable records. A host is never ejected while the pool still expects it to run or
 // hold anything.
 func poolEjectRefusal(s *Store, membership protocol.PoolMembership, target protocol.PoolMember) error {
+	if err := poolEjectWatchdogRefusal(membership, target.HostID); err != nil {
+		return err
+	}
 	poolVMMu.Lock()
 	state, err := loadPoolVMs(s)
 	poolVMMu.Unlock()
@@ -1660,6 +1663,22 @@ func poolEjectRefusal(s *Store, membership protocol.PoolMembership, target proto
 		}
 	}
 	return poolEjectLocalDependencyRefusal(s, membership, state, target)
+}
+
+func poolEjectWatchdogRefusal(membership protocol.PoolMembership, targetHostID string) error {
+	ready := 0
+	feeding := false
+	for _, member := range membership.Members {
+		if member.Status == "ready" {
+			ready++
+		}
+		feeding = feeding || poolWatchdogFeeding(member)
+	}
+	target, _ := poolMemberByID(membership, targetHostID)
+	if target.Status == "ready" && ready <= 3 && feeding {
+		return errors.New("the pool must stop feeding every host watchdog before an eject leaves fewer than three ready hosts")
+	}
+	return nil
 }
 
 // poolEjectOwnerRefusal distinguishes a locally contained VM from one still owned by the
@@ -1856,6 +1875,9 @@ func removePoolMembership(s *Store, record *poolTransferRecord) error {
 		return errors.New("no such member of this pool")
 	}
 	if target.Status != "ejected" {
+		if err = poolEjectWatchdogRefusal(state.Membership, record.TargetHostID); err != nil {
+			return err
+		}
 		poolPeerMu.Unlock()
 		err = retireEjectedLocalPoolVMOwners(s, record.TargetHostID)
 		poolPeerMu.Lock()
@@ -1865,6 +1887,9 @@ func removePoolMembership(s *Store, record *poolTransferRecord) error {
 		state, err = loadPoolPeer(s)
 		if err != nil || state.Membership.Valid() != nil {
 			return errors.New("pool membership is unavailable")
+		}
+		if err = poolEjectWatchdogRefusal(state.Membership, record.TargetHostID); err != nil {
+			return err
 		}
 		state.Membership = nextPoolMembership(state.Membership, s.State.HostID, record.TargetHostID)
 		if err = state.Membership.Valid(); err != nil {

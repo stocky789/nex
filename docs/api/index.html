@@ -13893,6 +13893,28 @@
         }
       ],
       &quot;description&quot;: &quot;Controller acknowledgement of backup-v1 after a protocol-v2 Core offers the capability; Core withholds backup inventory until acknowledged.&quot;
+    },
+    &quot;iso_download_progress&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;boolean&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;True only in a v2 response to a Core offering iso-download-progress-v1. Core withholds ManagedState.iso_downloads until acknowledged, and clears readiness on disconnect, restart or Controller replacement.&quot;
+    },
+    &quot;detected_os&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;type&quot;: &quot;boolean&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;True only in a v2 response to a Core offering detected-os-v1. Core withholds ManagedState.detected_os until acknowledged; startup and re-enrollment clear readiness without erasing retained history.&quot;
     }
   },
   &quot;required&quot;: [
@@ -14506,6 +14528,17 @@
         }
       ],
       &quot;description&quot;: &quot;Host observation of a running VM&#x27;s resource consumption; absent for VMs that are not running, from Core builds that predate usage observation, and whenever the host could not sample the VM within its probe deadline.&quot;
+    },
+    &quot;detected_os&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/DetectedOS&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Historical OS identity from the pool master; may remain available when the VM is stopped or its live guest observation is absent. Display as last detected when no live OS is reported. Older Core builds omit it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -16711,7 +16744,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -19239,6 +19272,28 @@
     },
     &quot;backup_policies_reported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;iso_downloads&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/ISODownloadProgress&quot;
+      },
+      &quot;maxItems&quot;: 16,
+      &quot;description&quot;: &quot;Live Core-observed byte counts for active URL ISO imports only, sent after Controller acknowledgement. Omitted after completion or interruption. Controller retains the latest report under the host inventory; display it as live only while the host connection is fresh.&quot;
+    },
+    &quot;detected_os&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/DetectedOS&quot;
+      },
+      &quot;maxProperties&quot;: 10000,
+      &quot;description&quot;: &quot;VM UUID to durable last detected OS, reported by the pool master from its Core-owned VM records. Optional; missing history does not mean the configured OS is a detected identity. Sent only after Controller acknowledgement of detected-os-v1.&quot;
     }
   },
   &quot;required&quot;: [],
@@ -20309,6 +20364,17 @@
         }
       ],
       &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
+    },
+    &quot;corosync_key_wrapped&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedKey&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Pool Corosync authentication key sealed for this member and replica generation; required when the pool forms its own cluster.&quot;
     }
   },
   &quot;required&quot;: [
@@ -20352,6 +20418,10 @@
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
       &quot;description&quot;: &quot;Native host generation in the configured authority lockspace after this member joined it; absent or zero means no sanlock preparation acknowledgement.&quot;
+    },
+    &quot;corosync_key_ready&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only after the addressed Corosync key was opened and durably stored; required by the master for a pool cluster replica.&quot;
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -20737,6 +20807,11 @@
         }
       ],
       &quot;description&quot;: &quot;What the host&#x27;s Nex-managed /etc files say right now. Independent of spec: spec is the staged, applied or last change; current is parsed from disk so a Controller can show live addressing before any change has been staged. Absent when the files are missing or were not written by Nex.&quot;
+    },
+    &quot;observed_gateway&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;ipv4&quot;,
+      &quot;description&quot;: &quot;Optional live default IPv4 gateway on br0, read from the host route table. Observed state only; absent if no gateway is reported. DHCP configuration specs still omit address and gateway.&quot;
     }
   },
   &quot;required&quot;: [
@@ -23458,11 +23533,22 @@
         &quot;armed&quot;,
         &quot;degraded&quot;
       ],
-      &quot;description&quot;: &quot;off is the pool&#x27;s Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice is not verified and degraded can mean it is connected and voting; two-host watchdog arming remains withheld in either state.&quot;
+      &quot;description&quot;: &quot;off is the pool&#x27;s Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice or native quorum is not verified; it can coexist with an operating witness when Corosync is nonquorate. Degraded means the witness and quorum are operating but two-host watchdog arming remains withheld.&quot;
     },
     &quot;detail&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Core&#x27;s own sentence for the state. A client shows it as written.&quot;
+    },
+    &quot;witness&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolFenceWitness&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The pool master&#x27;s current native qdevice observation, separate from watchdog arming. Omitted when no witness is selected.&quot;
     },
     &quot;armed&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -25306,5 +25392,78 @@
     &quot;metadata_receipts&quot;
   ],
   &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ISODownloadProgress"><summary>ISODownloadProgress</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;operation_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Active dispatched URL iso-import operation on this reporting host.&quot;
+    },
+    &quot;received_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Bytes received from the public ISO server when Core last saved a sample.&quot;
+    },
+    &quot;total_bytes&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;HTTP Content-Length when positive; omitted when the source does not provide a length.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;operation_id&quot;,
+    &quot;received_bytes&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.ISODownloadProgress&quot;
+}</pre></details>
+<details id="PoolFenceWitness"><summary>PoolFenceWitness</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;forming&quot;,
+        &quot;operating&quot;
+      ],
+      &quot;description&quot;: &quot;Operating means the pool master verified the selected qdevice&#x27;s identity, pinned CA, TLS connection and cast vote. It does not imply an armed watchdog or an automatic fence proof.&quot;
+    },
+    &quot;detail&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s current native observation or reason the witness is still forming.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolFenceWitness&quot;
+}</pre></details>
+<details id="DetectedOS"><summary>DetectedOS</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;os&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 4096,
+      &quot;description&quot;: &quot;Last successful guest-get-osinfo display name; 1\u20134096 UTF-8 bytes.&quot;,
+      &quot;pattern&quot;: &quot;\\S&quot;
+    },
+    &quot;os_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;Optional guest-reported OS identifier; at most 200 UTF-8 bytes.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;Nonzero Core timestamp of the successful guest-agent OS observation, not the inventory/report time.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;os&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.DetectedOS&quot;,
+  &quot;description&quot;: &quot;Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health.&quot;
 }</pre></details>
 </section></main></html>

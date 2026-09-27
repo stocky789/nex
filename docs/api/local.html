@@ -6066,7 +6066,7 @@
 }</pre></details>
 <details id="PoolFenceCluster"><summary>PoolFenceCluster</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;The pool&#x27;s own Corosync/Pacemaker cluster, which carries no resources and exists only so that a diskless sbd has a quorum to lose. Nex Core forms one for a pool of three or more ready hosts with Host fencing on and no clustered-storage repository; a pool that has clustered storage keeps the cluster clustered storage already owns and is not armed at all in this release. Like the counts beside it, this is the master&#x27;s memory-only observation over the membership it owns, derived on every report and never stored: the durable facts are the membership and each host&#x27;s own armed report.&quot;,
+  &quot;description&quot;: &quot;The pool master&#x27;s memory-only Corosync/Pacemaker cluster observation. Pools of three to five ready hosts may arm diskless sbd; an eligible two-host pool may instead report a connected and voting qdevice witness while watchdog arming stays withheld. The selected witness and host armed reports remain durable on Core, not in this derived status.&quot;,
   &quot;properties&quot;: {
     &quot;state&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -6078,11 +6078,22 @@
         &quot;armed&quot;,
         &quot;degraded&quot;
       ],
-      &quot;description&quot;: &quot;off is the pool&#x27;s own Host fencing setting. not_available is this pool: clustered storage, fewer than three hosts, more hosts than Nex Core has exercised, or no usable watchdog. forming is a cluster Nex Core has started and is waiting to see quorate. arming is the one-host-at-a-time rollout. degraded is a cluster whose hosts are not all armed.&quot;
+      &quot;description&quot;: &quot;off is the pool&#x27;s Host fencing setting; not_available means no applicable cluster. In a two-host pool, forming means qdevice or native quorum is not verified and can coexist with an operating witness; degraded means witness and quorum are operating but watchdogs remain unarmed. Larger pools use forming for Corosync quorum, arming for rollout and degraded when hosts are not all armed.&quot;
     },
     &quot;detail&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Core&#x27;s own sentence for the state. A client shows it as written.&quot;
+    },
+    &quot;witness&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolFenceWitness&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The pool master&#x27;s current native qdevice observation, separate from watchdog arming. Omitted when no witness is selected.&quot;
     },
     &quot;armed&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -7319,5 +7330,26 @@
     &quot;status&quot;,
     &quot;observed_at&quot;
   ]
+}</pre></details>
+<details id="PoolFenceWitness"><summary>PoolFenceWitness</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;forming&quot;,
+        &quot;operating&quot;
+      ],
+      &quot;description&quot;: &quot;Operating means the pool master verified the selected qdevice&#x27;s identity, pinned CA, TLS connection and cast vote. It does not imply an armed watchdog or an automatic fence proof.&quot;
+    },
+    &quot;detail&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s current native observation or reason the witness is still forming.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolFenceWitness&quot;
 }</pre></details>
 </section></main></html>

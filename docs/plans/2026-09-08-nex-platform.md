@@ -1,7 +1,26 @@
 # Nex Controller and Nex Core implementation plan
 
 Date: 2026-09-08  
-Status: Standalone installer alpha and Phase 1 Controller/agent development foundation have lab evidence. **Phase 2 closed 2026-09-17** by project owner decision: gate5 functional clauses plus BUG-0256 / admission lab on published 0.3.1 and VirtIO media on 0.3.2; see [Phase 2 close](../qa/2026-09-17-phase2-gate/CLOSED.md). Remaining delivery gates are tracked below.
+Status (project owner, 2026-09-25): **Phases 0–4 are finished and closed. Phase 5,
+VM snapshots and rollback, is next.** Issues discovered later in Phases 0–4 are
+bugs, not reasons to reopen those phases. This is a scope/acceptance decision, not
+new test evidence: the [Phase 2 close](../qa/2026-09-17-phase2-gate/CLOSED.md),
+[Phase 3 lab](../qa/2026-09-23-phase3-placement-lab.md), and
+[Phase 4 lab](../qa/2026-09-19-phase4-native-acceptance.md) retain their exact
+results and limits. Phase 0's full guest-network/data-reboot check and Phase 3's
+physical Intel/AMD checks were not run. The published 0.4.12 network-installer UEFI
+failure ([plan](2026-09-24-net-installer.md)) and mixed-uplink VLAN join failure
+([plan](2026-09-24-pool-vlan-host-uplink-maps.md)) are known bugs/follow-ups.
+
+**Fencing is the exception:** native and physical fence proof, failure paths,
+duplicate-writer exclusion, and two-host lease/witness acceptance remain open
+([host fencing](2026-09-22-automatic-host-fencing.md),
+[two-host fencing](2026-09-22-two-host-pool-fencing.md)). No automatic-recovery or
+production-readiness claim follows from closing Phases 0–4. Phases 5–10 remain
+future work. API impact: **none** — no client, Controller/Core or peer contract
+changes. Guide impact: **updated** — the enrollment guide's phase status is
+corrected; operator steps do not change. State owner: **none** — this decision
+persists no product state.
 
 Project planning files live in `docs/plans/`.
 
@@ -469,6 +488,11 @@ browsable reference and agent protocol documentation; later phases extend them. 
 
 **Gate:** accelerated guest boots, receives networking, retains written data after guest/host reboot, and can be controlled locally.
 
+**Phase 0 closed by project owner, 2026-09-25.** The complete guest-network and
+written-data reboot check above was not run; this decision accepts that limit and
+tracks a later failure as a bug. It does not turn bounded nested-KVM evidence into
+a full gate pass.
+
 ### 1. Controller foundation and host enrollment
 
 1. Create the Go controller and agent, minimal UI, schema migrations, systemd units, and development build commands.
@@ -486,11 +510,15 @@ browsable reference and agent protocol documentation; later phases extend them. 
 
 **Gate:** create a site, enroll a host so it becomes the pool master of its automatically created pool, revoke the host, reject unauthorized requests, and restart either process without losing identity or duplicating operations. Interrupt the controller connection, fail a libvirt check, and stall a probe: show distinct stale/degraded outcomes, keep other reports responsive, and recover with fresh observations. Offline hosts show stale/unknown state; monitoring never issues an automatic VM restart.
 
+**Phase 1 closed by project owner, 2026-09-25.** Its earlier development
+acceptance remains as recorded in the [foundation plan](2026-09-08-controller-foundation.md);
+later defects are bugs, not a reopened phase.
+
 ### 2. One-host VM management
 
 1. Register host-local storage at pool level with explicit host accessibility.
 2. Register a pool network and map it to the host's existing guest network/bridge. Keep management connectivity intact; defer editing host interfaces to Phase 4.
-   **Pool VLAN networks, 2026-09-09:** a pool network is name + uplink NIC name + VLAN ID; Core creates an additive per-VLAN guest bridge without touching the management bridge, so this does not wait for the Phase 4 staged-apply gate, which still covers host interface/address edits. See [the plan](2026-09-09-pool-vlan-networks.md), which also records the guest tools direction.
+   **Pool VLAN networks, 2026-09-09:** the implemented registration uses name + uplink NIC name + VLAN ID; Core creates an additive per-VLAN guest bridge without touching the management bridge. The 2026-09-24 [per-host uplink-map decision](2026-09-24-pool-vlan-host-uplink-maps.md) supersedes the same-NIC-name assumption for mixed-uplink pools, but is not implemented. Phase 4 staged apply still covers host interface/address edits. See also [the original VLAN plan](2026-09-09-pool-vlan-networks.md).
 3. Upload a guest ISO with size/path validation and free-space checks. Create a VM with selected CPU, RAM, storage, disk, network, and firmware.
 4. Implement list/details, start, graceful shutdown, explicit force-stop, restart, edit while stopped where required, and deletion with separate disk-retention choices.
 5. Implement authenticated browser console sessions with short-lived authorization. Keep raw VNC endpoints inaccessible from untrusted networks.
@@ -539,6 +567,11 @@ residuals: `[close record](../qa/2026-09-17-phase2-gate/CLOSED.md)`.
 8. Deliver the host-local web UI and Controller appliance bootstrap below, reusing the VM lifecycle and console operations proven in Phase 2.
 
 **Gate:** install without internet, eject media, reboot, enroll, and create a VM. Test multiple disks, absent network, representative Intel/AMD hardware, and recovery access. No credentials or private host keys are cloned into the image.
+
+**Phase 3 closed by project owner, 2026-09-25.** The disposable lab chain passed;
+physical Intel/AMD installation and the unchecked cases below remain unrun. A
+failure discovered later is a bug, while the Phase 8 supported-release gate stays
+separate.
 
 Preseed supports package/repository and installation configuration. Offline operation still requires all necessary content on the media. [Debian preseed](https://www.debian.org/releases/trixie/amd64/apbs04.en.html), [Debian Live installer options](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-installer.en.html)
 
@@ -702,14 +735,16 @@ existing-host reconnection without duplicate control. Review desktop/360px and
 keyboard flows, empty/loading/error/stale states and disruptive confirmations.
 Include runnable API/failure checks, updated guide/reference, retained matching
 appliance source/notices under the existing licensing gate, and independent review.
-Full integrated acceptance remains open. The appliance plan and artifact lab
-record bounded checks already passed; they do not close the remaining gates above.
+The complete product and physical acceptance above remain open. The disposable
+install-to-first-VM chain passed; its lab evidence does not close the other
+failure, recovery, hardware and release gates above.
 
 ### 4. Multi-host pools and shared storage
 
-**Current acceptance status (2026-09-20): closed for disposable virtual-lab scope.** S1–S6 are
-implemented in the dirty working tree. The final `f714` source validation passed `go test -race
--count=1 -timeout 20m ./...` and the 374-test Python suite; that is source evidence, not a release.
+**Acceptance recorded 2026-09-20: closed for disposable virtual-lab scope.** S1–S6 were
+implemented in that development source candidate. The final `f714` source validation passed
+`go test -race -count=1 -timeout 20m ./...` and the 374-test Python suite; that is source
+evidence, not a release.
 Reviewed native evidence includes the repeated G1 join/eject lifecycle, missing-uplink failure,
 autonomous recovery and cleanup, and S6-14 boot-time restriction, API/direct-hook/authority-offer
 refusals, autostart suppression, rejoin and post-clear normal start/stop. `BUG-0372` through
@@ -718,12 +753,18 @@ harness is **partial/FAIL** because it received a different safe eject refusal f
 shared-storage reservation and exited before timed-suppression observation. The older scoped S6-18
 pass is separate historical evidence.
 
+**Phase 4 closed by project owner, 2026-09-25.** Later defects, including the
+mixed-uplink VLAN join gap, are bugs. This does not expand the 2026-09-20 lab
+evidence or close the separate fencing acceptance described above.
+
 Phase 4 and the initial manual-recovery gate are **closed for disposable virtual-lab scope**
 (project owner, 2026-09-20). OD-6 is **decided**: the strict unreachable-ready-member rule is the
 approved default (fence or fail-closed; silence is never agreement). Permanent limits stay open
 forever for this lab class: physical/BMC fencing, five-host scale, package-installed hook
 enforcement, authentic owner-conflict S6-12/16 fixtures, OD-5 no-escape, and remaining C-class
-matrix rows. No production-readiness or release claim follows from these results. Post-close S2
+matrix rows. A later review found that members with differently named uplinks can join
+with failed VLAN convergence; the [per-host mapping plan](2026-09-24-pool-vlan-host-uplink-maps.md)
+remains unimplemented. No production-readiness or release claim follows from these results. Post-close S2
 maintenance native revalidation on Core `327b7ec9…` passed ordered prep/core/autostart/restarts/hook/hosts
 (see [native acceptance report](../qa/2026-09-19-phase4-native-acceptance.md)).
 
@@ -801,15 +842,12 @@ package-install and authentic owner-conflict cases are not claimed. See [join gu
 
 #### Pool authority transfer and master succession
 
-**Decision: project owner, 2026-09-14.** Planned master change and member eject are implemented in
-the working tree (status under *Transfer steps* below); manual promotion after permanent master
-loss and automatic succession remain planned and not implemented. *(Status superseded 2026-09-19:
-manual promotion is now implemented in the working tree too — see the note under the recovery
-decisions below. Automatic succession is still planned and not implemented, and both gates stay
-outstanding. The design decision this bullet records is unchanged.)* One design covers planned
-master change, member eject, manual promotion after permanent master loss
-([Phase 7](#manual-recovery-after-permanent-host-loss)) and automatic succession. Phase 7 and
-[Phase 9](#9-optional-per-pool-ha) reference it; they do not redesign it.
+**Decision: project owner, 2026-09-14.** Planned master change, member eject and manual
+promotion after permanent master loss passed the bounded Phase 4 lab gate. A narrow
+two-host BMC automatic-promotion path has focused simulated checks; full automatic
+succession acceptance remains open (see [two-host fencing](2026-09-22-two-host-pool-fencing.md)).
+The same design informs [manual recovery](#manual-recovery-after-permanent-host-loss)
+and [optional HA](#9-optional-per-pool-ha).
 
 **Recovery decisions: project owner, 2026-09-19.** The decisions themselves are unchanged and are
 recorded below as the owner stated them. **Implementation status, 2026-09-19: fence-verified manual

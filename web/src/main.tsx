@@ -32,9 +32,10 @@ import type { API, Audit, Data, Host, Operation, Pool, Session, Site } from "./t
 
 export type { API, Audit, Check, Data, Host, Operation, Pool, Site } from "./types";
 
-// The scope the top bar filters by: a site, and one of its pools or "" for all of them. It is a
-// per-browser convenience; the pools themselves come from the hosts on every load.
+// The scope the top bar filters by: a site and an optional pool; "*" explicitly means all pools.
+// It is a per-browser convenience; the pools themselves come from the hosts on every load.
 type Scope = { site: string; pool: string };
+const allPools = "*";
 const empty: Data = {
   sites: [],
   pools: [],
@@ -73,7 +74,9 @@ watchSystemTheme(() => applyTheme(""));
 function readScope(): Scope {
   try {
     const saved = JSON.parse(readPreference("nex.scope"));
-    return { site: String(saved.site || ""), pool: String(saved.pool || "") };
+    const pool = String(saved.pool ?? "");
+    // Older builds stored all-pools as ""; "*" is the explicit sentinel now.
+    return { site: String(saved.site || ""), pool: pool === "" ? allPools : pool };
   } catch { return { site: "", pool: "" }; }
 }
 // GlobalSearch jumps to a VM, a host (by name or IP address) or a settings section. It filters
@@ -215,8 +218,8 @@ function App() {
   const host = data.hosts.find((h) => (kind === "hosts" || kind === "host-console") && h.id === id);
   const site = data.sites.find(s => s.id === scope.site) || data.sites[0];
   const sitePools = data.pools.filter(p => p.site_id === site?.id);
-  // A site with one pool is that pool, so its pool screens need no extra choice.
-  const pool = sitePools.find(p => p.id === scope.pool) || (sitePools.length === 1 ? sitePools[0] : undefined);
+  // An unset or removed pool defaults to the first one; All pools remains an explicit choice.
+  const pool = sitePools.find(p => p.id === scope.pool) || (scope.pool === allPools && sitePools.length > 1 ? undefined : sitePools[0]);
   const inScope = (poolID: string) => pool ? poolID === pool.id : sitePools.some(p => p.id === poolID);
   const scopedHosts = data.hosts.filter(h => inScope(h.pool_id));
   const scopedVMs = data.vms.filter(v => inScope(v.pool_id));
@@ -229,6 +232,11 @@ function App() {
     setScopeState(next);
     writePreference("nex.scope", JSON.stringify(next));
   }
+  useEffect(() => {
+    if (site && pool && scope.pool !== allPools && scope.pool !== pool.id) {
+      setScope({ site: site.id, pool: pool.id });
+    }
+  }, [site?.id, pool?.id, scope.pool]);
   async function api<T>(
     path: string,
     method = "GET",
@@ -551,7 +559,7 @@ function App() {
     if (kind === "updates") location.replace("#/settings/updates");
     const moved = kind === "settings" && movedSection(id);
     if (moved) location.replace(moved);
-    const linked = kind === "sites" ? data.sites.find(s => s.id === id) && { site: id, pool: "" }
+    const linked = kind === "sites" ? data.sites.find(s => s.id === id) && { site: id, pool: allPools }
       : kind === "pools" ? data.pools.filter(p => p.id === id).map(p => ({ site: p.site_id, pool: p.id }))[0] : undefined;
     const settingsSection = kind === "pools" ? route.split("/").filter(Boolean)[2] : undefined;
     if (linked) { setScope(linked); location.replace(settingsSection ? `#/settings/${settingsSection}` : "#/"); }
@@ -810,7 +818,7 @@ function App() {
           <span className="sep" aria-hidden="true">/</span><b>{pool?.name || "All pools"}</b><span className="count">{scopedHosts.length} {scopedHosts.length === 1 ? "host" : "hosts"}</span><Icon kind="chevron" size={14} />
         </>}>
           {data.sites.map(s => <Fragment key={s.id}>
-            <button type="button" aria-current={s.id === site?.id && !pool ? "true" : undefined} onClick={() => setScope({ site: s.id, pool: "" })}>{s.name} · all pools</button>
+            <button type="button" aria-current={s.id === site?.id && !pool ? "true" : undefined} onClick={() => setScope({ site: s.id, pool: allPools })}>{s.name} · all pools</button>
             {data.pools.filter(p => p.site_id === s.id).map(p => <button key={p.id} type="button" className="indent" aria-current={p.id === pool?.id ? "true" : undefined} onClick={() => setScope({ site: s.id, pool: p.id })}>{p.name}</button>)}
           </Fragment>)}
           <hr />

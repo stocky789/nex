@@ -1,0 +1,61 @@
+{
+  "summary": "Repair two-host witness registration, member cluster formation, and native status reporting",
+  "paths": [
+    "internal/agent/run.go",
+    "internal/agent/pool_witness_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_cluster.go",
+    "internal/agent/pool_cluster_test.go",
+    "internal/agent/pool_maintenance.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/pool_watchdog_arming.go",
+    "internal/agent/pool_watchdog_arming_test.go",
+    "internal/agent/storage_cluster_secrets.go",
+    "internal/controller/pool_fence_bmc_test.go",
+    "internal/protocol/pool.go",
+    "internal/vmhost/pool_witness.go",
+    "internal/vmhost/pool_witness_test.go",
+    "internal/vmhost/pool_cluster.go",
+    "internal/vmhost/pool_cluster_test.go",
+    "internal/vmhost/storage_cluster.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-members.test.mjs",
+    "web/src/pool-promotion.tsx",
+    "docs/API.md",
+    "docs/plans/2026-09-22-two-host-pool-fencing.md",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/qa/2026-09-25-two-host-witness-registration.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Show the Core-reported operating witness separately from watchdog protection, explain the survivor-availability decision, name the controlled Corosync restart needed on an already-running two-host cluster, and explain the armed three-to-two-host eject and maintenance refusals.",
+    "pages": ["docs/guide/pool-authority-and-recovery.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Core advertises the implemented pool-witness-v1 capability and canonicalizes its native CSR. The signed peer authority replica now includes a per-member sealed Corosync key; a new member refuses a pool cluster replica without it. The existing Core membership report and Controller pool-members response gain optional PoolFenceCluster.witness, the master's current native qdevice observation independent of watchdog arming. Older Core reports omit it and the UI omits the separate witness line. The two-host native configuration now omits WaitForAll so quorum can recover when the witness returns while a peer is down; this is an existing contract behavior change, not a new route. The existing eject and maintenance operations gain safety refusals when a transition would leave two hosts with a configured witness while watchdogs still feed. Peer mTLS, master authorization, signature and generation checks, and atomic replica retries remain as before. Older Core peers require upgrade to form the pool cluster.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The two-host phase plan records verified cluster formation and the still-open fencing gates; the public roadmap status does not change.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The fix uses Core-owned membership and a shared private Corosync key; it adds no Controller-owned pool state.",
+    "record": "The pool master's pool-peer.json PoolMembership.Witness, its storage-cluster/corosync-authkey, and signed per-member authority replicas hold the witness, credential and wrapped key. A fresh Controller adopts the master's authenticated membership report and Core re-registers against the runtime qnetd CA."
+  },
+  "verification": {
+    "method": "Focused report, native-CSR, sealed-key delivery, member replica, key ordering, verbose status, and incorrect witness identity regressions failed before their respective fixes and passed after. Focused agent, vmhost, and Controller tests and Go builds passed. A disposable two-Core/Controller pool reproduced forming; after removing temporary lab bypasses, the patched hosts established matching private keys and 3/3 native quorum votes with connected TLS qdevices, and Controller reported degraded with zero watchdogs armed. The authorized original test hosts reached the same quorum and Controller status after patched Core-local service restarts, with both VMs still running and temporary transfer access removed. The follow-up optional witness status passed focused Core, Controller projection, UI rendering, typecheck, build, API contract, and isolated Chromium checks for operating, forming, operating witness with nonquorate cluster, absent, stale, error and loading. A fresh isolated witness-loss lab kept the survivor VM running but found WaitForAll blocked requorum after qnetd returned; a second cloned lab without WaitForAll on two-host witness clusters restored quorum in about nine seconds and stayed inquorate on an A-only service cold start without qnetd. Focused simulated regressions cover the armed eject, maintenance, arming-intent and two-host config/policy guards. Final agent, vmhost, Controller package tests, UI typecheck/build, API contract, generated reference, documentation, privacy and diff checks passed. The new render/status follow-up is not yet installed on the original pool; an existing running cluster needs a controlled Corosync restart because reload did not clear WaitForAll. Watchdog reset and physical acceptance remain untested.",
+    "evidence": ["internal/agent/pool_witness_test.go", "internal/agent/pool_cluster_test.go", "internal/agent/pool_transfer_test.go", "internal/agent/pool_watchdog_arming_test.go", "internal/vmhost/pool_witness_test.go", "internal/vmhost/pool_cluster_test.go", "docs/qa/2026-09-25-two-host-witness-registration.md"]
+  }
+}

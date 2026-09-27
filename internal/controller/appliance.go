@@ -35,10 +35,42 @@ type managedAppliance struct {
 	Error       string                 `json:"error,omitempty"`
 	// Guest is the host's latest guest-agent and console-channel observation of a
 	// running VM; absent when the VM is not running or the host predates it.
-	Guest *protocol.GuestInfo `json:"guest,omitempty"`
+	Guest      *protocol.GuestInfo  `json:"guest,omitempty"`
+	DetectedOS *protocol.DetectedOS `json:"detected_os,omitempty"`
 	// Usage is the host's latest resource observation of a VM observed running in a fresh
 	// report; omitted otherwise.
 	Usage *protocol.VMUsage `json:"usage,omitempty"`
+}
+
+// Historical OS comes only from the recorded pool master, even while it is offline.
+// cache is keyed by master host id within one list request so the inventory JSON is
+// unmarshaled once per master instead of once per VM.
+func reportedDetectedOS(cache map[string]*protocol.ManagedState, pool, master, id string, raw sql.NullString) *protocol.DetectedOS {
+	if master == "" || !raw.Valid {
+		return nil
+	}
+	managed, cached := cache[master]
+	if !cached {
+		var inv protocol.Inventory
+		if json.Unmarshal([]byte(raw.String), &inv) != nil || inv.Managed == nil {
+			cache[master] = nil
+			return nil
+		}
+		if m := inv.Managed.Membership; m == nil || m.Valid() != nil || m.PoolID != pool || m.MasterHostID != master {
+			cache[master] = nil
+			return nil
+		}
+		cache[master] = inv.Managed
+		managed = inv.Managed
+	}
+	if managed == nil {
+		return nil
+	}
+	os, ok := managed.DetectedOS[id]
+	if !ok || os.Valid() != nil {
+		return nil
+	}
+	return &os
 }
 
 func applianceUUID(s string) bool {
@@ -208,22 +240,25 @@ func (c *Controller) adoptAppliance(w http.ResponseWriter, r *http.Request, user
 }
 
 func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	rows, err := c.db.Query("SELECT a.id,a.pool_id,a.host_id,a.name,h.revoked,h.inventory FROM appliances a JOIN hosts h ON h.id=a.host_id ORDER BY a.name,a.id")
+	rows, err := c.db.Query("SELECT a.id,a.pool_id,a.host_id,a.name,h.revoked,h.inventory,p.master_host_id,m.inventory FROM appliances a JOIN hosts h ON h.id=a.host_id JOIN pools p ON p.id=a.pool_id LEFT JOIN hosts m ON m.id=p.master_host_id AND m.pool_id=p.id AND m.revoked=0 ORDER BY a.name,a.id")
 	if err != nil {
 		fail(w, 500, "VM lookup failed")
 		return
 	}
 	defer rows.Close()
 	out := []managedAppliance{}
+	detectedCache := map[string]*protocol.ManagedState{}
 	for rows.Next() {
 		v := managedAppliance{Role: "controller", Protected: true}
 		var revoked bool
-		var raw sql.NullString
-		if rows.Scan(&v.ID, &v.PoolID, &v.HostID, &v.Name, &revoked, &raw) != nil {
+		var raw, masterRaw sql.NullString
+		var master string
+		if rows.Scan(&v.ID, &v.PoolID, &v.HostID, &v.Name, &revoked, &raw, &master, &masterRaw) != nil {
 			fail(w, 500, "VM decode failed")
 			return
 		}
 		v.State, v.Freshness, v.Guest, v.Usage = c.observeVM(v.HostID, v.ID, revoked, raw)
+		v.DetectedOS = reportedDetectedOS(detectedCache, v.PoolID, master, v.ID, masterRaw)
 		out = append(out, v)
 	}
 	if rows.Err() != nil {
@@ -231,18 +266,20 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		return
 	}
 	rows.Close()
-	managed, err := c.db.Query("SELECT r.command,o.status,o.error,h.revoked,h.inventory FROM managed_resources r JOIN operations o ON o.id=r.operation_id JOIN hosts h ON h.id=r.host_id WHERE r.kind='vm-create' AND o.status!='failed' ORDER BY r.name,r.id")
+	managed, err := c.db.Query("SELECT r.command,o.status,o.error,h.revoked,h.inventory,p.master_host_id,m.inventory FROM managed_resources r JOIN operations o ON o.id=r.operation_id JOIN hosts h ON h.id=r.host_id JOIN pools p ON p.id=r.pool_id LEFT JOIN hosts m ON m.id=p.master_host_id AND m.pool_id=p.id AND m.revoked=0 WHERE r.kind='vm-create' AND o.status!='failed' ORDER BY r.name,r.id")
 	if err != nil {
 		fail(w, 500, "VM lookup failed")
 		return
 	}
 	defer managed.Close()
+	detectedCache = map[string]*protocol.ManagedState{}
 	for managed.Next() {
 		var command string
 		var v managedAppliance
-		var raw sql.NullString
+		var raw, masterRaw sql.NullString
+		var master string
 		var revoked bool
-		if managed.Scan(&command, &v.Status, &v.Error, &revoked, &raw) != nil {
+		if managed.Scan(&command, &v.Status, &v.Error, &revoked, &raw, &master, &masterRaw) != nil {
 			fail(w, 500, "VM decode failed")
 			return
 		}
@@ -265,6 +302,7 @@ func (c *Controller) appliances(w http.ResponseWriter, r *http.Request, user, cs
 		v.Spec = &spec
 		v.OperationID = cmd.OperationID
 		v.State, v.Freshness, v.Guest, v.Usage = c.observeVM(v.HostID, v.ID, revoked, raw)
+		v.DetectedOS = reportedDetectedOS(detectedCache, v.PoolID, master, v.ID, masterRaw)
 		out = append(out, v)
 	}
 	if managed.Err() != nil {

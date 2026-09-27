@@ -269,7 +269,12 @@ export function HostFencingSetting({ report, onChange, busy }: {
     </label>
     <p className="help">Turning this on does not arm anything by itself. Nex Core arms a host's watchdog only where every prerequisite below holds.</p>
     <p className="warning" role="note">Once watchdogs are armed, a host that loses this pool's quorum resets itself and its running virtual machines stop. A switch failure that splits a pool therefore reboots the minority side. This pool's cluster runs on the management network, so changing a host's management network, or any work that interrupts it, is refused while that host is armed — put the host in maintenance first. In a three-host pool a second failure while one host is already down reboots the remaining two, because two of three are a minority: for planned work on more than one host, put the first in maintenance mode, which disarms the whole pool.</p>
+    {summary.cluster?.witness ? <p className="help pool-host-fencing-witness" role="status">
+      <strong>Witness</strong> <Badge value={summary.cluster.witness.state === "operating" ? "ok" : "pending"} label={summary.cluster.witness.state} />
+      {summary.cluster.witness.detail ? ` ${summary.cluster.witness.detail}` : ""}
+    </p> : null}
     {summary.cluster ? <p className={`help pool-host-fencing-cluster ${clusterBadges[summary.cluster.state] || "unknown"}`} role="status">
+      <strong>Watchdog cluster</strong>{" "}
       <Badge value={clusterBadges[summary.cluster.state] || "unknown"} label={clusterStateNames[summary.cluster.state] || summary.cluster.state} />
       {clusterText(report, summary.cluster)}
     </p> : null}
@@ -357,6 +362,7 @@ export function poolChecks(report: Report): StatusCheck[] {
   else checks.push({ label: "Fencing", result: `${summary.ready === summary.total ? "OK" : "Not ready"} (${summary.ready} of ${summary.total})`, tone: summary.ready === summary.total ? "ok" : "warn" });
   checks.push(report.host_fencing_supported === false || !summary ? { label: "Host fencing", result: "Not reported", tone: "neutral" }
     : { label: "Host fencing", result: summary.host_fencing ? "On" : "Off", tone: "neutral" });
+  if (summary?.cluster?.witness) checks.push({ label: "Witness", result: capitalize(summary.cluster.witness.state), tone: summary.cluster.witness.state === "operating" ? "ok" : "warn", detail: summary.cluster.witness.detail });
   if (summary?.cluster) checks.push({ label: "Watchdog cluster", result: capitalize(clusterStateNames[summary.cluster.state] || summary.cluster.state), tone: badgeTone(clusterBadges[summary.cluster.state] || "unknown"), detail: clusterText(report, summary.cluster) });
   return checks;
 }

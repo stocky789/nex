@@ -62,3 +62,33 @@ external redistribution. No additional approval is needed to complete this set.
 
 API impact for the coverage extension: **existing contract** — consumes the same
 optional `guest.os_id` introduced above. Guide impact: **updated**. No new state.
+
+## Retain the last detected OS — 2026-09-25
+
+Project owner selected Core-owned retention when live guest facts disappear. Preserve
+the last successful QEMU Guest Agent OS name, canonical ID and detection time for managed
+pool VMs. Never preserve live agent readiness or IP addresses as if they were current.
+Missing facts, sleep, shutdown and failed requests do not erase the historical OS; a new
+successful report replaces it after an OS upgrade or reinstall. With no saved history,
+show the explicitly configured family. UI history is marked **(last detected)**.
+
+State owner: **core**. The pool master's `pool-vms.json` VM record owns the retained OS,
+carried by existing authority replication/transfer. The assigned host durably queues its
+observation for existing peer inventory publication during master outages. A replacement
+Controller recovers `managed.detected_os` from the master's authenticated inventory;
+Controller adds no private history or settings. Unmanaged domains are outside this record.
+
+API impact: **changed contract** — additive `detected_os` records in pool peer VM inventory,
+master managed inventory and client VM results. Existing authentication and VM ownership
+checks apply; records are bounded and timestamped. Absence from older builds means no
+historical fallback, never deletion. This changes no power operation or guest-tools contract.
+Core advertises `detected-os-v1` and waits for Controller's acknowledgement before sending
+the added report field. Reset that acknowledgement on restart/re-enrollment. Upgrade all
+Core hosts before relying on OS history through master transfer or promotion: older Core
+code cannot retain the new VM record field.
+Guide impact: **updated** in [guest tools](../guide/guest-tools.md).
+
+Acceptance: focused failures-before-fix, persistence, retry and Controller re-adoption tests;
+UI typecheck/build and simulated browser state transitions; API/documentation/privacy checks
+and independent review. [Executed evidence and limits](../qa/2026-09-25-guest-os-retention.md)
+record which checks actually ran. No phase is reopened or marked complete by this fix.

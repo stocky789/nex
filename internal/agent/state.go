@@ -72,6 +72,9 @@ type State struct {
 	// Controller-connection-scoped acknowledgement for the additive member
 	// session-monitor report fields. It never represents native readiness.
 	StorageClusterSessionMonitorProtocolReady bool `json:"storage_cluster_session_monitor_protocol_ready,omitempty"`
+	// ISODownloadProgressReady is scoped to the current Controller connection.
+	ISODownloadProgressReady bool `json:"iso_download_progress_ready,omitempty"`
+	DetectedOSReady          bool `json:"detected_os_ready,omitempty"`
 	// StorageProtocolLegacy records an explicit v2 rejection by a Controller only
 	// while Core has no v2 storage state. It preserves existing local management.
 	StorageProtocolLegacy bool                    `json:"storage_protocol_legacy,omitempty"`

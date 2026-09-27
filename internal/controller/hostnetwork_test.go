@@ -190,10 +190,10 @@ func TestHostNetworkProjection(t *testing.T) {
 	if view.Hostname != l.member.inv.Hostname {
 		t.Fatalf("the projection does not report the host's own name: %q", view.Hostname)
 	}
-	l.member.inv.ManagementNetwork = &protocol.ManagementNetworkStatus{Revision: 2, Stage: protocol.ManagementNetworkStaged, OperationID: "op-stage", ObservedAt: time.Now().UTC()}
+	l.member.inv.ManagementNetwork = &protocol.ManagementNetworkStatus{Revision: 2, Stage: protocol.ManagementNetworkStaged, OperationID: "op-stage", ObservedGateway: "192.0.2.1", ObservedAt: time.Now().UTC()}
 	l.member.inv.Checks = []protocol.Check{{Name: "management-network", Status: "failed", Error: "the rollback restored the previous configuration", ObservedAt: time.Now().UTC()}}
 	l.send(&l.member, nil)
-	if view = l.hostNetwork(t); view.State != protocol.ManagementNetworkStaged || view.Record == nil || view.Record.Revision != 2 || view.Check == nil || view.Check.Status != "failed" {
+	if view = l.hostNetwork(t); view.State != protocol.ManagementNetworkStaged || view.Record == nil || view.Record.Revision != 2 || view.Record.ObservedGateway != "192.0.2.1" || view.Check == nil || view.Check.Status != "failed" {
 		t.Fatalf("the host's record was not projected: %+v", view)
 	}
 	// A host without the capability offers no control at all.

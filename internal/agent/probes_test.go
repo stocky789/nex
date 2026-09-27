@@ -398,13 +398,28 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	probe := guestProbe()
+	var recordings []map[string]protocol.DetectedOS
+	probe := recordingGuestProbe(func(_ context.Context, facts map[string]protocol.DetectedOS) { recordings = append(recordings, facts) })
 	first, err := probe(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := probe(context.Background())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recordings) != 1 || recordings[0]["12345678-1234-4234-8234-123456789012"].OSID != "debian" {
+		t.Fatalf("successful OS not recorded exactly once: %#v", recordings)
+	}
+	// A newly started probe has no cached agent success. Failed QGA reads must
+	// not create an observation or overwrite the previously retained one.
+	if err := os.WriteFile(filepath.Join(bin, "virsh"), []byte(strings.Replace(script, "*guest-get-osinfo*) echo", "*guest-get-osinfo*) exit 1; echo", 1)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	failedProbe := recordingGuestProbe(func(_ context.Context, facts map[string]protocol.DetectedOS) {
+		t.Fatalf("failed agent recorded OS: %#v", facts)
+	})
+	if _, err := failedProbe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for _, result := range []any{first, second} {

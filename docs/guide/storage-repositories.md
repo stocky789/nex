@@ -142,7 +142,11 @@ for production workloads. Use an explicitly selected disposable lab host.
     mount/session setup where applicable, including any SMB or iSCSI credentials Core held for that
     repository. For ZFS it unregisters Nex storage while
     leaving the native pool and dataset intact. It never deletes data, formats a LUN,
-    touches the original ZFS dataset, or removes `.nex-storage-marker`.
+    touches the original ZFS dataset, or removes `.nex-storage-marker`. **Detach** is disabled
+    for the host's automatic `/var/lib/libvirt/images` repository, even if it has been renamed.
+    The row says **Host default; cannot detach**. **Update** still permits renaming that
+    repository, but its directory cannot be changed in Controller. The registration stays
+    available for local VM disks and ISOs through this workflow.
 
 ### Provision local ZFS storage from selected disks
 

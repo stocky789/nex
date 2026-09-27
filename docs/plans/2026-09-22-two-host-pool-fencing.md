@@ -2,8 +2,9 @@
 
 Status: partially implemented: automatic BMC promotion in Core has focused simulated checks;
 new-image delivery scripts stage native packages inactive (image build unverified). Controller
-qnetd registration and Core witness credential wiring have bounded checks, while storage-lease
-activation, two-host witness self-reset/proof, their UI, and full acceptance remain open.
+qnetd registration, member credential/key delivery and connected native quorum were verified
+in an isolated two-Core/Controller lab. Storage-lease activation, two-host witness
+self-reset/proof, their UI, and full acceptance remain open.
 Decision: project owner,
 2026-09-22; native witness
 certificate flow approved by project owner, 2026-09-24. Follow-on to
@@ -15,6 +16,18 @@ disposable container. Neither observation is Nex integration evidence. Native sa
 contention and emulated watchdog reset were exercised in a separate
 [disposable storage lab](../qa/2026-09-24-two-host-storage-lease-lab.md); Core lease integration
 and physical timing remain open.
+The [two-Core witness integration lab](../qa/2026-09-25-two-host-witness-registration.md)
+reproduced and repaired cluster formation; Controller now reports a connected voting witness
+as degraded with both watchdogs unarmed. API impact: changed peer authority-replica contract;
+the signed per-member Corosync key and its acknowledgement receipt require upgraded Core
+peers. The witness selection and shared key stay durable on the pool master; a fresh
+Controller recovers the selection from Core and signs new qdevice credentials.
+The pool status now reports the master's verified qdevice vote as **Witness · operating**
+separately from **Watchdog cluster · degraded**; it does not infer witness health from
+where qnetd runs. API impact: changed `PoolFenceCluster.witness` observation in Core's
+existing membership report and Controller's pool-members projection. The observation
+is memory-only and omitted by older Core versions. The Controller displays it without
+deriving health; two-host watchdog arming remains gated as below.
 
 ## Problem
 
@@ -102,7 +115,7 @@ decision 2. There is still no force, override or "declare host lost".
   `corosync-qnetd` on the witness, giving the pair a third vote. New Core images stage both
   packages because another pool master may be the witness; the Controller appliance stages
   qnetd. All services remain inactive until selected and configured. Nex Core wraps selection,
-  registration and reporting; there is no Nex consensus code. No Nex witness service is active today.
+  registration and reporting; there is no Nex consensus code.
   Debian's qnetd post-install script creates a durable `/etc` CA database. Fresh-image delivery
   removes that unused database after configuration; witness runtime creates and uses only a
   `/run` CA database.
@@ -176,17 +189,37 @@ A Controller may be the witness. It survives the replacement test because it car
   the other's authority.
 
 **Implementation safety finding, 2026-09-24.** With one pool host already gone, losing the
-Controller witness removes the survivor's second vote. Pacemaker's `no-quorum-policy=suicide`
+selected witness removes the survivor's second vote, regardless of where that witness runs.
+Pacemaker's `no-quorum-policy=suicide`
 can panic that survivor even without SBD; the native peer-partition lab already observed a
 Pacemaker direct-panic path. Core currently uses `freeze` for an actual two-host witness cluster
 and withholds two-host SBD arming and witness exclusion proof. That preserves the stated
-Controller-outage rule while leaving automatic witness takeover unavailable. The exact
-one-host-down plus qnetd-outage sequence was not run before the disposable lab was stopped;
-neither a safe timing bound nor a replacement witness design is established. The preferred
+Controller-outage rule while leaving automatic witness takeover unavailable. A later
+isolated one-host-down plus qnetd-outage sequence kept the survivor and its running
+Controller VM up. Qnetd return left the old Corosync config blocked by `WaitForAll`;
+a fresh cloned lab without that option restored quorum while the other host stayed down.
+The preferred
 other-pool-master candidate also lacks cross-pool certificate trust and registration, so only
-the Controller candidate is currently usable. A product-owner decision and fresh isolated
-acceptance evidence are required before enabling automatic witness takeover. The earlier five
-decisions above do not resolve this newly observed availability conflict.
+the Controller candidate is currently usable. **Decision: project owner, 2026-09-25 — the
+survivor must keep its VMs running if the Controller witness disappears.** Core counts a
+registered, connected and voting witness as operating without judging its physical placement.
+The same survivor-availability requirement applies when any selected witness disappears; moving
+qnetd to a separate machine alone does not establish it. Automatic two-host watchdog fencing
+requires a design and native outage proof that preserve the survivor's VMs, or an independent
+fence proof such as BMC. The two-host renderer now omits `wait_for_all`; the three-or-more-host
+watchdog cluster retains it. Config reload alone did not clear the old runtime flag, so an
+existing running two-host cluster needs a controlled Corosync restart. A cold-start service
+check with only one host and no qnetd stayed inquorate. Physical reset, split-brain and
+automatic-takeover evidence remain required before enabling witness fencing.
+An armed three-host pool must stop every watchdog feed before ejecting into a two-host
+pool. Core records feeding intent before starting SBD, rechecks it before durable
+membership removal, and refuses to apply a two-host witness config while any host
+reports feeding or the local SBD state is live or unknown. Core also refuses a
+maintenance drain from three ready hosts to the configured two-host witness until
+all watchdogs have stopped. A transition already stranded with only two votes may
+wait for the third vote to return before teardown can safely finish.
+The master checks each new feeding intent against its current drain and fencing
+decision before that host may start SBD, closing a stale-member timing gap.
 
 ### Automatic takeover
 
@@ -320,7 +353,7 @@ defaults on; the Controller allowed as witness under the no-durable-state rules;
 witness selection with deterministic re-selection; automatic takeover on a valid proof; and no
 replication decision, because ZFS replication does not exist.
 
-The original five decisions remain as recorded. The witness outage conflict above is a new open
-decision. Two values are deliberately left to lab measurement rather than choice:
+The original five decisions remain as recorded. The witness outage conflict is resolved by the
+2026-09-25 survivor-availability decision above. Two values are deliberately left to lab measurement rather than choice:
 the lockspace host-dead interval and the witness fencing timeout, each bounded below by twice the
 target's watchdog timeout, measured and recorded in the implementing slices.

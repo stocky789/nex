@@ -139,6 +139,9 @@ are not usable by current Core. `POST /api/v1/agent/witness/register` accepts
 `PoolWitnessRegistration{address, certificate_pem, ca_pem, ca_sha256}`; the Controller address is
 empty for the same reason. Registration also requires the reported membership to match the
 request's pool, master and fencing generation, plus the `pool-witness-v1` capability. The cluster
+capability is advertised in Core's normal v2 reports, but not its legacy v1 reports. Core sends a
+single `CERTIFICATE REQUEST` PEM block, including when native `certutil` generated a
+`NEW CERTIFICATE REQUEST` block or the request is retried from its staged file. The cluster
 name is `nexpool` followed by the first 128 bits of SHA-256 over `nex-pool-cluster\0` and the pool ID;
 the PEM CSR must have a valid signature and matching common name. Registration refuses a name
 already mapped to another enrolled pool. Repeating registration is safe: the native signer may replace that cluster's
@@ -1711,7 +1714,7 @@ an unsigned or partial copy.
   call is also how the master learns the member's certified peer public key for the wrap, from the
   pinned TLS leaf, so no public key is ever put on the wire or into the membership record.
 - `POST /api/v1/pool/replica`, body ≤ 1 MiB (`protocol.PoolReplicaLimit`) with no trailing JSON →
-  `200 PoolReplicaAck{host_id, generation, digest, verified, sanlock_host_generation?}`; `409` with the same shape plus a
+  `200 PoolReplicaAck{host_id, generation, digest, verified, sanlock_host_generation?, corosync_key_ready?}`; `409` with the same shape plus a
   bounded `error` on refusal; `400 invalid pool authority replica`; `401 replica peer rejected`;
   `405` with `Allow: GET, POST`. Idempotent: the same generation with the same content returns the
   same acknowledgement. `sanlock_host_generation` is present only after the member joins the
@@ -1719,7 +1722,7 @@ an unsigned or partial copy.
 
 **Payload.** `protocol.PoolAuthorityReplica{pool_id, master_host_id, generation, member_host_id,
 created_at, membership, vms, storage, networks, media, storage_clusters, ca_key_wrapped?,
-fence_credentials?, witness_credentials?, sections[], signature}`. `sections[]` is exactly
+corosync_key_wrapped?, fence_credentials?, witness_credentials?, sections[], signature}`. `sections[]` is exactly
 `membership, vms, storage, networks, media, storage_clusters`, in that order, each with the SHA-256
 of its canonical JSON, so a truncated or reordered copy is refused rather than used. The signature
 is ECDSA P-256/SHA-256 with the **pool CA key** over the whole replica minus `signature`; a member
@@ -1737,6 +1740,21 @@ exact NFS repositories, authority repository, timeout bounds and `prepared_gener
 `membership.next_sanlock_host_id` prevents lease ID reuse. Each `PoolMember` carries
 `sanlock_host_id` and `sanlock_host_generation` to bind later native lease observations to the
 same member. These preparation records do not enable storage-lease takeover.
+
+`corosync_key_wrapped` carries the master's 128-byte pool Corosync authentication key,
+sealed for the addressed member with a separate `nex pool corosync key v1` context bound
+to pool, member and replica generation. A member verifies the signature, opens and durably
+stores the key before acknowledging a pool cluster replica; each host installs that same
+key before starting Corosync. A missing or mismatched key blocks cluster formation. A
+member uses the verified replica's current witness and missing peer addresses for pool
+cluster configuration, including same-membership-generation witness updates, while
+keeping its local maintenance, arming and peer identity record. The member's
+`corosync_key_ready` receipt is mandatory whenever the master sends a pool key; an older
+member that ignores the new field and omits the receipt cannot be counted as ready.
+Upgrade both hosts to complete the pool cluster handshake.
+The member refuses a missing key with `pool authority replica omitted the Corosync key`;
+the master reports `pool member acknowledged the replica without the Corosync key` when
+the receipt is absent. A retry uses the same signed generation and immutable key.
 
 **Sealed CA key.** `ca_key_wrapped` is the pool CA private key wrapped for exactly one member:
 ECDH between a fresh ephemeral P-256 key and that member's certified peer public key,
@@ -1959,6 +1977,15 @@ restored and the host is never put back in the pool. A cancelled master change r
 master change was cancelled by an operator`, a cancelled eject `the pool member eject was cancelled
 by an operator`. Nothing is ever aborted on a timeout. A refusal at the freeze marks the record
 terminal, so a refused transfer never blocks the next one.
+An eject that would leave fewer than three ready hosts refuses while any membership row says a
+watchdog is still feeding. Core rechecks immediately before the durable membership write, so a
+feed that begins after the initial freeze on upgraded Core hosts cannot be missed; the transfer
+remains before removal.
+The maintenance operation also refuses a drain from three ready hosts to a configured two-host
+witness while any pool watchdog still feeds; its response names the prerequisite to disarm.
+The master also refuses a new watchdog feeding intent after Host fencing is off, that host is
+draining, or the pool no longer has a supported three-to-five-host watchdog cluster. A member must record that intent
+before it starts SBD.
 
 **A cancel that Core performed is a success, not a failure.** A `transfer-cancel` that did what it
 was asked returns `status: "succeeded"` with Core's sentence in `last_transfer.reason` and `error`
@@ -2900,10 +2927,18 @@ status from the master report.
 at most `PoolWatchdogClusterHosts` (5) of them, with Host fencing on and **no clustered-storage
 repository**. A two-ready-host pool with Host fencing on and no storage lease can separately
 register Controller-hosted qnetd and configure native Corosync qdevice. That quorum vote is status
-only for safety-proof purposes: `PoolFenceCluster` reports `forming` until qdevice is verified and
-`degraded` after it is connected and voting, while two-host SBD arming and witness-loss exclusion
-proof remain withheld. In the supported watchdog cluster every ready host that is not in maintenance
-is included; the ring address is the host
+only for safety-proof purposes: `PoolFenceCluster` reports `forming` until qdevice and native
+quorum are verified, then `degraded` while two-host SBD arming and witness-loss exclusion
+proof remain withheld. Its optional `witness` field separately reports `forming` or `operating`
+from the pool master's native qdevice identity, pinned CA, TLS and cast-vote checks; a voting
+witness does not imply native quorum or an armed watchdog. Older Core reports omit the
+field, and Controller passes it through without deriving witness health. A two-host
+witness configuration omits `wait_for_all` so native quorum can return after qnetd
+reconnects with one host down. The three-or-more-host watchdog configuration retains
+`wait_for_all`. Updating an already running two-host Corosync configuration requires
+a controlled service restart; a config reload did not clear the old runtime flag in
+the isolated test. In the supported watchdog cluster every ready host that is not in
+maintenance is included; the ring address is the host
 part of the `peer_origin` the pool already records, the Corosync node name is the durable host ID
 (which is what `corosync-quorumtool` reads back and what `pcmk_host_*` already matches), and the
 node ID is a stable digest of that host ID, never reused for another host. A host the pool counts as
@@ -3025,6 +3060,18 @@ keeps no copy of the change, computes no countdown and is not required for the r
 capability list and absent from the legacy v1 list, which also strips `management_network` from the
 report. Without it, `supported` is false in the view and submitting anyway is
 `409 staged management network edits need management-network-v1 on this host; upgrade Nex Core`.
+
+**Observed DHCP values.** A fresh `GET /api/v1/hosts/{id}/network` returns the host's
+`nics` including the live IPv4 address on `br0`. Its `management_network.observed_gateway`
+is the live default IPv4 gateway on `br0` from the host route table, when present. Both
+are observations, not configuration: the `current`/`spec` DHCP interface keeps `address`
+and `gateway` empty, and POST still rejects them for DHCP. An older Core omits
+`observed_gateway`; the Controller shows an unknown value rather than guessing. A stale
+host report must not present these values as current. The field is additive in both the
+Core inventory and Controller GET result; no command or retry behavior changes. Upgrade
+Controller before Core because the older Controller strictly decodes Core reports.
+The Hosts list and panel display the IPv4 address observed on `br0`, not a loopback or
+unrelated interface address; absent observation displays an unknown marker.
 
 **Durable state, and where it lives.** The host writes `<state-dir>/management-network.json`: the
 operation ID of the change, its revision and stage, the spec, the verbatim previous contents of the
@@ -4214,6 +4261,24 @@ Controller never downloads or stages these URL bytes. URLs are limited to 4096 c
 cannot contain credentials or fragments; client responses and applied inventory omit them.
 Identical request retries return the same operation; changed payloads conflict. Poll media and
 operations for completion: initial zero size and empty hash become host-reported metadata.
+While a URL import is actively running, Core offers `iso-download-progress-v1` in a v2
+report. Controller responds with `iso_download_progress: true`; until that acknowledgement,
+Core withholds the new field so an older strict Controller can keep accepting reports.
+Core then reports `Inventory.managed.iso_downloads[]`
+with the assigned `operation_id`, `received_bytes`, and `total_bytes` when the public server
+sent a positive `Content-Length`. Core samples the transfer in its own journal at most once
+per second and sends the latest sample in its ordinary authenticated report. Controller
+validates the report against that host's dispatched URL `iso-import` and exposes it only as
+the latest host observation in `GET /api/v1/hosts[].inventory.managed.iso_downloads`.
+An operation unknown to a replacement Controller has no task row to attach progress to;
+Controller ignores that progress while accepting the report and later adopts a completed ISO.
+The browser shows a percentage only with a known total; without one it shows received bytes
+and an indeterminate bar. A stale host report is not live progress. A terminal or interrupted
+Core import omits the entry on its next report; task status still decides whether the ISO is
+usable. No URL or credentials enter the progress report, and Controller does not drive the
+transfer. This is an additive Core report and client inventory contract. Readiness resets on
+disconnect, Core restart and Controller replacement; an older Controller receives no unknown
+progress field.
 Older hosts reject admission and never receive URL commands. Core journal recovery handles
 Controller outages and ambiguous interrupted imports require attention. A replacement Controller
 recovers completed ISO identity, name, storage, size and hash from managed inventory.
@@ -4963,10 +5028,50 @@ artwork and uses a generic monitor icon when it is missing or has no bundled ico
 lookup has no name-based heuristics. This is observation, not health: a connected agent proves
 nothing about guest applications.
 
-Compatibility: shared upgrade rule; an older Core omits the guest observation, so the VM retains
-its configured OS label and Linux/Windows family icon (otherwise a generic monitor).
-A reported OS with a missing/unknown ID uses the generic monitor. No pool-scoped setting is introduced.
-Evidence: [console features QA report](qa/console-features/checks.md).
+Core also retains the last successful OS identity for managed VMs as `DetectedOS`: `os`
+(non-whitespace, at most 4096 UTF-8 bytes), optional `os_id` (at most 200 bytes), and
+`observed_at` (the nonzero timestamp of that successful guest-agent response). A failed,
+empty or missing response does not replace this history. Hostname, IP addresses, channel
+states and application health are not retained as OS history.
+
+API impact: **changed contract** — optional `Inventory.managed.detected_os` maps canonical
+nonzero VM UUIDs to `DetectedOS` (at most 10000 entries); `GET /api/v1/vms` exposes the
+corresponding optional `detected_os` object. The existing authenticated Core peer
+`POST /api/v1/pool/vms/inventory` also accepts the optional map. No new route or command.
+Core keeps local successful observations in `pool-vms.json` until normal inventory publication
+can deliver them to the master. The master's VM owner records in that file are the durable
+authority, included in existing authority replication; a replacement Controller recovers them
+from the master's managed inventory. Controller projects only the enrolled, non-revoked pool
+master's report with matching membership; it stores no separate OS history.
+
+The peer's existing pool mTLS identity, ready membership and generation checks apply. Each
+history key must name a VM in the publishing member's inventory owned by that member and pool;
+invalid values are refused. Only a newer successful observation replaces the master's record.
+Exact retries and an omitted map or entry preserve the existing history; a stopped or
+unresponsive guest does not clear it. A managed VM deletion removes its owner record and
+history. A lost Controller connection does not stop Core observation or peer publication.
+Local persistence failure is logged and retried on a later successful guest-agent reading;
+a retained-history read failure reports a failed `guest-os-history` check. Historical records
+are limited to managed VM definitions; unmanaged guests do not gain durable OS history.
+
+The client prefers live `guest.os`, otherwise displays `detected_os.os` as **last detected**
+even for a stopped VM or stale host, and otherwise displays the configured OS family as
+**configured**. Historical identity does not imply that guest tools are connected. Missing or
+unknown reported IDs use the generic monitor icon. Compatibility follows the shared upgrade
+rule: older Core versions omit history; the existing configured fallback remains available.
+Core advertises `detected-os-v1`; an updated Controller acknowledges it with optional
+`ReportResponse.detected_os: true` only on protocol v2 reports offering that capability.
+Core withholds `Inventory.managed.detected_os` until acknowledged, so older Controllers
+continue accepting reports without this additive field. Startup and re-enrollment clear the
+acknowledgement; Core retains OS history independently of negotiation.
+
+Upgrade Core across the pool before relying on retained OS history through master changes.
+An older master ignores the optional peer field while the reporting host keeps its local
+observations, but an older Core's VM record cannot preserve this history through transfer or
+promotion. Mixed-version master changes therefore do not guarantee retention.
+The original live guest observation evidence is in the
+[console features QA report](qa/console-features/checks.md); that report does not verify durable
+OS-history behavior.
 
 ## VM usage observation
 

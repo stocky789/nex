@@ -1256,7 +1256,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused and not stored; whatever this host already held is unchanged. The bounded reason is one of \&quot;pool authority replica names another pool\&quot;, \&quot;pool authority replica is not from the current pool master\&quot;, \&quot;pool authority replica is addressed to another host\&quot;, \&quot;pool authority replica is not signed by this pool&#x27;s CA\&quot;, \&quot;pool authority replica does not declare every section\&quot;, \&quot;pool authority replica section digest does not match\&quot;, \&quot;pool authority replica generation is older than the stored replica\&quot;, \&quot;pool authority replica generation was already stored with different contents\&quot;, \&quot;pool authority replica VM ownership record is invalid\&quot;, \&quot;pool authority replica omitted the qdevice credential addressed to this member\&quot;, \&quot;pool authority replica could not be stored\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;pool peer state is unavailable\&quot;, \&quot;stored pool authority replica is unavailable\&quot;, or a PoolAuthorityReplica.Valid() text. Refusal also includes \&quot;pool authority replica backup pages are incomplete or invalid\&quot; when a signed backup manifest names missing or corrupt staged pages.&quot;,
+      &quot;description&quot;: &quot;Refused and not stored; whatever this host already held is unchanged. The bounded reason is one of \&quot;pool authority replica names another pool\&quot;, \&quot;pool authority replica is not from the current pool master\&quot;, \&quot;pool authority replica is addressed to another host\&quot;, \&quot;pool authority replica is not signed by this pool&#x27;s CA\&quot;, \&quot;pool authority replica does not declare every section\&quot;, \&quot;pool authority replica section digest does not match\&quot;, \&quot;pool authority replica generation is older than the stored replica\&quot;, \&quot;pool authority replica generation was already stored with different contents\&quot;, \&quot;pool authority replica VM ownership record is invalid\&quot;, \&quot;pool authority replica omitted the qdevice credential addressed to this member\&quot;, \&quot;pool authority replica omitted the Corosync key\&quot;, \&quot;pool authority replica could not be stored\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;pool peer state is unavailable\&quot;, \&quot;stored pool authority replica is unavailable\&quot;, or a PoolAuthorityReplica.Valid() text. Refusal also includes \&quot;pool authority replica backup pages are incomplete or invalid\&quot; when a signed backup manifest names missing or corrupt staged pages.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2212,12 +2212,12 @@
   }
 }</pre></details></section>
 <section id="peerPublishPoolVMInventory"><h2>POST <code>/api/v1/pool/vms/inventory</code></h2>
-<p>Publish member VM inventory</p><p>Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB.</p>
+<p>Publish member VM inventory</p><p>Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB. Optional detected_os publishes retained guest OS history; each key must name a VM in this inventory owned by this member and pool. Invalid history is refused. The master retains the newest successful observation in pool-vms.json; missing entries or repeated observations never erase it.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerPublishPoolVMInventory&quot;,
   &quot;summary&quot;: &quot;Publish member VM inventory&quot;,
-  &quot;description&quot;: &quot;Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB.&quot;,
+  &quot;description&quot;: &quot;Served by the pool master. The member publishes its complete VM inventory bound to its membership generation; the master stores it durably to re-adopt pool VM records and settle pending updates. host_id must equal the caller. On 409 with a membership body the member refreshes its membership once and republishes. Body at most 1 MiB. Optional detected_os publishes retained guest OS history; each key must name a VM in this inventory owned by this member and pool. Invalid history is refused. The master retains the newest successful observation in pool-vms.json; missing entries or repeated observations never erase it.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMemberCertificate&quot;: []
@@ -4277,6 +4277,17 @@
         }
       ],
       &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
+    },
+    &quot;corosync_key_wrapped&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolWrappedKey&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;Pool Corosync authentication key sealed for this member and replica generation; required when the pool forms its own cluster.&quot;
     }
   },
   &quot;required&quot;: [
@@ -4986,11 +4997,22 @@
         &quot;armed&quot;,
         &quot;degraded&quot;
       ],
-      &quot;description&quot;: &quot;off is the pool&#x27;s Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice is not verified and degraded can mean it is connected and voting; two-host watchdog arming remains withheld in either state.&quot;
+      &quot;description&quot;: &quot;off is the pool&#x27;s Host fencing setting. not_available means the pool has no applicable cluster or witness support. For the three-or-more-host watchdog cluster, forming waits for Corosync quorum, arming is the one-host-at-a-time rollout, and degraded means hosts are not all armed. In an eligible two-host pool, forming means qdevice or native quorum is not verified; it can coexist with an operating witness when Corosync is nonquorate. Degraded means the witness and quorum are operating but two-host watchdog arming remains withheld.&quot;
     },
     &quot;detail&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Core&#x27;s own sentence for the state. A client shows it as written.&quot;
+    },
+    &quot;witness&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolFenceWitness&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;The pool master&#x27;s current native qdevice observation, separate from watchdog arming. Omitted when no witness is selected.&quot;
     },
     &quot;armed&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
@@ -5378,7 +5400,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -6045,6 +6067,10 @@
       &quot;minimum&quot;: 0,
       &quot;description&quot;: &quot;Native host generation in the configured authority lockspace after this member joined it; absent or zero means no sanlock preparation acknowledgement.&quot;
     },
+    &quot;corosync_key_ready&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;True only after the addressed Corosync key was opened and durably stored; required by the master for a pool cluster replica.&quot;
+    },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
@@ -6688,6 +6714,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolVMStartOutcome&quot;
       },
       &quot;description&quot;: &quot;Exact failed owner-local start outcomes. A matching pending_start_operation_id, current authenticated owner, fresh shut-off observation and no pending definition or recovery transition are required to release a stopped reservation. Missing, uncertain and unrelated evidence leaves it reserved. Fresh running observation can independently confirm current execution without changing the task outcome.&quot;
+    },
+    &quot;detected_os&quot;: {
+      &quot;type&quot;: [
+        &quot;object&quot;,
+        &quot;null&quot;
+      ],
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/DetectedOS&quot;
+      },
+      &quot;description&quot;: &quot;VM UUID to retained successful OS observation. Entries must belong to VMs in this inventory owned by the authenticated member in this pool; omitted entries preserve the master\u2019s retained value. Only newer observations replace existing history. Older Core ignores this field. Upgrade Core throughout the pool before relying on history retention through master transfer or promotion.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9271,5 +9307,54 @@
     &quot;mount_path&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.ZFSStorageSource&quot;
+}</pre></details>
+<details id="PoolFenceWitness"><summary>PoolFenceWitness</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;forming&quot;,
+        &quot;operating&quot;
+      ],
+      &quot;description&quot;: &quot;Operating means the pool master verified the selected qdevice&#x27;s identity, pinned CA, TLS connection and cast vote. It does not imply an armed watchdog or an automatic fence proof.&quot;
+    },
+    &quot;detail&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s current native observation or reason the witness is still forming.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;state&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.PoolFenceWitness&quot;
+}</pre></details>
+<details id="DetectedOS"><summary>DetectedOS</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;os&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 4096,
+      &quot;description&quot;: &quot;Last successful guest-get-osinfo display name; 1\u20134096 UTF-8 bytes.&quot;,
+      &quot;pattern&quot;: &quot;\\S&quot;
+    },
+    &quot;os_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 200,
+      &quot;description&quot;: &quot;Optional guest-reported OS identifier; at most 200 UTF-8 bytes.&quot;
+    },
+    &quot;observed_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;Nonzero Core timestamp of the successful guest-agent OS observation, not the inventory/report time.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;os&quot;,
+    &quot;observed_at&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;protocol.DetectedOS&quot;,
+  &quot;description&quot;: &quot;Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health.&quot;
 }</pre></details>
 </section></main></html>

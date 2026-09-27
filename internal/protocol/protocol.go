@@ -100,10 +100,12 @@ type VMUsage struct {
 // still records each entry under the current pool/host, which is a no-op for hosts that
 // presented their own identity at enrollment.
 type ManagedState struct {
-	Storage  []StorageRegistration `json:"storage,omitempty"`
-	Networks []NetworkRegistration `json:"networks,omitempty"`
-	Media    []Media               `json:"media,omitempty"`
-	VMs      []VMCreateSpec        `json:"vms,omitempty"`
+	// DetectedOS is the pool master's durable last successful OS observation per VM.
+	DetectedOS map[string]DetectedOS `json:"detected_os,omitempty"`
+	Storage    []StorageRegistration `json:"storage,omitempty"`
+	Networks   []NetworkRegistration `json:"networks,omitempty"`
+	Media      []Media               `json:"media,omitempty"`
+	VMs        []VMCreateSpec        `json:"vms,omitempty"`
 	// MissingVMs names entries of VMs whose persistent domain libvirt no longer lists; the
 	// journal still holds them, but a Controller must not adopt them as live guests.
 	MissingVMs []string `json:"missing_vms,omitempty"`
@@ -115,6 +117,7 @@ type ManagedState struct {
 	// Outcomes are journal entries that ended failed or needs_attention: task history a
 	// replaced Controller records so host truth is not lost with the old database.
 	Outcomes           []ManagedOutcome           `json:"outcomes,omitempty"`
+	ISODownloads       []ISODownloadProgress      `json:"iso_downloads,omitempty"`
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
 	ZFSProvisions      []ZFSProvisionHostResult   `json:"zfs_provisions,omitempty"`
 	Membership         *PoolMembership            `json:"membership,omitempty"`
@@ -305,6 +308,7 @@ type ReportRequest struct {
 	PoolResults        []PoolResult             `json:"pool_results,omitempty"`
 }
 type ReportResponse struct {
+	DetectedOS             *bool                     `json:"detected_os,omitempty"`
 	Commands               []Command                 `json:"commands"`
 	AcknowledgedResults    []string                  `json:"acknowledged_results"`
 	Consoles               []ConsoleRequest          `json:"consoles,omitempty"`
@@ -314,6 +318,7 @@ type ReportResponse struct {
 	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
+	ISODownloadProgress    *bool                     `json:"iso_download_progress,omitempty"`
 	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
 	PoolRequests           []PoolRequest             `json:"pool_requests,omitempty"`
 }
@@ -335,6 +340,10 @@ const StorageClusterCapability = "storage-clustered-iscsi-v2"
 // decoders: older Controllers ignore the offered capability and acknowledge
 // only StorageClusterCapability; older Cores never offer it.
 const StorageClusterSessionMonitorCapability = "storage-cluster-session-monitor-v1"
+
+const DetectedOSCapability = "detected-os-v1"
+
+const ISODownloadProgressCapability = "iso-download-progress-v1"
 
 type StorageClusterSupport struct {
 	Capability string `json:"capability"`

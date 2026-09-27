@@ -143,6 +143,25 @@ storage's `nex-media` directory. Managed inventory and enrollment/report adoptio
 recover these on a fresh Controller. Current pools contain only their master;
 future member distribution remains Phase 4 work.
 
+### URL download progress — 2026-09-25 bug fix
+
+Core samples received bytes and the public server's positive `Content-Length` during an
+active URL import. Its existing managed journal owns the observation; ordinary authenticated
+reports carry `iso_downloads` after Controller support is acknowledged. Controller validates
+the operation and host, mirrors only the latest observation in host inventory and renders it
+in **Storage** and **Tasks**. Unknown total size gives an indeterminate bar, stale host data
+is not live progress, and task success still requires complete ISO validation. Progress clears
+after a terminal or interrupted import; Controller neither downloads nor schedules it.
+
+API impact: **changed contract** — additive `ManagedState.iso_downloads` on the Core report
+and `GET /api/v1/hosts` inventory, plus a Controller acknowledgement for old-version
+compatibility. The `iso-import` command, submission, result and retry rules are unchanged.
+Guide impact: **updated** — the VM creation guide explains the bar and its limits.
+State owner: **core** — the host managed journal records bounded byte samples for an active
+import; a fresh Controller adopts the completed ISO from Core inventory and ignores progress
+for an operation it never submitted. No new Controller-owned state.
+See [progress checks](../qa/2026-09-25-iso-url-progress.md) for executed evidence and limits.
+
 Guide impact: **updated** — document both source choices, host internet access,
 public-only URL restrictions, task results, and safe retry behavior in the
 [VM creation guide](../guide/create-virtual-machine.md).

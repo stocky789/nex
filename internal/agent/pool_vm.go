@@ -51,7 +51,8 @@ type poolVMRecord struct {
 	// Spec is the master-owned inventory copy used to re-adopt a pool VM after a
 	// Controller replacement.  It is written only from a complete, generation
 	// matched host inventory or a validated new vm-create request.
-	Spec protocol.VMCreateSpec `json:"spec"`
+	Spec       protocol.VMCreateSpec `json:"spec"`
+	DetectedOS *protocol.DetectedOS  `json:"detected_os,omitempty"`
 	// PendingUpdate is a master-owned reservation for one exact next revision.
 	// The committed Spec never changes until the owner proves the matching local
 	// managed journal succeeded; a timeout therefore blocks rather than adopts
@@ -1300,8 +1301,9 @@ type poolVMPendingUpdate struct {
 	Next        protocol.VMCreateSpec `json:"next"`
 }
 type poolVMState struct {
-	VMs       map[string]poolVMRecord    `json:"vms"`
-	Inventory map[string]poolVMInventory `json:"inventory,omitempty"`
+	LocalDetectedOS map[string]protocol.DetectedOS `json:"local_detected_os,omitempty"`
+	VMs             map[string]poolVMRecord        `json:"vms"`
+	Inventory       map[string]poolVMInventory     `json:"inventory,omitempty"`
 }
 type poolVMRequest struct {
 	VMID                string                              `json:"vm_id,omitempty"`

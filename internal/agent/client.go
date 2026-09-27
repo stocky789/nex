@@ -214,6 +214,8 @@ func acceptIdentity(s *Store, r protocol.EnrollResponse, key, csr, controller, t
 		next.ZFSReplaceProtocolReady = false
 		next.StorageClusterProtocolReady = false
 		next.StorageClusterSessionMonitorProtocolReady = false
+		next.ISODownloadProgressReady = false
+		next.DetectedOSReady = false
 		next.StorageProtocolLegacy = false
 	}
 	next.Controller, next.TrustPEM, next.ControllerServerName = controller, trust, serverName

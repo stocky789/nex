@@ -46,6 +46,8 @@ assert.deepEqual(plotValues([s("a", "net", "bytes_per_second", [1]), s("b", "net
 assert.equal(formatValue("percent", 3.25), "3.3%");
 assert.equal(formatValue("bytes", 1536), "1.5 KiB");
 assert.equal(formatValue("bytes_per_second", 3 * 1024 ** 3), "3.0 GiB/s");
+assert.equal(formatValue("network_rate", 125_000), "1.0 Mbps");
+assert.equal(formatValue("network_rate", 125_000_000), "1.0 Gbps");
 assert.equal(formatValue("bytes", 512), "512 B");
 assert.equal(formatValue("iops", 120), "120 IOPS");
 assert.equal(formatValue("load", null), "—");
@@ -53,6 +55,7 @@ const unique = labels => new Set(labels).size === labels.length;
 const tiny = formatTicks("bytes_per_second", [0, 0.5, 1, 1.5], 0.5);
 assert.deepEqual(tiny, ["0.0 B/s", "0.5 B/s", "1.0 B/s", "1.5 B/s"], "near-zero rate ticks stay distinct");
 assert.deepEqual(formatTicks("bytes_per_second", [0, 512 * 1024, 1024 ** 2, 1.5 * 1024 ** 2], 512 * 1024), ["0.0 MiB/s", "0.5 MiB/s", "1.0 MiB/s", "1.5 MiB/s"]);
+assert.deepEqual(formatTicks("network_rate", [0, 62_500, 125_000], 62_500), ["0.0 Mbps", "0.5 Mbps", "1.0 Mbps"]);
 assert.deepEqual(formatTicks("bytes", [0, 2 * 1024 ** 3, 4 * 1024 ** 3], 2 * 1024 ** 3), ["0 GiB", "2 GiB", "4 GiB"]);
 assert.ok(unique(formatTicks("percent", [0, 0.2, 0.4, 0.6], 0.2)), "small percent steps stay distinct");
 assert.deepEqual(formatTicks("bytes_per_second", [0, 0.25, 0.5, 0.75, 1], 0.25), ["0.00 B/s", "0.25 B/s", "0.50 B/s", "0.75 B/s", "1.00 B/s"], "quarter steps are exact, not rounded to repeats");
@@ -209,8 +212,9 @@ console.log("stats helpers ok");
     s("memory.assigned", "memory", "bytes", [8, 8, 8]), s("memory.host", "memory", "bytes", [2, 4, 4]),
     s("disk.vda.read_bytes", "disk", "bytes_per_second", [1024, 0, 1024]), s("disk.vda.write_bytes", "disk", "bytes_per_second", [1024, 0, 1024]),
     s("disk.vda.read_iops", "disk", "iops", [500, 500, 500]),
+    s("net.nic0.rx", "network", "bytes_per_second", [125_000, 0, 125_000]),
   ] });
-  assert.deepEqual(rows.map(r => r.text), ["30%", "4 B", "2.0 KiB/s", "—"]);
+  assert.deepEqual(rows.map(r => r.text), ["30%", "4 B", "2.0 KiB/s", "1.0 Mbps"]);
   assert.deepEqual(rows[0].values, [10, 30], "a gap is left out, not drawn as zero");
   assert.equal(rows[1].detail, "memory.host", "host resident, not assigned plus host");
   assert.deepEqual(rows[2].values, [100, 0, 100]);

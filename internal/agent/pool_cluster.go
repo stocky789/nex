@@ -47,7 +47,21 @@ var (
 	applyPoolWitnessProperties  = vmhost.ApplyPoolWitnessClusterProperties
 	poolWitnessPropertiesReady  = vmhost.PoolWitnessClusterPropertiesReady
 	poolClusterBoundSet         = vmhost.PoolClusterBoundSet
+	activatePoolWitness         = vmhost.ActivatePoolWitness
+	deactivatePoolWitness       = vmhost.DeactivatePoolWitness
+	readPoolClusterAuthKey      = ReadClusterCorosyncAuthKey
+	mintPoolClusterAuthKey      = ClusterCorosyncAuthKey
+	installPoolClusterAuthKey   = installClusterAuthKey
 )
+
+// poolClusterAuthKey loads the shared Corosync key for this host. The master may mint it;
+// members only install the key delivered in a verified authority replica.
+func poolClusterAuthKey(s *Store, membership protocol.PoolMembership) ([]byte, error) {
+	if membership.MasterHostID == s.State.HostID {
+		return mintPoolClusterAuthKey(s, membership.PoolID)
+	}
+	return readPoolClusterAuthKey(s)
+}
 
 // poolClusteredStorageDetail is the one sentence a clustered-storage pool gets, everywhere.
 // Arming such a pool means changing its no-quorum-policy from freeze to suicide underneath a
@@ -60,14 +74,12 @@ const poolClusteredStorageDetail = "this pool runs clustered storage; watchdog f
 // call for. It runs on every host on every pass and is the whole lifecycle: there is no
 // command, no job, and nothing a Controller has to stay alive for.
 func ReconcilePoolCluster(ctx context.Context, s *Store) error {
-	poolPeerMu.Lock()
-	state, err := loadPoolPeer(s)
-	poolPeerMu.Unlock()
-	if err != nil || state.Membership.Valid() != nil {
+	membership, err := poolClusterMembership(s)
+	if err != nil {
 		return err
 	}
-	nodes, want, _ := poolClusterIntent(s, state.Membership)
-	self, _ := poolMemberByID(state.Membership, s.State.HostID)
+	nodes, want, _ := poolClusterIntent(s, membership)
+	self, _ := poolMemberByID(membership, s.State.HostID)
 	if !want || !poolClusterContains(nodes, s.State.HostID) {
 		// Nobody leaves while anybody is still feeding a watchdog. A host that stops its
 		// cluster stops sbd with it, which is safe for that host and dangerous for the
@@ -80,7 +92,7 @@ func ReconcilePoolCluster(ctx context.Context, s *Store) error {
 		// runs it: one host at a time puts its watchdog down by restarting its cluster
 		// without sbd, staying a member and staying quorate. Only when the pool's own
 		// records say nobody is armed does anyone leave.
-		if poolClusterMayLeave(s, state.Membership, nodes, self, want) {
+		if poolClusterMayLeave(s, membership, nodes, self, want) {
 			return leavePoolCluster(ctx)
 		}
 		// Not yet. Either this host is still feeding — its own arming pass puts the device
@@ -91,29 +103,92 @@ func ReconcilePoolCluster(ctx context.Context, s *Store) error {
 		return poolClusterPolicy(ctx, s)
 	}
 	witnessAddress := ""
-	if state.Membership.Witness != nil && len(nodes) == 2 {
-		witnessAddress = state.Membership.Witness.Address
+	if membership.Witness != nil && len(nodes) == 2 {
+		armed, armedErr := localWatchdogArmed(ctx)
+		if armedErr != nil || armed {
+			return errors.New("two-host witness cluster cannot replace a live or unverified watchdog; disarm this host first")
+		}
+		for _, member := range membership.Members {
+			if poolWatchdogFeeding(member) {
+				return errors.New("two-host witness cluster cannot replace an armed watchdog cluster; disarm every host first")
+			}
+		}
+		witnessAddress = membership.Witness.Address
+	}
+	if err := vmhost.PoolClusterCanOwnCorosync(s.dir); err != nil {
+		return err
+	}
+	key, err := poolClusterAuthKey(s, membership)
+	if err != nil {
+		return err
+	}
+	if err = installPoolClusterAuthKey(key); err != nil {
+		return err
 	}
 	if witnessAddress == "" {
-		_, err = applyPoolCluster(ctx, s.dir, state.Membership.PoolID, nodes)
+		_, err = applyPoolCluster(ctx, s.dir, membership.PoolID, nodes)
 	} else {
-		_, err = applyPoolClusterWithWitness(ctx, s.dir, state.Membership.PoolID, nodes, witnessAddress)
+		_, err = applyPoolClusterWithWitness(ctx, s.dir, membership.PoolID, nodes, witnessAddress)
 	}
 	if err != nil {
 		return err
 	}
-	if witnessAddress != "" && vmhost.PoolWitnessCredentialsReady(ctx, s.dir, state.Membership.PoolID, *state.Membership.Witness) {
-		if err = vmhost.ActivatePoolWitness(ctx, s.dir, state.Membership.PoolID, *state.Membership.Witness); err != nil {
+	if witnessAddress != "" && poolWitnessCredentialsReady(ctx, s.dir, membership.PoolID, *membership.Witness) {
+		if err = activatePoolWitness(ctx, s.dir, membership.PoolID, *membership.Witness); err != nil {
 			return err
 		}
 	} else if witnessAddress != "" {
-		if err = vmhost.DeactivatePoolWitness(ctx); err != nil {
+		if err = deactivatePoolWitness(ctx); err != nil {
 			return err
 		}
-	} else if err = vmhost.DeactivatePoolWitness(ctx); err != nil {
+	} else if err = deactivatePoolWitness(ctx); err != nil {
 		return err
 	}
 	return poolClusterPolicy(ctx, s)
+}
+
+func poolClusterMembership(s *Store) (protocol.PoolMembership, error) {
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil || state.Membership.Valid() != nil {
+		return protocol.PoolMembership{}, err
+	}
+	membership := state.Membership
+	if membership.MasterHostID == s.State.HostID {
+		return membership, nil
+	}
+	poolReplicaMu.Lock()
+	record, err := loadPoolReplica(s)
+	poolReplicaMu.Unlock()
+	if err != nil || record == nil || !record.Verified {
+		return membership, err
+	}
+	replica := record.Replica
+	if replica.Membership.Generation < membership.Generation {
+		return membership, nil
+	}
+	// Fail closed on identity and signature even when Verified was previously true: a
+	// tampered on-disk replica must not steer cluster membership or witness selection.
+	if replica.PoolID != membership.PoolID || replica.MasterHostID != membership.MasterHostID || replica.MemberHostID != s.State.HostID ||
+		replica.Valid() != nil || verifyPoolAuthorityReplica(state.CAPEM, replica) != nil {
+		return protocol.PoolMembership{}, errors.New("pool cluster authority replica is invalid")
+	}
+	if replica.Membership.Generation > membership.Generation {
+		return replica.Membership, nil
+	}
+	// The master can finish witness registration without advancing membership generation.
+	// Keep the member's local maintenance and arming reports at that generation, while using
+	// the signed witness selection and the peer addresses the member missed at join.
+	membership.Witness = replica.Membership.Witness
+	for i := range membership.Members {
+		if membership.Members[i].PeerOrigin == "" {
+			if member, ok := poolMemberByID(replica.Membership, membership.Members[i].HostID); ok {
+				membership.Members[i].PeerOrigin = member.PeerOrigin
+			}
+		}
+	}
+	return membership, nil
 }
 
 // poolClusterPolicy is the master's one write on the pool's cluster, and every host reads it back
@@ -128,6 +203,15 @@ func poolClusterPolicy(ctx context.Context, s *Store) error {
 	}
 	nodes, _, _ := poolClusterIntent(s, membership)
 	if poolWitnessPolicyApplies(nodes, membership) {
+		armed, armedErr := localWatchdogArmed(ctx)
+		if armedErr != nil || armed {
+			return errors.New("two-host witness policy cannot replace a live or unverified watchdog; disarm this host first")
+		}
+		for _, member := range membership.Members {
+			if poolWatchdogFeeding(member) {
+				return errors.New("two-host witness policy cannot replace an armed watchdog cluster; disarm every host first")
+			}
+		}
 		current, err := poolWitnessPropertiesReady(ctx)
 		if err != nil || current {
 			return err
@@ -407,14 +491,29 @@ func PoolFenceClusterFor(s *Store, membership protocol.PoolMembership, q vmhost.
 	}
 	state.ArmingHostID = poolWatchdogArmingTurn(nodes, membership)
 	if len(nodes) == 2 && membership.Witness != nil {
-		witness := vmhost.ReadPoolWitnessStatus(context.Background(), s.dir, membership.PoolID, *membership.Witness)
+		witness := readPoolWitnessStatus(context.Background(), s.dir, membership.PoolID, *membership.Witness)
 		if !membership.Witness.CredentialsReady || !witness.Observed {
+			reason := witness.Error
+			if !membership.Witness.CredentialsReady {
+				reason = "registration is pending"
+			}
 			state.State, state.ArmingHostID = protocol.PoolClusterForming, ""
-			state.Detail = "this pool's qdevice witness is not ready: " + witness.Error
+			state.Detail = "this pool's qdevice witness is not ready: " + reason
+			state.Witness = &protocol.PoolFenceWitness{State: "forming", Detail: reason}
 			return state
 		}
-		state.State, state.ArmingHostID = protocol.PoolClusterDegraded, ""
-		state.Detail = "the qdevice witness is connected and voting; two-host watchdog fencing remains withheld pending native testing of witness loss with one host already down"
+		state.Witness = &protocol.PoolFenceWitness{State: "operating", Detail: "Connected, TLS verified and casting a vote as observed by the pool master"}
+		state.ArmingHostID = ""
+		if !q.Observed || !q.Quorate {
+			state.State = protocol.PoolClusterForming
+			state.Detail = "the qdevice witness is voting, but this pool's quorum is not yet observed"
+			if q.Observed {
+				state.Detail = "the qdevice witness is voting, but this pool's cluster is not quorate"
+			}
+			return state
+		}
+		state.State = protocol.PoolClusterDegraded
+		state.Detail = "two-host watchdog fencing remains withheld because witness loss with one host unavailable has not been proven safe for the survivor"
 		return state
 	}
 	switch {

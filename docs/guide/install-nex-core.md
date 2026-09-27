@@ -165,6 +165,7 @@ existing ZFS DKMS package still builds its kernel module locally.
    marks **Network** while the network is configured and **Disk** while the disk is prepared,
    then moves to **Install** for package and bootloader work. Only the steps before the bullet
    are ticked, so **Disk** and **Review** are not ticked while **Network** is current.
+   **Installing system software** is an automatic package step; it does not ask you to choose software.
    The indicator describes the current step, not an estimated overall completion percentage.
    Under the progress bar, **Still working…** keeps moving and an **Installer activity** log
    scrolls the latest entries from `/var/log/syslog`, `/var/log/partman` and

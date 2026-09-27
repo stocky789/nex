@@ -84,8 +84,23 @@ the guest agent also reports a canonical OS ID from its `guest-get-osinfo` respo
 uses the guest's `/etc/os-release` ID (for example `debian` or `ubuntu`) and Windows reports
 `mswindows`. Nex uses this ID for distro icons without guessing from the display name; the
 OS text remains visible, and a missing ID or one without a bundled icon uses the generic
-monitor icon. Before guest facts arrive, the configured Linux or Windows family
-uses its family icon; this does not establish a detected distribution or edition.
+monitor icon. For managed VMs, Core retains the last successfully reported OS on the
+pool master. If live facts become unavailable, the VM list and Overview keep that
+name and icon with **(last detected)**, including while the VM is asleep, stopped,
+or its host is not reporting. Hover over it for the detection time. This is historical
+information, not proof that the guest or its tools are running. Core retains it across
+restarts and a replacement Controller recovers it from the pool master.
+
+Before Core has recorded an OS, or with older Core builds, the fallback is
+**Linux (configured)** or **Windows (configured)**, or **OS unavailable** if no family
+is recorded. The configured family is a VM setting, not a detected distribution or edition.
+Upgrade Core throughout the pool before relying on retained OS information across a master
+change; an older master cannot preserve it. Separately adopted Controller appliances and
+unmanaged domains do not have this retained record.
+
+SPICE vdagent supplies clipboard and display integration, not the OS name. Once the VM
+is running and QEMU Guest Agent answers again, reports refresh the detected OS automatically,
+including after a reinstall; rebooting solely to refresh the label is not required.
 Distro icons link to their official project websites in a new tab. Values are
 guest-reported and may be absent or customized.
 
@@ -169,6 +184,9 @@ guest hand back pages it has already freed; it does not make Nex rebalance memor
   ceiling or use **Dedicated** for a predictable reservation instead.
 
 ## Verification
+
+The retained-OS change has separate [retention verification](../qa/2026-09-25-guest-os-retention.md),
+with simulated browser and host/API regression checks distinguished from live guest testing.
 
 The GUI navigation on this page was rewritten for the Controller console redesign (development
 build 0.4.8); the walkthrough is recorded in the

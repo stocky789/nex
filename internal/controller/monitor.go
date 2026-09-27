@@ -26,6 +26,14 @@ func (c *Controller) observationFreshness(key string) string {
 	}
 	return "fresh"
 }
+
+func isoDownloadProgressValid(progress protocol.ISODownloadProgress) bool {
+	return nameValid(progress.OperationID) &&
+		progress.ReceivedBytes >= 0 && progress.TotalBytes >= 0 &&
+		progress.ReceivedBytes <= 1<<50 && progress.TotalBytes <= 1<<50 &&
+		(progress.TotalBytes == 0 || progress.ReceivedBytes <= progress.TotalBytes)
+}
+
 func validateInventory(v *protocol.Inventory) error {
 	if v == nil {
 		return nil
@@ -64,7 +72,7 @@ func validateInventory(v *protocol.Inventory) error {
 		}
 	}
 	if m := v.Managed; m != nil {
-		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 || len(m.PoolVMSnapshots) > 10000 || len(m.RecoveryReservations) > 10000 ||
+		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.DetectedOS) > 10000 || len(m.ISODownloads) > 16 || len(m.Outcomes) > 30000 || len(m.PoolVMSnapshots) > 10000 || len(m.RecoveryReservations) > 10000 ||
 			len(m.BackupRepositories) > 10000 || len(m.BackupCatalog) > 10000 || len(m.BackupRuns) > 30000 || len(m.BackupPolicies) > 10000 {
 			return errors.New("managed state limits exceeded")
 		}
@@ -115,6 +123,18 @@ func validateInventory(v *protocol.Inventory) error {
 				return errors.New("invalid or duplicate backup policy")
 			}
 			seenPolicies[policy.ID] = true
+		}
+		for id, os := range m.DetectedOS {
+			if !applianceUUID(id) || os.Valid() != nil {
+				return errors.New("invalid detected OS")
+			}
+		}
+		downloads := map[string]bool{}
+		for _, progress := range m.ISODownloads {
+			if !isoDownloadProgressValid(progress) || downloads[progress.OperationID] {
+				return errors.New("invalid ISO download progress")
+			}
+			downloads[progress.OperationID] = true
 		}
 		var fields []string
 		for _, s := range m.Storage {

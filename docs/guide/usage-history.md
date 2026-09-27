@@ -104,6 +104,7 @@ Known limits:
    **Performance** tab to stop. Realtime pauses
    while the browser page is hidden and turns itself off after 10 minutes; select **Resume**
    to continue.
+    Network rates use decimal bits per second (Mbps/Gbps); disk rates use bytes per second.
 12. For the pool as a whole, select **Overview** in the rail. Its utilisation chart draws CPU,
     memory and storage I/O from the same per-host history, with **1H**, **1D**, **1W** and
     **1M** ranges. Point at the chart, or tap it, to read every line at that time; with the
@@ -171,6 +172,8 @@ captured on the earlier layout, where these charts were on a **Stats** tab, and 
 the behaviour it describes.
 
 The console placement is checked separately in the [console realtime assessment](../changes/2026-09-17-console-realtime-stats.json), using a simulated API and guest display; this is not new host-sampling evidence.
+The 2026-09-25 [network unit and chart layout check](../qa/2026-09-25-network-rate-console-charts.md)
+used a simulated browser fixture; no physical Core network rates were measured.
 
 2026-09-16: the charts (then on the Stats tab) and Realtime drawer were exercised in a real browser against a mocked
 Controller API (loading, empty, error, stale, stacked, hover, zoom, legend chips, keyboard, narrow

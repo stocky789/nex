@@ -20,6 +20,7 @@ import (
 )
 
 type poolVMInventory struct {
+	DetectedOS map[string]protocol.DetectedOS      `json:"detected_os,omitempty"`
 	HostID     string                              `json:"host_id"`
 	Generation uint64                              `json:"generation"`
 	VMs        []protocol.VMCreateSpec             `json:"vms"`
@@ -637,7 +638,11 @@ func localPoolVMInventory(ctx context.Context, s *Store, generation uint64) (poo
 	if err != nil {
 		return poolVMInventory{}, errors.New("managed snapshot recovery journal is unavailable")
 	}
-	return poolVMInventory{HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, StartOutcomes: startOutcomes, Updates: updates, Aborted: aborted, Recoveries: recoveries, Deleted: deleted, ObservedAt: time.Now().UTC()}, nil
+	detectedOS, err := retainLocalDetectedOS(s, managed.VMs, nil)
+	if err != nil {
+		return poolVMInventory{}, err
+	}
+	return poolVMInventory{DetectedOS: detectedOS, HostID: s.State.HostID, Generation: generation, VMs: managed.VMs, Storage: storage, Observed: observed, StartOutcomes: startOutcomes, Updates: updates, Aborted: aborted, Recoveries: recoveries, Deleted: deleted, ObservedAt: time.Now().UTC()}, nil
 }
 
 func poolVMRecoveryJournalEvidence(ctx context.Context, engine *vmhost.ManagedEngine, poolID, hostID string, vms []protocol.VMCreateSpec) (map[string]protocol.PoolVMRecoveryEvidence, error) {
@@ -755,6 +760,23 @@ func recordPoolVMInventory(s *Store, membership protocol.PoolMembership, inv poo
 	}
 	if !ready {
 		return errors.New("VM inventory host is not ready")
+	}
+	if len(inv.DetectedOS) > len(inv.VMs) {
+		return errors.New("invalid detected OS inventory")
+	}
+	byID := make(map[string]protocol.VMCreateSpec, len(inv.VMs))
+	for _, vm := range inv.VMs {
+		if previous, ok := byID[vm.ID]; ok && previous.ID != "" {
+			byID[vm.ID] = protocol.VMCreateSpec{}
+			continue
+		}
+		byID[vm.ID] = vm
+	}
+	for id, detected := range inv.DetectedOS {
+		vm := byID[id]
+		if vm.ID == "" || vm.HostID != inv.HostID || vm.PoolID != membership.PoolID || detected.Valid() != nil {
+			return errors.New("invalid detected OS inventory")
+		}
 	}
 	// The receiving master timestamps its own accepted snapshot; a member-provided
 	// time cannot make an old generation appear current.
@@ -1023,6 +1045,16 @@ func seedPoolVMOwners(s *Store, membership protocol.PoolMembership, state *poolV
 						old.State = "stopped"
 						state.VMs[vm.ID] = old
 					}
+				}
+			}
+			if detected, ok := inv.DetectedOS[vm.ID]; ok && host == observedHost {
+				record := state.VMs[vm.ID]
+				if detected.Valid() != nil {
+					return errors.New("invalid detected OS inventory")
+				}
+				if record.DetectedOS == nil || detected.ObservedAt.After(record.DetectedOS.ObservedAt) {
+					record.DetectedOS = &detected
+					state.VMs[vm.ID] = record
 				}
 			}
 		}

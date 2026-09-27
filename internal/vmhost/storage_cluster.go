@@ -501,17 +501,10 @@ func renderCorosyncConfig(marker, clusterName string, nodes []corosyncNode, wait
 // vendor file. It reports whether the bytes on disk changed.
 func writeCorosyncConfig(stateDir, rendered, marker string) (bool, error) {
 	old, readErr := os.ReadFile(corosyncConfigPath)
-	switch {
-	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
-		return false, readErr
-	case readErr == nil && strings.HasPrefix(string(old), "# Managed by Nex Core;"):
-		if corosyncConfigMarker(old) != marker {
-			return false, errors.New("this host's Corosync configuration belongs to another Nex Core cluster on this pool; one host has one cluster")
-		}
-	case readErr == nil:
-		if !corosyncUnconfiguredMarker(stateDir, old) {
-			return false, errors.New("refusing to replace administrator Corosync configuration")
-		}
+	if err := checkCorosyncConfigOwner(stateDir, old, readErr, marker); err != nil {
+		return false, err
+	}
+	if readErr == nil && !strings.HasPrefix(string(old), "# Managed by Nex Core;") {
 		// Packaging creates the marker only for a recognized untouched vendor
 		// file. Preserve that file before its one permitted replacement.
 		if err := os.MkdirAll(filepath.Join(stateDir, "storage-cluster"), 0700); err != nil {
@@ -534,6 +527,22 @@ func writeCorosyncConfig(stateDir, rendered, marker string) (bool, error) {
 		return false, err
 	}
 	return changed, nil
+}
+
+func checkCorosyncConfigOwner(stateDir string, old []byte, readErr error, marker string) error {
+	switch {
+	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
+		return readErr
+	case readErr == nil && strings.HasPrefix(string(old), "# Managed by Nex Core;"):
+		if corosyncConfigMarker(old) != marker {
+			return errors.New("this host's Corosync configuration belongs to another Nex Core cluster on this pool; one host has one cluster")
+		}
+	case readErr == nil:
+		if !corosyncUnconfiguredMarker(stateDir, old) {
+			return errors.New("refusing to replace administrator Corosync configuration")
+		}
+	}
+	return nil
 }
 
 // corosyncConfigMarker is the owning consumer's header line, empty for clustered storage,

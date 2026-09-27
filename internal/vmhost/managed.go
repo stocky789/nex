@@ -145,6 +145,8 @@ type managedJournal struct {
 	DiskChains      [][]string      `json:"disk_chains,omitempty"`
 	MediaPath       string          `json:"media_path,omitempty"`
 	DownloadedMedia *protocol.Media `json:"downloaded_media,omitempty"`
+	DownloadedBytes int64           `json:"downloaded_bytes,omitempty"`
+	DownloadTotal   int64           `json:"download_total,omitempty"`
 	// AppliedStorage is Core's verified projection of a storage command. Command remains the
 	// original request so idempotent replay compares exactly what the caller sent.
 	AppliedStorage *protocol.StorageRegistration `json:"applied_storage,omitempty"`
@@ -2024,6 +2026,20 @@ var (
 	managedStorageReadyFn = managedStorageReady
 )
 
+// ManagedStorageReadyForTests stubs repository readiness for tests that cannot create
+// root-owned storage paths. Callers must restore via the returned function (typically t.Cleanup).
+func ManagedStorageReadyForTests() func() {
+	previous := managedStorageReadyFn
+	managedStorageReadyFn = func(_ context.Context, s protocol.StorageRegistration, _ uint64) (storageAccess, error) {
+		path := s.Path
+		if path == "" {
+			path = filepath.Join("/var/lib/nex-storage", s.ID)
+		}
+		return storageAccess{Path: path, Available: 1 << 40}, nil
+	}
+	return func() { managedStorageReadyFn = previous }
+}
+
 type expectedStorageIdentityContextKey struct{}
 type storageClusterConfigContextKey struct{}
 type poolStorageExpectation struct {
@@ -2984,6 +3000,9 @@ func (e *ManagedEngine) Applied(ctx context.Context) (*protocol.ManagedState, []
 			out.Outcomes = append(out.Outcomes, outcome)
 			continue
 		case "pending":
+			if running[c.OperationID] && c.Kind == "iso-import" && c.Media.URL != "" {
+				out.ISODownloads = append(out.ISODownloads, protocol.ISODownloadProgress{OperationID: c.OperationID, ReceivedBytes: j.DownloadedBytes, TotalBytes: j.DownloadTotal})
+			}
 			if !running[c.OperationID] {
 				outcome.Status = "needs_attention"
 				if c.Kind == "snapshot-create" || c.Kind == "snapshot-revert" || c.Kind == "snapshot-delete" {

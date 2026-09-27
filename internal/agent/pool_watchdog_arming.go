@@ -55,9 +55,8 @@ func ReconcilePoolWatchdogArming(ctx context.Context, s *Store) error {
 	watchdog := localWatchdog(s)
 	armed, armedErr := localWatchdogArmed(ctx)
 	if armedErr != nil {
-		// Nothing is known about sbd, so nothing is changed and nothing is claimed.
-		return reportPoolWatchdogArmed(ctx, s, protocol.PoolWatchdogArmed{
-			Detail: "Nex Core could not read whether this host's watchdog is armed"})
+		// Keep the last feeding record until the native device can be read again.
+		return armedErr
 	}
 	want, turn, why := poolWatchdogArmingIntent(ctx, s, state.Membership, watchdog, armed)
 	// The generation is the membership's, the counter that moves when the set of hosts that
@@ -68,6 +67,15 @@ func ReconcilePoolWatchdogArming(ctx context.Context, s *Store) error {
 		FencingGeneration: self.Generation, Detail: why}
 	switch {
 	case want:
+		if !armed {
+			pending := poolWatchdogNotArmed(report, "this host is preparing to arm its watchdog")
+			pending.Feeding = true
+			if err = reportPoolWatchdogArmed(ctx, s, pending); err != nil {
+				report.Detail = boundPoolPeerText(200, "this host could not record its watchdog arming intent", err.Error())
+				break
+			}
+			report.Feeding = true
+		}
 		// Arming and re-verifying are the same call, deliberately: "armed" has to mean
 		// "armed and still verified". ArmLocalWatchdog re-checks Pacemaker, the cluster's
 		// policy and sbd's own configuration every pass, and its verdict decides the
@@ -178,7 +186,7 @@ func poolWatchdogArmingIntent(ctx context.Context, s *Store, membership protocol
 		// cluster policy therefore keeps the remaining host running on quorum loss, and
 		// Core withholds SBD arming and witness exclusion until that failure case and the
 		// product's no-VM-stop promise are reconciled.
-		return false, false, "two-host watchdog fencing is withheld pending native testing of witness loss with one host already down"
+		return false, poolWatchdogTeardownTurn(ctx, s, membership, nodes, armed), "two-host watchdog fencing is withheld pending native testing of witness loss with one host already down"
 	}
 	if !poolClusterContains(nodes, s.State.HostID) {
 		return false, poolWatchdogTeardownTurn(ctx, s, membership, nodes, armed),
@@ -283,6 +291,9 @@ func poolClusterTeardownSafe(s *Store, membership protocol.PoolMembership, nodes
 // that host reads about itself: a host stops being armed when the pool stops wanting a cluster at
 // all, or when it is being drained out of the one it has.
 func poolWatchdogShouldDisarm(s *Store, membership protocol.PoolMembership, nodes []vmhost.PoolClusterNode, member protocol.PoolMember) bool {
+	if len(nodes) == 2 {
+		return true
+	}
 	if _, wanted, _ := poolClusterIntent(s, membership); !wanted {
 		return true
 	}
@@ -365,6 +376,17 @@ func applyPoolWatchdogArmedReport(s *Store, state *poolPeerState, hostID string,
 		member := &state.Membership.Members[i]
 		if member.HostID != hostID {
 			continue
+		}
+		if report.Feeding && !poolWatchdogFeeding(*member) {
+			usable := 0
+			for _, peer := range state.Membership.Members {
+				if peer.Status == "ready" && !peer.Maintenance {
+					usable++
+				}
+			}
+			if state.Membership.HostFencingDisabled || member.Maintenance || usable < 3 || usable > protocol.PoolWatchdogClusterHosts {
+				return errors.New("this pool no longer permits new watchdog arming")
+			}
 		}
 		if samePoolWatchdogArmedReport(member.WatchdogArmed, report) {
 			return nil

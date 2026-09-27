@@ -97,6 +97,9 @@ class APIContractTests(unittest.TestCase):
             elif go_type.startswith('[]'):
                 self.assertEqual(schema['type'], ['array', 'null'])
                 check_type(go_type[2:], schema['items'])
+            elif go_type.startswith('map[string]'):
+                self.assertEqual(schema['type'], ['object', 'null'])
+                check_type(go_type[len('map[string]'):], schema['additionalProperties'])
             elif go_type == 'time.Time':
                 self.assertEqual(schema['type'], 'string')
                 self.assertEqual(schema['format'], 'date-time')
@@ -889,6 +892,7 @@ class HostNetworkContractTests(unittest.TestCase, PoolStructParityMixin):
                             self.wire)
         self.assertEqual(schemas['ManagementNetworkStatus']['properties']['stage']['enum'], stages)
         self.assertIn('current', schemas['ManagementNetworkStatus']['properties'])
+        self.assertIn('observed_gateway', schemas['ManagementNetworkStatus']['properties'])
         # The two host-report/command envelope fields a fresh Controller adopts from.
         self.assertIn('ManagementNetworkStatus', json.dumps(
             schemas['Inventory']['properties']['management_network']))
