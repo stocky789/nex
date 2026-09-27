@@ -48,6 +48,13 @@ def publish_release(root, directory, version, keep=3, content=b"iso-bytes"):
 
 
 class PublishTests(unittest.TestCase):
+    def test_hash_pinned_release_payload_accepts_matched_libvirt_packages(self):
+        for package in ('libvirt0', 'libvirt-daemon-driver-qemu', 'libnss-libvirt'):
+            with self.subTest(package=package):
+                self.assertRegex(f'{package}-' + 'a' * 64 + '.deb', publish.PAYLOAD_NAME)
+        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('libvirt0-' + 'a' * 63 + '.deb'))
+        self.assertIsNone(publish.PAYLOAD_NAME.fullmatch('unrelated-' + 'a' * 64 + '.deb'))
+
     def test_publishes_iso_with_checksum_and_latest_link(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "downloads"

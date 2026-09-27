@@ -9,7 +9,8 @@ import { storageAccess } from "./storage";
 import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
-import { AttentionList, Badge, Meter, badgeTone, monotone } from "./ui";
+import { AttentionList, Badge, Meter, badgeTone, monotone, date } from "./ui";
+import { type BackupRecoveryPoint, type BackupRun } from "./backup-types";
 import "./overview.css";
 
 export { monotone };
@@ -52,6 +53,9 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const [range, setRange] = useState<ChartRange>("1D");
   const [histories, setHistories] = useState<StatsHistory[] | null>(null);
   const [members, setMembers] = useState<Report | null>(null);
+  const [catalog, setCatalog] = useState<BackupRecoveryPoint[] | null>(null);
+  const [backupRuns, setBackupRuns] = useState<BackupRun[] | null>(null);
+  const [backupError, setBackupError] = useState(false);
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
   const hostKey = hosts.map(h => h.id).join(",");
   useEffect(() => {
@@ -72,6 +76,26 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
     let live = true;
     const load = () => api<Report>(`pools/${encodeURIComponent(pool.id)}/members`).then(r => { if (live) setMembers(r); }, () => { if (live) setMembers(null); });
     setMembers(null);
+    load();
+    const timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+    return () => { live = false; clearInterval(timer); };
+  }, [pool?.id]);
+  useEffect(() => {
+    if (!pool) {
+      setCatalog(null);
+      setBackupRuns(null);
+      return;
+    }
+    let live = true;
+    const load = () => {
+      void api<BackupRecoveryPoint[]>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
+        .then(points => { if (live) { setCatalog(points); setBackupError(false); } }, () => { if (live) { setCatalog(null); setBackupError(true); } });
+      void api<BackupRun[]>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
+        .then(runs => { if (live) setBackupRuns(runs); }, () => { if (live) setBackupRuns(null); });
+    };
+    setCatalog(null);
+    setBackupRuns(null);
+    setBackupError(false);
     load();
     const timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
     return () => { live = false; clearInterval(timer); };
@@ -114,6 +138,10 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const storageShare = capacity ? 100 * (capacity - free) / capacity : null;
 
   const attention = attentionItems(data, hosts, vms, storage, coreAvailable);
+  const failedBackups = backupRuns?.filter(r => ["failed", "missed", "needs_attention"].includes(r.status)) || [];
+  if (failedBackups.length) attention.push({ tone: "bad", title: `${failedBackups.length} backup or restore runs need attention`, detail: "Review Core run outcomes and errors.", href: "#/backups" });
+  const untestedPoints = catalog?.filter(p => p.last_test_result !== "passed") || [];
+  if (untestedPoints.length) attention.push({ tone: "warn", title: `${untestedPoints.length} recovery points lack a passed restore test`, detail: "Test a point before relying on it.", href: "#/backups" });
 
   const sharedStorage = storage.filter(s => s.capabilities?.shared);
   const sharedHealthy = sharedStorage.filter(s => badgeTone(storageAccess(s)) === "ok" && !s.access?.error).length;
@@ -127,6 +155,31 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const running = ops.filter(o => unfinished.has(o.status)).length;
   const staleHosts = hosts.length - fresh.length;
   const memoryNow = last(usage.memory);
+  const backupPoints = catalog
+    ? [...catalog].sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""))
+    : null;
+  const lastBackup = backupPoints?.[0] || null;
+  const lastRun = backupRuns?.filter(r => ["backup-now", "backup-scheduled", "backup-policy-run-now"].includes(r.kind))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] || null;
+  const lastRestoreTest = backupPoints
+    ?.filter(p => p.last_tested_at)
+    .sort((a, b) => (b.last_tested_at || "").localeCompare(a.last_tested_at || ""))[0] || null;
+  const nights = Array.from({ length: 14 }, (_, i) => {
+    const day = new Date();
+    day.setUTCHours(0, 0, 0, 0);
+    day.setUTCDate(day.getUTCDate() - (13 - i));
+    const key = day.toISOString().slice(0, 10);
+    return backupPoints?.some(p => (p.captured_at || "").slice(0, 10) === key) ?? false;
+  });
+  const backupsSummary = !pool
+    ? "Choose a pool"
+    : backupError
+      ? "Backup catalog unavailable"
+      : catalog == null
+        ? "Loading…"
+      : lastBackup
+        ? `Last ${date(lastBackup.captured_at)}`
+        : "No recovery points";
 
   return <div className="overview">
     <h1 className="sr-only">{title} overview</h1>
@@ -162,8 +215,7 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
       </Tile>
       <Tile {...tile("attention")} title="Needs attention" note={attention.length > 0 && <Badge value="warning" label={String(attention.length)} />}
         summary={attention.length ? `${count(attention.length, "item")}${failures ? ` · ${count(failures, "failure")}` : ""}` : "Nothing needs attention"}>
-        {attention.length ? <AttentionList items={attention} /> : <p className="note">Every host in scope is reporting and healthy.</p>}
-        <p className="note">Backup failures and untested restores appear here with backups (Phase 6).</p>
+        {attention.length ? <AttentionList items={attention} /> : <p className="note">No reported issues in the available inventory. Check Backups for run history.</p>}
       </Tile>
     </div>
 
@@ -202,10 +254,15 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
           <Badge value={o.status} label={unfinished.has(o.status) ? "Running" : undefined} />
         </a></li>)}</ul> : <p className="note">No tasks yet.</p>}
       </Tile>
-      <Tile {...tile("backups")} title="Backups, last 14 nights" extra={<a href="#/backups">Repositories</a>} summary="Available with backups (Phase 6)">
-        <div className="ov-nights" aria-hidden="true">{Array.from({ length: 14 }, (_, i) => <i key={i} />)}</div>
-        <dl className="ov-kv"><dt>Last run</dt><dd className="muted">—</dd><dt>Last restore test</dt><dd className="muted">—</dd></dl>
-        <p className="note">Available with backups (Phase 6).</p>
+      <Tile {...tile("backups")} title="Backups, last 14 nights" extra={<a href="#/backups">Backups</a>} summary={backupsSummary}>
+        <div className="ov-nights" aria-hidden="true">{nights.map((on, i) => <i key={i} className={on ? "on" : undefined} />)}</div>
+        <span className="sr-only">Completed backups on {nights.filter(Boolean).length} of the last 14 UTC days.</span>
+        <dl className="ov-kv">
+          <dt>Last run</dt>
+          <dd>{!pool ? <span className="muted">Choose a pool</span> : lastRun ? <>{date(lastRun.updated_at)} · <Badge value={lastRun.status} /></> : backupRuns === null ? <span className="muted">Unavailable</span> : <span className="muted">Never</span>}</dd>
+          <dt>Last restore test</dt>
+          <dd>{!pool ? <span className="muted">Choose a pool</span> : backupError ? <span className="muted">Unavailable</span> : catalog == null ? <span className="muted">Loading…</span> : lastRestoreTest ? <>{date(lastRestoreTest.last_tested_at)}{lastRestoreTest.last_test_result ? ` · ${lastRestoreTest.last_test_result}` : ""}</> : <span className="muted">Never</span>}</dd>
+        </dl>
       </Tile>
       <Tile {...tile("resilience")} title="Resilience"
         summary={`${scopePools.length > 1 ? "Masters" : "Master"} ${scopePools.map(p => hostName(p.master_host_id)).join(", ")} · shared storage ${sharedStorage.length ? `${sharedHealthy} of ${sharedStorage.length} healthy` : "none"}`}>

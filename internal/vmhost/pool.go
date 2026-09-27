@@ -4,6 +4,8 @@ package vmhost
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -29,9 +31,34 @@ func RehomeLeavingPoolScope(stateDir, poolID, hostID string) error {
 
 func rehomePoolScope(stateDir, poolID, hostID string, leaving bool) error {
 	e := NewManaged(stateDir)
+	if _, err := os.Stat(e.stateDir); errors.Is(err, os.ErrNotExist) {
+		// A fresh host has no managed journal to re-scope. Joining it must remain a
+		// no-op here; the first managed command creates the state directory.
+		return nil
+	} else if err != nil {
+		return err
+	}
+	real, err := filepath.EvalSymlinks(e.stateDir)
+	if err != nil || real != e.stateDir {
+		return errors.New("managed state must not use symlinks")
+	}
+	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock(lock)
 	js, err := e.journals()
 	if err != nil {
 		return err
+	}
+	for _, j := range js {
+		if snapshotPoolOp(j.Command.Kind) && !j.RecoverySettled {
+			return errors.New("managed pool scope cannot change while a snapshot operation is unresolved")
+		}
+		if leaving && j.Command.Kind == "snapshot-create" && j.RecoverySettled &&
+			j.RecoveryStage == "completed" && j.RecoveryOutcome == "completed" && j.Result.Status == "succeeded" {
+			return errors.New("managed pool scope cannot leave while completed snapshots remain in the old pool catalog")
+		}
 	}
 	for _, j := range js {
 		c, changed := j.Command, false
@@ -56,7 +83,7 @@ func rehomePoolScope(stateDir, poolID, hostID string, leaving bool) error {
 			set(&c.Media.PoolID, &c.Media.HostID)
 		case c.StorageLifecycle != nil && c.StorageLifecycle.Action == "update":
 			set(&c.StorageLifecycle.PoolID, &c.StorageLifecycle.HostID)
-		case leaving && c.VM != nil:
+		case leaving && c.VM != nil && !snapshotPoolOp(c.Kind):
 			set(&c.VM.PoolID, &c.VM.HostID)
 		case leaving && c.Power != nil:
 			set(&c.Power.PoolID, &c.Power.HostID)
@@ -83,6 +110,13 @@ func rehomePoolScope(stateDir, poolID, hostID string, leaving bool) error {
 		}
 	}
 	return nil
+}
+
+// snapshotPoolOp is true for snapshot mutations that fence leave/join while
+// unresolved and are never re-scoped on leave (create also keeps settled
+// catalog completions refused separately).
+func snapshotPoolOp(kind string) bool {
+	return kind == "snapshot-create" || kind == "snapshot-revert" || kind == "snapshot-delete"
 }
 
 // HandlePoolCommand accepts only reconciliation after the peer endpoint durably admits it.

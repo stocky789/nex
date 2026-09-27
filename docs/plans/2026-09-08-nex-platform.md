@@ -117,8 +117,8 @@ and open gates: [production-readiness handoff](2026-09-14-production-readiness-h
 platform implements pool capabilities and exposes them through its API. Controller is the
 replaceable management UI/API that authenticates operators, submits requests and displays
 host results. Apply the [Core-first acceptance order](../../AGENTS.md#core-first-delivery-and-acceptance)
-to every slice, retaining the existing closed Controller-scoped responsibilities and explicit
-backup/restore orchestration exception. Existing storage safety, pool authority and recovery
+to every slice, retaining the closed Controller-scoped responsibilities. The 2026-09-25 decision
+below supersedes the earlier backup exception: pool backup/restore is Core-owned. Storage safety, pool authority and recovery
 gates remain the priority; migration, HA and managed applications keep their dependencies.
 This decision changes no milestone status or implementation queue.
 
@@ -138,7 +138,7 @@ endpoints, schedulers or UI controls now:
   must have a durable record on the pool master, recovered through inventory/adoption by a fresh
   Controller. Each implementation slice must name its concrete record and API contract before
   adding settings. Swarm retains container task scheduling; Core manages the supporting VM
-  lifecycle and supported constraints. Preserve the Controller backup/restore exception.
+  lifecycle and supported constraints. Core also owns backup scheduling, execution and history.
 - **Unified application catalogue, follow-on:** allow both VM appliances and Docker applications
   behind one discovery/deployment experience, using their existing lifecycle engines. Start with
   a small supported set whose deployment, updates and recovery are verified. VM image/bootstrap
@@ -661,8 +661,9 @@ the hosting server and test its recovery before claiming self-hosting recoverabl
 Use SQLite's supported backup mechanism or a quiesced backup, with matching
 configuration and identity material; copying a live database file without its
 transaction/WAL state is not a valid export. Provide a
-documented manual replacement-appliance import of that export in this slice (from Phase 6 the
-same export carries the Controller-scoped backup schedules, jobs, run history and catalog);
+documented manual replacement-appliance import of that export in this slice;
+Phase 6 backup schedules, jobs, run history and repository inventory recover from Core APIs,
+without requiring this Controller export (project owner decision, 2026-09-25);
 include CA/identity keys and required configuration with secret protection, and
 ensure the original instance cannot resume before activating its replacement.
 A same-host snapshot is insufficient. This minimal manual Controller recovery
@@ -989,6 +990,17 @@ separate from both initial manual promotion and automatic VM restart acceptance.
 
 ### 5. Snapshots and rollback
 
+**Checkpoint, 2026-09-27: closed for disposable virtual-lab scope.** S0 native and
+S1–S3 product snapshot paths, Core APIs, Controller UI, running BIOS crash/quiesced
+create (UEFI refused), freeze/thaw, bulk stopped Snapshot, and focused Snapshots
+usability follow-up have accepted disposable-lab evidence. S0 native lifecycle and
+midcommit consolidation also have a multi-backend (local/NFS/SMB/iSCSI) lab record;
+that is not product-on-every-backend certification or product backup/restore. BUG-0647 exact-retry recovery is fixed. Accepted residuals remain
+honest in the support matrix and do not reopen this gate. Close record:
+[docs/qa/2026-09-26-phase5-gate/CLOSED.md](../qa/2026-09-26-phase5-gate/CLOSED.md).
+See the [recovery plan](2026-09-25-recovery-snapshots-backups-restores.md) and
+[recovery handoff](2026-09-26-recovery-session-handoff.md).
+
 1. First run a disposable snapshot/backup API experiment on Debian's installed libvirt/QEMU versions; record supported create, revert, delete, backup, and firmware-state combinations with a runnable reproduction. Implement create, list, named description, revert, and delete for that validated backend. Start with gracefully stopped guests and disk-only snapshots.
 2. Capture all supported writable disks and corresponding VM configuration/firmware state. Reject unsupported disk, passthrough, or state combinations before modifying anything.
 3. Revert requires an explicit confirmation describing discarded changes. Keep VM configuration and disks matched to the chosen recovery point.
@@ -1010,23 +1022,44 @@ filesystems today does not enable that integration.
 
 ### 6. Backups, scheduling, and restoration
 
+**Checkpoint, 2026-09-27: Phase 6 closed for disposable virtual-lab scope.**
+S4–S7 Core/Controller/UI/guide code is present with unit and contract evidence. Disposable-lab
+product NFS backup/restore, lab install (`0.4.12` + overlay), bounded nested Campaign A/B
+(Campaign B re-run PASS after BUG-0651), browser walkthrough (settlement fixed in code) and
+hermetic CI are recorded. Owner closed disposable scope 2026-09-27. Physical/production
+certification is **not** claimed. Close record:
+[docs/qa/2026-09-27-phase6-gate/CLOSED.md](../qa/2026-09-27-phase6-gate/CLOSED.md).
+Index:
+[docs/qa/2026-09-27-phase6-implementation-index.md](../qa/2026-09-27-phase6-implementation-index.md).
+Phase 5 closed 2026-09-27 for disposable virtual-lab scope.
+
 1. Add pool-level backup repositories, initially an external NFS-backed filesystem in a separate failure domain from primary VM storage. Separate repository credentials and permissions from guest access.
 2. Implement full backups of gracefully stopped VMs first. Include every supported disk, VM configuration, required firmware/NVRAM state, format versions, checksums, and a standalone recovery manifest. Preserve vTPM state if supported; otherwise block backup of that configuration explicitly.
 3. Export self-contained disk images rather than copies that still depend on source snapshot backing files. Mark backups complete only after data and manifest validation; incomplete uploads must never appear restorable.
 4. Add online full backup using the supported libvirt backup API. Coordinate the disk set, report crash-consistent versus quiesced capture, and test guest shutdown or agent failure during backup. Do not copy a live disk with an ordinary file copy. [Libvirt backup API](https://libvirt.org/formatbackup.html), [live full backup guidance](https://libvirt.org/kbase/live_full_disk_backup.html)
-5. Add pool policies selecting VMs, schedules, retention counts/age, bandwidth/concurrency limits, and per-VM overrides. Run the scheduler in the existing controller process (the explicit exception below). Record missed runs during controller outages; serialize conflicting disk operations.
+5. Add pool policies selecting VMs, schedules, retention counts/age, bandwidth/concurrency limits, and per-VM overrides. Run one scheduler on the authoritative Core pool master; persist schedules, job definitions, dispatch identities and run history in Core. Continue through Controller loss; record genuinely missed runs when Core cannot execute them. Serialize conflicting disk operations and reconcile jobs before a new master dispatches work.
 6. Only prune completed, eligible backups after a successful new backup; respect protected recovery points and active restores. Do not add incremental chains until dependency-aware retention and recovery are implemented and tested.
 7. Restore by default as a new stopped VM into selected pool storage on a compatible host. Generate a new identity/MAC and default to a disconnected or isolated network to avoid collisions with the original.
 8. Provide explicit original-VM replacement with confirmation, proven exclusive ownership, and preserved existing disks until the restored guest is validated. Validate storage capacity, checksums, firmware, network mappings, and manifests before registration.
-9. Support catalog import/rebuild from repository manifests and a documented recovery command so backups remain useful after losing the controller database. Provide encryption at rest through the repository/storage layer initially and document key recovery independently of the controller.
+9. Core exposes repository inventory, jobs and run history through authenticated APIs. A fresh Controller adopts all pool members and existing protection by connecting to the master, with no old Controller database/export or per-host/job recreation. Support Core catalog rebuild from repository manifests and a documented Core recovery command when pool metadata is lost. Provide encryption at rest through the repository/storage layer initially and document key recovery independently of Controller.
 10. Back up and restore the controller database, configuration, and identity/key material using a consistent database backup mechanism. Restore only one authoritative controller and reconcile agents before accepting mutations.
 11. Show last successful backup, last verification, retention preview, repository space, and failed/missed jobs. Add an explicit test-restore workflow; scheduled isolated boot verification can follow manual restore proof. Completed-backup records are not a claim of tamper-proof/WORM storage.
 
-**Decision (project owner, 2026-09-10):** backup and restore orchestration is the explicit exception to the rule that Nex Controller never drives jobs: the Controller runs the scheduler, drives backup and restore jobs, and keeps their run history and the catalog. Backup repository registrations stay pool-scoped on the pool master and re-adopt like other pool settings. Schedules, jobs, run history and the catalog are Controller-scoped: a replacement Controller recovers them only from the Controller backup/restore in step 10 (the catalog can also be rebuilt from repository manifests, step 9); without that backup they are lost, while the repository registrations and every backup already written are not.
+**Decision (project owner, 2026-09-25), superseding the 2026-09-10 backup exception:**
+backup and restore are Core capabilities, including scheduling, job definitions, execution,
+history and verification. Controller configures and observes them through APIs. Delete Controller:
+the pool keeps backing up and can restore through Core. Connect a fresh Controller to the master:
+all pool members, jobs, schedules, retained run history and recovery points are adopted with their
+existing identities. Restoring Controller data is unnecessary for this adoption. Controller-scoped
+accounts/sites/audit/identity still have their separate recovery path. The three-host Controller-loss
+and master-host-loss campaigns in the [recovery plan](2026-09-25-recovery-snapshots-backups-restores.md#mandatory-three-host-continuity-and-adoption-campaign)
+are required acceptance. Master loss needs proven authority takeover and accessible data; VM
+discovery alone grants neither disk access nor execution ownership. Automatic VM restart remains
+Phase 9, and recovery of a failed host's surviving VM disks retains Phase 7's separate gate.
 
 **UX acceptance:** provide a short preset-based policy workflow with explicit VM scope, independent repository, schedule/time zone, retention, and downtime/consistency review. Quick application of a reviewed policy reuses the same validated scheduler; display next run and failed/missed jobs without implying a successful job proves recovery.
 
-**Gate:** back up a guest, make its original disks unavailable, restore to another compatible host/storage, boot it on an isolated network, and verify files/application data. Test corrupted/missing backups, full repository, interrupted jobs, retention, lost controller database, and snapshot-plus-backup interactions. Measure actual backup/restore time before promising RPO/RTO.
+**Gate:** back up a guest, make its original disks unavailable, restore to another compatible host/storage, boot it on an isolated network, and verify files/application data. Test corrupted/missing backups, full repository, interrupted jobs, retention, lost controller database, and snapshot-plus-backup interactions. Prove scheduled backups and Core-local restores while Controller is absent, then master-only adoption by a fresh Controller, preserving member/job identities and prior/during-outage history. Repeat with master-host loss, safe takeover, accessible backups and local-disk negative cases. Measure actual backup/restore time before promising RPO/RTO.
 
 #### Changed-block tracking and incremental backup follow-on
 
@@ -1049,17 +1082,17 @@ a snapshot means tracking was enabled or remains trustworthy.
   and establish a new full baseline with an explained operator-visible result. Never silently
   interpret lost tracking as “nothing changed” or discard the last usable backup chain.
 - Keep bitmap/checkpoint manipulation on Core, under the active master's VM/disk ownership and
-  serialization rules. Preserve the existing explicit Controller backup-job scheduling/catalog
-  exception; it does not authorize Controller to manipulate host bitmaps or become an HA owner.
+  serialization rules. Scheduling, job history and catalog authority also stay in Core under the
+  2026-09-25 decision; Controller neither manipulates host bitmaps nor becomes an HA owner.
   Recovery manifests and required keys must remain usable after loss of the original Core and
-  Controller catalog, following the existing catalog rebuild and key-custody requirements.
+  Controller, following the existing Core catalog rebuild and key-custody requirements.
 - Present full/incremental selection, supported combinations, last successful backup and last
   tested restore clearly. Discover safe defaults and explain any full-baseline fallback, missing
   chain dependency or incompatible disk; do not expose bitmap identifiers as routine user input.
 
 **Acceptance — outstanding:** perform full plus multiple incremental backups of a multi-disk
 guest with identifiable writes, deletes and discards; restore selected recovery points on a
-clean host after making original disks and the Controller catalog unavailable. Verify disk and
+clean host after making original disks and Controller unavailable. Verify disk and
 guest/application data, configuration and firmware state. Exercise corrupt/missing increments,
 retention/pruning, full repository, interrupted publication and the bitmap lifecycle events
 above, proving either correct continuity or safe full-baseline fallback. Require independent
@@ -1087,8 +1120,8 @@ may bypass VM ownership, fencing or snapshot/backup concurrency checks.
 
 **API impact of these roadmap additions: none; guide impact: none** — no runtime capability
 changes. **Planned API impact: new/changed contracts** for snapshot/checkpoint capabilities,
-backup lifecycle requests and Core-reported validity/results: UI → Controller authorization/job
-orchestration within the existing backup exception → master-authorized Core disk work → durable
+backup lifecycle requests and Core-reported validity/results: UI → Controller authorization/API
+relay → master-owned Core scheduling and authorized disk work → durable
 Core observations and backup manifests. Specify permission/scope validation, failure/retry,
 cancellation, concurrency, reconnect and version compatibility on both sides; update API schemas,
 reference and runnable negative-path tests plus the operator guide in each implementation slice.
@@ -1461,7 +1494,7 @@ This follows Phases 0–8 and the minimal VM image/bootstrap capability it needs
 
 #### Ownership, storage, and failure behavior
 
-- Begin with one managed swarm per enabled pool. Controller authorizes operator requests and displays host-reported operation history. Core validates and persists desired application configuration, identities, node-VM relationships and durable provisioning progress on the pool master; define the concrete records and inventory/adoption contracts in each slice. Recover Swarm-owned runtime state through the managed swarm. Provisioning and reconciliation must survive Controller disconnection, and a replacement Controller must rediscover applications through Core APIs. Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler; retain the explicit Controller backup/restore orchestration exception.
+- Begin with one managed swarm per enabled pool. Controller authorizes operator requests and displays host-reported operation history. Core validates and persists desired application configuration, identities, node-VM relationships and durable provisioning progress on the pool master; define the concrete records and inventory/adoption contracts in each slice. Recover Swarm-owned runtime state through the managed swarm. Provisioning and reconciliation must survive Controller disconnection, and a replacement Controller must rediscover applications through Core APIs. Swarm owns service scheduling, replicas, rolling updates, and replacement tasks. Avoid a competing Nex container scheduler; backup/restore remains Core-owned under the 2026-09-25 decision.
 - Provision manager/worker roles automatically. For an HA-enabled swarm use three managers on separate physical Nex Core hosts, enforce that separation during VM placement/migration/maintenance, and reserve sufficient resources. Managers may also run workloads in a small validated deployment; dedicated manager VMs can follow workload requirements.
 - Swarm manager quorum is independent of hypervisor/pool HA quorum. Keep manager addresses stable and each manager's Raft state on its own node disk; do not share one Docker data directory between nodes. Loss of Nex Controller must not stop Swarm scheduling; loss of Swarm manager quorum prevents orchestration while existing tasks may continue. [Docker nodes](https://docs.docker.com/engine/swarm/how-swarm-mode-works/nodes/), [Swarm administration](https://docs.docker.com/engine/swarm/admin_guide/)
 - Failover creates replacement containers on eligible nodes; it does not live-migrate their memory, retain process identity, or guarantee uninterrupted connections. Service identity is stable while task/container IDs change. Expose recovery progress and measured downtime honestly.
@@ -1595,7 +1628,7 @@ README.md
 go.mod
 cmd/nex-controller/main.go
 cmd/nex-core-agent/main.go
-internal/controller/             # UI-facing API/auth, host requests, Controller-scoped data and backup jobs
+internal/controller/             # UI-facing API/auth, host requests and Controller-scoped data
 internal/agent/                  # Core APIs, durable pool state/policies, libvirt and host operations
 internal/protocol/               # shared request/response definitions only
 web/                            # React/TypeScript UI
@@ -1643,14 +1676,13 @@ connecting each pool master to it, with every setting coming across. Decisions:
   durable, host-local record (today: the managed journal and `/etc/network/interfaces.d`) and is
   reported in inventory so a Controller that does not know it re-adopts it with the same identity
   and name. This applies to pool membership, networks, storage registrations, media, VM
-  definitions and identity, later snapshot policies, and backup repository registrations; backup
-  schedules, jobs, run history and the catalog are the agreed Controller-scoped exception
-  (decision: project owner, 2026-09-10, Phase 6). Running workloads and local
-  recovery never depend on the Controller (unchanged).
+  definitions and identity, snapshot policies, backup repository registrations, schedules,
+  jobs, run history and the catalog. The 2026-09-25 Core ownership decision supersedes
+  the former backup exception. Running workloads and local recovery never depend on Controller.
 - **Replacement procedure target:** install a new Controller, connect each pool master (token or
   address plus root password), wait for adoption. No re-entry of pool settings. Controller-scoped
   data (sites, administrator accounts and roles, audit history, enrollment tokens, the Controller
-  CA and, from Phase 6, backup jobs) is backed up and restored separately; until that exists, it is re-created by hand and this is
+  CA) is backed up and restored separately; until that exists, it is re-created by hand and this is
   documented as a limit.
 - **Rule for every slice:** the [architecture invariant](../../AGENTS.md#the-architecture-invariant-nex-core-does-the-work-nex-controller-only-asks).
 - **Status:** implemented for storage registrations, networks, media and VM definitions

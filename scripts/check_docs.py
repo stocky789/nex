@@ -134,8 +134,11 @@ def roadmap_required(relative):
 # The closed list of Controller-owned data (AGENTS.md, architecture invariant). A controller
 # owner must name one of these in its record; anything else is a design defect, not a record.
 CONTROLLER_EXCEPTIONS = ('sites', 'administrator accounts and roles', 'audit history', 'enrollment tokens',
-                         'the Controller CA', 'backup/restore jobs')
-CONTROLLER_RECORD = re.compile(r'\b(sites?|administrators?|admins?|audit|enrollment|tokens?|controller ca|ca|backups?|restores?)\b', re.I)
+                         'the Controller CA')
+CONTROLLER_RECORD = re.compile(r'\b(sites?|administrators?|admins?|audit|enrollment|tokens?|controller ca|ca)\b', re.I)
+POOL_RECOVERY_RECORD = re.compile(
+    r'\b(?:backup|restore)[ /-](?:jobs?|definitions?|polic(?:y|ies)|schedules?|history|'
+    r'catalog(?:ue)?|repositor(?:y|ies)|recovery points?|execution|verification results?|run history)\b', re.I)
 
 
 def check_state(file, data):
@@ -159,7 +162,8 @@ def check_state(file, data):
     # core: the host-side record and the path a fresh Controller re-adopts it by.
     # controller: which closed Controller-scoped exception it is, and its backup path.
     nonempty(state.get('record'), 'state.record')
-    if state['owner'] == 'controller' and not CONTROLLER_RECORD.search(state['record']):
+    if state['owner'] == 'controller' and (
+            POOL_RECOVERY_RECORD.search(state['record']) or not CONTROLLER_RECORD.search(state['record'])):
         raise ValueError(f'{file}: state.record for owner controller must name one of the closed '
                          'Controller-scoped exceptions: ' + ', '.join(CONTROLLER_EXCEPTIONS))
 

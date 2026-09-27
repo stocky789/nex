@@ -1,0 +1,32 @@
+{
+  "summary": "Install nex-core-local 0.4.12 plus Phase 6 overlay binary on disposable Phase 6 lab core1/core2/core3 (Path A). Storage guest untouched. Product backup API smoke not run.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-lab-install.md",
+    "docs/changes/2026-09-27-phase6-lab-install.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor QA evidence of disposable-lab package install only; no operator workflow or product behavior changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core contract or client API changed; hosts received an existing package and a worktree binary overlay for later smoke.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Unblocks Phase 6 product walkthrough prerequisites; Campaign A/B and backup API smoke remain separate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Lab package/service install only; no new pool-scoped durable product settings were authored beyond package defaults on disposable guests."
+  },
+  "verification": {
+    "method": "Path A on disposable recovery Core lab: rebuilt nex-core-local; verified nex-core-local_0.4.12_amd64.deb; SCP + core-release stamp + noninteractive apt-get install on core1/core2/core3 only; overlay Phase 6 binary to /usr/lib/nex/nex-core-local; confirmed systemctl is-active and :9443 listen on each; confirmed storage guest had no Core binary. Recorded package version 0.4.12 and overlay SHA-256. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-lab-install.md"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "summary": "Record Phase 6 / S4 disposable-lab product walkthrough: NFS and versions verified; product backup APIs blocked because nex-core-local is not installed on the existing guests. Campaign A/B not run.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-s4-lab-walkthrough.md",
+    "docs/qa/2026-09-27-phase6-s7-status.md",
+    "docs/changes/2026-09-27-phase6-s4-lab-walkthrough.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor QA evidence only; no operator workflow or product behavior changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Evidence-only lab probe; no Controller/Core contract or client API changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records an incomplete live product walkthrough; Phase 6 gate and Campaign A/B remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable product state was written; guests were probed read-mostly and left intact."
+  },
+  "verification": {
+    "method": "SSH to disposable core1/core2/core3/storage on loopback forwards; recorded dpkg versions, service state, NFS exports/mounts, absence of nex packages and local Core listeners; built worktree nex-core-local and nex-core-agent into ignored cache without deploying; documented product-path blockers. Campaign A/B not executed. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-s4-lab-walkthrough.md"
+    ]
+  }
+}

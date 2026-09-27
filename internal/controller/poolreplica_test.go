@@ -60,7 +60,7 @@ func TestPoolMemberReplicaStates(t *testing.T) {
 		t.Fatalf("awaiting: %+v", got)
 	}
 	if !l.members(t).ReplicaSupported {
-		t.Fatal("master advertises pool-authority-replica-v1 but the pool says unsupported")
+		t.Fatal("master advertises pool-authority-replica-v2 but the pool says unsupported")
 	}
 
 	// Both sides agree at one generation, verified, no error.
@@ -89,7 +89,7 @@ func TestPoolMemberReplicaStates(t *testing.T) {
 	}
 
 	// A master-reported refusal wins over everything but freshness and capability.
-	l.setReplica(0, "pool member does not support pool-authority-replica-v1; upgrade it before relying on its replica", heldReplica(7, true, ""))
+	l.setReplica(0, "pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica", heldReplica(7, true, ""))
 	if got := l.replica(t, l.member.id); got.State != "refused" || got.Error == "" {
 		t.Fatalf("master refusal: %+v", got)
 	}

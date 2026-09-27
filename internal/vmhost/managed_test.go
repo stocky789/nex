@@ -211,6 +211,83 @@ func TestManagedReferencesAndXML(t *testing.T) {
 	}
 }
 
+func TestManagedSnapshotLocalIntentFencesUntilOwnerReservation(t *testing.T) {
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	if err := os.Mkdir(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	vm := managedTestVM()
+	create := protocol.Command{OperationID: "create-seed", Kind: "vm-create", VM: &vm}
+	if err := e.save(managedJournal{Command: create, Result: protocol.Result{OperationID: create.OperationID, Status: "succeeded"}, Stage: "defined"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, record, _ := managedRecoveryEntryForTest(vm, "snapshot-local-intent")
+	preflight := managedSnapshotRecord{SnapshotID: snapshot.OperationID, Name: snapshot.Snapshot.Name, Description: snapshot.Snapshot.Description, CreatedAt: time.Now().UTC()}
+	if err := e.save(managedJournal{
+		Command: snapshot, Snapshot: &preflight,
+		Result: protocol.Result{OperationID: snapshot.OperationID, Status: "pending"},
+		Stage:  "validating", RecoveryStage: "preflight",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := filepath.Join(t.TempDir(), "virsh.log")
+	t.Setenv("VMHOST_LOG", calls)
+	fakeCommand(t, "virsh", `echo called >> "$VMHOST_LOG"; exit 2`)
+	start := protocol.Command{OperationID: "start-during-snapshot-intent", Kind: "vm-power", Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"}}
+	result, err := e.Execute(context.Background(), start, nil)
+	if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "local snapshot intent") {
+		t.Fatalf("start crossed local-intent fence: result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("native command ran before reservation: %v", err)
+	}
+	if err := e.save(managedJournal{
+		Command: snapshot, Snapshot: &record,
+		Result: protocol.Result{OperationID: snapshot.OperationID, Status: "pending"},
+		Stage:  "validating", RecoveryStage: "local-intent",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = e.Execute(context.Background(), snapshot, nil)
+	if err != nil || result.Status != "needs_attention" {
+		t.Fatalf("same-operation replay escaped local intent: result=%+v err=%v", result, err)
+	}
+	if _, err := e.readJournal(snapshot.OperationID + ".json"); err != nil {
+		t.Fatalf("local intent journal became unreadable: %v", err)
+	}
+}
+
+func TestManagedSnapshotEmergencyPowerCanNamePendingSnapshot(t *testing.T) {
+	e, vm, _ := managedRecoveryFixture(t)
+	for _, action := range []string{"shutdown", "force-stop"} {
+		command := protocol.Command{OperationID: "emergency-" + action, Kind: "vm-power", Power: &protocol.VMPowerRequest{
+			VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: action, AfterOperationID: "snapshot-op",
+		}}
+		log := filepath.Join(t.TempDir(), "virsh.log")
+		t.Setenv("VMHOST_LOG", log)
+		fakeCommand(t, "virsh", `case "$3" in
+domstate) echo running;;
+shutdown|destroy) echo "$3" >> "$VMHOST_LOG";;
+*) exit 2;; esac`)
+		result, err := e.Execute(context.Background(), command, nil)
+		if err != nil || result.Status != "succeeded" {
+			t.Fatalf("emergency %s after snapshot result=%+v err=%v", action, result, err)
+		}
+		calls, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := action
+		if action == "force-stop" {
+			want = "destroy"
+		}
+		if !strings.Contains(string(calls), want) {
+			t.Fatalf("emergency %s did not reach libvirt: %q", action, calls)
+		}
+	}
+}
+
 func TestStorageProjectionUsesGenerationsAndTombstones(t *testing.T) {
 	base := protocol.StorageRegistration{ID: "storage-1", PoolID: "pool-1", HostID: "host-1", Name: "old", Path: "/srv/old"}
 	next := protocol.StorageRegistration{Name: "new", Path: "/srv/new"}
@@ -622,6 +699,118 @@ func TestNextStorageReconcileOldestDue(t *testing.T) {
 	js[0].Result.ObservedAt = js[2].Result.ObservedAt
 	if got := nextStorageReconcile(js, now); got == nil || got.Command.OperationID != "first" {
 		t.Fatalf("operation ID tie-break = %+v", got)
+	}
+}
+
+func TestNextResourceRemovalReconcileSelectsOnlyOldestDueRemoval(t *testing.T) {
+	now := time.Now().UTC()
+	entry := func(id, kind, resource, action, status string, age time.Duration) managedJournal {
+		return managedJournal{
+			Command: protocol.Command{
+				OperationID: id,
+				Kind:        kind,
+				ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+					Resource: resource, Action: action, ResourceID: "resource-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 2,
+				},
+			},
+			Result: protocol.Result{OperationID: id, Status: status, ObservedAt: now.Add(-age)},
+			Stage:  "removing",
+		}
+	}
+	js := []managedJournal{
+		entry("later", "media-remove", "media", "remove", "pending", 2*time.Minute),
+		entry("terminal", "network-remove", "network", "remove", "failed", 10*time.Minute),
+		entry("too-young", "network-remove", "network", "remove", "needs_attention", 30*time.Second),
+		entry("wrong-resource", "network-remove", "media", "remove", "needs_attention", 4*time.Minute),
+		entry("first", "network-remove", "network", "remove", "needs_attention", 3*time.Minute),
+		entry("foreign-older", "network-remove", "network", "remove", "needs_attention", 5*time.Minute),
+		{Command: protocol.Command{OperationID: "other", Kind: "vm-delete"}, Result: protocol.Result{Status: "needs_attention", ObservedAt: now.Add(-time.Hour)}},
+		entry("no-time", "media-remove", "media", "remove", "needs_attention", 4*time.Minute),
+	}
+	js[len(js)-1].Result.ObservedAt = time.Time{}
+	js[1].Stage = "removal-refused"
+	js[5].Command.ResourceLifecycle.PoolID = "old-pool"
+	if got := nextResourceRemovalReconcile(js, now, "pool-1", "host-1"); got == nil || got.Command.OperationID != "first" {
+		t.Fatalf("oldest due removal = %+v", got)
+	}
+	js[0].Result.ObservedAt = js[4].Result.ObservedAt
+	if got := nextResourceRemovalReconcile(js, now, "pool-1", "host-1"); got == nil || got.Command.OperationID != "first" {
+		t.Fatalf("operation ID tie-break = %+v", got)
+	}
+}
+
+func TestPendingResourceRemovalReturnsExactDurableCommand(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	c := protocol.Command{
+		OperationID: "remove-network-1",
+		Kind:        "network-remove",
+		ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+			Resource: "network", Action: "remove", ResourceID: "net-1", PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 3,
+		},
+	}
+	observed := time.Now().UTC().Add(-2 * time.Minute)
+	if err := e.save(managedJournal{Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "needs_attention", ObservedAt: observed}, Stage: "removing"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.PendingResourceRemoval(context.Background(), "pool-1", "host-1")
+	if err != nil || got == nil {
+		t.Fatalf("pending removal = %+v, %v", got, err)
+	}
+	if !reflect.DeepEqual(got.Command, c) || got.Result.Status != "needs_attention" || got.Stage != "removing" || !got.Result.ObservedAt.Equal(observed) {
+		t.Fatalf("pending removal changed durable command/evidence: %+v", got)
+	}
+	if err = e.save(managedJournal{Command: protocol.Command{OperationID: "terminal", Kind: "network-remove", ResourceLifecycle: c.ResourceLifecycle}, Result: protocol.Result{OperationID: "terminal", Status: "failed", ObservedAt: observed.Add(-time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(e.stateDir, c.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = e.PendingResourceRemoval(context.Background(), "pool-1", "host-1")
+	if err != nil || got == nil || got.Command.OperationID != "terminal" {
+		t.Fatalf("legacy failed removal was not selected for safe exact reconciliation: %+v, %v", got, err)
+	}
+}
+
+func TestResourceRemovalOutcomeReturnsOnlyExactDefinitiveTerminalJournal(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	entry := func(id, status, stage string) managedJournal {
+		c := protocol.Command{
+			OperationID: id,
+			Kind:        "media-remove",
+			ResourceLifecycle: &protocol.ResourceLifecycleRequest{
+				Resource: "media", Action: "remove", ResourceID: "iso-" + id, PoolID: "pool-1", HostID: "host-1", ExpectedGeneration: 1,
+			},
+		}
+		if status == "failed" && stage == "validating" {
+			stage = "removal-refused"
+		}
+		return managedJournal{Command: c, Stage: stage, Result: protocol.Result{OperationID: id, Status: status, Error: "stored result", ObservedAt: time.Now().UTC()}}
+	}
+	for _, j := range []managedJournal{
+		entry("success", "succeeded", "removing"),
+		entry("refused", "failed", "validating"),
+		entry("uncertain-failure", "failed", "removing"),
+		entry("uncertain", "needs_attention", "removing"),
+		entry("pending", "pending", "removing"),
+	} {
+		if err := e.save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"success", "refused"} {
+		got, err := e.ResourceRemovalOutcome(context.Background(), id)
+		if err != nil || got == nil || got.Command.OperationID != id || got.Result.Status == "" || got.Result.Error != "stored result" {
+			t.Fatalf("terminal outcome %q = %+v, %v", id, got, err)
+		}
+	}
+	for _, id := range []string{"uncertain-failure", "uncertain", "pending", "unknown"} {
+		got, err := e.ResourceRemovalOutcome(context.Background(), id)
+		if err != nil || got != nil {
+			t.Fatalf("ambiguous/nonexistent outcome %q = %+v, %v", id, got, err)
+		}
+	}
+	if _, err := e.ResourceRemovalOutcome(context.Background(), "bad/id"); err == nil {
+		t.Fatal("invalid operation ID was accepted")
 	}
 }
 
@@ -1063,7 +1252,7 @@ func TestManagedRecordVMMediaKeepsBootOrderOnEject(t *testing.T) {
 	if err := e.save(j); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.recordVMMedia(protocol.VMMediaRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "eject"}); err != nil {
+	if err := e.recordVMMedia(context.Background(), protocol.VMMediaRequest{VMID: v.ID, PoolID: v.PoolID, HostID: v.HostID, Action: "eject"}); err != nil {
 		t.Fatal(err)
 	}
 	applied, _ := e.Applied(context.Background())
@@ -1161,6 +1350,33 @@ func TestManagedDefinitionTampering(t *testing.T) {
 	// A libvirt that does not echo freePageReporting must not fail every "maximum" VM.
 	if err = validateManagedDefinition([]byte(strings.Replace(string(wanted), ` freePageReporting="on"`, "", 1)), wanted); err != nil {
 		t.Fatalf("absent freePageReporting rejected: %v", err)
+	}
+}
+
+func TestValidateManagedDefinitionAcceptsCdromDriverTypeMismatch(t *testing.T) {
+	v := managedTestVM()
+	wanted, err := testDomainXML(v, []protocol.NetworkRegistration{{Kind: "bridge", Source: "br0"}}, []string{"/disk"}, "/iso/install.iso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Projection retained a qcow2 overlay driver; libvirt reports raw for the same published ISO.
+	projected := strings.Replace(string(wanted), `type="raw"></driver>`, `type="qcow2"></driver>`, 1)
+	if projected == string(wanted) || !strings.Contains(projected, `device="cdrom"`) {
+		t.Fatal("fixture did not mutate CDROM driver type")
+	}
+	if err := validateManagedDefinition(wanted, []byte(projected)); err != nil {
+		t.Fatalf("same-ISO CDROM qcow2 vs raw ownership rejected: %v", err)
+	}
+	if err := validateManagedDefinition([]byte(projected), wanted); err != nil {
+		t.Fatalf("reverse same-ISO CDROM driver mismatch rejected: %v", err)
+	}
+	// Disk driver mismatch must still refuse.
+	diskProjected := strings.Replace(string(wanted), `type="qcow2" iothread="1"></driver>`, `type="raw" iothread="1"></driver>`, 1)
+	if diskProjected == string(wanted) {
+		t.Fatal("fixture did not mutate disk driver type")
+	}
+	if err := validateManagedDefinition(wanted, []byte(diskProjected)); err == nil {
+		t.Fatal("accepted disk driver type mismatch")
 	}
 }
 
@@ -1673,11 +1889,11 @@ func TestAvailableCPUModelUsesUsableDomainCapabilities(t *testing.T) {
 
 func TestManagedAutostartObservation(t *testing.T) {
 	for _, tc := range []struct {
-		info string
-		want bool
-	}{{"Id:             -\nName:           guest\nAutostart:      enable\n", true}, {"Name:           guest\nAutostart:      disable\n", false}, {"Name:           guest\n", false}, {"", false}} {
-		if got := autostartEnabled([]byte(tc.info)); got != tc.want {
-			t.Fatalf("autostart %v for %q", got, tc.info)
+		info         string
+		wantDisabled bool
+	}{{"Id:             -\nName:           guest\nAutostart:      enable\n", false}, {"Name:           guest\nAutostart:      disable\n", true}, {"Name:           guest\n", false}, {"", false}, {"Name: guest\nAutostart: unexpected\n", false}} {
+		if got := autostartDisabled([]byte(tc.info)); got != tc.wantDisabled {
+			t.Fatalf("autostart disabled=%v for %q", got, tc.info)
 		}
 	}
 }
@@ -1992,10 +2208,60 @@ func startLibvirt(t *testing.T) func() string {
 	return func() string { b, _ := os.ReadFile(log); os.Remove(log); return string(b) }
 }
 
-// A verified definition is a succeeded creation whatever the automatic start did: the failure
-// reason lands in the journal's start field, is reported as a failed <operation>:start
-// vm-power outcome while the VM is listed as a normal managed VM, and a retried creation
-// neither starts the guest again nor loses the recorded reason.
+func TestManagedPowerStartAcceptsReadyLocalStorage(t *testing.T) {
+	lowMemoryHost(t, 65536)
+	e := startEngine(t)
+	calls := startLibvirt(t)
+	t.Setenv("VMHOST_STATE", "shut off")
+	t.Setenv("VMHOST_DOMAINS", "12345678-1234-4234-8234-123456789012")
+
+	storage := protocol.StorageRegistration{
+		ID: "local-1", PoolID: "p", HostID: "h", Name: "local",
+		Path: t.TempDir(), Kind: protocol.StorageKindLocal, Generation: 1,
+	}
+	if err := e.save(managedJournal{
+		Command: protocol.Command{OperationID: "register-local", Kind: "storage-register", Storage: &storage},
+		Result:  protocol.Result{OperationID: "register-local", Status: "succeeded"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vm := managedTestVM()
+	vm.Disks[0].StorageID = storage.ID
+	create := protocol.Command{OperationID: "create-local", Kind: "vm-create", VM: &vm}
+	if err := e.save(managedJournal{Command: create, Result: protocol.Result{OperationID: create.OperationID, Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	previousReady := managedStorageReadyFn
+	readyCalls := 0
+	managedStorageReadyFn = func(_ context.Context, got protocol.StorageRegistration, _ uint64) (storageAccess, error) {
+		if got.ID != storage.ID || got.StorageKind() != protocol.StorageKindLocal || got.Path != storage.Path {
+			return storageAccess{}, errors.New("unexpected local storage registration")
+		}
+		readyCalls++
+		return storageAccess{Path: got.Path, Total: 2 << 40, Available: 1 << 40, Health: "healthy"}, nil
+	}
+	t.Cleanup(func() { managedStorageReadyFn = previousReady })
+
+	request := protocol.Command{
+		OperationID: "start-local", Kind: "vm-power",
+		Power: &protocol.VMPowerRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, Action: "start"},
+	}
+	result, err := e.Execute(context.Background(), request, nil)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("local VM start = %+v, %v", result, err)
+	}
+	if readyCalls != 1 {
+		t.Fatalf("local storage readiness checks = %d, want 1", readyCalls)
+	}
+	if got := calls(); got != "domstate "+vm.ID+"\nstart "+vm.ID+"\n" {
+		t.Fatalf("libvirt calls %q", got)
+	}
+}
+
+// A verified definition is a succeeded creation whatever the automatic start did. A refused
+// preflight is a definitive failed start; a request whose libvirt result is uncertain is not.
+// Both keep the VM managed, and a retried creation neither starts it again nor loses the result.
 func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	e := startEngine(t)
 	calls := startLibvirt(t)
@@ -2016,23 +2282,26 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 		t.Fatalf("creation with a failed start: %+v %v", r, err)
 	}
 	// The trailing domstate is powerVM observing the domain after the failed start: a failed
-	// call says nothing about what the guest did, so the outcome is settled by observation
-	// (BUG-0213). Here the domain is still shut off, so the start stays a recorded failure.
+	// call says nothing about what the guest did, so the outcome stays uncertain even though
+	// the current state is shut off (BUG-0213).
 	reason := "libvirt did not confirm the start request; inspect the VM on its host"
 	if got := calls(); got != "domstate "+v.ID+"\nstart "+v.ID+"\ndomstate "+v.ID+"\n" {
 		t.Fatalf("start calls %q", got)
 	}
 	saved, err := e.readJournal("create.json")
-	if err != nil || saved.Start != reason || saved.Stage != "started" {
+	if err != nil || saved.Start != reason || saved.StartOutcome != startOutcomeUncertainRequest || saved.Stage != "started" {
 		t.Fatalf("start reason not recorded: %+v %v", saved, err)
 	}
 	got, checks := e.Applied(context.Background())
 	if len(got.VMs) != 1 || got.VMs[0].ID != v.ID || len(got.MissingVMs) != 0 || checks[1].Status != "healthy" {
 		t.Fatalf("VM not reported as managed: %+v %+v", got, checks)
 	}
-	want := protocol.ManagedOutcome{OperationID: "create:start", Kind: "vm-power", ID: v.ID, Name: "guest", Status: "failed", Error: "VM created but not started: " + reason}
+	want := protocol.ManagedOutcome{OperationID: "create:start", Kind: "vm-power", ID: v.ID, Name: "guest", Status: "needs_attention", Error: "VM created but not started: " + reason}
 	if len(got.Outcomes) != 2 || got.Outcomes[0].Status != "succeeded" || got.Outcomes[1] != want {
 		t.Fatalf("start outcome %+v, want %+v", got.Outcomes, want)
+	}
+	if outcome, found, err := e.CreateStartOutcome(context.Background(), c.OperationID); err != nil || !found || outcome != want {
+		t.Fatalf("exact create start outcome = %+v, found %t, err %v; want %+v", outcome, found, err, want)
 	}
 	calls()
 	if r, err = e.Execute(context.Background(), c, nil); err != nil || r.Status != "succeeded" {
@@ -2041,10 +2310,10 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	if got := calls(); got != "" {
 		t.Fatalf("retry touched libvirt: %q", got)
 	}
-	if saved, err = e.readJournal("create.json"); err != nil || saved.Start != reason {
+	if saved, err = e.readJournal("create.json"); err != nil || saved.Start != reason || saved.StartOutcome != startOutcomeUncertainRequest {
 		t.Fatalf("retry lost the start reason: %+v %v", saved, err)
 	}
-	// A start that succeeds reports its successful creation, without a failed start outcome.
+	// A start that succeeds reports its successful creation, without a start-failure outcome.
 	t.Setenv("VMHOST_FAIL", "")
 	v2 := v
 	v2.ID, v2.Name = "12345678-1234-4234-8234-123456789013", "guest2"
@@ -2062,10 +2331,28 @@ func TestManagedStartFailureKeepsCreationSucceeded(t *testing.T) {
 	}
 }
 
+func TestManagedCreateStartOutcomeUnknownMarkerNeedsAttention(t *testing.T) {
+	e := startEngine(t)
+	v := managedTestVM()
+	v.StartAfterCreate = true
+	c := protocol.Command{OperationID: "create", Kind: "vm-create", VM: &v}
+	j := managedJournal{
+		Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "succeeded"},
+		Stage: "started", Start: "legacy refusal text", StartOutcome: "future-state",
+	}
+	if err := e.save(j); err != nil {
+		t.Fatal(err)
+	}
+	outcome, found, err := e.CreateStartOutcome(context.Background(), c.OperationID)
+	if err != nil || !found || outcome.Status != "needs_attention" {
+		t.Fatalf("unknown persisted start outcome = %+v, found %t, err %v", outcome, found, err)
+	}
+}
+
 // An entry that died at the start step is settled from libvirt: a running domain means the
-// single start took effect; otherwise the start is recorded as interrupted and reported as a
-// failed outcome. The creation is succeeded either way, on a re-sent operation and on report,
-// and a reason an earlier process recorded is never overwritten.
+// single start took effect; otherwise its completion remains ambiguous. The creation is
+// succeeded either way, on a re-sent operation and on report, and a reason an earlier process
+// recorded is never overwritten.
 func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	e := startEngine(t)
 	calls := startLibvirt(t)
@@ -2088,7 +2375,7 @@ func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	if got := calls(); got != "domstate "+running.VM.ID+"\n" {
 		t.Fatalf("settling must observe only: %q", got)
 	}
-	if saved, err := e.readJournal("running.json"); err != nil || saved.Start != "started" || saved.Stage != "started" {
+	if saved, err := e.readJournal("running.json"); err != nil || saved.Start != "started" || saved.StartOutcome != startOutcomeStarted || saved.Stage != "started" {
 		t.Fatalf("running domain not recorded as started: %+v %v", saved, err)
 	}
 	// Left behind by a dead process: report settles it without a re-sent operation.
@@ -2104,15 +2391,24 @@ func TestManagedInterruptedStartSettlesFromLibvirt(t *testing.T) {
 	for _, o := range got.Outcomes {
 		by[o.OperationID] = o
 	}
-	if o := by["stopped:start"]; o.Kind != "vm-power" || o.Status != "failed" || o.ID != stopped.VM.ID || o.Error != "VM created but not started: interrupted before the automatic start completed" {
+	if o := by["stopped:start"]; o.Kind != "vm-power" || o.Status != "needs_attention" || o.ID != stopped.VM.ID || o.Error != "VM created but not started: interrupted before the automatic start completed" {
 		t.Fatalf("interrupted start outcome %+v", o)
 	}
-	if o := by["legacy:start"]; o.Error != "VM created but not started: libvirt refused the start request; inspect the VM on its host" {
+	if o := by["legacy:start"]; o.Status != "needs_attention" || o.Error != "VM created but not started: libvirt refused the start request; inspect the VM on its host" {
 		t.Fatalf("recorded reason overwritten: %+v", o)
+	}
+	if outcome, found, err := e.CreateStartOutcome(context.Background(), stopped.OperationID); err != nil || !found || outcome != by["stopped:start"] {
+		t.Fatalf("interrupted create start outcome = %+v, found %t, err %v", outcome, found, err)
+	}
+	if outcome, found, err := e.CreateStartOutcome(context.Background(), legacy.OperationID); err != nil || !found || outcome != by["legacy:start"] {
+		t.Fatalf("legacy create start outcome = %+v, found %t, err %v", outcome, found, err)
 	}
 	for _, op := range []string{"stopped", "legacy"} {
 		if saved, err := e.readJournal(op + ".json"); err != nil || saved.Result.Status != "succeeded" || saved.Stage != "started" {
 			t.Fatalf("%s not durably succeeded: %+v %v", op, saved, err)
+		}
+		if saved, err := e.readJournal(op + ".json"); err != nil || saved.StartOutcome != startOutcomeUncertainRequest {
+			t.Fatalf("%s ambiguity not durably retained: %+v %v", op, saved, err)
 		}
 	}
 	// A re-sent operation for the settled entry replays the durable result.

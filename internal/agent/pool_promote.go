@@ -1337,6 +1337,8 @@ func advancePoolPromotion(ctx context.Context, s *Store, record *poolTransferRec
 		return fencePoolExcludedHosts(ctx, s, record)
 	case "activate":
 		return activatePromotedPoolAuthority(ctx, s, record, timeout)
+	case "catalog-rebuild":
+		return reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record)
 	case "repoint":
 		return repointPoolMembers(ctx, s, record, timeout)
 	}

@@ -70,14 +70,37 @@ verification limits that apply to its workflow.
    (Controller and host-local package updates from a configured repo).
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
+26. [Set up backup repositories](backup-repositories.md)
+   (Settings → Backup repositories; NFS destination, Test access, capacity and host access).
+27. [Back up a VM now](backup-now.md)
+   (stopped full backup or running BIOS crash-consistent backup from Backups or the VM Overview link).
+28. [Restore a backup as a new VM](restore-as-new.md)
+   (recovery point → new stopped guest with new UUID/MACs and disconnected NICs).
+29. [Test a backup restore](test-restore.md)
+   (inspect an isolated test VM, record passed or failed, then confirm cleanup).
+30. [Set up backup policies and schedules](backup-policies.md)
+   (Backups → Policies; coverage, schedule/time zone, retention, Pause, Run now).
+31. [Restore a backup over an existing VM](restore-replace.md)
+   (explicit replace; retained originals; refuses unsafe in-place overwrite).
+32. [Rebuild the backup catalog](catalog-rebuild.md)
+   (import/rebuild from repository manifests; CLI and local API syntax).
+33. [Recover backups without Controller](recover-without-controller.md)
+   (Core-local status, restore, protect, test restore and catalog rebuild).
 
 Each procedure states its prerequisites, expected outcome, troubleshooting, and verification
 limits. A documented procedure is not automatically a tested procedure: check its Verification
 section for the exact evidence and outstanding checks.
 
 Pools are created automatically: each enrolled host becomes the pool master of its own pool.
-Managed snapshots/backups/restores, migrations, HA, and Docker Container Services
-remain **planned and unavailable**; see the [roadmap](../plans/2026-09-08-nex-platform.md).
+Managed snapshot controls are available in the development slice documented under
+[Manage VM snapshots](vm-snapshots.md). Backup repository registration, Back up now,
+restore-as-new, restore-replace, protect, test restore, catalog rebuild and backup
+policies/schedules are available in the development UI documented above. Running BIOS guests
+can select Crash-consistent online backup; Quiesced and UEFI online capture are refused.
+Migrations, HA, and Docker Container
+Services remain **planned and unavailable**; see the [roadmap](../plans/2026-09-08-nex-platform.md).
+The [VM snapshot workflow](vm-snapshots.md) documents the development slice
+under integration; it has not passed native API acceptance.
 
 The [API reference](../API.md) tracks implemented Nex interfaces separately. Build developers
 should use the [ISO build instructions](../../installer/README.md) or

@@ -1,0 +1,43 @@
+{
+  "summary": "Phase 6 / S8 closeout status: index S4–S7 implementation and unit/contract evidence; keep Phase 6 gate open with exact unexecuted lab/Campaign A/B/browser blockers.",
+  "paths": [
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-27-phase6-s8-closeout-status.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Status and roadmap wording only; operator guide steps for backup/restore already landed in S4–S7 change records and are unchanged here.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "API impact: none. Documentation closeout and published status language only; no Controller/Core contract change in this slice."
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Move Phase 6 backups milestone from Next/not started to In testing with implemented done items and explicit open lab/Campaign A/B/browser gates; Phase 6 remains not closed.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Status, QA index and roadmap wording only; durable backup state ownership remains Core as recorded in S4–S7 change records."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree; python3 -m unittest discover -s tests -p 'test_repository_privacy.py'. No Campaign A/B or browser claim. Cross-checked S4 lab walkthrough and S7 status for open evidence language.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-implementation-index.md",
+      "docs/qa/2026-09-27-phase6-s4-lab-walkthrough.md",
+      "docs/qa/2026-09-27-phase6-s7-status.md",
+      "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  }
+}

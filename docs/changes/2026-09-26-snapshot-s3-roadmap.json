@@ -1,0 +1,36 @@
+{
+  "summary": "Update roadmap snapshot milestone for S2 leaf-delete/metadata/Controller relay and S3 BIOS crash/quiesced lab evidence; Phase 5 close still open.",
+  "paths": [
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/changes/2026-09-26-snapshot-s3-roadmap.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Roadmap board and plan status only; operator guide already updated in the S3 docs slice.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No API behaviour change; status text only.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Published snapshot milestone done/open lists now match recorded S2/S3 lab evidence without claiming Phase 5 close.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Status documentation only."
+  },
+  "verification": {
+    "method": "Aligned roadmap and plan wording with QA receipts for running-mode crash/quiesced and earlier stopped lifecycle evidence; documentation gate on the worktree.",
+    "evidence": [
+      "website/src/routes/roadmap/+page.svelte",
+      "docs/qa/2026-09-26-recovery-snapshot-running-mode.md"
+    ]
+  }
+}

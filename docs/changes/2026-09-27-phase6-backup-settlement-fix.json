@@ -1,0 +1,53 @@
+{
+  "summary": "Fix Phase 6 backup-now exact-retry and restore-as-new run-journal settlement on the Controller dispatch path; Overview backups tile reads the catalog.",
+  "paths": [
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_replace.go",
+    "internal/agent/backup_test_restore.go",
+    "internal/agent/backup_test.go",
+    "web/src/overview.tsx",
+    "web/src/overview.css",
+    "docs/API.md",
+    "CHANGELOG.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-27-phase6-backup-settlement-fix.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Settlement and Overview tile wiring; operator backup/restore steps and guide pages are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Documents exact same-key republish settle and Controller-path pool-backup-runs reservation during execute; routes and request shapes unchanged.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix for Phase 6 browser walkthrough; Phase 6 gate remains open pending lab redeploy.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-runs/{operation_id}.json reserved during execute when Controller dispatch skipped Core-local admission; pool-backup-catalog/ on successful backup-now; published recovery-point directory under the NFS repository root.",
+    "reason": "Run journal and catalog remain master Core durable state; fresh Controller adopts them via inventory."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/vmhost/ ./internal/agent/ -run 'PublishBackupRecoveryPointExactRetry|BackupNowControllerPath|RestoreAsNewControllerPath|BackupAdmissionExactRetry|Phase6BackupHermetic'; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/vmhost/managed_backup_test.go",
+      "internal/agent/backup_test.go",
+      "docs/BUG_LEDGER.md",
+      "docs/API.md",
+      "docs/qa/2026-09-27-phase6-backup-browser.md"
+    ],
+    "limits": [
+      "Disposable-lab redeploy and browser re-walkthrough of backup-now / restore-as-new settlement remain outstanding",
+      "Overview tile night grid is UTC calendar days from catalog captured_at only"
+    ]
+  }
+}

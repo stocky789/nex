@@ -1,0 +1,304 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { useMemo, useRef, useState, type FormEvent } from "react";
+import type { API, Data, Pool } from "./types";
+import { Panel, Section, Badge, date } from "./ui";
+import { backupOpID, stableBody, type BackupRepository, type BackupRecoveryPoint } from "./backup-types";
+
+export type BackupPolicy = {
+  id: string;
+  schedule_id: string;
+  pool_id: string;
+  name: string;
+  enabled: boolean;
+  paused: boolean;
+  repository_id: string;
+  capture_mode: string;
+  time_zone: string;
+  rule: { frequency: string; hour: number; minute: number; weekdays?: number[] };
+  vm_ids: string[];
+  retention: { keep_latest: number; protect_newer_than?: number };
+  revision: number;
+  next_dispatch_at?: string;
+  last_dispatch_at?: string;
+};
+
+type Props = {
+  active: boolean;
+  api: API;
+  data: Data;
+  pool: Pool;
+  repos: BackupRepository[];
+  points: BackupRecoveryPoint[] | null;
+  policies: BackupPolicy[] | null;
+  busy: boolean;
+  unavailable: boolean;
+  working: string;
+  setWorking: (v: string) => void;
+  onNotice: (text: string, operationID?: string) => void;
+  onError: (text: string) => void;
+  error: string;
+  reload: () => Promise<void>;
+  requestID: (key: string, prefix: string) => string;
+  clearRequest: (key: string) => void;
+  openCreate: boolean;
+  onOpenCreate: () => void;
+  onCloseCreate: () => void;
+};
+
+type Step = 1 | 2 | 3;
+
+const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export function retentionPreview(points: BackupRecoveryPoint[] | null, vmIDs: string[], keepLatest: number) {
+  if (!points) return null;
+  let keep = 0, prune = 0;
+  for (const vm of vmIDs) {
+    const forVM = points.filter(p => p.source_vm_id === vm).slice().sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""));
+    let eligible = 0;
+    forVM.forEach(p => {
+      if (p.protected || eligible++ < keepLatest) keep++;
+      else prune++;
+    });
+  }
+  return { keep, prune };
+}
+
+export function BackupPolicies({
+  active, api, data, pool, repos, points, policies, busy, unavailable, working, setWorking, error,
+  onNotice, onError, reload, requestID, clearRequest, openCreate, onOpenCreate, onCloseCreate,
+}: Props) {
+  const [step, setStep] = useState<Step>(1);
+  const [name, setName] = useState("Nightly");
+  const [vms, setVMs] = useState<string[]>([]);
+  const [repo, setRepo] = useState("");
+  const [tz, setTZ] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const [hour, setHour] = useState(2);
+  const [minute, setMinute] = useState(0);
+  const [frequency, setFrequency] = useState<"daily" | "weekly">("daily");
+  const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [keepLatest, setKeepLatest] = useState(7);
+  const [runVM, setRunVM] = useState<Record<string, string>>({});
+  const [uncertain, setUncertain] = useState(false);
+  const pendingPause = useRef<Record<string, { paused: boolean }>>({});
+  const poolVMs = useMemo(() => data.vms.filter(v => v.pool_id === pool.id && !v.protected), [data.vms, pool.id]);
+  const preview = retentionPreview(points, vms, keepLatest);
+
+  const blocker = (() => {
+    if (unavailable) return "Controller inventory could not be loaded.";
+    if (busy) return "Another task is already in progress.";
+    if (!name.trim()) return "Enter a name.";
+    if (!vms.length) return "Select at least one VM.";
+    if (!repo) return "Select a repository.";
+    if (!tz.trim()) return "Enter a time zone.";
+    if (frequency === "weekly" && !weekdays.length) return "Select at least one weekday.";
+    if (keepLatest < 1) return "Keep at least one recovery point.";
+    return "";
+  })();
+
+  const close = () => {
+    if (working || uncertain) return;
+    clearRequest("policy-create");
+    setStep(1);
+    onCloseCreate();
+  };
+
+  const change = (update: () => void) => {
+    if (uncertain) return;
+    clearRequest("policy-create");
+    update();
+  };
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (blocker || step !== 3) return;
+    const key = "policy-create";
+    setWorking(key);
+    onError("");
+    try {
+      const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(pool.id)}/backup-policies`, "POST", {
+        request_id: requestID(key, "bpol"),
+        name: name.trim(),
+        enabled: true,
+        paused: false,
+        repository_id: repo,
+        capture_mode: "stopped",
+        time_zone: tz.trim(),
+        rule: {
+          frequency,
+          hour,
+          minute,
+          ...(frequency === "weekly" ? { weekdays } : {}),
+        },
+        vm_ids: vms,
+        retention: { keep_latest: keepLatest },
+      });
+      clearRequest(key);
+      setUncertain(false);
+      onNotice(`${name.trim()}: policy save requested`, backupOpID(reply));
+      setStep(1);
+      onCloseCreate();
+      await reload().catch(err => onError(err instanceof Error ? err.message : String(err)));
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status && status >= 400 && status < 500 && status !== 409) {
+        clearRequest(key);
+        setUncertain(false);
+      } else setUncertain(true);
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const pause = async (policy: BackupPolicy, paused: boolean) => {
+    const key = `pause-${policy.id}`;
+    setWorking(key);
+    onError("");
+    try {
+      const body = stableBody(pendingPause.current, key, { paused });
+      const reply = await api<{ operation?: { id?: string } }>(
+        `pools/${encodeURIComponent(pool.id)}/backup-policies/${encodeURIComponent(policy.id)}/pause`,
+        "POST",
+        { request_id: requestID(key, "bpause"), ...body },
+      );
+      clearRequest(key);
+      delete pendingPause.current[key];
+      onNotice(`${policy.name}: ${body.paused ? "pause" : "resume"} requested`, backupOpID(reply));
+      await reload();
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status && status >= 400 && status < 500 && status !== 409) {
+        clearRequest(key);
+        delete pendingPause.current[key];
+      }
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const runNow = async (policy: BackupPolicy, vmID: string) => {
+    const key = `run-${policy.id}-${vmID}`;
+    setWorking(key);
+    onError("");
+    try {
+      const reply = await api<{ operation?: { id?: string } }>(
+        `pools/${encodeURIComponent(pool.id)}/backup-policies/${encodeURIComponent(policy.id)}/run-now`,
+        "POST",
+        { request_id: requestID(key, "brun"), vm_id: vmID },
+      );
+      clearRequest(key);
+      onNotice(`${policy.name}: run now`, backupOpID(reply));
+      await reload();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const toggleVM = (id: string) => {
+    setVMs(cur => cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]);
+  };
+
+  const toggleDay = (d: number) => {
+    setWeekdays(cur => cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d].sort());
+  };
+
+  if (!active) return null;
+
+  return <>
+    <Section icon="backup" title="Policies" count={policies?.length ?? 0} actions={<>
+      <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={onOpenCreate}>Create policy</button>
+    </>}>
+      {error && <p className="why" role="alert">{error}</p>}
+      {policies === null && !error ? <p className="muted">Loading…</p> : null}
+      {policies && policies.length === 0 ? <p className="empty">No backup policies.</p> : null}
+      {policies && policies.length > 0 ? <div className="table-scroll"><table className="records">
+        <thead><tr><th>Name</th><th>VMs</th><th>Schedule</th><th>Next</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+          {policies.map(p => {
+            const repoName = repos.find(r => r.id === p.repository_id)?.name || p.repository_id;
+            return <tr key={p.id}>
+              <td><strong>{p.name}</strong><small className="muted">{repoName} · {p.capture_mode}</small></td>
+              <td>{p.vm_ids?.length || 0}</td>
+              <td className="muted">{p.rule?.frequency} {String(p.rule?.hour).padStart(2, "0")}:{String(p.rule?.minute).padStart(2, "0")} {p.time_zone}</td>
+              <td className="muted">{p.next_dispatch_at ? date(p.next_dispatch_at) : "—"}</td>
+              <td>{p.paused ? <Badge value="paused" /> : p.enabled ? <Badge value="enabled" /> : <Badge value="disabled" />}</td>
+              <td className="row-actions">
+                <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => pause(p, !p.paused)}>
+                  {pendingPause.current[`pause-${p.id}`] ? "Retry request" : p.paused ? "Resume" : "Pause"}
+                </button>
+                {(p.vm_ids || []).length > 0 && <>
+                  <select aria-label={`VM for ${p.name} Run now`} value={p.vm_ids.includes(runVM[p.id]) ? runVM[p.id] : p.vm_ids[0]} onChange={e => setRunVM(cur => ({ ...cur, [p.id]: e.target.value }))} disabled={Boolean(working) || unavailable || busy}>
+                    {p.vm_ids.map(vmID => <option key={vmID} value={vmID}>{data.vms.find(v => v.id === vmID)?.name || vmID}</option>)}
+                  </select>
+                  <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => runNow(p, p.vm_ids.includes(runVM[p.id]) ? runVM[p.id] : p.vm_ids[0])}>Run now</button>
+                </>}
+              </td>
+            </tr>;
+          })}
+        </tbody>
+      </table></div> : null}
+    </Section>
+
+    {openCreate ? <Panel icon="backup" title="Create policy" onClose={close} wide>
+      <form className="stack" onSubmit={submit}>
+        {error && <p className="why" role="alert">{error}</p>}
+        {uncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact policy request.</p>}
+        <p className="muted">Step {step} of 3</p>
+        {step === 1 ? <>
+          <label>Name<input value={name} disabled={uncertain} onChange={e => change(() => setName(e.target.value))} required /></label>
+          <label>Repository<select value={repo} disabled={uncertain} onChange={e => change(() => setRepo(e.target.value))} required>
+            <option value="">Select…</option>
+            {repos.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select></label>
+          <fieldset>
+            <legend>VMs</legend>
+            {poolVMs.map(v => <label key={v.id} className="check">
+              <input type="checkbox" checked={vms.includes(v.id)} disabled={uncertain} onChange={() => change(() => toggleVM(v.id))} />{v.name}
+            </label>)}
+            {!poolVMs.length ? <p className="muted">No VMs in this pool.</p> : null}
+          </fieldset>
+        </> : null}
+        {step === 2 ? <>
+          <label>Time zone<input value={tz} disabled={uncertain} onChange={e => change(() => setTZ(e.target.value))} required /></label>
+          <label>Frequency<select value={frequency} disabled={uncertain} onChange={e => change(() => setFrequency(e.target.value as "daily" | "weekly"))}>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select></label>
+          {frequency === "weekly" ? <fieldset>
+            <legend>Days</legend>
+            {weekdayLabels.map((label, i) => <label key={label} className="check">
+              <input type="checkbox" checked={weekdays.includes(i)} disabled={uncertain} onChange={() => change(() => toggleDay(i))} />{label}
+            </label>)}
+          </fieldset> : null}
+          <div className="vm-fields">
+            <label>Hour<input type="number" min={0} max={23} value={hour} disabled={uncertain} onChange={e => change(() => setHour(Number(e.target.value)))} /></label>
+            <label>Minute<input type="number" min={0} max={59} value={minute} disabled={uncertain} onChange={e => change(() => setMinute(Number(e.target.value)))} /></label>
+            <label>Keep latest<input type="number" min={1} max={365} value={keepLatest} disabled={uncertain} onChange={e => change(() => setKeepLatest(Number(e.target.value)))} /></label>
+          </div>
+          <p className="muted">{preview ? `Current catalog estimate: keep ${preview.keep}, eligible to prune ${preview.prune}. The next backup and active restores can change this.` : "Retention preview unavailable until the recovery catalog loads."}</p>
+          {frequency === "weekly" && !weekdays.length ? <p className="why" role="alert">Select at least one weekday.</p> : null}
+        </> : null}
+        {step === 3 ? <>
+          <dl className="kv">
+            <dt>Name</dt><dd>{name.trim()}</dd>
+            <dt>VMs</dt><dd>{vms.length}</dd>
+            <dt>Repository</dt><dd>{repos.find(r => r.id === repo)?.name || repo}</dd>
+            <dt>Schedule</dt><dd>{frequency} {String(hour).padStart(2, "0")}:{String(minute).padStart(2, "0")} {tz}</dd>
+            <dt>Retention</dt><dd>Keep latest {keepLatest}</dd>
+            <dt>Capture</dt><dd>stopped</dd>
+          </dl>
+          {blocker ? <p className="why" role="alert">{blocker}</p> : null}
+        </> : null}
+        <div className="row-actions">
+          {step > 1 ? <button type="button" className="sm" disabled={Boolean(working)} onClick={() => setStep(s => (s - 1) as Step)}>Back</button> : null}
+          {step < 3 ? <button type="button" className="sm primary" disabled={(step === 1 && (!name.trim() || !vms.length || !repo)) || (step === 2 && Boolean(blocker))} onClick={() => setStep(s => (s + 1) as Step)}>Next</button> : null}
+          {step === 3 ? <button type="submit" className="sm primary" disabled={Boolean(blocker) || Boolean(working)}>Save policy</button> : null}
+          <button type="button" className="sm" disabled={Boolean(working)} onClick={close}>Cancel</button>
+        </div>
+      </form>
+    </Panel> : null}
+  </>;
+}

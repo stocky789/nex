@@ -1,0 +1,47 @@
+{
+  "summary": "Wire stopped-snapshot revert post-native verification so exact retries settle after rewritten heads and verified ISO overlays, without a second native revert.",
+  "paths": [
+    "internal/vmhost/managed_snapshot_revert.go",
+    "internal/vmhost/managed_snapshot_revert_test.go",
+    "internal/vmhost/media_test.go",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/vm-snapshots.md",
+    "CHANGELOG.md",
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "docs/qa/2026-09-26-stopped-revert-native-validation.md",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Stopped revert now has disposable-lab evidence for exact same-operation recovery; deletion and Controller controls remain unfinished.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Uses the existing authenticated Core snapshot-revert admission and exact-retry status path. No new client or Controller endpoint.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Records corrected stopped-revert lab evidence while keeping Phase 5/6 incomplete and Phase 6 unimplemented.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "record": "Executing-Core managed snapshot-revert journals, ObservedTargetNativeXMLSHA256, current projection, native libvirt metadata, and master pool-vms.json reservation/catalog. A fresh Controller adopts inventory and results through authenticated host APIs.",
+    "reason": "Revert settlement remains Core-owned pool recovery state."
+  },
+  "verification": {
+    "method": "Focused Go tests SnapshotRevert|SettledSnapshotMedia passed. Disposable Core2 lab: exact same-operation POST settled with native counter still 1, master pending_recovery cleared, and guest markers restored to point A with Secure Boot enabled. Raw lab receipts under .cache were wiped after the session; results remain in the QA record.",
+    "evidence": [
+      "docs/BUG_LEDGER.md",
+      "docs/qa/2026-09-26-stopped-revert-native-validation.md"
+    ]
+  }
+}

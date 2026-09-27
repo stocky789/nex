@@ -419,6 +419,44 @@ func TestPoolRehomeResumes(t *testing.T) {
 	}
 }
 
+func TestPoolRehomeRefusesUnsettledSnapshot(t *testing.T) {
+	for _, status := range []string{"pending", "needs_attention"} {
+		t.Run(status, func(t *testing.T) {
+			s := peerStore(t, "member-1", "old-pool")
+			vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
+			s.State.Journal["snapshot-1"] = JournalEntry{
+				Command: &protocol.Command{OperationID: "snapshot-1", Kind: "snapshot-create", VM: vm, Snapshot: &protocol.VMSnapshotRequest{Name: "Before update"}},
+				Status:  status,
+			}
+			if err := s.Save(); err != nil {
+				t.Fatal(err)
+			}
+			if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "old-pool", VMID: vm.ID, HostID: s.State.HostID, Spec: *vm}}, Inventory: map[string]poolVMInventory{s.State.HostID: {HostID: s.State.HostID, Generation: 1, VMs: []protocol.VMCreateSpec{*vm}}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			err := ResumePoolRehome(context.Background(), s)
+			if err == nil || !strings.Contains(err.Error(), "snapshot recovery") {
+				t.Fatalf("rehome with %s snapshot = %v, want snapshot recovery refusal", status, err)
+			}
+			if s.State.PoolID != "old-pool" || s.State.PoolName == "New Pool" {
+				t.Fatalf("refused rehome changed Core identity: %#v", s.State)
+			}
+			state, err := loadPoolPeer(s)
+			if err != nil || state.PendingRehome == nil || state.PendingRehome.PoolID != "new-pool" {
+				t.Fatalf("refused rehome cleared retry marker: %#v, %v", state.PendingRehome, err)
+			}
+			vms, err := loadPoolVMs(s)
+			if err != nil || vms.VMs[vm.ID].PoolID != "old-pool" || len(vms.Inventory) != 1 {
+				t.Fatalf("refused rehome cleared old pool ownership: %#v, %v", vms, err)
+			}
+		})
+	}
+}
+
 // A deleted VM can leave an old solo pool's owner projection behind.  Joining another
 // pool must discard that projection before it can be copied into a signed replica and
 // later adopted by a promoted member.

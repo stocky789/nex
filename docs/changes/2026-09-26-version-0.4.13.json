@@ -1,0 +1,55 @@
+{
+  "summary": "Bump working product version to 0.4.13 for Phase 5/6 snapshot recovery and review hardening.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/api/index.html",
+    "docs/api/openapi.json",
+    "docs/guide/change-management-network.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/publish-a-release.md",
+    "docs/guide/software-updates.md",
+    "installer/README.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Working-version labels and release guidance now name 0.4.13; historical published-0.4.12 netinst notes are unchanged.",
+    "pages": [
+      "docs/guide/change-management-network.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/install-nex-core.md",
+      "docs/guide/join-a-pool.md",
+      "docs/guide/navigate-the-controller-console.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/publish-a-release.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No new endpoints from the version bump itself; snapshot route x-introduced-version stamps now correctly name 0.4.13 instead of 0.4.12.",
+    "pages": [
+      "docs/api/openapi.json",
+      "docs/api/index.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Version bump does not close or reopen a published roadmap milestone."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Release notes and version labels create no durable pool resource."
+  },
+  "verification": {
+    "method": "python3 scripts/release-version.py --current reports 0.4.13; python3 -m unittest tests.test_release_version -v passed.",
+    "evidence": [
+      "CHANGELOG.md",
+      "scripts/release-version.py",
+      "tests/test_release_version.py"
+    ]
+  }
+}

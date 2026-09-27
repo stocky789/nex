@@ -1,0 +1,49 @@
+{
+  "summary": "Record disposable Core-local snapshot API acceptance, intermediate validator and harness failures, and successful exact-request recovery/adoption on matched r5 and r7 candidates. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-core-api-preparation.md",
+    "docs/changes/2026-09-26-recovery-core-api-preparation.json",
+    "tests/integration/core_local_snapshot_api.py",
+    "tests/test_core_local_snapshot_api.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is contributor-only disposable acceptance work. No operator behavior changed; later exact-request replay completed successfully on the selected lab Core.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The test uses the existing authenticated Core local session, host, pool, VM snapshot create, operation poll, and snapshot catalog routes. It discovered an actual Core storage-identity preflight failure; no API contract was changed by this batch.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records bounded disposable acceptance results and does not change recovery scope or exit criteria.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only private disposable lab state and contributor test artifacts were used; no product durable state was added."
+  },
+  "verification": {
+    "method": "Used the actual ephemeral Controller and selected disposable Core. The first operation failed before effects and its master record had no pending reservation. A later preserved operation encountered stale Controller reports from a mismatched development decoder, then a needs_attention reservation under an earlier Core validator. After matching the disposable Controller candidate and correcting the Core memory-unit comparison, the exact same request and operation ID succeeded under the reviewed r5 Core binary; the installed Debian package version remained unchanged. Exact retry returned the same operation, the runner's changed-body POST passed its expected HTTP 409 assertion, and the Core master catalog contained exactly one matching row. Native snapshot metadata, shut-off VM state, both overlay-to-base chains, and both 4 KiB markers passed. While Controller was offline, Core service restarted to a new PID with the exact candidate executable, package and binary hash; exact replay after restart remained succeeded and retained catalog/native/disk evidence. The ephemeral Controller restarted, freshly reported the host, and adopted the matching catalog row. Root account was locked at completion. Under matching r7 Core and Controller candidates, the same existing request was replayed again, Core restarted and exact replay remained succeeded, both chains and markers passed, root remained locked, and the Controller readback showed the host fresh and returned the same descriptor. The Controller remained available during the r7 replay. A separate r7 PAM harness attempt returned 401 before any operation request because its outer unlock step was omitted; that attempt was preserved and was followed by a successful invocation using the established PAM flow. Earlier failed attempt artifacts remain immutable. The first post-restart harness attempt missed transient systemd wrapper readiness; the following attempt recorded successful Core checks but the outer runner misclassified the result because the remote payload lacked an explicit success status. Both runner defects were fixed and covered by focused tests before the fresh-label successful run.",
+    "evidence": [
+      "docs/API.md",
+      "internal/vmhost/managed_snapshot.go",
+      "internal/vmhost/managed.go",
+      "internal/vmhost/storage_native.go",
+      "tests/integration/core_local_snapshot_api.py",
+      "tests/test_core_local_snapshot_api.py",
+      "docs/qa/2026-09-26-recovery-core-api-preparation.md"
+    ],
+    "checks": [
+      "python3 -m unittest tests.test_core_local_snapshot_api -v — 16 passed",
+      "python3 -m py_compile tests/integration/core_local_snapshot_api.py \u2014 passed",
+      "Reviewed r5 disposable Core API run: preserved request succeeded through exact replay after Core restart and fresh Controller adoption",
+      "r7 disposable Core API exact replay: passed; Core restart, post-restart replay, both marker reads, and fresh Controller B adoption verified",
+      "python3 -m unittest discover -s tests -q — 530 run, 1 skipped, 1 unrelated Deep32 payload IndentationError"
+    ]
+  }
+}

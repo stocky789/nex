@@ -17,6 +17,12 @@ const operations: Record<string, string> = {
   "pool-join": "Join pool", "pool-maintenance": "Maintenance mode", "pool-transfer": "Change pool master",
   "pool-promote": "Promote pool master", "pool-fence-profile": "Fence profile", "pool-host-fencing": "Host fencing",
   "pool-bmc-provisioning": "BMC provisioning", enroll: "Enroll host",
+  "backup-repository-register": "Register backup repository", "backup-repository-test": "Test backup repository",
+  "backup-now": "Back up now", "backup-restore-as-new": "Restore as new",
+  "backup-restore-replace": "Restore replace", "backup-test-restore": "Test restore",
+  "backup-protect": "Protect recovery point", "backup-catalog-import": "Import recovery points",
+  "backup-catalog-rebuild": "Rebuild backup catalog", "backup-test-verify": "Record restore test",
+  "backup-test-cleanup": "Clean up test restore",
 };
 export function operationLabel(kind: string): string { return operations[kind] ?? humanize(kind); }
 

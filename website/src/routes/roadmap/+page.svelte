@@ -118,19 +118,53 @@
       ]
     },
     {
-      status: "next",
-      title: "Snapshots, backups and proven restores",
+      status: "shipped",
+      title: "VM snapshots and rollback",
       summary:
-        "Getting a VM back — from a rollback point, and from a backup that lives somewhere else.",
-      done: [],
+        "Phase 5 closed 2026-09-27 for disposable virtual-lab scope; Core-owned snapshots with Controller UI; permanent physical/production and product-on-every-backend limits remain documented.",
+      done: [
+        "Bounded disposable-lab native feasibility for disk snapshots and paired firmware state",
+        "Core-owned stopped snapshot creation and catalog reporting, with bounded exact-retry, interruption, Controller replacement and pool promotion/rejoin evidence",
+        "Corrected stopped revert recovery for a disposable two-disk UEFI guest: exact same-operation retry settled without a second native revert",
+        "Stopped leaf delete with public no-delete blockcommit, catalog metadata rename and Controller Snapshots tab create/list/rename/revert/delete",
+        "Running BIOS crash-consistent and quiesced create through Controller, with honest UEFI and missing-agent refusals",
+        "Browser Snapshots walkthrough: crash create, rename, matching-disk revert and leaf delete",
+        "VMs-list bulk Snapshot for selected shut-off guests with shared name and per-VM create tasks",
+        "Native multi-backend stopped snapshot lifecycle and midcommit consolidation on local, NFS, SMB and exclusive iSCSI (lab only; not product backup)",
+        "Phase 5 gate closed on 2026-09-27 for disposable virtual-lab scope (forge CI on ac92f407; independent checklist and Core state-ownership review)"
+      ],
       open: [
-        "Snapshots: create, list, revert and delete, covering every supported disk and the matching VM configuration, and recovering cleanly when a snapshot or its consolidation is interrupted",
-        "VM disk snapshots through QEMU/libvirt on validated disk-format and storage combinations, without requiring ZFS or Btrfs",
-        "Backup repositories on storage separate from the VMs they protect, with their own credentials",
-        "Full backups of stopped guests first, then running guests through libvirt's backup support, each with checksums and a manifest that can stand on its own",
-        "Schedules, retention, bandwidth limits and per-VM overrides, with missed runs recorded rather than hidden",
-        "Restoring as a new VM by default, on an isolated network, and replacing an original only with explicit confirmation and proven ownership",
-        "Rebuilding the backup catalog from the repository itself, so backups outlive the Controller database"
+        "Product Controller/Core snapshot paths not certified on every S0 backend (NFS/SMB/exclusive iSCSI); S0 native evidence is not product-on-all-backends certification",
+        "Physical and production storage and hardware fencing remain untested (disposable nested lab only)",
+        "Memory snapshots are later work, out of Phase 5 scope"
+      ]
+    },
+    {
+      status: "testing",
+      title: "Backups and proven restores",
+      summary:
+        "Phase 6 had a bounded disposable-lab close on 2026-09-27. Follow-up safety and UI fixes are in review for the current candidate; its acceptance remains open.",
+      done: [
+        "Core NFS backup repository registration, stopped full backup and restore-as-new APIs",
+        "Controller relay and Backups UI for repositories, recovery points, Back up now and restore as new",
+        "Online full backup (crash-consistent) for running BIOS guests via libvirt push-mode; quiesced and UEFI online refused",
+        "Core-owned backup policies, schedules and retention with Controller/UI relay",
+        "Restore replace exclusive cutover, protect/pins, test restore, catalog import/rebuild and Core-local backup status",
+        "Operator guides for repositories, Back up now, policies, restore-as-new/replace, catalog rebuild and Controller-absent recovery",
+        "Disposable-lab product NFS stopped backup → disks aside → restore-as-new (nex-core-local 0.4.12 + Phase 6 overlay)",
+        "Bounded nested Campaign A (Controller-absent Run now/restore + fresh Controller adoption)",
+        "Bounded nested Campaign B re-run after promote backup-authority fix (continuity, restore-as-new, adoption)",
+        "Browser Backups rail walkthrough; settlement bugs fixed in code; hermetic Phase 6 backup CI regression",
+        "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope"
+      ],
+      open: [
+        "Nested disposable lab is not physical failure-domain certification",
+        "Quiesced online and UEFI online backup remain refused until proven",
+        "Current candidate needs a live browser re-walk of backup, restore, policy and error flows after follow-up fixes",
+        "Post-close safety and cleanup fixes need independent review, relevant checks and current-candidate acceptance",
+        "Full three-host simultaneous join and schedule wall-clock span not fully proven",
+        "Lab used package 0.4.12 plus binary overlay — not ISO install acceptance",
+        "Forge CI on a published push not yet inspected (owner push residual)"
       ]
     },
     {

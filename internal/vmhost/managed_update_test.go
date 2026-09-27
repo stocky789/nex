@@ -95,7 +95,7 @@ func TestManagedUpdateLayoutKeepsExistingDisks(t *testing.T) {
 
 // The current definition is the highest succeeded revision, and Applied reports it once.
 func TestManagedCurrentAndAppliedFollowRevisions(t *testing.T) {
-	e := NewManaged(t.TempDir())
+	e := managedTestEngine(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
 	v0 := managedTestVM()
 	v1, v2, failed := v0, v0, v0
@@ -172,7 +172,7 @@ esac`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := NewManaged(t.TempDir())
+	e := managedTestEngine(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
 	if err = e.applyLive(context.Background(), cur.ID, expected, "", ""); err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ dominfo) echo 'Autostart: disable';;
 domstate) echo running;;
 dumpxml) case "$*" in *--inactive*) cat "$MANAGED_DIR/persistent.xml";; *) cat "$MANAGED_DIR/live.xml";; esac;;
 esac`)
-	e := NewManaged(filepath.Join(dir, "state"))
+	e := managedTestEngine(filepath.Join(dir, "state"))
 	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,7 @@ case "$*" in
     touch "$MANAGED_DIR/live";;
   esac;;
 esac`)
-	e := NewManaged(filepath.Join(dir, "state"))
+	e := managedTestEngine(filepath.Join(dir, "state"))
 	os.MkdirAll(e.stateDir, 0700)
 	if err := e.applyLive(context.Background(), v.ID, expected, "", ""); err == nil || !strings.Contains(err.Error(), "uncertain") {
 		t.Fatalf("partial IOThread add must remain uncertain: %v", err)
@@ -534,7 +534,7 @@ case "$*" in
 *dumpxml*--inactive*) if [ -e "$MANAGED_DIR/attached" ]; then cat "$MANAGED_DIR/after.xml"; else cat "$MANAGED_DIR/persistent.xml"; fi;;
 *dumpxml*) if [ -e "$MANAGED_DIR/attached" ]; then cat "$MANAGED_DIR/after.xml"; else cat "$MANAGED_LIVE"; fi;;
 esac`)
-	e := NewManaged(filepath.Join(dir, "state"))
+	e := managedTestEngine(filepath.Join(dir, "state"))
 	os.MkdirAll(e.stateDir, 0700)
 	for _, entry := range []managedJournal{
 		{Command: protocol.Command{OperationID: "op-net", Kind: "network-register", Network: &net}, Result: protocol.Result{OperationID: "op-net", Status: "succeeded"}},
@@ -583,7 +583,7 @@ esac`)
 // as the current definition, the revision they named is still the next one the Controller
 // sends, and the retry must reach the edit instead of the reservation.
 func TestManagedFailedUpdateDoesNotReserveRevision(t *testing.T) {
-	e := NewManaged(t.TempDir())
+	e := managedTestEngine(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
 	v0 := managedTestVM()
 	v1 := v0
@@ -608,7 +608,7 @@ func TestManagedFailedUpdateDoesNotReserveRevision(t *testing.T) {
 // needs_attention after define (for example libvirt CPU check mismatch) must not permanently
 // lock the revision: Applied never promotes that entry to the current definition.
 func TestManagedNeedsAttentionUpdateDoesNotReserveRevision(t *testing.T) {
-	e := NewManaged(t.TempDir())
+	e := managedTestEngine(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
 	v0 := managedTestVM()
 	v1 := v0
@@ -634,7 +634,7 @@ func TestManagedNeedsAttentionUpdateDoesNotReserveRevision(t *testing.T) {
 // way a re-sent operation would be: a matching persistent definition means it succeeded, in
 // the state the edit left the guest.
 func TestAppliedPromotesInterruptedEdit(t *testing.T) {
-	e := NewManaged(t.TempDir())
+	e := managedTestEngine(t.TempDir())
 	os.MkdirAll(e.stateDir, 0700)
 	v0 := managedTestVM()
 	v1 := v0

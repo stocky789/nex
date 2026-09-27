@@ -49,7 +49,7 @@ func TestManagedQueueAdmissionReplayAndRestart(t *testing.T) {
 	defer reopened.Close()
 	for _, cmd := range commands {
 		for i := 0; i < 100; i++ {
-			if got := nextManagedCommand(reopened.State.Journal); got != cmd.OperationID {
+			if got := nextManagedCommand(reopened.State.Journal, ""); got != cmd.OperationID {
 				t.Fatalf("next %q, want %q", got, cmd.OperationID)
 			}
 		}
@@ -57,7 +57,7 @@ func TestManagedQueueAdmissionReplayAndRestart(t *testing.T) {
 		e.Status = "succeeded"
 		reopened.State.Journal[cmd.OperationID] = e
 	}
-	if nextManagedCommand(reopened.State.Journal) != "" {
+	if nextManagedCommand(reopened.State.Journal, "") != "" {
 		t.Fatal("terminal work dispatched")
 	}
 }
@@ -73,13 +73,13 @@ func TestManagedQueueLegacyOrderAndOverflow(t *testing.T) {
 	e.Order = 1
 	e.RequestedAt = now.Add(-time.Hour)
 	journal["c"] = e
-	if got := nextManagedCommand(journal); got != "a" {
+	if got := nextManagedCommand(journal, ""); got != "a" {
 		t.Fatalf("legacy stable tie-break: %q", got)
 	}
 	e = journal["b"]
 	e.RequestedAt = now.Add(-time.Minute)
 	journal["b"] = e
-	if got := nextManagedCommand(journal); got != "b" {
+	if got := nextManagedCommand(journal, ""); got != "b" {
 		t.Fatalf("legacy receipt order: %q", got)
 	}
 	s := testStore(t)
@@ -117,7 +117,7 @@ func TestManagedQueueSurvivesControllerReplacement(t *testing.T) {
 	if pending.Order != before.Order || pending.Status != "pending" || !pending.Acknowledged || !s.State.Journal["done"].Acknowledged {
 		t.Fatal("replacement lost queue or retained stale transport results")
 	}
-	if nextManagedCommand(s.State.Journal) != "pending" {
+	if nextManagedCommand(s.State.Journal, "") != "pending" {
 		t.Fatal("replacement lost runnable work")
 	}
 	outcomes := commandOutcomes(s.State.Journal, nil)
@@ -152,6 +152,112 @@ func TestManagedQueueOutcomesPreferEngineAndRemainStable(t *testing.T) {
 	}
 }
 
+func TestAcknowledgedBackupRestoreOutcomesRemainInDurableInventory(t *testing.T) {
+	s := testStore(t)
+	s.State.Journal = map[string]JournalEntry{}
+	commands := []protocol.Command{
+		{OperationID: "restore-new", Kind: protocol.BackupKindRestoreNew, Restore: &protocol.RestoreAsNewRequest{
+			NewVMID: "22222222-2222-4222-8222-222222222222", NewVMName: "restored"}},
+		{OperationID: "restore-replace", Kind: protocol.BackupKindRestoreReplace, RestoreReplace: &protocol.RestoreReplaceRequest{
+			OriginalVMID: "11111111-1111-4111-8111-111111111111"}},
+		{OperationID: "restore-test", Kind: protocol.BackupKindTestRestore, TestRestore: &protocol.TestRestoreRequest{
+			NewVMID: "33333333-3333-4333-8333-333333333333", NewVMName: "test-restored"}},
+	}
+	for i := range commands {
+		cmd := commands[i]
+		s.State.Journal[cmd.OperationID] = JournalEntry{Command: &cmd, Status: "succeeded", Acknowledged: true}
+	}
+	peer := commands[0]
+	peer.OperationID = "member-execution"
+	s.State.Journal[peer.OperationID] = JournalEntry{Command: &peer, Status: "succeeded", PeerDispatched: true}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var durable State
+	if err := json.Unmarshal(raw, &durable); err != nil {
+		t.Fatal(err)
+	}
+	outcomes := commandOutcomes(durable.Journal, nil)
+	if len(outcomes) != 3 || outcomes[0].OperationID != "restore-new" || outcomes[0].ID != commands[0].Restore.NewVMID ||
+		outcomes[0].Name != "restored" || outcomes[0].Status != "succeeded" ||
+		outcomes[1].OperationID != "restore-replace" || outcomes[1].ID != commands[1].RestoreReplace.OriginalVMID ||
+		outcomes[2].OperationID != "restore-test" || outcomes[2].ID != commands[2].TestRestore.NewVMID {
+		t.Fatalf("acknowledged backup outcomes were not recoverable from durable Core state: %+v", outcomes)
+	}
+	native := []protocol.ManagedOutcome{
+		{OperationID: "restore-new", Kind: "vm-create", ID: commands[0].Restore.NewVMID, Status: "succeeded"},
+		{OperationID: "member-execution", Kind: "vm-create", ID: commands[0].Restore.NewVMID, Status: "succeeded"},
+		{OperationID: "unrelated-native", Kind: "vm-create", ID: "44444444-4444-4444-8444-444444444444", Status: "succeeded"},
+	}
+	outcomes = commandOutcomes(durable.Journal, native)
+	if len(outcomes) != 4 || outcomes[0].OperationID != "unrelated-native" ||
+		outcomes[1].OperationID != "restore-new" || outcomes[1].Kind != protocol.BackupKindRestoreNew ||
+		outcomes[2].OperationID != "restore-replace" || outcomes[3].OperationID != "restore-test" {
+		t.Fatalf("native same-ID outcome obscured backup authority or peer execution leaked: %+v", outcomes)
+	}
+}
+
+func TestAcknowledgedBackupMetadataOutcomesRemainInDurableInventory(t *testing.T) {
+	s := testStore(t)
+	repo := &protocol.BackupRepository{ID: "repo-1", Name: "Primary"}
+	policy := &protocol.BackupPolicy{ID: "policy-1", Name: "Nightly"}
+	protect := &protocol.ProtectRecoveryPointRequest{RepositoryID: repo.ID, RecoveryPointID: "point-1"}
+	imported := &protocol.CatalogImportRequest{RepositoryID: repo.ID}
+	verify := &protocol.TestRestoreVerifyRequest{RepositoryID: repo.ID, RecoveryPointID: "point-1", TestVMID: "test-vm"}
+	cleanup := &protocol.TestRestoreCleanupRequest{RepositoryID: repo.ID, RecoveryPointID: "point-1", TestVMID: "test-vm"}
+	tests := []struct {
+		command  protocol.Command
+		id, name string
+	}{
+		{protocol.Command{Kind: "backup-repository-register", BackupRepository: repo}, repo.ID, repo.Name},
+		{protocol.Command{Kind: "backup-repository-test", BackupRepository: repo}, repo.ID, repo.Name},
+		{protocol.Command{Kind: "backup-policy-upsert", BackupPolicy: policy}, policy.ID, policy.Name},
+		{protocol.Command{Kind: "backup-policy-pause", BackupPolicy: policy}, policy.ID, policy.Name},
+		{protocol.Command{Kind: "backup-policy-run-now", BackupPolicy: policy, VM: &protocol.VMCreateSpec{ID: "vm-1"}}, policy.ID, policy.Name},
+		{protocol.Command{Kind: "backup-protect", BackupProtect: protect}, protect.RecoveryPointID, ""},
+		{protocol.Command{Kind: "backup-catalog-import", CatalogImport: imported}, repo.ID, ""},
+		{protocol.Command{Kind: "backup-catalog-rebuild", CatalogImport: imported}, repo.ID, ""},
+		{protocol.Command{Kind: "backup-test-verify", TestRestoreVerify: verify}, verify.TestVMID, ""},
+		{protocol.Command{Kind: "backup-test-cleanup", TestRestoreClean: cleanup}, cleanup.TestVMID, ""},
+	}
+	s.State.Journal = map[string]JournalEntry{}
+	want := make(map[string]struct{ id, name string }, len(tests))
+	for _, tc := range tests {
+		cmd := tc.command
+		cmd.OperationID = "op-" + cmd.Kind
+		s.State.Journal[cmd.OperationID] = JournalEntry{Command: &cmd, Status: "succeeded", Acknowledged: true}
+		want[cmd.OperationID] = struct{ id, name string }{tc.id, tc.name}
+	}
+	memberCleanup := tests[len(tests)-1].command
+	memberCleanup.OperationID = "member-cleanup"
+	s.State.Journal[memberCleanup.OperationID] = JournalEntry{Command: &memberCleanup, Status: "succeeded", PeerDispatched: true}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var durable State
+	if err := json.Unmarshal(raw, &durable); err != nil {
+		t.Fatal(err)
+	}
+	outcomes := commandOutcomes(durable.Journal, nil)
+	if len(outcomes) != len(tests) {
+		t.Fatalf("acknowledged backup metadata outcomes lost: %+v", outcomes)
+	}
+	for _, outcome := range outcomes {
+		match, ok := want[outcome.OperationID]
+		if !ok || outcome.ID != match.id || outcome.Name != match.name || outcome.Kind == "" || outcome.Status != "succeeded" {
+			t.Fatalf("backup metadata outcome changed: %+v", outcome)
+		}
+	}
+}
+
 func TestManagedQueueLocalDependencyDoesNotChangeReplay(t *testing.T) {
 	s := testStore(t)
 	edit := protocol.Command{OperationID: "edit", Kind: "vm-update", VM: &protocol.VMCreateSpec{ID: "guest"}}
@@ -163,7 +269,7 @@ func TestManagedQueueLocalDependencyDoesNotChangeReplay(t *testing.T) {
 	if entry.AfterOperationID != "edit" || entry.Command.Power.AfterOperationID != "" {
 		t.Fatal("local dependency missing or transport input mutated")
 	}
-	dispatched := dispatchCommand(entry)
+	dispatched := dispatchCommand(entry, s.State.Journal)
 	if dispatched.Power.AfterOperationID != "edit" || entry.Command.Power.AfterOperationID != "" || start.Power.AfterOperationID != "" {
 		t.Fatal("dispatch lost dependency or mutated transport command")
 	}
@@ -175,7 +281,7 @@ func TestManagedQueueLocalDependencyDoesNotChangeReplay(t *testing.T) {
 	if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{explicit}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := dispatchCommand(s.State.Journal["explicit"]).Power.AfterOperationID; got != "edit" {
+	if got := dispatchCommand(s.State.Journal["explicit"], s.State.Journal).Power.AfterOperationID; got != "edit" {
 		t.Fatalf("explicit prerequisite changed: %q", got)
 	}
 	other := queuedPower("other")

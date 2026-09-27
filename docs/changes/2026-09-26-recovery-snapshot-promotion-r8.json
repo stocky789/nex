@@ -1,0 +1,52 @@
+{
+  "summary": "Record reviewed r8 virtual-fence promotion, survivor snapshot and safe-rejoin evidence, completing the bounded S1 gate with existing safety and crash checks. Phases 5 and 6 remain open. API impact: existing contract.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-promotion-r8.md",
+    "docs/changes/2026-09-26-recovery-snapshot-promotion-r8.json",
+    "docs/API.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/BUG_LEDGER.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The snapshot guide links the verified promotion/rejoin behavior and its virtual-fence limits; the plan and bug ledger record bounded S1 acceptance without closing either recovery phase.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The walkthrough used the existing authenticated Controller fence-profile, promotion-preflight and confirmed-promotion APIs, the local Core snapshot API, and existing pool membership, inventory, and replica contracts. It introduced no endpoint or wire change.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This QA record does not change the published website roadmap; the recovery plan and bug ledger track the bounded evidence and remaining gates.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Core owns the managed snapshot journal and native libvirt state; the current pool master owns the durable snapshot catalog, settlement receipt, membership/fence transfer evidence, inventory, and signed authority replicas. A fresh Controller reads the master-reported catalog and membership through authenticated APIs.",
+    "reason": "The walkthrough inspected Core-owned state and the existing master/member adoption path. It adds no Controller-owned pool state."
+  },
+  "verification": {
+    "method": "Executed the documented promotion/rejoin path on matched r8 package-based Debian 13 Core and Controller candidates in a disposable three-Core lab. Configured the former master's virtual fence profile, isolated its peer link, required a fresh candidate preflight naming the exact fence set, submitted confirmed promotion, and verified the target guest powered off and the transfer record reported exclusion. While it remained off, submitted one new stopped two-disk snapshot through the owner Core API and inspected the master catalog/settlement, owner journal, native metadata and marker reads, and member replica acknowledgements. Rebooted the former master with its private peer NIC disabled before guest execution, recorded its durable unconfirmed restriction, restored the link, and verified membership, accepted inventory, restriction clear, signed replica and acknowledged generation on the master, both members, and Controller projection. An independent read-only reviewer checked the private receipts and found no evidence mismatch; sanitized evidence and hashes are in the QA document. The fence target was a virtual domain on the same outer host, so this does not prove independent physical fencing. The separate native-effect timeout/crash claim is limited by its own linked QA note. Final ACK and cleared exclusion are directly observed; ordering between inventory acceptance and exclusion clear is supported by reviewed production code and its focused regression, not a separately sampled intermediate event. The full Python suite ran 550 tests with 549 passing and one real-APT prerequisite skip; full Go tests, focused protocol/agent race tests, API generation check, documentation gate and repository privacy checks passed at this checkpoint.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-promotion-r8.md",
+      "docs/qa/2026-09-26-recovery-snapshot-core-crash-r8.md",
+      "docs/API.md",
+      "docs/guide/vm-snapshots.md"
+    ],
+    "checks": [
+      "Fresh promotion preflight identified exactly the former master as a fence target; confirmed promotion succeeded, the configured virtual fence powered off that guest, and the new master recorded verified exclusion \u2014 passed",
+      "While the former master remained off, the owner API returned HTTP 202 for one new snapshot; the new master durably settled its descriptor and the owner verified both disk markers \u2014 passed",
+      "Former master booted with its peer link isolated and recorded the durable unconfirmed restriction before reconnecting \u2014 passed",
+      "After private-link restoration, the former master adopted the new master at membership generation 5, cleared restriction, and received the verified five-point replica; the master accepted its generation-5 inventory and cleared its replica-ack exclusion \u2014 passed",
+      "Controller member projection showed both surviving members fresh/current at the acknowledged authority generation \u2014 passed",
+      "Independent hardware fencing, watchdog, Corosync quorum, automatic failover, running-guest snapshots, ISO install, and complete recovery-plan acceptance \u2014 not established"
+    ]
+  }
+}

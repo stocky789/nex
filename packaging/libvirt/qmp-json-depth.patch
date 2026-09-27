@@ -1,0 +1,266 @@
+Subject: qemu: bound JSON depth for monitor replies
+
+query-block recursively includes backing image metadata. Keep the general JSON
+parser's default nesting limit, but allow QMP replies enough bounded depth for
+the maximum supported backing chain and its reply envelope.
+
+License: LGPL-2.1-or-later, as in the modified libvirt source files
+---
+--- a/src/libvirt_private.syms
++++ b/src/libvirt_private.syms
+@@ -2673,6 +2673,7 @@
+ virJSONValueCopy;
+ virJSONValueFree;
+ virJSONValueFromString;
++virJSONValueFromStringWithDepth;
+ virJSONValueGetBoolean;
+ virJSONValueGetNumberDouble;
+ virJSONValueGetNumberInt;
+--- a/src/qemu/qemu_domain.c
++++ b/src/qemu/qemu_domain.c
+@@ -6102,8 +6102,6 @@
+ }
+ 
+ 
+-#define QEMU_DOMAIN_STORAGE_SOURCE_CHAIN_MAX_DEPTH 200
+-
+ /**
+  * qemuDomainStorageSourceValidateDepth:
+  * @src: storage source chain to validate
+--- a/src/qemu/qemu_domain.h
++++ b/src/qemu/qemu_domain.h
+@@ -46,6 +46,8 @@
+ #include "vireventthread.h"
+ #include "storage_source_conf.h"
+ 
++#define QEMU_DOMAIN_STORAGE_SOURCE_CHAIN_MAX_DEPTH 200
++
+ #define QEMU_DOMAIN_FORMAT_LIVE_FLAGS \
+     (VIR_DOMAIN_XML_SECURE)
+ 
+--- a/src/qemu/qemu_monitor_json.c
++++ b/src/qemu/qemu_monitor_json.c
+@@ -26,6 +26,7 @@
+ #include <sys/time.h>
+ 
+ #include "qemu_monitor_json.h"
++#include "qemu_domain.h"
+ #include "qemu_alias.h"
+ #include "viralloc.h"
+ #include "virlog.h"
+@@ -49,6 +50,11 @@
+ 
+ #define LINE_ENDING "\r\n"
+ 
++/* query-block nests one image object per backing layer. Its reply adds four
++ * enclosing objects/arrays, and JSON-C counts the root at one.
++ */
++#define QEMU_MONITOR_JSON_MAX_DEPTH (QEMU_DOMAIN_STORAGE_SOURCE_CHAIN_MAX_DEPTH + 5)
++
+ static void qemuMonitorJSONHandleShutdown(qemuMonitor *mon, virJSONValue *data);
+ static void qemuMonitorJSONHandleReset(qemuMonitor *mon, virJSONValue *data);
+ static void qemuMonitorJSONHandleStop(qemuMonitor *mon, virJSONValue *data);
+@@ -192,7 +198,8 @@
+ 
+     VIR_DEBUG("Line [%s]", line);
+ 
+-    if (!(obj = virJSONValueFromString(line)))
++    if (!(obj = virJSONValueFromStringWithDepth(line,
++                                                QEMU_MONITOR_JSON_MAX_DEPTH)))
+         return -1;
+ 
+     if (virJSONValueGetType(obj) != VIR_JSON_TYPE_OBJECT) {
+--- a/src/util/virjson.c
++++ b/src/util/virjson.c
+@@ -1456,7 +1456,8 @@
+ 
+ 
+ virJSONValue *
+-virJSONValueFromString(const char *jsonstring)
++virJSONValueFromStringWithDepth(const char *jsonstring,
++                                int maxDepth)
+ {
+     json_object *jobj = NULL;
+     virJSONValue *ret = NULL;
+@@ -1464,9 +1465,15 @@
+     enum json_tokener_error jerr;
+     int jsonflags = JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8;
+ 
++    if (maxDepth < 1) {
++        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                       _("JSON parser depth must be positive"));
++        return NULL;
++    }
++
+     VIR_DEBUG("string=%s", jsonstring);
+ 
+-    tok = json_tokener_new();
++    tok = json_tokener_new_ex(maxDepth);
+     if (!tok) {
+         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                        _("failed to create JSON tokener"));
+@@ -1490,6 +1497,13 @@
+     return ret;
+ }
+ 
++
++virJSONValue *
++virJSONValueFromString(const char *jsonstring)
++{
++    return virJSONValueFromStringWithDepth(jsonstring, JSON_TOKENER_DEFAULT_DEPTH);
++}
++
+ static json_object *
+ virJSONValueToJsonC(virJSONValue *object)
+ {
+@@ -1574,6 +1588,16 @@
+ {
+     virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                    _("No JSON parser implementation is available"));
++    return NULL;
++}
++
++
++virJSONValue *
++virJSONValueFromStringWithDepth(const char *jsonstring G_GNUC_UNUSED,
++                                int maxDepth G_GNUC_UNUSED)
++{
++    virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                   _("No JSON parser implementation is available"));
+     return NULL;
+ }
+ 
+--- a/src/util/virjson.h
++++ b/src/util/virjson.h
+@@ -247,6 +247,10 @@
+ 
+ virJSONValue *
+ virJSONValueFromString(const char *jsonstring);
++
++virJSONValue *
++virJSONValueFromStringWithDepth(const char *jsonstring,
++                                int maxDepth);
+ char *
+ virJSONValueToString(virJSONValue *object,
+                      bool pretty);
+--- a/tests/qemumonitorjsontest.c
++++ b/tests/qemumonitorjsontest.c
+@@ -1489,6 +1489,110 @@
+     return 0;
+ }
+ 
++static void
++testQemuMonitorJSONGetBlockInfoFree(void *opaque)
++{
++    struct qemuDomainDiskInfo *info = opaque;
++
++    g_free(info->nodename);
++    g_free(info);
++}
++
++
++static int
++testQemuMonitorJSONGetBlockInfoDepth(const testGenericData *data,
++                                     size_t imageDepth,
++                                     bool expectSuccess)
++{
++    virDomainXMLOption *xmlopt = data->xmlopt;
++    g_auto(virBuffer) replyBuf = VIR_BUFFER_INITIALIZER;
++    g_autofree char *reply = NULL;
++    g_autoptr(GHashTable) blockDevices = virHashNew(testQemuMonitorJSONGetBlockInfoFree);
++    g_autoptr(qemuMonitorTest) test = NULL;
++    g_autoptr(virJSONValue) defaultReply = NULL;
++    struct qemuDomainDiskInfo *info;
++    size_t i;
++
++    if (!(test = qemuMonitorTestNewSchema(xmlopt, data->schema)))
++        return -1;
++
++    virBufferAddLit(&replyBuf,
++                    "{\"return\":[{\"device\":\"drive-test\","
++                    "\"removable\":false,\"inserted\":{"
++                    "\"node-name\":\"test-node\",\"image\":");
++
++    for (i = 0; i < imageDepth; i++) {
++        virBufferAsprintf(&replyBuf, "{\"filename\":\"disk-%zu.qcow2\"", i);
++        if (i + 1 < imageDepth)
++            virBufferAddLit(&replyBuf, ",\"backing-image\":");
++    }
++
++    for (i = 1; i < imageDepth; i++)
++        virBufferAddLit(&replyBuf, "}");
++    virBufferAddLit(&replyBuf, "}}}]}");
++    reply = virBufferContentAndReset(&replyBuf);
++
++    if (expectSuccess) {
++        defaultReply = virJSONValueFromString(reply);
++        if (defaultReply || !virGetLastError() ||
++            !strstr(virGetLastError()->message, "nesting too deep")) {
++            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                           "Default JSON parser depth changed for QMP replies");
++            return -1;
++        }
++        virResetLastError();
++    }
++
++    if (qemuMonitorTestAddItem(test, "query-block", reply) < 0)
++        return -1;
++
++    if (qemuMonitorJSONGetBlockInfo(qemuMonitorTestGetMonitor(test), blockDevices) < 0) {
++        if (expectSuccess)
++            return -1;
++
++        if (!virGetLastError() ||
++            !strstr(virGetLastError()->message, "nesting too deep")) {
++            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                           "Deep query-block reply failed for an unexpected reason");
++            return -1;
++        }
++        virResetLastError();
++        return 0;
++    }
++
++    if (!expectSuccess) {
++        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                       "Over-depth query-block reply was accepted");
++        return -1;
++    }
++
++    info = virHashLookup(blockDevices, "test");
++    if (!info || STRNEQ_NULLABLE(info->nodename, "test-node")) {
++        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                       "Deep query-block reply did not preserve disk information");
++        return -1;
++    }
++
++    return 0;
++}
++
++
++static int
++testQemuMonitorJSONqemuMonitorJSONGetBlockInfoDeep(const void *opaque)
++{
++    const testGenericData *data = opaque;
++
++    if (testQemuMonitorJSONGetBlockInfoDepth(data,
++                                             QEMU_DOMAIN_STORAGE_SOURCE_CHAIN_MAX_DEPTH,
++                                             true) < 0)
++        return -1;
++
++    return testQemuMonitorJSONGetBlockInfoDepth(data,
++                                                QEMU_DOMAIN_STORAGE_SOURCE_CHAIN_MAX_DEPTH + 1,
++                                                false);
++}
++
++
+ static int
+ testQemuMonitorJSONqemuMonitorJSONGetAllBlockStatsInfo(const void *opaque)
+ {
+@@ -3055,6 +3159,7 @@
+     DO_TEST_GEN(qemuMonitorJSONSetLaunchSecurityState);
+     DO_TEST(qemuMonitorJSONGetBalloonInfo);
+     DO_TEST(qemuMonitorJSONGetBlockInfo);
++    DO_TEST(qemuMonitorJSONGetBlockInfoDeep);
+     DO_TEST(qemuMonitorJSONGetAllBlockStatsInfo);
+     DO_TEST(qemuMonitorJSONGetMigrationStats);
+     DO_TEST(qemuMonitorJSONGetChardevInfo);

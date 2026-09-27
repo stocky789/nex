@@ -1,0 +1,57 @@
+{
+  "summary": "Phase 6 / S5 online full backup via libvirt push-mode, journal disk discovery for stopped and online paths, and Back up now online mode.",
+  "paths": [
+    "internal/protocol/backup.go",
+    "internal/protocol/backup_test.go",
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/managed_backup_online.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/vmhost/engine.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_test.go",
+    "web/src/backups.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/guide/backup-now.md",
+    "docs/changes/2026-09-27-phase6-s5-online-backup.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Back up now now offers crash-consistent online mode for running BIOS guests and documents UEFI/quiesced refusals.",
+    "pages": [
+      "docs/guide/backup-now.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "backup-now consistency accepts stopped, crash, and quiesced; manifests and catalog entries may record crash/quiesced; online path uses libvirt backup-begin with completed-job success=1 gating. docs/API.md and openapi/local-openapi updated.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json",
+      "docs/api/local-openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S5 implementation only; Phase 6 gate and disposable-lab native online evidence remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-repositories.json, pool-backup-catalog/ and pool-backup-runs/ plus repository recovery-point directories with versioned manifests (consistency stopped|crash|quiesced). Fresh Controller adopts repositories, catalog and runs from authenticated master inventory when backup_*_reported flags are true.",
+    "reason": "Pool backup destinations, recovery points and run history remain Core-owned; online capture adds no Controller-owned pool state."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/vmhost/ ./internal/agent/ ./internal/localcore/ ./internal/controller/; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree. Focused coverage: success=0 refusal, missing completed-job stats refusal, publish only after validated success, journal disk-head discovery, UEFI/quiesced admission refusal. Native libvirt online backup on disposable NFS remains open.",
+    "evidence": [
+      "internal/protocol/backup_test.go",
+      "internal/vmhost/managed_backup_test.go",
+      "internal/agent/backup_test.go",
+      "docs/API.md"
+    ]
+  }
+}

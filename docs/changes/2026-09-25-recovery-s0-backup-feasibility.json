@@ -1,0 +1,35 @@
+{
+  "summary": "Record native full-backup, independent-restore, cancellation, shutdown, destination-full, preserved source-chain reopen, and checkpointed leaf-snapshot deletion evidence from a disposable Core candidate.",
+  "paths": [
+    "tests/integration/recovery_s0_backup.py",
+    "tests/test_recovery_s0_backup.py",
+    "docs/qa/2026-09-25-recovery-s0-backup.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor-only feasibility probe; no operator recovery workflow is implemented or changed.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe exercises native libvirt/QEMU on one assigned disposable Core candidate. No Nex Controller/Core or client-facing contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The report records partial S0 feasibility evidence and explicitly leaves the gate open; no roadmap milestone status changed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state changed. Guest disks, domains, snapshots, and exports are isolated disposable lab artifacts."
+  },
+  "verification": {
+    "method": "The tracked canonical run on an earlier patched libvirt package set completed a disposable two-disk native online full backup; both outputs were standalone qcow2. Owner-only outputs were mode 0600 and libvirt-qemu-owned; restoring from scoped local copies booted with expected markers while export hashes remained unchanged. A stopped qemu-img conversion also booted with source images unavailable. Tracked cleanup removed its snapshot and checkpoint metadata. Tracked failure probes observed actual NFS ENOSPC (job type 4/success=0), graceful shutdown failure despite processed=total and remaining=0, and targeted NFS cancellation; the earlier paused ENOSPC case completed source resume/new-write verification. A bounded stall-only rerun enforced no-progress samples, dropped-packet evidence, successful abort, cancelled terminal statistics and exact qdisc/filter restoration. A helper-level regression identified omission of a nested backing-chain base in the profile generator. The exact 15-package six-patch libvirt closure was then installed from a hash-verified candidate: the preserved source domain reopened, both disk markers were read, a local-output native full backup completed with success statistics, and guest markers survived graceful shutdown/restart. A separate checkpoint branch accepted a checkpointed full backup, a second snapshot and a revert; native leaf snapshot deletion later succeeded while checkpoint and parent-snapshot metadata remained. Several tracked runs including the ENOSPC probe exposed harness assumptions: one earlier rerun rejected mixed partial-image check results, one six-patch run rejected the observed running/no-error source state, another failed in the success finalizer before persisting structured output, and a later attempt compared helper output `running` against `running (booted)` before post-write hashes. An identity-bound continuation on that failed case passed guest writes/readback, graceful restart/marker checks, and output-hash equality but was not a successful harness invocation. After fixing state normalization and initializing cleanup paths before the probe, a corrected tracked ENOSPC-only run passed: the native job ended failed with success=0, the source remained running without a block error, markers were read back on both source disks, and partial-output hashes were unchanged after source writes. Ten focused unit tests pass; ordinary CI does not execute native lab probes. See the QA report for exact evidence.",
+    "evidence": [
+      "tests/integration/recovery_s0_backup.py",
+      "tests/test_recovery_s0_backup.py",
+      "docs/qa/2026-09-25-recovery-s0-backup.md"
+    ]
+  }
+}

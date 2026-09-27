@@ -27,18 +27,23 @@ class NetinstReleaseTests(unittest.TestCase):
             payload.write_bytes(b'compiled Nex package with appliance')
             digest = publish.sha256(payload)
             payload = payload.rename(directory / f'nex-core-local-{digest}.deb')
+            libvirt_payload = directory / 'libvirt0-input.deb'
+            libvirt_payload.write_bytes(b'matched libvirt candidate')
+            libvirt_digest = publish.sha256(libvirt_payload)
+            libvirt_payload = libvirt_payload.rename(directory / f'libvirt0-{libvirt_digest}.deb')
             network_manifest = directory / f'nex-core-{version}-netinst-compliance-manifest.json'
             network_manifest.write_text(json.dumps({
                 'version': version,
                 'iso': {'file': netinst.name, 'sha256': publish.sha256(netinst)},
                 'source_bundle': {'file': source.name, 'sha256': publish.sha256(source)},
-                'netinst_payloads': [{'file': payload.name, 'sha256': digest}],
+                'netinst_payloads': [{'file': payload.name, 'sha256': digest},
+                                     {'file': libvirt_payload.name, 'sha256': libvirt_digest}],
             }))
-            args = (root, iso, source, manifest, 3, netinst, network_manifest, [payload])
+            args = (root, iso, source, manifest, 3, netinst, network_manifest, [payload, libvirt_payload])
             publish.publish(*args, check=True)
             self.assertEqual(list(root.iterdir()), [])
             publish.publish(*args)
-            for asset in (iso, source, manifest, netinst, network_manifest, payload):
+            for asset in (iso, source, manifest, netinst, network_manifest, payload, libvirt_payload):
                 self.assertEqual((root / version / asset.name).read_bytes(), asset.read_bytes())
                 self.assertTrue((root / version / (asset.name + '.sha256')).is_file())
             payload.write_bytes(b'changed package')

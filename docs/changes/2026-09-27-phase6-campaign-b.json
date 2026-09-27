@@ -1,0 +1,37 @@
+{
+  "summary": "Bounded Phase 6 Campaign B on nested lab: core2 joined and was fence-promoted after core1 QMP/virsh lab fence; backup policies/catalog/runs did not materialize on the new master (backup ops 503), so restore and fresh-Controller backup adoption were not_run. Overall fail for Campaign B acceptance.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-campaign-b.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "docs/changes/2026-09-27-phase6-campaign-b.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor disposable-lab QA evidence only; operator guide workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Exercised existing pool join, fence-profile, promote, and Core-local backup contracts; no API shape change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records nested-lab Campaign B attempt; full Campaign B and Phase 6 acceptance remain open after backup-takeover failure.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool membership and authority after fence-verified promotion persist on the surviving master's Nex Core. Backup repositories/policies/catalog/runs were expected to follow Core authority but were empty on the survivor in this run; that gap is recorded as a failed Campaign B step rather than Controller-owned state.",
+    "record": "pool-peer.json membership/transfer on the promoted master; intended backup durability remains pool-backup-repositories.json, pool-backup-policies.json, pool-backup-catalog/, pool-backup-runs/ plus NFS recovery-point payloads"
+  },
+  "verification": {
+    "method": "Disposable recovery-s0-core nested lab: enrolled/joined core2 to core1 pool; recorded lab virsh fence; QMP-powered off core1; promoted core2 (exclusion_verified). Observed empty backup lists and 503 backup operation unavailable on survivor despite NFS payloads and replica backup_authority summaries. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-campaign-b.md",
+      "docs/qa/2026-09-27-phase6-campaign-a.md",
+      "docs/qa/2026-09-26-recovery-snapshot-promotion-r8.md"
+    ]
+  }
+}

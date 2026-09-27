@@ -1,0 +1,59 @@
+{
+  "summary": "Phase 6 / S4 Core foundation for NFS backup repositories, stopped full backup publication and restore-as-new from local copies.",
+  "paths": [
+    "internal/protocol/backup.go",
+    "internal/protocol/backup_test.go",
+    "internal/protocol/protocol.go",
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_test.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/backup_test.go",
+    "internal/localcore/service.go",
+    "internal/localcore/handoff.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/changes/2026-09-27-phase6-s4-core-backup.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This slice delivers Core APIs and durable host state only. Operator UI workflows and guide walkthroughs belong to the Controller/UI lane.",
+    "pages": []
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds host-local backup repository, backup-now, restore-as-new, catalog and run routes, ManagedState inventory flags, and the stopped-backup development contract in docs/API.md and local-openapi.json.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S4 Core foundation only; Phase 6 gate and public roadmap status remain open until later slices close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-repositories.json, pool-backup-catalog/ and pool-backup-runs/ plus repository recovery-point directories with versioned manifests. Fresh Controller adopts repositories, catalog and runs from authenticated master inventory when backup_*_reported flags are true.",
+    "reason": "Pool backup destinations, recovery points and run history are Core-owned and must survive Controller replacement without Controller database state."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/vmhost/ ./internal/agent/ ./internal/localcore/; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree. Focused coverage includes admission/exact retry/changed-input conflict, incomplete never published, corrupt manifest refused, and catalog adoption inventory flags. Live libvirt stopped backup convert/restore on disposable NFS remains open for later lab evidence.",
+    "evidence": [
+      "internal/protocol/backup_test.go",
+      "internal/vmhost/managed_backup_test.go",
+      "internal/agent/backup_test.go",
+      "internal/localcore/backup_test.go",
+      "docs/API.md"
+    ]
+  }
+}

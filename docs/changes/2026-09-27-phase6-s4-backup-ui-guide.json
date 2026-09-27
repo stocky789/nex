@@ -1,0 +1,68 @@
+{
+  "summary": "Phase 6 / S4 Controller UI and operator guides for backup repositories, Back up now and restore-as-new.",
+  "paths": [
+    "web/src/backup-types.ts",
+    "web/src/backup-repositories.tsx",
+    "web/src/backups.tsx",
+    "web/src/vm-last-backup.tsx",
+    "web/src/gated.tsx",
+    "web/src/rail-screens.tsx",
+    "web/src/settings.tsx",
+    "web/src/vm-panel.tsx",
+    "web/src/lazy-screens.tsx",
+    "web/src/main.tsx",
+    "web/src/labels.ts",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/backup-now.md",
+    "docs/guide/restore-as-new.md",
+    "docs/guide/README.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/changes/2026-09-27-phase6-s4-backup-ui-guide.json",
+    "CHANGELOG.md",
+    "internal/controller/backups.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/monitor.go",
+    "docs/api/openapi.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Adds operator workflows for NFS backup repository setup, stopped Back up now and restore-as-new, and updates console navigation for the S4 screens.",
+    "pages": [
+      "docs/guide/backup-repositories.md",
+      "docs/guide/backup-now.md",
+      "docs/guide/restore-as-new.md",
+      "docs/guide/README.md",
+      "docs/guide/navigate-the-controller-console.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "UI calls the Controller backup relay that landed mid-flight in the same worktree: GET/POST /api/v1/pools/{id}/backup-repositories, POST .../backup-repositories/{repo_id}/test, GET .../backup-catalog, POST /api/v1/vms/{id}/backup, POST /api/v1/pools/{id}/backup-restore. Create uses flat {request_id,id?,name,kind,source}; restore requires host_id. Docs/API.md and openapi.json for that relay are assessed with those Controller paths; Core-local contracts remain in the S4 Core change record.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S4 UI/guide only; Phase 6 gate and public roadmap remain open until Core lab evidence and later slices close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-repositories.json, pool-backup-catalog/ and pool-backup-runs/ plus repository recovery-point directories. Fresh Controller adopts repositories and catalog from authenticated master inventory when backup_*_reported flags are true; UI only submits requests and renders host-reported results.",
+    "reason": "Pool backup destinations and recovery points are Core-owned; Controller must not keep the only copy."
+  },
+  "verification": {
+    "method": "npm --prefix web run typecheck; npm --prefix web run build; python3 scripts/check_docs.py --worktree. No browser walkthrough in this change; guide Verification sections leave disposable-lab UI evidence open. UI aligned to mid-flight internal/controller/backups.go routes.",
+    "evidence": [
+      "docs/guide/backup-repositories.md",
+      "docs/guide/backup-now.md",
+      "docs/guide/restore-as-new.md",
+      "internal/controller/backups.go"
+    ]
+  }
+}

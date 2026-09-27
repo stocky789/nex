@@ -325,7 +325,10 @@ func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, 
 func virshTimeout(command string) time.Duration {
 	switch command {
 	case "shutdown", "reboot", "reset", "start", "destroy",
-		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename":
+		"define", "undefine", "attach-device", "detach-device", "change-media", "domrename",
+		"backup-begin":
+		// backup-begin starts an asynchronous job and should return promptly; keep the
+		// job-taking bound so a hung domain job does not leave Core with a 20s false refusal.
 		return 5 * time.Minute
 	}
 	return 20 * time.Second
@@ -420,6 +423,10 @@ func (e *Engine) verifyImage(ctx context.Context) (manifest, error) {
 	return m, nil
 }
 func checkImage(ctx context.Context, path string) error {
+	return checkImageWithBacking(ctx, path, false)
+}
+
+func checkImageWithBacking(ctx context.Context, path string, allowBacking bool) error {
 	b, err := run(ctx, "qemu-img", "info", "--force-share", "--output=json", path)
 	if err != nil {
 		return err
@@ -428,12 +435,19 @@ func checkImage(ctx context.Context, path string) error {
 	if json.Unmarshal(b, &v) != nil || v["format"] != "qcow2" {
 		return errors.New("image must be qcow2")
 	}
+	if unsupportedImageMetadata(v, allowBacking) {
+		return errors.New("backing chains, external data files and encrypted images are unsupported")
+	}
+	return nil
+}
+
+func unsupportedImageMetadata(x any, allowBacking bool) bool {
 	var unsafe func(any) bool
 	unsafe = func(x any) bool {
 		switch v := x.(type) {
 		case map[string]any:
 			for k, x := range v {
-				if (strings.Contains(k, "backing") || k == "data-file" || k == "encrypted") && x != nil && x != "" && x != false {
+				if (strings.Contains(k, "backing") && !allowBacking || k == "data-file" || k == "encrypted") && x != nil && x != "" && x != false {
 					return true
 				}
 				if unsafe(x) {
@@ -449,10 +463,7 @@ func checkImage(ctx context.Context, path string) error {
 		}
 		return false
 	}
-	if unsafe(v) {
-		return errors.New("backing chains, external data files and encrypted images are unsupported")
-	}
-	return nil
+	return unsafe(x)
 }
 
 func (e *Engine) lock(ctx context.Context) (*os.File, error) {
@@ -1393,12 +1404,20 @@ func (e *Engine) RemoveSeed(ctx context.Context, id string) error {
 // Check both running and persistent assignments; a pathname is not proof that
 // another libvirt domain has not been attached to the same writable image.
 func (e *Engine) exclusiveDisk(ctx context.Context, j journal) error {
-	owned, err := os.Stat(j.Disk)
-	if err != nil {
-		return err
-	}
-	if st, ok := owned.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 {
-		return errors.New("owned disk has unsupported hardlink aliases")
+	return e.exclusiveDisks(ctx, j, []string{j.Disk})
+}
+
+func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) error {
+	owned := make([]os.FileInfo, len(paths))
+	for i, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 {
+			return errors.New("owned disk has unsupported hardlink aliases")
+		}
+		owned[i] = info
 	}
 	ids, err := e.virsh(ctx, "list", "--all", "--uuid")
 	if err != nil {
@@ -1419,40 +1438,107 @@ func (e *Engine) exclusiveDisk(ctx context.Context, j journal) error {
 			if err != nil {
 				return errors.New("cannot establish other domain storage ownership")
 			}
-			decoder := xml.NewDecoder(bytes.NewReader(b))
-			for {
-				token, err := decoder.Token()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return err
-				}
-				element, ok := token.(xml.StartElement)
-				if !ok || element.Name.Local != "source" {
+			files, err := domainDiskSourceFiles(b)
+			if err != nil {
+				return errors.New("cannot establish other domain storage ownership")
+			}
+			for _, head := range files {
+				otherHead, statErr := os.Stat(head)
+				if errors.Is(statErr, os.ErrNotExist) {
 					continue
 				}
-				for _, attr := range element.Attr {
-					if attr.Name.Local != "file" {
-						continue
+				if statErr != nil {
+					return errors.New("other domain disk cannot be inspected for exclusive ownership")
+				}
+				for _, own := range owned {
+					if os.SameFile(own, otherHead) {
+						return errors.New("another domain backing chain references the appliance disk; local control blocked")
 					}
-					other, err := os.Stat(attr.Value)
-					// Our disk exists with Nlink==1, so a nonexistent path cannot be that inode now;
-					// cross-repository duplicate backing is refused at registration, not here.
-					if errors.Is(err, os.ErrNotExist) {
-						continue
-					}
+				}
+				chain, err := imageChainFiles(ctx, head)
+				if err != nil {
+					return errors.New("other domain backing chain cannot be inspected for exclusive ownership")
+				}
+				for _, path := range chain {
+					other, err := os.Stat(path)
 					if err != nil {
 						return errors.New("other domain disk cannot be inspected for exclusive ownership")
 					}
-					if os.SameFile(owned, other) {
-						return errors.New("another domain references the appliance disk; local control blocked")
+					for _, own := range owned {
+						if os.SameFile(own, other) {
+							return errors.New("another domain backing chain references the appliance disk; local control blocked")
+						}
 					}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func domainDiskSourceFiles(b []byte) ([]string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(b))
+	diskDepth, depth := 0, 0
+	diskDevice := ""
+	var files []string
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return files, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch element := token.(type) {
+		case xml.StartElement:
+			depth++
+			if element.Name.Local == "disk" {
+				diskDepth, diskDevice = depth, "disk"
+				for _, attr := range element.Attr {
+					if attr.Name.Local == "device" {
+						diskDevice = attr.Value
+					}
+				}
+			}
+			if diskDepth != 0 && diskDevice == "disk" && element.Name.Local == "source" {
+				for _, attr := range element.Attr {
+					if attr.Name.Local == "file" && filepath.IsAbs(attr.Value) {
+						files = append(files, filepath.Clean(attr.Value))
+					}
+				}
+			}
+		case xml.EndElement:
+			if element.Name.Local == "disk" && depth == diskDepth {
+				diskDepth, diskDevice = 0, ""
+			}
+			depth--
+		}
+	}
+}
+
+func imageChainFiles(ctx context.Context, head string) ([]string, error) {
+	b, err := run(ctx, "qemu-img", "info", "--force-share", "--backing-chain", "--output=json", head)
+	if err != nil {
+		return nil, err
+	}
+	var images []map[string]any
+	if json.Unmarshal(b, &images) != nil {
+		return nil, errors.New("qemu-img returned invalid backing-chain metadata")
+	}
+	for _, image := range images {
+		if unsupportedImageMetadata(image, true) {
+			return nil, errors.New("backing chains with external data files or encrypted images are unsupported")
+		}
+	}
+	layers, err := parseImageChain(head, b)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(layers))
+	for i, layer := range layers {
+		paths[i] = layer.Path
+	}
+	return paths, nil
 }
 
 func createDiskDir(path string) error {

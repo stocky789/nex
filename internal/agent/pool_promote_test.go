@@ -375,8 +375,132 @@ func TestPoolPromotionRefusesEveryFenceThatIsNotProof(t *testing.T) {
 			if peerState(t, candidate).Membership.MasterHostID == "member-1" {
 				t.Fatal("the candidate promoted itself without a verified fence proof")
 			}
+			if member, ok := poolMemberByID(peerState(t, candidate).Membership, "master-1"); ok && member.ReplicaAckExcluded {
+				t.Fatal("an invalid fence proof marked the old master as ACK-excluded")
+			}
 			lab.requireNoWriter("after a refused promotion")
 		})
+	}
+}
+
+func TestFencedOfflineFormerMasterDoesNotBlockSnapshotReservation(t *testing.T) {
+	lab := promotionLab(t, 2)
+	oldMaster, candidate := lab.host("master-1"), lab.host("member-2")
+	pushReplicas(t, oldMaster)
+	lab.powerOff(oldMaster.State.HostID)
+	fakeFence(t, observedPowerOff(0))
+	result := ExecutePoolPromotion(context.Background(), candidate, promoteCommand("offline-master-promotion", candidate.State.HostID))
+	if result.Status != "succeeded" {
+		t.Fatalf("promotion with a proven powered-off master = %#v", result)
+	}
+
+	vm := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", candidate.State.HostID)
+	state := poolVMState{VMs: map[string]poolVMRecord{
+		vm.ID: {PoolID: candidate.State.PoolID, VMID: vm.ID, HostID: vm.HostID, Epoch: 1, State: "stopped", Spec: vm},
+	}}
+	if err := savePoolVMs(candidate, state); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{
+		OperationID: "11111111-2222-4333-8444-555555555555", Kind: "snapshot-create", VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{Name: "before-change"},
+	}
+	if _, err := ReservePoolVMSnapshot(context.Background(), candidate, command, 1, strings.Repeat("a", 64), time.Now().UTC()); err != nil {
+		t.Fatalf("verified survivor did not acknowledge snapshot reservation while the fenced former master was offline: %v", err)
+	}
+}
+
+func TestUnprovenOfflineReadyMemberStillBlocksSnapshotReservation(t *testing.T) {
+	lab := promotionLab(t, 2)
+	master := lab.host("master-1")
+	pushReplicas(t, master)
+	// This member is merely unreachable. No promotion or fresh fence proof has
+	// established that it can no longer act on the old authority.
+	lab.powerOff("member-2")
+	vm := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", master.State.HostID)
+	state := poolVMState{VMs: map[string]poolVMRecord{
+		vm.ID: {PoolID: master.State.PoolID, VMID: vm.ID, HostID: vm.HostID, Epoch: 1, State: "stopped", Spec: vm},
+	}}
+	if err := savePoolVMs(master, state); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{
+		OperationID: "11111111-2222-4333-8444-555555555555", Kind: "snapshot-create", VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{Name: "before-change"},
+	}
+	if _, err := ReservePoolVMSnapshot(context.Background(), master, command, 1, strings.Repeat("a", 64), time.Now().UTC()); err == nil {
+		t.Fatal("an unreachable ready member without a verified promotion fence was excluded from snapshot reservation")
+	}
+	member, ok := poolMemberByID(peerState(t, master).Membership, "member-2")
+	if !ok || member.ReplicaAckExcluded {
+		t.Fatalf("unproven unreachable member was marked ACK-excluded: %#v", member)
+	}
+}
+
+func TestReturningFencedMemberRejoinsBeforeReplicaAckExclusionClears(t *testing.T) {
+	lab := promotionLab(t, 1)
+	oldMaster, candidate := lab.host("master-1"), lab.host("member-1")
+	pushReplicas(t, oldMaster)
+	lab.powerOff(oldMaster.State.HostID)
+	fakeFence(t, observedPowerOff(0))
+	if result := ExecutePoolPromotion(context.Background(), candidate, promoteCommand("returning-member-promotion", candidate.State.HostID)); result.Status != "succeeded" {
+		t.Fatalf("promotion = %#v", result)
+	}
+	member, ok := poolMemberByID(peerState(t, candidate).Membership, oldMaster.State.HostID)
+	if !ok || !member.ReplicaAckExcluded {
+		t.Fatalf("verified-fenced former master was not retained with explicit replica ACK exclusion: %#v", member)
+	}
+
+	// The former master first adopts the new signed authority while remaining
+	// restricted. Merely returning or receiving the replica does not clear exclusion.
+	lab.powerOn(oldMaster.State.HostID)
+	if err := EnsurePoolBootRestriction(oldMaster); err != nil {
+		t.Fatal(err)
+	}
+	ReconcilePoolRestriction(context.Background(), oldMaster, 5*time.Second)
+	member, ok = poolMemberByID(peerState(t, candidate).Membership, oldMaster.State.HostID)
+	if !ok || !member.ReplicaAckExcluded {
+		t.Fatal("repointing the returning host alone cleared replica ACK exclusion")
+	}
+
+	pushReplicas(t, candidate)
+	storedReplica, err := loadPoolReplica(oldMaster)
+	if err != nil || storedReplica == nil {
+		t.Fatalf("returning member did not durably receive the promoted master's replica: %v", err)
+	}
+	storedMember, ok := poolMemberByID(storedReplica.Replica.Membership, oldMaster.State.HostID)
+	if !ok || !storedMember.ReplicaAckExcluded {
+		t.Fatal("the verified-fence ACK exclusion was not preserved in the signed replica delivered to the returning member")
+	}
+	if err := PublishPoolVMInventory(context.Background(), candidate); err != nil && !errors.Is(err, errPoolVMInventoryIncomplete) {
+		t.Fatalf("current master's initial inventory = %v", err)
+	}
+	if err := PublishPoolVMInventory(context.Background(), oldMaster); err != nil {
+		t.Fatalf("returning host current-generation inventory: %v", err)
+	}
+	member, ok = poolMemberByID(peerState(t, candidate).Membership, oldMaster.State.HostID)
+	if !ok || member.ReplicaAckExcluded {
+		t.Fatalf("accepted inventory and exact current replica ACK did not restore mandatory ACK eligibility: %#v", member)
+	}
+	// The clear changes signed authority content. A subsequent normal push must
+	// deliver and acknowledge that changed replica before further quorum work.
+	pushReplicas(t, candidate)
+	lab.powerOff(oldMaster.State.HostID)
+	vm := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", candidate.State.HostID)
+	state, err := loadPoolVMs(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.VMs[vm.ID] = poolVMRecord{PoolID: candidate.State.PoolID, VMID: vm.ID, HostID: vm.HostID, Epoch: 1, State: "stopped", Spec: vm}
+	if err = savePoolVMs(candidate, state); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{
+		OperationID: "11111111-3333-4333-8444-555555555555", Kind: "snapshot-create", VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{Name: "after-rejoin"},
+	}
+	if _, err = ReservePoolVMSnapshot(context.Background(), candidate, command, 1, strings.Repeat("b", 64), time.Now().UTC()); err == nil {
+		t.Fatal("the returned host was still treated as ACK-excluded after current inventory adoption")
 	}
 }
 

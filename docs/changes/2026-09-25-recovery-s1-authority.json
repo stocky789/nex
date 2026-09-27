@@ -1,0 +1,77 @@
+{
+  "summary": "Implement the Core-owned stopped snapshot reservation, master catalog and exact per-VM settlement contracts; fence authority writes against freeze and replica limits; require current-master admission for managed VM execution-increasing actions.",
+  "paths": [
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "internal/agent/managed_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_authority_freeze_test.go",
+    "internal/agent/pool_storage.go",
+    "internal/agent/pool_storage_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/run.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/protocol/protocol.go",
+    "tests/test_api_contract.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Managed local-storage start, wake, reboot, media, and autostart now require reachable current pool-master admission; emergency shutdown and force-stop remain available during master loss.",
+    "pages": [
+      "docs/guide/vm-power.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Core local snapshot-create, snapshot-operation and snapshot-list routes use typed host contracts and stable operation IDs. The current pool master exposes a compact authenticated peer catalog and settles through a bounded per-VM action carrying exact terminal evidence; complete inventory HTTP success is not a settlement acknowledgement. ManagedState reports the master-owned catalog and pending-recovery observation. Controller submits, reads and adopts host-reported state only.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The change is an incomplete S1 foundation and does not close a recovery acceptance gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool master persists snapshot descriptors, pending recovery reservations and bounded terminal receipts in its existing pool-vms.json owner records, replicated through the existing signed pool authority. The executing Core persists exact native intent and journal evidence under its managed VM journal; the authenticated snapshot-settle action commits only matching terminal evidence. Fresh Controllers adopt the catalog and unresolved reservation observation from the current master ManagedState. Member eject is refused while the master catalog retains descriptors because member rehome does not yet transfer snapshot records.",
+    "reason": "Snapshot identity, execution authority and recovery state remain host-owned and survive Controller replacement."
+  },
+  "verification": {
+    "method": "`go test -race -timeout 20m ./internal/agent ./internal/protocol` passed (agent 54.793s; protocol cached). Focused regressions cover exact denied-reservation replay and failed-before-effects settlement, duplicate/full-catalog denials, stale operation-order rejection after a later settlement and same-owner epoch advance, exact accepted/denied reservation ACK validation, member TLS reservation/settlement, headroom, autostart suppression, freeze races, stale membership and snapshot-catalog ejection. `python3 scripts/generate_api.py --check` and all 74 `tests.test_api_contract` tests passed. Owner-record writes preserve room for pending terminal receipts, but unrelated storage/network/media/credential growth after reservation can still make the overall bounded replica too large; snapshot admission is refused if current sizing does not fit and native acceptance remains subject to S0/S2 gates.",
+    "evidence": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/openapi.json",
+      "docs/api/peer-openapi.json",
+      "docs/guide/vm-power.md",
+      "docs/guide/vm-snapshots.md",
+      "internal/agent/pool_authority_freeze_test.go",
+      "internal/agent/pool_storage_test.go",
+      "internal/agent/pool_vm_inventory_test.go",
+      "internal/agent/pool_vm_recovery_test.go",
+      "internal/agent/pool_vm_test.go",
+      "internal/protocol/pool_test.go",
+      "tests/test_api_contract.py",
+      "tests/test_repository_privacy.py"
+    ]
+  }
+}

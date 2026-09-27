@@ -297,6 +297,14 @@ func PoolPeerHandler(s *Store) http.Handler {
 			PoolReplicaHandler(s).ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == poolBackupPagePath {
+			PoolBackupPageHandler(s).ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == poolBackupPeerPath || strings.HasPrefix(r.URL.Path, poolBackupPeerPath+"/") {
+			PoolBackupPeerHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolTransferPath {
 			PoolTransferHandler(s).ServeHTTP(w, r)
 			return
@@ -988,6 +996,12 @@ func ResumePoolRehome(ctx context.Context, s *Store) error {
 		poolPeerMu.Unlock()
 		if pending == nil {
 			return nil
+		}
+		// Pool rehome clears the former pool's VM ownership projection. A snapshot
+		// intent is already a durable local fence before the master reservation is
+		// acknowledged, so it must block both identity change and record retirement.
+		if hasUnsettledSnapshot(s.State.Journal, "") {
+			return errors.New("host has unresolved snapshot recovery; reconcile it before pool rehome")
 		}
 		s.State.PoolID, s.State.PoolName = pending.PoolID, pending.PoolName
 		if err = s.Save(); err == nil {

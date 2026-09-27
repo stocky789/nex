@@ -32,12 +32,23 @@ undefine) echo "$*" >> "$VMHOST_LOG"; touch "$VMHOST_GONE";;
 	return log
 }
 
+func stubDeleteStorage(t *testing.T, path string) {
+	t.Helper()
+	previous := managedStorageReadyFn
+	managedStorageReadyFn = func(_ context.Context, _ protocol.StorageRegistration, _ uint64) (storageAccess, error) {
+		return storageAccess{Path: path, Total: 1 << 40, Available: 1 << 40}, nil
+	}
+	t.Cleanup(func() { managedStorageReadyFn = previous })
+}
+
 // seedInterruptedDelete journals a VM and a wipe delete left in stage by an agent that died.
 func seedInterruptedDelete(t *testing.T, stage string) (*ManagedEngine, protocol.Command, string) {
 	t.Helper()
 	vm := managedTestVM()
 	vm.MediaID = ""
 	disk := filepath.Join(t.TempDir(), "nex-vms", vm.ID, "disk-0.qcow2")
+	storageRoot := filepath.Dir(filepath.Dir(filepath.Dir(disk)))
+	stubDeleteStorage(t, storageRoot)
 	if err := os.MkdirAll(filepath.Dir(disk), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -49,14 +60,21 @@ func seedInterruptedDelete(t *testing.T, stage string) (*ManagedEngine, protocol
 		t.Fatal(err)
 	}
 	create := protocol.Command{OperationID: "create-1", Kind: "vm-create", VM: &vm}
+	storage := protocol.StorageRegistration{ID: "s", PoolID: vm.PoolID, HostID: vm.HostID, Path: storageRoot, Kind: protocol.StorageKindLocal}
 	del := protocol.Command{OperationID: "del-1", Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, PoolID: vm.PoolID, HostID: vm.HostID, DeleteDisks: true}}
 	for _, j := range []managedJournal{
+		{Command: protocol.Command{OperationID: "storage-1", Kind: "storage-register", Storage: &storage}, Result: protocol.Result{OperationID: "storage-1", Status: "succeeded"}},
 		{Command: create, Result: protocol.Result{OperationID: create.OperationID, Status: "succeeded"}, Stage: "defined", Disks: []string{disk}, Targets: []string{"vda"}, MediaTarget: "sda"},
-		{Command: del, Result: protocol.Result{OperationID: del.OperationID, Status: "needs_attention", Error: "interrupted"}, Stage: stage, Retained: []string{disk}},
 	} {
 		if err := e.save(j); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := e.save(managedJournal{
+		Command: del, Result: protocol.Result{OperationID: del.OperationID, Status: "needs_attention", Error: "interrupted"},
+		Stage: stage, Retained: []string{disk},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	return e, del, disk
 }

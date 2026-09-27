@@ -1,0 +1,33 @@
+{
+  "summary": "Record Phase 6 Backups UI browser walkthrough against replacement Controller B and enrolled core1: Settings repositories, Backups rail, Back up now / Restore as new / Policies with keyboard focus on primary confirms. Real Controller↔Core; not MSW.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-backup-browser.md",
+    "docs/changes/2026-09-27-phase6-backup-browser.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor disposable-lab QA evidence only; operator guide workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Exercised existing Controller backup repository, catalog, backup-now, restore-as-new, and backup-policies routes; no contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records browser evidence for Phase 6; does not move the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool backup repositories, catalog, policies, runs, and restored managed VMs persist on the pool master; replacement Controller B adopted them via host APIs without the prior Controller database.",
+    "record": "pool-backup-repositories.json, pool-backup-catalog/, pool-backup-policies (and schedules), pool-backup-runs/, managed VM journals on the pool master; NFS recovery-point payload under the registered repository mount"
+  },
+  "verification": {
+    "method": "Playwright Chromium against live replacement Controller B (loopback HTTPS, web/dist) enrolled to core1 after Campaign A removed Controller A. Signed in; Settings→Backup repositories (list, Test access 202, create autofocus/cancel); Backups rail recovery points; Back up now wizard focus+Enter submit 202 (op failed recovery-point-already-exists; NFS dir for that op id had manifest+vda); Restore as new focus+Enter submit 202 (guest+qcow2 present; backup-restore-as-new needs_attention missing run journal); Policies listed adopted policy and create 202 (API showed two policies). Private captures under ignored .cache/phase6-backup-browser/captures. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-backup-browser.md"
+    ]
+  }
+}

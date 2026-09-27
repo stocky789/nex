@@ -1,24 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Rail screens outside pool settings: Backups, Containers, Tasks and Events.
+// Rail screens outside pool settings: Containers, Tasks and Events. Backups lives in backups.tsx.
 import type { Audit, Data, Operation } from "./types";
 import { auditLabel, operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { auditTarget, AttentionList, Badge, Section, badgeTone, date, size, type Attention } from "./ui";
-import { BackupRepositories, Gated, gatedButtons } from "./gated";
+import { Gated, gatedButtons } from "./gated";
 import "./settings.css";
 
-// Backups (Phase 6) and container services (Phase 10) have their place in the console now; the
-// pages show the real layout with disabled controls and never an invented job or stack.
-export function Backups() {
-  return <>
-    <h1 className="sr-only">Backups</h1>
-    <Section icon="backup" title="Backup jobs" actions={gatedButtons(["Back up now", "Restore", "Test restore"], "backups", 6)}>
-      <Gated columns={["Job", "Virtual machines", "Schedule", "Last run", "Result", "Last restore test"]} capability="backups" phase={6} />
-      <p className="note">A completed backup is not proof of a working restore: each job will show its last verified restore test beside its last run.</p>
-    </Section>
-    <BackupRepositories />
-  </>;
-}
+export { Backups } from "./backups";
+
 export function Containers() {
   return <>
     <h1 className="sr-only">Container services</h1>

@@ -1,0 +1,38 @@
+{
+  "summary": "Keep forge recovery-libvirt on the proven AppArmor midcommit guest; leave branch/deep32 for lab",
+  "paths": [
+    ".gitea/workflows/recovery-libvirt.yml",
+    ".github/workflows/recovery-libvirt.yml",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-forge-ci-recovery-midcommit-scope.json",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI scope and failure diagnostics only; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not change the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI runner scope only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Forge run 4523: session probes and AppArmor midcommit passed; nested branch probe failed without usable stderr in the Actions log. Default NEX_RECOVERY_SYSTEM_MODE/midcommit keeps forge on the proven path; branch/deep32 remain via NEX_RECOVERY_SYSTEM_MODE=all. Updated validate_system_guest_results unit coverage; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/test_libvirt_recovery_ci.py",
+      ".gitea/workflows/recovery-libvirt.yml"
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "summary": "Record a bounded +nex3 native observation that missing completed-backup statistics are refused as success.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-backup-job-disappearance.md",
+    "docs/changes/2026-09-26-recovery-backup-job-disappearance.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This contributor-only QA record documents a native libvirt probe and changes no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe exercised libvirt commands and an existing result parser; it changed no Nex Controller/Core or client-facing API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This records one bounded S0 experiment and leaves the broader S0 and product acceptance gates open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No product state changed; only a disposable nested guest, synthetic domain and private backup outputs were used."
+  },
+  "verification": {
+    "method": "The reviewed +nex3 run7 result SHA256 is b8738cf3d15aa25102ee432f5783a79d746a2a90e3be20d4c806b464963fe5ba, bound to candidate manifest SHA256 116615ecd128c157d390d96ada07281d53b77d4afb5c61dc628a20ef6450588e and recipe SHA256 3bf950c83fa9279de22e80c736984304e275d77ffcecd0609893cc5466ac46a5. The private archived runner source records backup-begin --reuse-external and the completed-record dismissal; after dismissal both current and completed job views returned type 0, and the existing parser rejected the absent terminal statistics. Output hashes were unchanged. Independent raw-artifact review passed. `python3 -m unittest tests/test_recovery_s0_backup.py` passed 22 tests; private-runner and wrapper py_compile passed. This controlled completed-record dismissal does not test organic in-progress job disappearance, daemon crash recovery, backup publication, restore, or a Nex API result.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-backup-job-disappearance.md",
+      "tests/integration/recovery_s0_backup.py",
+      "tests/test_recovery_s0_backup.py"
+    ]
+  }
+}

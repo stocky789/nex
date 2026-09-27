@@ -1,0 +1,77 @@
+{
+  "summary": "Phase 6 / S6 backup policies, Core scheduler, retention and Controller/UI relay.",
+  "paths": [
+    "internal/protocol/backup_policy.go",
+    "internal/protocol/backup_policy_test.go",
+    "internal/protocol/backup.go",
+    "internal/protocol/protocol.go",
+    "internal/protocol/pool.go",
+    "internal/agent/backup_policy.go",
+    "internal/agent/backup_schedule.go",
+    "internal/agent/backup_schedule_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_test.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/controller/backup_policies.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/monitor.go",
+    "internal/controller/managed.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/service.go",
+    "web/src/backup-policies.tsx",
+    "web/src/backups.tsx",
+    "web/src/backup-repositories.tsx",
+    "docs/guide/backup-policies.md",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/guide/README.md",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/local.html",
+    "docs/api/index.html",
+    "docs/changes/2026-09-27-phase6-s6-backup-policies.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can create, pause and run backup policies from Backups → Policies.",
+    "pages": [
+      "docs/guide/backup-policies.md",
+      "docs/guide/backup-repositories.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds backup policy CRUD/pause/run-now on Controller and Core-local APIs, ManagedState backup_policies inventory, additive BackupRun schedule fields and compact backup_authority replica refs.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S6 implementation only; Phase 6 gate remains open until S7/S8 and lab campaigns close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-backup-policies.json (stable job/schedule IDs, enabled/paused, rules, time zones, next/last dispatch, VM selection, repository, capture mode, retention, overrides, revision). Run history under pool-backup-runs/ with occurrence IDs and missed/overlap outcomes. Compact backup_authority refs on the signed pool authority replica. Fresh Controller adopts policies and runs from authenticated master inventory when backup_policies_reported and backup_runs_reported are true.",
+    "reason": "Schedules and policies must work without Controller and survive Controller replacement."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/protocol/ ./internal/agent/ ./internal/controller/ ./internal/localcore/; python3 scripts/generate_api.py --check; python3 scripts/check_docs.py --worktree. Unit coverage: DST gap/repeat, duplicate occurrence refusal, Controller-absent tick, retention vs protect.",
+    "evidence": [
+      "internal/protocol/backup_policy_test.go",
+      "internal/agent/backup_schedule_test.go",
+      "docs/API.md",
+      "docs/guide/backup-policies.md"
+    ]
+  }
+}

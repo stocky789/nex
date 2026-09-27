@@ -1,0 +1,53 @@
+{
+  "summary": "Add Controller snapshot list/create/rename/revert/delete relay and the VM Snapshots tab, backed by Core catalog and snapshot-metadata peer updates.",
+  "paths": [
+    "internal/controller/snapshots.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/agent/managed.go",
+    "internal/agent/snapshot.go",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/API.md",
+    "docs/guide/vm-snapshots.md",
+    "CHANGELOG.md",
+    "web/src/vm-snapshots.tsx",
+    "web/src/vm-panel.tsx",
+    "docs/changes/2026-09-26-controller-snapshot-relay.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can manage stopped snapshots from the Controller VM Snapshots tab as well as the host-local API.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds Controller GET/POST/PATCH snapshot routes that queue Core-owned snapshot-create/revert/delete/metadata commands, and documents the peer snapshot-metadata action.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Advances in-progress S2 Controller UI; Phase 5 status unchanged until running capture and acceptance close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Pool master's pool-vms.json snapshot catalog and owner managed journals; Controller only queues requests and displays master-reported catalog rows from ManagedState.pool_vm_snapshots.",
+    "reason": "A fresh Controller adopts catalog and outcomes from host inventory without local snapshot state."
+  },
+  "verification": {
+    "method": "go test ./internal/controller ./internal/agent. Disposable lab: Controller list returned the retained point; PATCH snapshot-metadata succeeded. Raw lab receipts under .cache were wiped after the session; results remain in the snapshots guide and browser QA.",
+    "evidence": [
+      "internal/controller/snapshots.go",
+      "internal/agent/snapshot.go",
+      "docs/guide/vm-snapshots.md",
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md"
+    ]
+  }
+}

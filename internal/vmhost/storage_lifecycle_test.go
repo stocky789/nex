@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -238,6 +239,51 @@ func TestLocalPathChangeIsNotMetadataOnly(t *testing.T) {
 	result, err := e.Execute(context.Background(), lifecycleCommand("move-local", "storage-update", request), nil)
 	if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "cannot update while used") {
 		t.Fatalf("local path change was treated as metadata-only: %+v, %v", result, err)
+	}
+}
+
+func TestRetainedSnapshotBlocksStorageSourceChangeAfterVMEdit(t *testing.T) {
+	root := t.TempDir()
+	e := NewManaged(filepath.Join(root, "state", "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	current := lifecycleLocalStorage("repo-1", "/srv/snapshot-dependency-test")
+	current.Generation = 1
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &current}, Result: protocol.Result{OperationID: "register-1", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	vm := managedTestVM()
+	vm.Disks[0].StorageID = current.ID
+	command, snapshot, reservation := managedRecoveryEntryForTest(vm, "snapshot-1")
+	dependencies, err := protocol.PoolVMSnapshotDependenciesForSpec(vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Dependencies = &dependencies
+	reservation.IntentSHA256, err = managedSnapshotIntentDigest(command, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.save(managedJournal{Command: command, Snapshot: &snapshot, Result: protocol.Result{OperationID: command.OperationID, Status: "succeeded"}, Stage: "defined",
+		RecoveryReservation: &reservation, RecoveryStage: "completed", RecoveryOutcome: "completed", RecoverySettled: true}); err != nil {
+		t.Fatal(err)
+	}
+	updated := vm
+	updated.Revision++
+	updated.Disks = []protocol.VMDisk{{StorageID: "repo-elsewhere", Name: "system", SizeGiB: 20, Bus: "virtio", BootOrder: 2}}
+	if err := e.save(managedJournal{Command: protocol.Command{OperationID: "vm-edit", Kind: "vm-update", VM: &updated}, Result: protocol.Result{OperationID: "vm-edit", Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	next := protocol.StorageRegistration{ID: "repo-1", PoolID: current.PoolID, HostID: current.HostID, Name: current.Name,
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports"}}}
+	setForTest(t, &nativeRun, func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("unexpected NFS mount effect")
+	})
+	request := protocol.StorageLifecycleRequest{Action: "update", RepositoryID: current.ID, PoolID: current.PoolID, HostID: current.HostID, ExpectedGeneration: 1, Registration: &next}
+	result, err := e.Execute(context.Background(), lifecycleCommand("move-snapshot-repo", "storage-update", request), nil)
+	if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "cannot update while used") {
+		t.Fatalf("storage source changed underneath a retained snapshot: %+v, %v", result, err)
 	}
 }
 

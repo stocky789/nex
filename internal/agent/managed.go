@@ -4,6 +4,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
@@ -23,7 +25,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
 		return true
 	}
 	return false
@@ -155,6 +157,15 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					log.Printf("remote VM update reconciliation did not complete; inspect the Core journal")
 				}
 			}
+			if completion, ready, err := reconcilePendingResourceRemoval(ctx, memberStore, engine); err != nil {
+				log.Printf("pool resource removal reconciliation is waiting for authority")
+			} else if ready {
+				select {
+				case completed <- completion:
+				case <-ctx.Done():
+					return
+				}
+			}
 			_ = PublishPoolVMInventory(ctx, memberStore)
 			_ = ReconcilePoolVMAutostart(ctx, memberStore)
 			// Retry NFS/SMB mounts that failed at boot on every host, including joined pools.
@@ -255,6 +266,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 						}
 					}
 					var finishMutation func(bool)
+					var finishResourceMutation func(bool, bool)
 					var finishVMExecution func(protocol.Result, error) error
 					executed := false
 					replayBlocked := false
@@ -269,7 +281,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 						finishMutation, err = BeginPoolStorageMutation(ctx, memberStore, cmd)
 					}
 					if err == nil {
-						err = BeginPoolResourceRemoval(ctx, memberStore, cmd)
+						finishResourceMutation, err = BeginPoolResourceRemoval(ctx, memberStore, cmd)
 					}
 					if err == nil {
 						finishVMExecution, err = AdmitPoolVMExecution(ctx, memberStore, cmd)
@@ -277,6 +289,10 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					executionCtx := ctx
 					if err == nil {
 						executionCtx, err = poolVMCommandExecutionContext(ctx, memberStore, cmd)
+					}
+					if err == nil && cmd.Kind == "snapshot-metadata" {
+						executed = true
+						result, err = executeSnapshotMetadata(executionCtx, memberStore, cmd)
 					}
 					// A redelivered exact definition command may already have a durable
 					// pending or terminal journal entry. Do not turn a fresh placement or
@@ -294,7 +310,7 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 							_ = engine.RecordRefusal(ctx, cmd, err.Error())
 						}
 					}
-					if err == nil && !replayBlocked {
+					if err == nil && !replayBlocked && cmd.Kind != "snapshot-metadata" {
 						executed = true
 						result, err = engine.Execute(executionCtx, cmd, mediaFetcher(identity))
 					}
@@ -310,6 +326,9 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 					}
 					if finishMutation != nil && !replayBlocked {
 						finishMutation(err == nil && (result.Status == "succeeded" || result.Status == "failed"))
+					}
+					if finishResourceMutation != nil && !replayBlocked {
+						finishResourceMutation(executed, !executed || (err == nil && (result.Status == "succeeded" || result.Status == "failed")))
 					}
 					if reserved && !replayBlocked && (err != nil || result.Status != "succeeded") {
 						ReleasePoolStorageReservations(ctx, memberStore, cmd)
@@ -334,6 +353,105 @@ func managedWorker(ctx context.Context, dir string, identity State, commands <-c
 			}
 		}
 	}
+}
+
+// reconcilePendingResourceRemoval resumes one exact Core journal entry after a
+// restart or lost reply. A fresh master check and replica acknowledgement happen
+// before Engine.Execute can replay native effects; ambiguous outcomes keep the
+// replicated marker and the managed journal for another pass.
+func reconcilePendingResourceRemoval(ctx context.Context, s *Store, engine *vmhost.ManagedEngine) (managedCompletion, bool, error) {
+	membership, err := Membership(s)
+	if err != nil || membership.MasterHostID != s.State.HostID {
+		return managedCompletion{}, false, nil
+	}
+	pending, err := engine.PendingResourceRemoval(ctx, s.State.PoolID, s.State.HostID)
+	if err != nil {
+		return managedCompletion{}, false, err
+	}
+	if pending != nil {
+		if err = validateLocalResourceRemovalOwner(s, membership, pending.Command); err != nil {
+			return managedCompletion{}, false, err
+		}
+		finish, beginErr := BeginPoolResourceRemoval(ctx, s, pending.Command)
+		if beginErr != nil {
+			return managedCompletion{}, false, beginErr
+		}
+		result, executeErr := engine.Execute(ctx, pending.Command, mediaFetcher(s.State))
+		definitive := executeErr == nil && (result.Status == "succeeded" || result.Status == "failed")
+		finish(true, definitive)
+		return managedCompletion{result: result, err: executeErr, background: true}, true, nil
+	}
+
+	// A process can exit after Engine.Execute durably records a terminal result
+	// but before the pool marker is cleared. Inspect only operations named by an
+	// exact persisted marker; terminal journal history without a marker is inert.
+	poolStorageMu.Lock()
+	storage, storageErr := loadPoolStorage(s)
+	poolStorageMu.Unlock()
+	if storageErr != nil {
+		return managedCompletion{}, false, storageErr
+	}
+	keys := make([]string, 0, len(storage.Mutations))
+	for key := range storage.Mutations {
+		if strings.HasPrefix(key, poolResourceMutationPrefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		operationID := storage.Mutations[key]
+		outcome, outcomeErr := engine.ResourceRemovalOutcome(ctx, operationID)
+		if outcomeErr != nil {
+			return managedCompletion{}, false, outcomeErr
+		}
+		if outcome == nil {
+			continue
+		}
+		if err = validateLocalResourceRemovalOwner(s, membership, outcome.Command); err != nil {
+			return managedCompletion{}, false, err
+		}
+		request := outcome.Command.ResourceLifecycle
+		if key != poolResourceMutationKey(request.Resource, request.ResourceID) || operationID != outcome.Command.OperationID {
+			return managedCompletion{}, false, errors.New("resource-removal marker does not match its terminal journal")
+		}
+		if err = settleTerminalPoolResourceMutation(s, key, operationID); err != nil {
+			return managedCompletion{}, false, err
+		}
+		return managedCompletion{result: outcome.Result, background: true}, true, nil
+	}
+	return managedCompletion{}, false, nil
+}
+
+func validateLocalResourceRemovalOwner(s *Store, membership protocol.PoolMembership, cmd protocol.Command) error {
+	request := cmd.ResourceLifecycle
+	if request == nil || (cmd.Kind != "network-remove" && cmd.Kind != "media-remove") || request.Action != "remove" ||
+		request.PoolID != s.State.PoolID || request.HostID != s.State.HostID || request.PoolID != membership.PoolID ||
+		request.HostID != membership.MasterHostID || membership.MasterHostID != s.State.HostID {
+		return errors.New("resource-removal journal does not belong to this pool master")
+	}
+	return nil
+}
+
+func settleTerminalPoolResourceMutation(s *Store, key, operationID string) error {
+	poolVMMu.Lock()
+	poolPeerMu.Lock()
+	poolStorageMu.Lock()
+	defer poolStorageMu.Unlock()
+	defer poolPeerMu.Unlock()
+	defer poolVMMu.Unlock()
+	peer, err := loadPoolPeer(s)
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.MasterHostID != s.State.HostID || peer.Membership.PoolID != s.State.PoolID || poolAuthorityWritable(peer) != nil {
+		return errors.New("pool authority is unavailable for terminal resource-removal reconciliation")
+	}
+	storage, err := loadPoolStorage(s)
+	if err != nil || storage.Mutations[key] != operationID {
+		return errors.New("resource-removal marker changed before terminal reconciliation")
+	}
+	delete(storage.Mutations, key)
+	if err = savePoolStorage(s, storage); err != nil {
+		return err
+	}
+	return nil
 }
 
 // osHostname is what this host calls itself, and what it reports as Inventory.Hostname; tests
@@ -451,10 +569,10 @@ func armManagementRollback(dir string, deadline time.Time) {
 // published at the current membership generation. Only the master accepts these commands;
 // a member's own converge loop applies the master's decision through the engine directly
 // and is deliberately not fenced here.
-func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Command) error {
+func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Command) (func(bool, bool), error) {
 	v := cmd.ResourceLifecycle
 	if v == nil {
-		return nil
+		return func(bool, bool) {}, nil
 	}
 	noun := "network"
 	if v.Resource == "media" {
@@ -462,56 +580,167 @@ func BeginPoolResourceRemoval(ctx context.Context, s *Store, cmd protocol.Comman
 	}
 	membership, err := Membership(s)
 	if err != nil {
-		return errors.New("pool membership is unavailable for a pool " + noun + " change")
+		return nil, errors.New("pool membership is unavailable for a pool " + noun + " change")
 	}
 	if membership.MasterHostID != s.State.HostID {
-		return errors.New("only the pool master may remove or rename a pool " + noun)
+		return nil, errors.New("only the pool master may remove or rename a pool " + noun)
 	}
 	if v.Action != "remove" {
 		// A rename moves a name and a generation; no VM definition references it.
-		return nil
+		return func(bool, bool) {}, nil
 	}
 	// A master change leaves the new master holding ISO records it adopted from shared
 	// storage while it was a member. Removal never unlinks an adopted file — the pool's
 	// only copy belongs to the host that imported it — so removing one here would drop the
 	// pool's record and leave the file behind with nothing to remove it. Say so instead.
 	if v.Resource == "media" && vmhost.NewManaged(filepath.Join(s.dir, "managed-vms")).MediaAdoptedHere(v.ResourceID) {
-		return errors.New("this pool master adopted this ISO from shared storage rather than importing it; the file stays on shared storage, so remove it from the host that imported it")
+		return nil, errors.New("this pool master adopted this ISO from shared storage rather than importing it; the file stays on shared storage, so remove it from the host that imported it")
 	}
 	incomplete := errors.New("pool VM inventory is incomplete; wait for every member to report before removing this " + noun)
 	poolVMMu.Lock()
 	state, err := loadPoolVMs(s)
-	poolVMMu.Unlock()
 	if err != nil {
-		return incomplete
+		poolVMMu.Unlock()
+		return nil, incomplete
+	}
+	for _, vm := range state.VMs {
+		if validatePoolVMSnapshotCatalog(vm) != nil {
+			poolVMMu.Unlock()
+			return nil, errors.New("pool VM snapshot catalog is invalid")
+		}
+		if poolVMSnapshotUsesResource(vm, v.Resource, v.ResourceID) {
+			poolVMMu.Unlock()
+			return nil, errors.New("resource is required by a retained VM snapshot")
+		}
+		if poolVMUsesResource(vm.Spec, v.Resource, v.ResourceID) || (vm.PendingUpdate != nil && poolVMUsesResource(vm.PendingUpdate.Next, v.Resource, v.ResourceID)) {
+			poolVMMu.Unlock()
+			return nil, errors.New("resource is still referenced by a pool VM definition")
+		}
 	}
 	for _, member := range membership.Members {
-		// This host's own VMs are covered by Core's local dependency check inside Execute;
-		// a single-host pool therefore needs no published inventory at all.
 		if member.HostID == s.State.HostID {
 			continue
 		}
-		// An ejected row is kept in membership for ever and its host is no longer part of
-		// this pool: its last snapshot describes VMs that left with it and must not hold a
-		// pool network or ISO against removal. recordPoolVMInventory drops the snapshot.
 		if member.Status == "ejected" {
 			continue
 		}
-		// A member that is not ready still runs the VMs it last published, so its snapshot
-		// keeps holding the resource; only a ready member must also be current.
-		if member.Status == "ready" && state.Inventory[member.HostID].Generation != membership.Generation {
-			return incomplete
+		inventory, reported := state.Inventory[member.HostID]
+		if !reported || inventory.HostID != member.HostID || (member.Status == "ready" && inventory.Generation != membership.Generation) {
+			poolVMMu.Unlock()
+			return nil, incomplete
 		}
-		// The durable per-member snapshot, not the never-pruned owner records: a VM that
-		// was deleted must stop holding its network or ISO.
-		for _, vm := range state.Inventory[member.HostID].VMs {
+		for _, vm := range inventory.VMs {
 			if poolVMUsesResource(vm, v.Resource, v.ResourceID) {
+				poolVMMu.Unlock()
 				if noun == "network" {
-					return errors.New("network cannot be removed while used by VM " + vm.ID + " on host " + member.HostID)
+					return nil, errors.New("network cannot be removed while used by VM " + vm.ID + " on host " + member.HostID)
 				}
-				return errors.New("ISO cannot be removed while attached to VM " + vm.ID + " on host " + member.HostID)
+				return nil, errors.New("ISO cannot be removed while attached to VM " + vm.ID + " on host " + member.HostID)
 			}
 		}
+	}
+
+	// VM admission, authority freeze, and resource removal use VM → peer → storage lock
+	// order. The durable marker closes the gap after this check and before native removal.
+	poolPeerMu.Lock()
+	peer, peerErr := loadPoolPeer(s)
+	if peerErr != nil || peer.Membership.Valid() != nil || peer.Membership.MasterHostID != s.State.HostID || peer.Membership.Generation != membership.Generation {
+		poolPeerMu.Unlock()
+		poolVMMu.Unlock()
+		return nil, errors.New("pool authority changed before resource removal could be reserved")
+	}
+	if peer.Transfer != nil && (peer.Transfer.Frozen || peer.Transfer.HandedOff) {
+		poolPeerMu.Unlock()
+		poolVMMu.Unlock()
+		return nil, errors.New("pool authority is frozen for transfer")
+	}
+	poolStorageMu.Lock()
+	storage, storageErr := loadPoolStorage(s)
+	key := poolResourceMutationKey(v.Resource, v.ResourceID)
+	newlyReserved := false
+	if storageErr == nil && storage.Mutations[key] != "" && storage.Mutations[key] != cmd.OperationID {
+		storageErr = errors.New("another resource removal is pending")
+	}
+	if storageErr == nil && storage.Mutations[key] == "" {
+		storage.Mutations[key] = cmd.OperationID
+		newlyReserved = true
+		if _, validationErr := poolResourceMutationsFromStorage(storage); validationErr != nil {
+			delete(storage.Mutations, key)
+			storageErr = errors.New("pool resource mutation limit or record validation failed")
+		} else {
+			storageErr = savePoolStorage(s, storage)
+		}
+	}
+	poolStorageMu.Unlock()
+	poolPeerMu.Unlock()
+	poolVMMu.Unlock()
+	if storageErr != nil {
+		return nil, errors.New("pool resource removal state is unavailable: " + storageErr.Error())
+	}
+	if err := confirmPoolResourceMutationReplica(ctx, s, membership, v.Resource, v.ResourceID, cmd.OperationID); err != nil {
+		// This invocation has not entered the native engine, so a newly written marker
+		// can be safely retired after an admission/replication refusal. A marker left by
+		// an earlier ambiguous operation is never cleared by a failed retry.
+		if newlyReserved {
+			finishPoolStorageMutation(s, key, cmd.OperationID, true)
+		}
+		return nil, err
+	}
+	return func(executed, definitive bool) {
+		finishPoolStorageMutation(s, key, cmd.OperationID, definitive && (executed || newlyReserved))
+	}, nil
+}
+
+// confirmPoolResourceMutationReplica proves every ready member has stored the exact
+// marker before the caller can begin native removal. Push is single-flight and may return
+// early, so only a matching post-ACK is evidence. Locks are released during peer I/O, then
+// the marker, authority and membership are rechecked before returning.
+func confirmPoolResourceMutationReplica(ctx context.Context, s *Store, membership protocol.PoolMembership, resource, id, operation string) error {
+	_ = PushPoolAuthorityReplicas(ctx, s, 20*time.Second)
+	replica, digest, err := buildPoolAuthorityReplica(s)
+	if err != nil {
+		return errors.New("pool resource removal authority replica is unavailable")
+	}
+	poolPeerMu.Lock()
+	peer, err := loadPoolPeer(s)
+	poolPeerMu.Unlock()
+	if err != nil || peer.Membership.Valid() != nil || peer.Membership.MasterHostID != s.State.HostID ||
+		peer.Membership.Generation != membership.Generation || peer.AuthorityGeneration == 0 || peer.AuthorityDigest != digest {
+		return errors.New("pool resource removal authority changed before members acknowledged it")
+	}
+	replica.Generation = peer.AuthorityGeneration
+	for _, member := range peer.Membership.Members {
+		if member.HostID == s.State.HostID || member.Status != "ready" {
+			continue
+		}
+		if member.PeerOrigin == "" || !poolReplicaPostAckMatches(s, member.HostID, replica.Generation, digest) {
+			return errors.New("every ready pool member must acknowledge the resource removal marker before native removal")
+		}
+	}
+
+	poolVMMu.Lock()
+	poolPeerMu.Lock()
+	poolStorageMu.Lock()
+	currentPeer, peerErr := loadPoolPeer(s)
+	owners, ownerErr := loadPoolVMs(s)
+	storage, storageErr := loadPoolStorage(s)
+	currentMutations, mutationErr := poolResourceMutationsFromStorage(storage)
+	key := poolResourceMutationKey(resource, id)
+	vmMatches := false
+	if ownerErr == nil {
+		vmBytes, marshalErr := json.Marshal(owners.VMs)
+		vmMatches = marshalErr == nil && string(vmBytes) == string(replica.VMs)
+	}
+	valid := peerErr == nil && ownerErr == nil && storageErr == nil && mutationErr == nil && vmMatches &&
+		currentPeer.Membership.Valid() == nil && currentPeer.Membership.MasterHostID == s.State.HostID &&
+		currentPeer.Membership.Generation == membership.Generation && currentPeer.AuthorityGeneration == replica.Generation &&
+		currentPeer.AuthorityDigest == digest && poolAuthorityWritable(currentPeer) == nil &&
+		storage.Mutations[key] == operation && reflect.DeepEqual(currentMutations, replica.ResourceMutations)
+	poolStorageMu.Unlock()
+	poolPeerMu.Unlock()
+	poolVMMu.Unlock()
+	if !valid {
+		return errors.New("pool resource removal authority changed after member acknowledgement")
 	}
 	return nil
 }
@@ -667,10 +896,16 @@ func commandHost(cmd protocol.Command) string {
 		if cmd.Media != nil {
 			return cmd.Media.HostID
 		}
-	case "vm-create", "vm-update":
+	case "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now":
 		if cmd.VM != nil {
 			return cmd.VM.HostID
 		}
+	case "backup-restore-as-new":
+		if cmd.Restore != nil {
+			return "" // restore-as-new targets local host placement chosen later
+		}
+	case "backup-restore-replace", "backup-test-restore":
+		return ""
 	case "vm-power":
 		if cmd.Power != nil {
 			return cmd.Power.HostID

@@ -1,0 +1,37 @@
+{
+  "summary": "Live nested Campaign B re-run after BUG-0651: rebuilt overlay on core1/2/3, re-seeded backup authority on core1, fence-promoted core2; survivor retained policies/catalog/runs, restored-as-new from NFS while core1 down, and fresh Controller C adopted the same backup IDs.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-campaign-b.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "docs/changes/2026-09-27-phase6-campaign-b-rerun.json",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor disposable-lab QA evidence only; operator guide workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Exercised existing join/master-change/fence-promote and Core-local/Controller backup contracts already extended by BUG-0651; no further API shape change in this re-run.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bounded nested Campaign B backup continuity now passes after BUG-0651; full three-host Campaign B and Phase 6 acceptance remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool membership/authority and backup repositories/policies/catalog/runs remain Core-owned on the pool master; promote materialises them from the signed replica; fresh Controller adopts the same IDs from survivor inventory.",
+    "record": "pool-peer.json membership/transfer; pool-backup-repositories.json, pool-backup-policies.json, pool-backup-catalog/, pool-backup-runs/; NFS recovery-point payloads; Controller adopts via authenticated host inventory APIs"
+  },
+  "verification": {
+    "method": "Rebuilt nex-core-local (overlay SHA-256 4f569d0e…4095d9), redeployed to core1/2/3 on disposable recovery-s0-core nested lab; go test ./internal/agent/ -run 'PoolPromotionRetainsBackupAuthority|PoolPromotionRebuildsCatalogFromNFSWhenIndexEmpty|AdoptPoolBackupAuthorityAndRebuildFromMount'; planned master-change to core1; NFS catalog rebuild + policy recreate; QMP power-off core1; fence-promote core2 (generation 5 succeeded); survivor listed policies/catalog/runs; restore-as-new from prun-724d407e0086 while core1 down; fresh Controller C enrolled survivor and adopted repo/policy/schedule/catalog/run IDs. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-campaign-b.md",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

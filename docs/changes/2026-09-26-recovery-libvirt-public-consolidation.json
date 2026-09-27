@@ -1,0 +1,37 @@
+{
+  "summary": "Validate the four-patch +nex3 libvirt candidate through public no-delete disk consolidation under enforcing AppArmor; the integrated two-disk delete path remains unsupported. API impact: none.",
+  "paths": [
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/integration/recovery_s0_consolidate.py",
+    "tests/test_libvirt_recovery_ci.py",
+    "docs/qa/2026-09-26-recovery-libvirt-public-consolidation.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor-only disposable CI and native-platform validation change. It defines no supported operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The change validates existing libvirt commands and does not alter Nex Controller/Core or client-facing contracts.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The evidence supports a bounded public consolidation path. S0 acceptance remains open because the integrated multi-disk delete path failed and broader recovery acceptance is incomplete.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable guest and build evidence changed; no durable Nex pool or Controller state was introduced."
+  },
+  "verification": {
+    "method": "The four-patch candidate at 11.3.0-3+deb13u3+nex3 passed checksum verification (90 entries; SHA256SUMS digest 116615ecd128c157d390d96ada07281d53b77d4afb5c61dc628a20ef6450588e; recipe hash 3bf950c83fa9279de22e80c736984304e275d77ffcecd0609893cc5466ac46a5). Its full Meson suite reported 158 pass, one expected failure, one skipped, and zero failures. `python3 tests/integration/libvirt_recovery_ci.py --candidate-dir <ignored-candidate-output>` passed one- and two-disk qemu:///session TCG lifecycle cases and a fresh enforcing-AppArmor qemu:///system guest public-consolidation case. The raw AppArmor result SHA256 is a55fabdd9d911d2d10b43c9208fa9dbb5142a0159d7a3956036b58cd772d6e64; the outer runner result SHA256 is 4b9f3bc8e1afe953288eb15242c1d170d7f2e8511bc3dc88fdcb99837fe186b4. Those raw results do not embed the candidate manifest digest; a separate ignored owner-curated invocation record links the executed command and exact candidate manifest/package hashes to the result hashes. Future outer results now include a candidate receipt. The public case recorded both per-disk commits with the same confined QEMU identity, metadata-only oldest-point deletion, reference scan before unlink, absent exact point-A files, all retained data reads, same-UUID reopen with all four required QMP observations, and retained C/B reverts. `python3 -m unittest tests.test_libvirt_recovery_ci tests.test_recovery_s0_consolidate` passed 13 tests; py_compile, `git diff --check`, `python3 scripts/check_docs.py --worktree`, and the repository privacy suite passed. A separate earlier +nex3 integrated two-disk snapshot-delete run ended uncertain after a monitor reset; it is preserved as a failed path and is not counted as success. No Core package install or remote Forge run is claimed. A second fresh enforcing-AppArmor qemu:///system run exercised a vda midcommit libvirtd interruption on the same immutable candidate. The outer raw result SHA256 is e4ce45f255b9f532ae56fb841f4e21b251d164dc281fde9b191525feab5ab1d1 and embeds the candidate receipt: SHA256SUMS digest 116615ecd128c157d390d96ada07281d53b77d4afb5c61dc628a20ef6450588e, recipe hash 3bf950c83fa9279de22e80c736984304e275d77ffcecd0609893cc5466ac46a5, and 15 selected package hashes. The inner system result SHA256 is 58cfa68aca5acd5609132f1503935a33a2bdd2715a5bf4b0d4cd250c1c08a464. It records a single vda job at 25.39% with ready=false while paused, unchanged QEMU UUID/PID/enforcing profile across libvirtd PID change, one disconnected vda client, terminal clear job state after restart, one completed vdb commit, reference-gated metadata-only A removal and unlink, retained data, same-UUID reopen and C/B reverts. Three earlier harness failures stopped before native recovery actions (SSH host-key fixture, staging depth, missing generated payload helper); the corrected runner and exact Active Block Commit output regression passed. `python3 -m unittest tests.test_libvirt_recovery_ci tests.test_recovery_s0_consolidate` passed 15 tests after correction. This is one controlled daemon-interruption case in a nested-TCG Debian guest with local qcow2 disks; it does not establish host-reboot, storage-backend, or production interruption coverage.",
+    "evidence": [
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/integration/recovery_s0_consolidate.py",
+      "tests/test_libvirt_recovery_ci.py",
+      "docs/qa/2026-09-26-recovery-libvirt-public-consolidation.md"
+    ]
+  }
+}

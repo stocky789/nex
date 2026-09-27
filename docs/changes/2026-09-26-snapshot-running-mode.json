@@ -1,0 +1,44 @@
+{
+  "summary": "Start S3 running snapshot create modes: admit crash/quiesced create for running guests, refuse UEFI running capture for now, and pass --quiesce only for quiesced mode.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/agent/pool_vm.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/localcore/snapshots.go",
+    "internal/controller/snapshots.go",
+    "docs/changes/2026-09-26-snapshot-running-mode.json",
+    "internal/vmhost/managed_snapshot_test.go",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "web/src/vm-snapshots.tsx"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Running capture is under integration and not yet an operator workflow; stopped guide steps are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Optional mode on snapshot-create (stopped default, crash, quiesced) changes admission and native flags; OpenAPI/API.md follow in the completing S3 slice.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Opens S3 implementation; Phase 5 status unchanged until running acceptance evidence exists.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Owner managed snapshot journals and master pool-vms.json catalog; mode is part of the create request bound into the journalled command.",
+    "reason": "Controller only queues create requests and adopts host-reported outcomes."
+  },
+  "verification": {
+    "method": "go test on protocol/agent/vmhost/localcore/controller packages after mode admission and observation changes.",
+    "evidence": [
+      "internal/vmhost/managed_snapshot.go",
+      "internal/protocol/pool.go"
+    ]
+  }
+}

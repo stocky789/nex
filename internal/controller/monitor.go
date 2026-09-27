@@ -64,8 +64,57 @@ func validateInventory(v *protocol.Inventory) error {
 		}
 	}
 	if m := v.Managed; m != nil {
-		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 {
+		if len(m.Storage) > 10000 || len(m.Networks) > 10000 || len(m.Media) > 10000 || len(m.VMs) > 10000 || len(m.Outcomes) > 30000 || len(m.PoolVMSnapshots) > 10000 || len(m.RecoveryReservations) > 10000 ||
+			len(m.BackupRepositories) > 10000 || len(m.BackupCatalog) > 10000 || len(m.BackupRuns) > 30000 || len(m.BackupPolicies) > 10000 {
 			return errors.New("managed state limits exceeded")
+		}
+		if len(m.PoolVMSnapshots) != 0 && !m.PoolVMSnapshotsReported || len(m.RecoveryReservations) != 0 && !m.RecoveryReservationsReported ||
+			len(m.BackupRepositories) != 0 && !m.BackupRepositoriesReported || len(m.BackupCatalog) != 0 && !m.BackupCatalogReported ||
+			len(m.BackupRuns) != 0 && !m.BackupRunsReported || len(m.BackupPolicies) != 0 && !m.BackupPoliciesReported {
+			return errors.New("snapshot authority observation is incomplete")
+		}
+		seenSnapshots := map[string]bool{}
+		for _, snapshot := range m.PoolVMSnapshots {
+			key := snapshot.VMID + "/" + snapshot.ID
+			if snapshot.Valid() != nil || seenSnapshots[key] {
+				return errors.New("invalid or duplicate snapshot descriptor")
+			}
+			seenSnapshots[key] = true
+		}
+		seenReservations := map[string]bool{}
+		for _, reservation := range m.RecoveryReservations {
+			if reservation.Valid() != nil || seenReservations[reservation.VMID] {
+				return errors.New("invalid or duplicate snapshot reservation")
+			}
+			seenReservations[reservation.VMID] = true
+		}
+		seenRepos := map[string]bool{}
+		for _, repo := range m.BackupRepositories {
+			if repo.Valid() != nil || seenRepos[repo.ID] {
+				return errors.New("invalid or duplicate backup repository")
+			}
+			seenRepos[repo.ID] = true
+		}
+		seenPoints := map[string]bool{}
+		for _, point := range m.BackupCatalog {
+			if point.Valid() != nil || seenPoints[point.ID] {
+				return errors.New("invalid or duplicate backup recovery point")
+			}
+			seenPoints[point.ID] = true
+		}
+		seenRuns := map[string]bool{}
+		for _, run := range m.BackupRuns {
+			if run.Valid() != nil || seenRuns[run.OperationID] {
+				return errors.New("invalid or duplicate backup run")
+			}
+			seenRuns[run.OperationID] = true
+		}
+		seenPolicies := map[string]bool{}
+		for _, policy := range m.BackupPolicies {
+			if policy.Valid() != nil || seenPolicies[policy.ID] {
+				return errors.New("invalid or duplicate backup policy")
+			}
+			seenPolicies[policy.ID] = true
 		}
 		var fields []string
 		for _, s := range m.Storage {

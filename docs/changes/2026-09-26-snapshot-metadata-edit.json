@@ -1,0 +1,53 @@
+{
+  "summary": "Add host-local PATCH to rename or redescribe a retained stopped snapshot on the pool master's catalog without changing digests or disk identity.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_metadata_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/localcore/snapshots.go",
+    "internal/localcore/service.go",
+    "internal/localcore/snapshots_test.go",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/API.md",
+    "docs/guide/vm-snapshots.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-snapshot-metadata-edit.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can rename or redescribe a retained point through the host-local API; the snapshots guide documents the steps.",
+    "pages": [
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Adds PATCH /api/local/v1/pool/vms/{id}/snapshots/{snapshot_id} and the peer master action snapshot-metadata. Capture digests and creation time stay fixed; later revert/delete bind the updated descriptor digest.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Advances in-progress S2 metadata; Phase 5 status unchanged until Controller UI and remaining acceptance close.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Pool master's pool-vms.json snapshot catalog name and description for the existing snapshot ID; fresh Controller adopts catalog rows from ManagedState.pool_vm_snapshots.",
+    "reason": "Controller only displays host-reported catalog entries."
+  },
+  "verification": {
+    "method": "Focused Go unit and CSRF route tests. Disposable lab on Core2 owner: create then PATCH renamed the retained point with unchanged digests. Raw lab receipts under .cache were wiped after the session; results remain in the snapshots guide verification notes and browser QA.",
+    "evidence": [
+      "internal/agent/pool_vm_metadata_test.go",
+      "internal/localcore/snapshots_test.go",
+      "docs/guide/vm-snapshots.md",
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md"
+    ]
+  }
+}

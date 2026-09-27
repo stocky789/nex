@@ -42,6 +42,9 @@ type poolPeerState struct {
 	// after a crash; generations may skip. A member leaves both empty.
 	AuthorityGeneration uint64
 	AuthorityDigest     string
+	// BackupActiveRoot names a complete, versioned backup store tree. Promotion sets
+	// it in the same atomic peer-state write that makes this host master.
+	BackupActiveRoot string
 	// Transfer is this host's durable part of a planned master change or a member eject.
 	// It carries the authority freeze: while Frozen is set every authority write on this
 	// host is refused, and while HandedOff is set they are refused for good, because this

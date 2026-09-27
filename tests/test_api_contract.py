@@ -100,6 +100,9 @@ class APIContractTests(unittest.TestCase):
             elif go_type == 'time.Time':
                 self.assertEqual(schema['type'], 'string')
                 self.assertEqual(schema['format'], 'date-time')
+            elif go_type == 'time.Duration':
+                # encoding/json marshals time.Duration as an integer nanosecond count.
+                self.assertEqual(schema['type'], 'integer')
             elif go_type == 'float64':
                 self.assertEqual(schema['type'], 'number')
             elif go_type == 'json.RawMessage':
@@ -251,6 +254,9 @@ class PeerAPIContractTests(APIContractTests):
         for name, base, suffix in re.findall(r'(\w+Path)\s*=\s*(\w+Path)\s*\+\s*"([^"]+)"', source):
             if base in consts:
                 consts[name] = consts[base] + suffix
+        base_paths = {name: consts[path] for name, path in re.findall(
+            r'(\w+)\s*:=\s*strings\.TrimRight\([^\n]+\)\s*\+\s*(\w+Path)\s*$', source, re.M)
+            if path in consts}
         handled = set()
         for line in source.splitlines():
             if 'r.URL.Path' not in line or '|| strings.HasPrefix(r.URL.Path' in line:
@@ -276,6 +282,8 @@ class PeerAPIContractTests(APIContractTests):
                         break
                 elif token in consts:
                     path += consts[token]
+                elif token in base_paths:
+                    path += base_paths[token]
                 elif m := re.fullmatch(r'strings\.TrimSuffix\((\w+), "/"\)', token):
                     path += consts[m[1]].rstrip('/')
                 elif re.fullmatch(r'\w*[Qq]uery', token):

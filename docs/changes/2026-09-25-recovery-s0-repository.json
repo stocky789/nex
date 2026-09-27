@@ -1,0 +1,33 @@
+{
+  "summary": "Exercise shared NFS repository ownership and publication primitives in a disposable recovery lab",
+  "paths": [
+    "tests/integration/recovery_s0_repository.py",
+    "docs/qa/2026-09-25-recovery-s0-repository.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor feasibility experiment only; no operator recovery workflow is implemented.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The experiment directly exercises native NFS filesystem primitives in selected disposable guests; no Controller/Core or client-facing contract changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "S0 and both recovery phases remain open; no product capability becomes available.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only disposable fixture files and test evidence are written; no product state or ownership schema is introduced."
+  },
+  "verification": {
+    "method": "Executed the native experiment three times across two selected Debian Core guests and their NFSv4.2 mount aliases; all exited zero. The QA report records exact assertions, tested script and package hashes, and untested crash/fencing/recovery boundaries. Independent review requested exact mount version/source evidence and retained scratch locations; both were added and the final native run passed. A second independent worker verified the corrected script, final private result and matching public script digest with no material findings.",
+    "evidence": [
+      "tests/integration/recovery_s0_repository.py",
+      "docs/qa/2026-09-25-recovery-s0-repository.md"
+    ]
+  }
+}

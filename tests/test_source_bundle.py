@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 import json
 import os
+import shutil
 import subprocess
 from unittest import mock
 
@@ -40,6 +41,40 @@ class SourceBundleTests(unittest.TestCase):
             self.assertEqual(source_bundle.retained_dsc(root, 'sample', '1'), dsc)
             artifact.write_bytes(b'tampered')
             self.assertIsNone(source_bundle.retained_dsc(root, 'sample', '1'))
+
+    @unittest.skipUnless(shutil.which('dpkg-deb'), 'requires dpkg-deb')
+    def test_matched_libvirt_source_input_covers_its_custom_binary_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / 'repo'; repo.mkdir()
+            source = root / 'third-party/libvirt/source'; source.mkdir(parents=True)
+            notices = root / 'third-party/libvirt/notices'; notices.mkdir()
+            tarball = source / 'libvirt_1+nex1.orig.tar.xz'; tarball.write_bytes(b'upstream source')
+            dsc = source / 'libvirt_1+nex1.dsc'
+            dsc.write_text(
+                'Source: libvirt\nVersion: 1+nex1\nChecksums-Sha256:\n'
+                f' {source_bundle.digest(tarball)} {tarball.stat().st_size} {tarball.name}\n')
+            (notices / 'libvirt-copyright').write_text('Debian source notice')
+            control = root / 'control'; (control / 'DEBIAN').mkdir(parents=True)
+            (control / 'DEBIAN' / 'control').write_text(
+                'Package: libvirt0\nVersion: 1+nex1\nArchitecture: amd64\n'
+                'Source: libvirt (1+nex1)\nMaintainer: test\nDescription: test\n')
+            subprocess.run(['dpkg-deb', '--build', str(control), str(repo / 'libvirt0_1+nex1_amd64.deb')],
+                           check=True, stdout=subprocess.DEVNULL)
+            iso, tree, output = root / 'base.iso', root / 'tree', root / 'source.tar.gz'
+            iso.write_bytes(b'iso'); (tree / 'nex/repo').mkdir(parents=True)
+            with mock.patch.object(source_bundle, 'update_sources'), \
+                    mock.patch.object(source_bundle, 'fetch_sources') as fetch:
+                source_bundle.main([
+                    '--version', '0.3.2', '--iso', str(iso), '--tree', str(tree), '--repository', str(repo),
+                    '--source-input', str(root / 'third-party/libvirt'), '--output', str(output),
+                ])
+            fetch.assert_not_called()
+            with source_bundle.tarfile.open(output) as archive:
+                names = set(archive.getnames())
+            self.assertIn('nex-iso-source/provided-sources/libvirt/source/libvirt_1+nex1.dsc', names)
+            self.assertIn('nex-iso-source/provided-sources/libvirt/source/libvirt_1+nex1.orig.tar.xz', names)
+            self.assertIn('nex-iso-source/provided-sources/libvirt/notices/libvirt-copyright', names)
 
     def test_deb_member_handles_large_trailing_content_after_match(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +229,10 @@ class SourceBundleTests(unittest.TestCase):
         self.assertIn('scripts/build-source-bundle.py', build)
         self.assertIn('nex-core-${version}-source.tar.gz', build)
         self.assertIn('nex-core-${version}-compliance-manifest.json', build)
+        self.assertIn('replace_matched_libvirt', build)
+        self.assertIn("source_name(control) == 'libvirt'", build)
+        self.assertIn('--source-input "$stage/nex/third-party"', build)
+        self.assertIn("for name in ('source', 'notices', 'recipe'):", build)
         self.assertIn('ARTWORK-LICENSE.md', build)
         self.assertIn('stage_virtio_win', build)
         self.assertIn('virtio-win-0.1.302-1.src.rpm', build)

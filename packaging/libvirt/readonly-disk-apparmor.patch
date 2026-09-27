@@ -1,0 +1,41 @@
+From 7b889af2d235d3fadfc172f371f02df0b74e40f2 Mon Sep 17 00:00:00 2001
+From: Serge Hallyn <serge.hallyn@ubuntu.com>
+Date: Mon, 5 Jan 2026 14:27:21 -0600
+Subject: [PATCH] virt-aa-helper: Ask for no deny rule for readonly disk elements
+
+Origin: upstream, https://gitlab.com/libvirt/libvirt/-/commit/7b889af2d235d3fadfc172f371f02df0b74e40f2
+Bug: https://gitlab.com/libvirt/libvirt/-/issues/806
+Bug-Debian: https://bugs.debian.org/1061725
+Bug-Debian: https://bugs.debian.org/932456
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/1554031
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/1692441
+Signed-off-by: Christian Ehrhardt <christian.ehrhardt@canonical.com>
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>
+Signed-off-by: Wesley Hershberger <wesley.hershberger@canonical.com>
+License: LGPL-2.1-or-later, as in src/security/virt-aa-helper.c
+
+The AppArmor permission flag R means read without emitting an explicit deny
+rule. It does not grant write access; it permits a separately requested write
+rule to take effect.
+---
+ src/security/virt-aa-helper.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: libvirt-11.3.0-3+deb13u3/src/security/virt-aa-helper.c
+===================================================================
+--- libvirt-11.3.0-3+deb13u3.orig/src/security/virt-aa-helper.c
++++ libvirt-11.3.0-3+deb13u3/src/security/virt-aa-helper.c
+@@ -824,11 +824,11 @@ add_file_path(virStorageSource *src,
+ 
+     if (depth == 0) {
+         if (src->readonly)
+-            ret = vah_add_file(buf, src->path, "rk");
++            ret = vah_add_file(buf, src->path, "Rk");
+         else
+             ret = vah_add_file(buf, src->path, "rwk");
+     } else {
+-        ret = vah_add_file(buf, src->path, "rk");
++        ret = vah_add_file(buf, src->path, "Rk");
+     }
+ 
+     if (ret != 0)

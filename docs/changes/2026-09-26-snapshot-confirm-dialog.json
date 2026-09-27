@@ -1,0 +1,36 @@
+{
+  "summary": "Replace Snapshots window.confirm with console dialogs; add disabled titles, keep confirm open through request, restore focus, and aria-describedby.",
+  "paths": [
+    "web/src/vm-snapshots.tsx",
+    "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-snapshot-confirm-dialog.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator steps still use Revert/Delete on the Snapshots tab; confirmation chrome and disabled titles only.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "UI confirmation and labelling only; snapshot routes unchanged.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Usability residual inside Phase 5; milestone status unchanged.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Confirmation dialog is ephemeral Controller UI; durable catalog remains Core-owned."
+  },
+  "verification": {
+    "method": "npm run build; Playwright on Controller :36704 Snapshots for s3-browser-clean5: Revert opens confirm-dialog with aria-describedby snap-confirm-desc; Cancel restores focus to Revert. Independent usability review PASS WITH GAPS then follow-up PASS on the claimed title/dialog/focus fixes.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md"
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "summary": "Unblock forge documentation and recovery-libvirt CI after the Phase 5 handoff push",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-phase5-handoff-status.json",
+    "docs/changes/2026-09-26-forge-ci-recovery-bootstrap.json",
+    "packaging/libvirt/build-matched-libvirt.sh"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI packaging bootstrap and change-record correction only; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not change the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI and documentation assessment only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "python3 scripts/check_docs.py --worktree; confirm build-matched-libvirt.sh bootstraps ca-certificates from default HTTP mirrors before HTTPS snapshot apt.",
+    "evidence": [
+      "packaging/libvirt/build-matched-libvirt.sh",
+      "docs/changes/2026-09-26-phase5-handoff-status.json"
+    ]
+  }
+}

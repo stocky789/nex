@@ -7,8 +7,9 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { VMList, statusOf, needsAttention, views, matches, hiddenColumns, bulkSkip } = await import(bundleTestModule(new URL("./vm-list.tsx", import.meta.url), "vm-list", true));
+const { VMList, statusOf, needsAttention, views, matches, hiddenColumns, bulkSkip, bulkSnapSkip } = await import(bundleTestModule(new URL("./vm-list.tsx", import.meta.url), "vm-list", true));
 assert.match(readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8"), /request submitted for \$\{total\} VM/);
+assert.match(readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8"), /setBulkSnapIDs/);
 
 const host = { id: "h1", pool_id: "p1", hostname: "node-1", connection: "fresh", revoked: false, capabilities: ["vm-power-v1", "managed-vm-v1", "vm-update-v1", "console-v1"], inventory: null };
 const stale = { ...host, id: "h2", hostname: "node-2", connection: "stale" };
@@ -35,6 +36,28 @@ assert.match(bulkSkip(web, "start", host), /observed running/);
 assert.match(bulkSkip(lost, "shutdown", stale), /freshly connected host/);
 assert.match(bulkSkip(vm("ctl", { protected: true }), "shutdown", host), /Controller appliance/);
 
+assert.equal(bulkSnapSkip(off, host), "");
+assert.match(bulkSnapSkip(web, host), /stop it first/);
+assert.match(bulkSnapSkip(lost, stale), /freshly connected/);
+assert.match(bulkSnapSkip(vm("ctl", { protected: true }), host), /Controller appliance/);
+assert.match(bulkSnapSkip(vm("stale-vm", { state: "shut off", freshness: "stale" }), host), /current VM state is unknown/);
+const snapSrc = readFileSync(new URL("./vm-list.tsx", import.meta.url), "utf8");
+assert.match(snapSrc, /requests\.current = \{\}/);
+assert.match(snapSrc, /requests\.current\[vm\.id\] \?\?= snapRequestID\(\)/, "bulk snapshot reuses one request_id per VM until success");
+assert.match(snapSrc, /delete requests\.current\[vm\.id\]/, "bulk snapshot drops the held request_id only after success");
+assert.match(snapSrc, /sentAny\.current = true/, "bulk snapshot records success outside React state before close");
+assert.match(snapSrc, /onClose=\{\(\) => onDone\(sentAny\.current\)\}/, "bulk snapshot onDone does not close over a stale sent array");
+assert.match(snapSrc, /const nameLocked = sent\.length > 0 \|\| working/, "name stays editable when every request failed");
+assert.doesNotMatch(snapSrc, /nameLocked = sent\.length > 0 \|\| Object\.keys\(errors\)/, "errors alone must not lock the snapshot name");
+
+const panelSnapSrc = readFileSync(new URL("./vm-snapshots.tsx", import.meta.url), "utf8");
+assert.match(panelSnapSrc, /requests\.current\[key\] \?\?= rid\(prefix\)/, "panel snapshot actions reuse request_id until success");
+assert.match(panelSnapSrc, /if \(vm\.protected\) return "Controller appliance/, "protected appliance VMs block snapshot actions");
+assert.match(panelSnapSrc, /confirmError/, "confirm dialog keeps its own error, not the create form error");
+assert.match(panelSnapSrc, /loadGen\.current/, "snapshot list load ignores stale responses after a VM switch");
+assert.match(panelSnapSrc, /if \(ok\) \{\s*setName\(""\);\s*setDescription\(""\);/, "create form clears only after a successful request");
+assert.match(panelSnapSrc, /if \(ok\) setEditID\(""\)/, "rename exits edit only after success");
+
 const data = { sites: [], pools: [{ id: "p1", name: "pool-1", site_id: "s", master_host_id: "h1" }], hosts: [host, stale], operations: [], audit: [], vms: [web, off, lost], storage: [], networks: [], media: [] };
 const props = { data, vms: data.vms, pool: data.pools[0], api: async () => ({}), reload: async () => {}, busy: false, unavailable: false, loading: false, onNotice() {}, onCreateVM() {},
   mediaControls: () => ({ drives: [], options: [] }), installMedia: () => ({ busy: false, note: "", onEject() {} }) };
@@ -47,7 +70,7 @@ assert.match(list, /Tags<svg/, "the Tags facet is offered");
 // The panel keeps phase-gated actions visible and disabled, and a stale host's VM says why.
 const panel = renderToStaticMarkup(createElement(VMList, { ...props, selectedID: "web" }));
 assert.match(panel, /disabled="" title="Available with live migration \(Phase 7\)"/);
-assert.match(panel, /Available with backups \(Phase 6\)/);
+assert.match(panel, /Last backup<\/dt><dd class="muted">Loading…<\/dd><dt>Last tested restore/);
 const stalePanel = renderToStaticMarkup(createElement(VMList, { ...props, selectedID: "lost" }));
 assert.match(stalePanel, /class="why" role="status">node-2 is not reporting\. Current execution state is unknown/);
 assert.match(stalePanel, /Console<\/button>/);

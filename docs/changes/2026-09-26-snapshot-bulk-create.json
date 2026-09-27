@@ -1,0 +1,52 @@
+{
+  "summary": "Enable VMs-list bulk Snapshot for selected shut-off guests with shared name, skip rules, and per-VM create retries.",
+  "paths": [
+    "web/src/vm-list.tsx",
+    "web/src/vm-list.test.mjs",
+    "docs/guide/vm-power.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+    "docs/qa/2026-09-26-phase5-snapshot-support-matrix.md",
+    "website/src/routes/roadmap/+page.svelte",
+    "docs/plans/2026-09-26-recovery-session-handoff.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/plans/2026-09-08-nex-platform.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-snapshot-bulk-create.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Bulk Snapshot on the VMs selection bar is now available for shut-off guests; power and snapshot guide steps describe it.",
+    "pages": [
+      "docs/guide/vm-power.md",
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Bulk UI posts the existing per-VM Controller snapshot create route; no new host or Controller contract.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Records bulk stopped Snapshot browser evidence under Phase 5 done items; checklist close remains open.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "record": "Master pool-vms.json snapshot catalog and per-VM recovery reservations/journals; Controller only submits authenticated create requests.",
+    "reason": "Bulk dialog is a front-end convenience over existing Core-owned create operations."
+  },
+  "verification": {
+    "method": "node web/src/vm-list.test.mjs; npm run build; Playwright on disposable Controller :36704 selected s3-browser-clean5 and s3-bios-qga-052ee6, submitted bulk Snapshot name bulk-snap-11665; both create POSTs returned 202 and both master catalogs listed the shared name after settlement. Bulk dialog Name autofocus, Escape/Cancel close, Will be requested, and mixed running skip (stop it first / Snapshot 1 VM) verified. Independent review PASS WITH GAPS; sticky request_id Name-lock fix and stale-VM skip unit test added.",
+    "evidence": [
+      "web/src/vm-list.test.mjs",
+      "docs/qa/2026-09-26-recovery-snapshot-browser.md",
+      "docs/qa/2026-09-26-phase5-snapshot-support-matrix.md"
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+Subject: qemu: Use a unique name for revert overlay files
+Origin: Nex recovery S0 native probe, 2026-09-25
+License: LGPL-2.1-or-later, as in src/qemu/qemu_snapshot.c
+
+Reverting an external snapshot creates new overlay files. The default moment
+name uses whole seconds, so two reverts in the same second can select the same
+overlay path. Keep the creation timestamp, but use a fresh UUID for this
+temporary name. The existing target validation still rejects an existing file
+instead of overwriting it.
+--- a/src/qemu/qemu_snapshot.c
++++ b/src/qemu/qemu_snapshot.c
+@@ -40,6 +40,7 @@
+ #include "virdomaincheckpointobjlist.h"
+ #include "virqemu.h"
+ #include "storage_source.h"
++#include "viruuid.h"
+ 
+ #define VIR_FROM_THIS VIR_FROM_QEMU
+ 
+@@ -2355,6 +2356,8 @@ qemuSnapshotRevertExternalPrepare(virDomainObj *vm,
+                                   virDomainDef *inactiveConfig,
+                                   qemuSnapshotRevertMemoryData *memdata)
+ {
++    unsigned char uuid[VIR_UUID_BUFLEN];
++    char uuidstr[VIR_UUID_STRING_BUFLEN];
+     size_t i;
+     bool active = virDomainObjIsActive(vm);
+     virDomainDef *domdef = NULL;
+@@ -2377,6 +2380,13 @@ qemuSnapshotRevertExternalPrepare(virDomainObj *vm,
+     if (virDomainMomentDefPostParse(&tmpsnapdef->parent) < 0)
+         return -1;
+ 
++    /* This name is only used to derive temporary overlay paths. */
++    if (virUUIDGenerate(uuid) < 0)
++        return -1;
++    virUUIDFormat(uuid, uuidstr);
++    g_free(tmpsnapdef->parent.name);
++    tmpsnapdef->parent.name = g_strdup(uuidstr);
++
+     /* Force default location to be external in order to create overlay files
+      * for every disk. In qemuSnapshotRevertValidate we make sure that each
+      * disk is regular file otherwise this would fail. */
+-- 
+2.51.0

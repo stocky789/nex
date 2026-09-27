@@ -1,0 +1,37 @@
+{
+  "summary": "Bounded Phase 6 Campaign A subset on disposable nested lab: Controller A removed, Core-local policy run-now and restore-as-new succeeded, fresh Controller B adopted same repo/policy/run/catalog IDs. Single-master only; Campaign B not run.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-campaign-a.md",
+    "docs/qa/2026-09-27-phase6-implementation-index.md",
+    "docs/changes/2026-09-27-phase6-campaign-a.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor disposable-lab QA evidence only; operator guide workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Exercised existing Core-local backup policy/run-now/restore and Controller inventory adoption contracts; no API shape change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records bounded nested-lab Campaign A subset progress; full three-host Campaign A/B and Phase 6 acceptance remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool backup repositories, policies, catalog, runs, and restored managed VMs persist on the pool master's Nex Core; fresh Controller B adopted them via host inventory/APIs without Controller A's database.",
+    "record": "pool-backup-repositories.json, pool-backup-policies.json, pool-backup-catalog/, pool-backup-runs/, managed VM journals on the pool master; NFS recovery-point payload under the registered repository mount"
+  },
+  "verification": {
+    "method": "Ran ignored-cache campaign-a.py against recovery-s0-core disposable lab: created Core policy pol-7e40601902b5, baseline and Controller-absent Run now (prun-a8be6982ba8c / prun-724d407e0086), stopped Controller A and moved its state aside, Core-local restore-as-new rstn-d599a64ade1b with source disks moved aside, started fresh Controller B and verified adoption of same repo/policy/schedule/catalog/run IDs. Campaign B not run. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-campaign-a.md",
+      "docs/qa/2026-09-27-phase6-product-backup-lab.md",
+      "docs/qa/2026-09-27-phase6-implementation-index.md"
+    ]
+  }
+}

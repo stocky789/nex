@@ -1,0 +1,32 @@
+{
+  "summary": "Record bounded Core API evidence for retained snapshot dependencies on storage, network and media, including the mixed-use storage-detach limitation.",
+  "paths": [
+    "docs/qa/2026-09-26-recovery-snapshot-resource-dependencies.md",
+    "docs/changes/2026-09-26-recovery-snapshot-resource-dependencies-qa.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This change records a disposable acceptance walkthrough and does not change operator steps or product behavior.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The walkthrough exercised existing Core and Controller API contracts; it made no API or implementation change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The evidence is partial and leaves the broader resource-lifecycle acceptance open, so no roadmap status changes.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "This documentation-only record adds no durable product state. The observed snapshot dependencies remain Core-owned as described in the implementation assessment."
+  },
+  "verification": {
+    "method": "Inspected the immutable runner progress and separate read-only master, native-disk, and storage-recheck artifacts from the disposable Core2 walkthrough. The initial harness stopped on its overly narrow storage-detach error assertion; a separate continuation performed one ordinary storage recheck and read-only reconciliation. No lab action was run for this documentation change. The QA report records the exact candidate/package versions, the successful expected retry/conflict assertions, the mixed-use detach limitation, and the marker/source distinction.",
+    "evidence": [
+      "docs/qa/2026-09-26-recovery-snapshot-resource-dependencies.md"
+    ]
+  }
+}

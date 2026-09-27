@@ -1,0 +1,56 @@
+{
+  "summary": "Integrate Core-owned stopped snapshot admission and bounded background dispatch through the existing durable command journal; acceptance remains open.",
+  "paths": [
+    "internal/agent/snapshot.go",
+    "internal/agent/snapshot_test.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/agent/queue_test.go",
+    "docs/API.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/guide/README.md",
+    "docs/BUG_LEDGER.md",
+    "internal/controller/managed.go",
+    "internal/controller/monitor.go",
+    "internal/controller/identity.go",
+    "internal/controller/snapshot_adoption_test.go",
+    "internal/agent/peer.go",
+    "internal/agent/peer_test.go",
+    "internal/vmhost/managed.go"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Documents the development host API, durable acceptance, scoped status, exact retry and unresolved-outcome behavior without claiming completed UI or native acceptance.",
+    "pages": [
+      "docs/guide/vm-snapshots.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "Authenticated host-local snapshot requests enter agent.Run for durable admission and execute independently of Controller. Existing Command/Result and owner peer contracts gain stopped snapshot metadata and exact settlement; API and machine references are updated in the coordinated contract slice.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Implements part of the existing recovery plan; no phase is closed.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Core state.json command journal retains accepted request IDs and outcomes. The executing Core managed journal owns native intent and capture detail; the master pool-vms.json owns snapshot descriptors and pending reservations. Fresh Controllers adopt the master inventory and owner-reported operation outcomes.",
+    "reason": "Snapshot execution and durable acceptance survive Controller outage and replacement."
+  },
+  "verification": {
+    "method": "Focused admission, dispatch, rehome, replay and ownership checks passed. Full agent/protocol race tests passed (agent 54.605s); Controller tests passed (35.872s), including catalog adoption and operation-ID collision regressions; localcore tests passed (7.985s, simulated agent channel). Final vmhost tests passed (9.768s) and race tests passed (14.352s), including symmetric memory/currentMemory normalization. Independent scoped reviews cleared authority, dispatch and validator corrections. Actual disposable host-API evidence covers durable acceptance, exact retry, changed-input conflict, stopped two-disk capture, exact master settlement, Core restart and replay with Controller offline, then fresh inventory/adoption by the same Controller. Earlier failed attempts are preserved in the linked QA record. The 14 focused runner tests passed after readiness/reporting corrections. A subsequent full `go test ./...` passed (agent 14.758s, Controller 35.822s, localcore 8.743s, vmhost 9.719s). Full Python suite passed (494 tests, one skip, 51.754s). Generated API references and repository privacy passed; the documentation gate passed for 139 uncommitted paths. A fresh Controller adopted the same pool/host/snapshot and succeeded operation; its original runner failed after enrollment, and an identity-bound read-only continuation was independently reviewed. The linked QA distinguishes its curated receipt from raw transcripts and records the missing old-Controller fingerprint baseline. Wider native matrix, multi-host replacement, browser workflow and phase acceptance remain open.",
+    "evidence": [
+      "internal/agent/snapshot_test.go",
+      "internal/agent/queue_test.go",
+      "docs/guide/vm-snapshots.md",
+      "internal/controller/snapshot_adoption_test.go",
+      "docs/qa/2026-09-26-recovery-core-api-preparation.md"
+    ]
+  }
+}

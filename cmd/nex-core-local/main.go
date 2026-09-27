@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"nex.local/nex/internal/agent"
 	"nex.local/nex/internal/localcore"
+	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 	"os"
 	"os/signal"
@@ -19,6 +20,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "rebuild-backup-catalog" {
+		if err := runRebuildBackupCatalog(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cluster-iscsi-session" {
 		if err := runClusterISCSISession(os.Args[2:], os.Geteuid()); err != nil {
 			log.Fatal(err)
@@ -115,6 +122,35 @@ func main() {
 	if err = server.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func runRebuildBackupCatalog(args []string) error {
+	flags := flag.NewFlagSet("rebuild-backup-catalog", flag.ContinueOnError)
+	dir := flags.String("agent-state-dir", "/var/lib/nex-core-agent", "private agent identity and journal directory")
+	repoID := flags.String("repository-id", "", "backup repository id to rebuild from published manifests")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("rebuild-backup-catalog accepts no positional arguments")
+	}
+	if !protocol.ValidSnapshotOperationID(*repoID) {
+		return fmt.Errorf("repository-id is required")
+	}
+	store, err := agent.OpenStore(*dir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	imported, err := agent.RebuildPoolBackupCatalogFromRepository(store, *repoID)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"repository_id": *repoID,
+		"imported":      len(imported),
+		"points":        imported,
+	})
 }
 
 var (

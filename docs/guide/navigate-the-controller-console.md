@@ -2,16 +2,17 @@
 
 ## Status
 
-Development build 0.4.12 of Nex Controller. The console replaces the earlier desktop layout
+Development build 0.4.13 of Nex Controller. The console replaces the earlier desktop layout
 (toolbar, resource tree, detail tabs and bottom task strip) with a labelled rail, a top bar,
 filterable lists with slide-over panels, a pool **Overview**, operational **Storage** and
 **Networks** screens and pool **Settings**. Every workflow reachable before remains reachable;
 the other guide pages name the screens used here.
 
 Some screens show features whose Nex Core phase has not landed. They keep their real layout with
-disabled controls and say which phase brings them: snapshots (Phase 5), backups (Phase 6), live
-migration (Phase 7), high availability (Phase 9) and container services (Phase 10). None of those
-features is available yet.
+disabled controls and say which phase brings them: restore tests (later
+Phase 6), live migration (Phase 7), high availability (Phase 9) and container services
+(Phase 10). Snapshot controls and the S4 backup repository / Back up now / restore-as-new
+flows are available in matching development builds.
 
 ## Prerequisites
 
@@ -40,8 +41,10 @@ features is available yet.
    - **Networks** (`#/networks`) — the pool's guest networks with **Name**, **VLAN**, **Uplink**,
      **Host access**, **VMs**, **Status** and **Actions**. The **VMs** count links to the VM list
      filtered to that network (`#/vms?network=<name>`).
-   - **Backups** (`#/backups`) — not available yet: every control is disabled and the screen reads
-     *Available with backups (Phase 6).*
+   - **Backups** (`#/backups`) — recovery points with VM/repository filters, **Back up now**,
+     **Restore as new**, **Replace**, **Protect**, **Test restore**, and **Policies**.
+     covers schedules and retention; test-restore recording remains gated. Register destinations under
+     **Settings** → **Backup repositories**.
    - Pinned at the bottom: **Tasks** (`#/tasks`), **Events** (`#/events`) and **Settings**
      (`#/settings`, which opens its **Overview** section).
 
@@ -93,7 +96,8 @@ features is available yet.
    - **Placement**: one column per host, with its role and each VM as a block sized by memory.
      A host with more than twelve VMs shows the first twelve and a **+N more** link to its panel.
    - **Recent tasks**, with a **History** link to **Tasks**.
-   - **Backups, last 14 nights** — not available yet (Phase 6).
+   - **Backups, last 14 nights** — overview chart remains gated; use **Backups** for recovery
+     points and **Settings** → **Backup repositories** for destinations.
    - **Resilience**: **Survives loss of one host** is not available yet (Phase 9); **Fencing**,
      **Shared storage** and **Master** are reported now.
 

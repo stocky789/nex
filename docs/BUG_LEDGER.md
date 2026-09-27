@@ -7997,3 +7997,1895 @@ Append resolved defects with their evidence and the approach to avoid.
   tests without skips; `bash installer/check.sh` passed. No forge run is claimed.
 - Avoid: removing the second pre-disk network check, guessing a replacement DNS server,
   or hiding Debian's menu while allowing another installer component to run.
+
+
+## BUG-0581 — Documentation gate retained superseded Controller backup ownership
+
+- Date: 2026-09-25. Status: fixed; local regression passed.
+- Symptom: a new assessment could declare pool backup jobs/history Controller-owned
+  despite the Core ownership decision.
+- Root cause: the closed-exception list and its name matcher still accepted backup/restore.
+- Fix: remove that exception and reject explicit recovery-job wording even alongside a
+  permitted Controller responsibility. Semantic ownership still requires source review.
+- Regression: the updated checker test failed against the original matcher and passed
+  after the fix. Independent review found omitted execution, verification and run-history
+  terms; added mixed-exception regressions failed before extending the same matcher and
+  passed afterward. `python3 -m unittest discover -s tests -p 'test_check_docs.py'` passed
+  29 tests; the privacy suite passed one test. The forge documentation workflow runs
+  the focused suite on pushes and pull requests; the existing Python suite also includes
+  it. No remote CI run is claimed. Historical Controller-owned records were reviewed
+  without changing their implementation claims.
+- Avoid: treating backup/restore wording as permission to store pool state in Controller,
+  or treating a text matcher as proof of architectural compliance.
+
+## BUG-0582 — Native external snapshot deletion conflicts with backing-file AppArmor policy
+
+- Date: 2026-09-25. Status: reproduced in the disposable recovery lab; backport validation open.
+- Symptom: libvirt `11.3.0-3+deb13u3` refused stopped external snapshot deletion
+  with a block-commit permission error, leaving `snapshotDeleteInProgress` metadata.
+- Root cause: the generated policy contained both an explicit backing-file write denial
+  and a write grant required by consolidation; AppArmor's explicit denial prevailed.
+  BIOS disk probes and a real Secure Boot/vTPM guest reproduced the failure.
+- Candidate fix: test upstream commit `7b889af2d235d3fadfc172f371f02df0b74e40f2`
+  against the matching Debian source. Its helper flag suppresses the explicit denial
+  without granting writes; a separate native write grant is still required.
+- Regression: the failing candidate operations and artifacts are preserved. The runnable
+  `tests/integration/libvirt_readonly_policy.py` rejects the original helper's explicit
+  denial and passes against the patched binary, preserving readonly permissions.
+  The build's upstream suite passed 158 tests with one expected failure and one skip.
+  A matched patched package passed four fresh stopped BIOS lifecycle cases (rapid
+  and paced, one and two disks), including retained-point markers, deletion of all
+  three points and native domain reopening. These image-only cases do not prove
+  guest OS recovery. On the canonical package, exact failed one- and two-disk deletions
+  subsequently succeeded without metadata edits: the parent in-progress flag cleared,
+  current and retained-point chains remained readable, and retained markers matched.
+  The firmware/storage matrix, delivery integration and CI coverage
+  remain outstanding.
+- Avoid: disabling AppArmor, granting blanket write access, clearing native in-progress
+  metadata manually, or counting command acceptance as completed consolidation.
+
+## BUG-0583 — Rapid native snapshot reverts reuse an overlay filename
+
+- Date: 2026-09-25. Status: reproduced in the disposable recovery lab; local fix validation open.
+- Symptom: repeated external snapshot revert can refuse with an existing-file error.
+  Current disk markers survived the observed refusal; retained-point recovery was not
+  established by that observation alone.
+- Root cause: libvirt 11.3 generates the temporary revert overlay name from whole
+  seconds, so successive reverts can select the same path. Its existing-file check
+  correctly refuses to overwrite the earlier overlay.
+- Candidate fix: give only the temporary revert definition a fresh UUID name, retaining
+  its timestamp and native target validation. User snapshot/checkpoint names are unaffected.
+- Regression: the immediate one- and two-disk cases in
+  `tests/integration/recovery_s0.py` reproduced the collision; paced cases advanced beyond
+  it. Patched immediate one- and two-disk cases passed, asserting fresh canonical
+  UUID overlay names, retained-point markers, subsequent capture, deletion and
+  native domain reopening. Delivery integration and CI coverage remain outstanding.
+- Avoid: deleting the colliding overlay, retrying without reconciliation, or hiding a
+  name collision with arbitrary sleeps in Core or Controller.
+
+## BUG-0584 — AppArmor helper omits the remainder of a partial backing chain
+
+- Date: 2026-09-25. Status: reproduced; native correction under validation.
+- Symptom: reopening the backup fixture's external snapshot chain fails opening its
+  deepest base image, despite readable file permissions. Every captured transient
+  AppArmor profile omits that base.
+- Root cause: libvirt 11.3's helper skips metadata probing when any explicit backing
+  prefix exists. Libvirt supports partial prefixes without an empty terminator;
+  QEMU follows the remaining image headers, but the helper grants only the prefix.
+- Regression evidence: the actual helper's dry-run omits the deepest base for a
+  three-layer partial definition, includes it for a complete definition, and correctly
+  omits it when an explicit empty backing-store terminator suppresses probing.
+  The minimal partial-chain helper correction passes the same check while preserving
+  explicit termination. The matched source build, upstream suite and container runtime
+  check passed. A manual native walkthrough after the exact package reinstall
+  reopened the preserved source, verified both guest markers, completed a full
+  backup, and restarted it again. Only a curated summary of those post-install
+  commands was retained; source identity linkage is owner-reported, not independently
+  established from raw output. A logged native reopen check remains pending.
+- Avoid: wildcard AppArmor grants, changing disk permissions without evidence, or
+  treating a supported partial chain as malformed to conceal a missing access rule.
+
+## BUG-0585 — Autostart unit test requires workstation-global storage
+
+- Date: 2026-09-25. Status: corrected locally; independent review passed.
+- Symptom: `TestAutostartPassAttemptsLocalStorageGuests` fails where its hard-coded
+  local storage directory is absent. Core correctly refuses unavailable storage.
+- Root cause: the fixture conflates local-VM autostart dispatch with native host
+  storage admission and assumes a host-global directory exists.
+- Fix: use a test-local directory to verify per-boot dispatch and fail-closed refusal;
+  separately verify a disk-backed local start through vmhost's existing private
+  storage-readiness test seam. Production validation is unchanged.
+- Regression: focused normal and race tests passed in agent and vmhost, followed by
+  `go test ./internal/agent -count=1` and `go test ./internal/vmhost -count=1`.
+  Independent review reran the focused normal/race checks and verified dispatch,
+  refusal and successful post-readiness start assertions.
+  A subsequent full race-enabled run passed agent, vmhost, localcore and controller.
+  Existing forge Go suites run these packages; no remote CI run is claimed.
+- Avoid: creating a global storage directory for a unit test, loosening path ownership
+  checks, or exposing a runtime bypass solely to make the fixture pass.
+
+## BUG-0586 — Multi-disk parent snapshot deletion loses a temporary write grant
+
+- Date: 2026-09-25. Status: reproduced; correction and recovery validation open.
+- Symptom: deleting the oldest of three external snapshots succeeds with one disk,
+  but a two-disk case loses its QEMU monitor after a permission error. The failed
+  delete advances target contents and removes one backing path still needed by a
+  retained point. Current disk markers remain readable; blind retry is unsafe.
+- Source diagnosis: snapshot deletion launches per-disk commits before waiting.
+  Successful first-disk cleanup revokes its removed chain, triggering a domain-wide
+  AppArmor profile rebuild that can drop the other disk's temporary write grant.
+  Timestamped generated rule-file samples show that grant changing from writable
+  to read-only before QEMU reports permission denied. This strongly supports the
+  race; the samples do not directly observe the loaded kernel profile.
+- Regression evidence: the three-point one/two-disk controls and exhaustive stopped
+  marker/chain reconciliation are retained by `tests/integration/recovery_s0.py`.
+  The earlier 16-point failure is also preserved. The separate 32-point JSON-depth
+  refusal is not evidence for this race. The serialized per-disk correction passed
+  the matched package build and upstream suite. Fresh one/two-disk parent controls
+  passed with an enforcing QEMU profile observed during parent consolidation,
+  followed by retained-point checks, remaining deletions, clear flags and QEMU
+  reopen. The ordinary four-case lifecycle also passed; unlink-only cleanup steps
+  do not require a QEMU process observation. Interruption recovery remains pending;
+  no safe failed-operation retry is claimed.
+- Avoid: broad writable backing-file permissions, manual metadata deletion, blind
+  retry of asymmetric disk chains, or accepting a successful leaf-only lifecycle
+  as proof that parent consolidation is safe.
+
+## BUG-0587 — Deep backing chains exceed the QMP JSON parser depth
+
+- Date: 2026-09-25. Status: corrected; compiled and native deep-chain regressions passed.
+- Symptom: a 32-point external snapshot chain refuses native deletion with
+  `failed to parse JSON: nesting too deep`; all recorded points and markers
+  remained intact in that run.
+- Source diagnosis: libvirt uses json-c's default depth of 32 for QMP responses.
+  Startup disk refresh calls `query-block`, whose image metadata recursively
+  describes backing images even though the consumer only needs top-level fields.
+  The installed QEMU 10.0.13 does not support `query-block`'s later `flat` option.
+- Regression evidence: the preserved 32-point probe separates this refusal from
+  BUG-0586's shallow multi-disk partial deletion. A bounded monitor-only parser
+  correction passed the compiled monitor suite in the six-patch `+nex2` build.
+  The exact installed candidate then passed `recovery_s0.py --stress-point-chain 32`
+  with two disks: parent deletion, all retained marker/chain/flag checks, the
+  remaining 31 deletions and final QEMU reopen. The existing forge libvirt job
+  runs the compiled suite; no remote CI execution is claimed.
+- Avoid: sending unsupported monitor arguments, globally allowing unbounded JSON
+  nesting, or concealing an untested depth restriction behind a capability claim.
+
+## BUG-0588 — Interruption probe rejects native block-commit progress
+
+- Date: 2026-09-25. Status: parser corrected; native progress recognized in the interruption campaign.
+- Symptom: the probe stopped before its planned daemon crash because libvirt's
+  active `Block Commit: [ 0.00 %]` response was classified as unknown.
+- Root cause: the fixture parser expected a different CLI progress label rather
+  than the observed libvirt 11.3 output, then inspected only stdout even though
+  native progress arrived on stderr. Its fail-closed behavior correctly prevented
+  the daemon signal and preserved the test domain.
+- Fix: recognize the observed `Block Commit` progress on either output stream
+  while continuing to reject unknown responses and distinguish explicitly inactive
+  jobs. No job query failure can authorize image reads or a crash injection.
+- Regression: `python3 tests/test_recovery_s0_interrupt.py` failed on the exact
+  recorded progress text and stderr-only response before their respective
+  corrections and passed afterward. The existing forge Python discovery runs this
+  regression. Read-only native reconciliation
+  found that the original deletion had completed coherently; this was not a
+  daemon-crash test and is not counted as interruption recovery.
+- Avoid: treating any nonempty CLI output as an active job, or treating query
+  failure as proof that a job is absent.
+
+## BUG-0589 — Snapshot deletion remains pending after libvirt daemon interruption
+
+- Date: 2026-09-25. Status: native restart cancellation verified; separate retained-image failure is BUG-0590.
+- Symptom: interrupting the matched four-patch libvirt daemon during a two-disk
+  oldest-point deletion left the synthetic domain paused after daemon restart.
+  The native commit remained pending with all three snapshot records retained.
+- Evidence: the disposable interruption probe observed active commit progress
+  before SIGKILL and a different daemon PID after restart. Subsequent read-only
+  QMP queries showed copied bytes equal total bytes, `status=pending`,
+  `auto-finalize=false` and `auto-dismiss=false`. Native persisted status retained
+  the commit and its delete-committed-images flag. The probe preserved the
+  fixture, skipped image reads and did not retry deletion.
+- Root cause under review: the synchronous snapshot-delete caller normally
+  finalizes this non-active commit; daemon restart does not resume that caller.
+  Stopped deletion omits the marker used by native restart cancellation.
+  A subsequent explicit native asynchronous abort cleared the pending job
+  without forced cancellation. After verifying no jobs and stopping the synthetic
+  domain, retained B/C/current chains and data passed; the target A marker on
+  the first disk no longer matched. One explicitly reconciled retry of the
+  original deletion then succeeded, preserving B/C/current data and reopening
+  through QEMU. The six-patch candidate subsequently persisted the marker and
+  canceled native jobs after restart; the same run exposed BUG-0590 before retry.
+  Existing per-disk cleanup can unlink images before snapshot metadata removal,
+  so manually finalizing alone is not established as safe recovery.
+- Regression: `tests/integration/recovery_s0_interrupt.py` reproduces the
+  unresolved result on the disposable package-based candidate. This campaign
+  is not yet run by CI; no fix or passing recovery regression is claimed.
+- Avoid: treating complete byte counters as a completed deletion, retrying
+  snapshot deletion blindly, or reading images while a native job remains active.
+
+## BUG-0590 — Interrupted multi-disk deletion removes a retained snapshot image
+
+- Date: 2026-09-25. Status: reproduced on the six-patch candidate; correction open.
+- Symptom: a daemon crash during the second disk's oldest-point commit left
+  retained point B's first disk unreadable after native cancellation and shutdown.
+  Current disk data remained readable. The probe preserved the fixture and
+  refused to retry deletion.
+- Evidence: the restart marker was present, the daemon restarted, and all native
+  jobs became terminal. Snapshot records A/B/C remained while B's first saved
+  source could not be opened. Remaining-point marker/chain validation failed,
+  so `reconciled_retry_ready` was false.
+- Root cause under review: the first disk's successful commit removes its image
+  before the snapshot operation updates the full retained metadata graph.
+  The stopped-deletion marker fix closes the orphaned-job issue but cannot make
+  this earlier per-disk unlink atomic with the later metadata update.
+- Regression: the six-patch native interruption probe reproduced this failure;
+  no passing correction or CI coverage is claimed. Required validation includes
+  interruption after one disk commits and before the remaining disks finish.
+- Avoid: treating terminal native jobs or clear delete flags as proof that every
+  retained point is usable, or retrying after a missing retained source.
+
+## BUG-0591 — VM deletion omitted ownership checks for retained disks
+
+- Date: 2026-09-25. Status: corrected in the working tree; scoped independent review passed.
+- Symptom: deleting a VM and its disks could unlink a disk detached by an earlier
+  update after another domain had adopted that retained disk.
+- Root cause: deletion verified the current VM chain, then expanded the wipe set
+  with historical retained paths without checking ownership of those added files.
+- Fix: validate the complete journaled wipe set against its original registered
+  storage and file identity, and inspect other domains' full chains before
+  undefine and wipe, including resumed deletion after the VM is undefined.
+- Regression: `TestDeleteDiskSetRejectsForeignReferenceToRetainedDisk` in
+  `internal/vmhost/managed_chain_test.go` exercises a foreign backing reference
+  omitted from partial XML and verifies refusal before effects with files intact.
+  `go test -race -timeout 20m ./internal/vmhost` passed. Existing forge Go tests
+  include this package; no remote CI run or native retained-disk test is claimed.
+- Avoid: treating an old journal's ownership claim as proof that a retained disk
+  is still exclusive, or validating only the current attached disk heads.
+
+## BUG-0592 — Capacity-failure probe could fail during source checks or cleanup
+
+- Date: 2026-09-25. Status: corrected; focused checks and corrected native invocation passed.
+- Symptom: ENOSPC-only probes reached a genuine unsuccessful backup but stopped
+  before a complete report, first because a running source was assumed to be paused,
+  then because cleanup used a path initialized only in the full-backup branch, and
+  finally because a normalized state was compared with a state-plus-reason string.
+- Fix: initialize scratch paths before either execution branch and classify the
+  observed source state consistently. Accept only known running/no-error or
+  paused/I/O-error cases with explicit source checks; preserve failed backup files.
+- Regression: the focused backup harness unit checks exercise source-state handling
+  and cleanup preservation. A separately captured identity-bound native continuation
+  compared original failed-output hashes before and after source writes and graceful
+  restart; both source disk markers matched and all output hashes remained unchanged.
+  The subsequent corrected ENOSPC-only native invocation passed independently,
+  verifying unsuccessful job classification, source writes, unchanged failed-output
+  hashes and successful scratch cleanup. All 10 focused unit tests passed.
+  Native end-to-end regression execution in CI remains outstanding.
+- Avoid: assuming every destination ENOSPC pauses the source, using full-run-only
+  variables in shared cleanup, or reporting a repaired continuation as a fresh pass.
+
+## BUG-0593 — Recovery inventory rejected a fresh Core journal directory
+
+- Date: 2026-09-25. Status: corrected in the working tree.
+- Symptom: the S1 recovery observation rejected ordinary inventory publication on
+  a host without a managed-VM journal directory, preventing safe rejoin completion.
+- Root cause: reservation enumeration treated the absent initial directory as an
+  unreadable existing journal instead of an empty inventory.
+- Fix: return no reservations only when the journal directory itself is absent;
+  existing unreadable or malformed journals still fail closed.
+- Regression: `TestPoolVMRecoveryReservationsOnFreshHost` passed. The initially
+  failing `TestReturningOldMasterRejoinsSafely`,
+  `TestRestrictedHostKeepsReportingAndStopping`,
+  `TestPublishPoolVMInventoryRefreshesStaleMemberAndAcceptsPartialSnapshot`, and
+  `TestSingleHostPoolMasterPublishesSharedVMInventory` passed together under
+  `go test -race -timeout 5m ./internal/agent -run` with those exact test names.
+  Existing forge Go jobs execute these suites; remote CI was not run.
+- Avoid: requiring a recovery journal on hosts that have never performed a managed
+  operation, or treating every journal read failure as empty state.
+
+## BUG-0594 — Foreign external data files escaped disk ownership checks
+
+- Date: 2026-09-25. Status: corrected in the working tree; independent review passed.
+- Symptom: a foreign qcow2 image could use an owned disk as its external data file
+  without the shared exclusivity check detecting the relationship.
+- Root cause: inactive domain XML can omit detected data-file metadata, and the
+  backing-chain parser discarded that metadata before comparing file identities.
+- Fix: apply the existing unsupported-metadata check to the captured qemu-img
+  chain records before reducing them to paths; inspectable foreign raw disks remain valid.
+- Regression: `TestExclusiveDiskFindsExternalDataFileOmittedFromDomainXML` failed
+  before the fix and passed afterward. `go test -race ./internal/vmhost` and
+  `go test ./internal/agent` passed; independent focused checks also passed.
+  Existing forge Go jobs run these packages; no remote CI or native alias test is claimed.
+- Avoid: treating domain XML or a list of backing filenames as a complete account
+  of an image's storage dependencies.
+
+## BUG-0595 — Managed chain validation ignored extra writable disks
+
+- Date: 2026-09-25. Status: corrected in the working tree; independent review passed.
+- Symptom: chain validation accepted a domain containing writable disks outside
+  the managed journal's expected target set.
+- Root cause: verification searched for each expected target without checking
+  whether the native definition contained additional or duplicate writable targets.
+- Fix: require an exact unique target/source mapping before validating chains;
+  unsupported writable device types are refused, and explicitly read-only
+  disks and CD-ROM media do not expand the writable set.
+- Regression: the extra-disk case in
+  `TestVerifyManagedDiskChainsBindsXMLJournalAndRegisteredStorage` failed before
+  the fix. `TestVerifyManagedDiskHeadsRequiresExactUniqueWritableTargets` and
+  `go test -race -timeout 20m ./internal/vmhost` passed afterward. Existing forge
+  Go jobs execute this package; no remote CI or native extra-disk test is claimed.
+- Avoid: interpreting verification of every expected disk as proof that every
+  actual writable disk is covered.
+
+## BUG-0596 — Promoted consolidation probe misread retained state and chain output
+
+- Date: 2026-09-25. Status: corrected in the working tree.
+- Symptom: the promoted public-consolidation probe expected the pre-commit base
+  marker when checking a retained snapshot's saved source after consolidation.
+  Tracked native attempts also stopped on a chain-result type mismatch, a
+  shadowed QMP helper during reopen, and a stale post-point image scan after
+  reverting to an older point. Each fixture was preserved; the reopened synthetic
+  guest was stopped only after identity and terminal-job checks.
+- Root cause: its marker helper selected the original base state rather than
+  the deleted overlay's state, which the completed commit installs in that base.
+  A separate call passed a command-observation object where a chain list was expected;
+  a local result variable shadowed its helper, and a reordered cleanup scan assumed
+  abandoned post-point heads would still exist after an older-point revert.
+- Fix: use the post-commit retained-point mapping, pass the captured image list
+  to the chain reader, avoid helper shadowing, and keep the proven reference-scan/
+  unlink sequence before optional retained-point reverts. Test the actual result shapes.
+- Regression: an isolated reproduction of the old helper returned `0x10` for
+  the retained saved source instead of `0x20`; the corrected mapping test in
+  `tests/test_recovery_s0_consolidate.py` passes. Existing forge Python jobs run
+  this suite. After the three preserved failures, a fresh tracked normal run
+  passed commits, metadata/data/chain checks, reopen, reference-checked unlink
+  and both retained-point reverts. Native end-to-end regression execution in CI
+  remains outstanding.
+- Avoid: making a mocked expectation mirror the helper without comparing it
+  to the captured native disk-state transition.
+
+## BUG-0597 — Native autostart could bypass Core recovery admission
+
+- Date: 2026-09-25. Status: corrected in the working tree; native reboot acceptance open.
+- Symptom: libvirt could start a managed VM after a daemon or host restart without
+  consulting a pending Core recovery reservation; local-storage starts also bypassed
+  the current master's owner admission.
+- Root cause: desired Core autostart intent was mirrored to libvirt's independent
+  autostart flag, and admission classified only shared-storage guests as pool-owned.
+- Fix: always disable and explicitly verify native autostart for managed VMs;
+  retain desired autostart in Core and use master admission for Core boot attempts
+  and managed starts. Emergency shutdown and force-stop remain available.
+- Regression: `TestSetManagedVMAutostartAlwaysSuppressesWithoutRewritingTheDefinition`
+  and `TestSetManagedVMAutostartRefusesUnconfirmedNativeFlag` pass in
+  `go test -race -timeout 20m ./internal/vmhost`. Agent checks
+  `TestAutostartPassRequiresOwnerAdmissionForLocalStorageGuests`,
+  `TestAutostartPassSkipsVMWhenNativeSuppressionIsUnconfirmed` and
+  `TestLocalStorageStartUsesRecoveryAdmissionWhileEmergencyStopSkipsMaster`
+  pass in focused agent runs and are included in the existing forge Go suite.
+  No remote CI or native reboot walkthrough is claimed.
+- Avoid: enabling a second boot mechanism that cannot read Core ownership and
+  recovery reservations, or interpreting an absent autostart observation as disabled.
+
+## BUG-0598 — Startup pool rehome could race snapshot reconciliation
+
+- Date: 2026-09-25. Status: corrected in the working tree; focused checks passed.
+- Symptom: startup could change pool identity or rewrite managed VM scope while
+  an accepted snapshot still needed recovery under its original owner identity.
+- Root cause: local service rehome ran concurrently with the embedded agent's
+  state owner, and pending snapshot commands did not fence identity rehome.
+- Fix: finish startup rehome before starting the embedded agent and refuse
+  identity rehome while snapshot commands are pending or need attention.
+- Regression: `TestPoolRehomeRefusesUnsettledSnapshot` checks that both unresolved
+  statuses retain the old identity, pending marker and durable VM owner records.
+  The focused agent suite passed, including this test; the existing forge Go
+  suite includes it. No native rehome walkthrough or remote CI run is claimed.
+- Avoid: adding another concurrent writer to the agent state or clearing a
+  recovery fence because the Controller or original request disconnected.
+
+## BUG-0599 — Snapshot history adoption could hide colliding Core request IDs
+
+- Date: 2026-09-26. Status: corrected in the integration working tree; regression checks passed.
+- Symptom: two hosts could accept the same caller-chosen snapshot operation ID,
+  but Controller history retained only the first host's operation.
+- Root cause: passive history adoption treated the host-local operation ID as
+  a globally unique Controller operation ID.
+- Fix: derive snapshot history IDs deterministically from the Core host and
+  original operation ID, retaining that original ID in the existing adoption
+  request key. Core snapshot identities and status lookup remain unchanged;
+  a fresh Controller reconstructs the same projection from host observations.
+- Regression: `TestSnapshotOutcomeIDsAreScopedToCoreHost` covers matching IDs
+  on different hosts and a same-host ID equal to an earlier derived history ID.
+  `go test ./internal/controller -count=1` passed (37.041s), including this
+  regression. The existing forge Controller Go suite runs it. No remote CI run
+  is claimed.
+- Avoid: treating a caller-provided host-local identity as globally unique,
+  or keeping a Controller-only identity mapping needed for recovery.
+
+## BUG-0600 — Snapshot settlement retries changed their own evidence identity
+
+- Date: 2026-09-26. Status: corrected during development; journal regression passed.
+- Symptom: a lost master settlement reply could leave an already-settled capture
+  unable to acknowledge the exact receipt on retry.
+- Root cause: the owner hashed its terminal journal as settlement evidence, then
+  rewrote the journal's result/error after a failed reply. The retry's hash no
+  longer matched the receipt already retained by the master.
+- Fix: keep terminal native journal bytes unchanged until exact master acknowledgement.
+  Return uncertain status through the agent operation record; save native terminal
+  settlement only after the matching receipt is confirmed.
+- Regression: `TestManagedSnapshotSettlementLostReplyReusesImmutableReceipt`
+  records evidence, simulates a lost reply, checks byte-for-byte journal stability,
+  and accepts only identical evidence on retry. `go test -race ./internal/vmhost
+  -count=1` passed (14.462s). The existing forge Go suite includes this test;
+  it is journal-level simulation, not a native network-loss walkthrough.
+- Avoid: including mutable retry diagnostics in an immutable receipt identity,
+  or interpreting a generic successful inventory response as settlement proof.
+
+## BUG-0601 — Snapshot preflight cleanup failure appeared terminal
+
+- Date: 2026-09-26. Status: corrected during development; focused and full vmhost tests passed.
+- Symptom: an oversized snapshot intent could report `failed` while a retained native
+  preflight journal continued to block the VM, preventing the same request from reconciling.
+- Root cause: the journal-size refusal ignored cleanup errors, unlike adjacent preflight
+  failures. The agent treated the reported failure as terminal despite the retained fence.
+- Fix: share preflight failure handling across the size, observation and intent-save
+  refusals; unsuccessful cleanup reports `needs_attention` with both error causes.
+  Successful cleanup retains the original failure result.
+- Regression: `TestManagedSnapshotPreflightCleanupFailureNeedsAttention` induces cleanup
+  refusal with a valid reserved journal, checks the nonterminal result and both causes,
+  and verifies that the journal survives. `go test ./internal/vmhost -run
+  'ManagedSnapshotPreflight' -count=1` and `go test ./internal/vmhost -count=1`
+  passed (full suite 10.417s). The existing forge Go suite runs the regression.
+  This tests the shared cleanup outcome, not a native oversized-record or power-loss campaign.
+- Avoid: discarding cleanup errors and reporting a terminal result while durable exclusion
+  state may remain; never remove an acknowledged reservation as preflight cleanup.
+
+## BUG-0602 — Definitive snapshot admission failures retained an unresolved fence
+
+- Date: 2026-09-26. Status: corrected during development; native API denial walkthrough pending.
+- Symptom: a duplicate name or full snapshot catalog returned the same uncertain admission
+  error as a lost reply, leaving an otherwise valid request held indefinitely.
+- Root cause: generic reservation errors did not prove whether the master had reserved the
+  operation. Simply clearing the fence on HTTP 409 would also permit delayed reserve requests
+  to arrive after the owner had already abandoned their operation.
+- Fix: persist a bounded refusal on the ordinary exact reservation, and settle it through
+  existing `failed-before-effects` evidence without native capture. Bind the owner's durable
+  command order to the reservation; the last settlement fences older requests from that owner,
+  including after intervening operations or execution-epoch changes, without an unbounded
+  list of rejected request IDs. Unknown responses remain unresolved.
+- Regression: `TestDeniedSnapshotAdmissionReplaysAndStaleOwnerOrderCannotReacquire` covers
+  exact denied replay and a delayed request after a later settlement/epoch advance;
+  `TestFullSnapshotCatalogDenialFitsFailedSettlementHeadroom` checks the full-catalog case.
+  `TestManagedSnapshotAdmissionDenialNeverRunsNativeAndReplaysSettlement` starts before the
+  first reserve reply and checks no native capture plus exact settlement retry after a lost ACK.
+  Full agent/protocol race tests passed (agent 54.605s), full vmhost race tests passed
+  (14.315s), and all 74 API contract tests passed. Existing forge Go/Python suites run these
+  checks. Master/native callbacks are simulated here; no native API denial result is claimed.
+- Avoid: treating an arbitrary conflict or timeout as proof that no reservation exists,
+  returning an executable ACK when replaying a denial, or assuming one retained receipt alone
+  prevents older requests from reacquiring after subsequent settlements.
+
+## BUG-0603 — Snapshot preflight rejected valid local repositories
+
+- Date: 2026-09-26. Status: corrected during development; native success rerun pending.
+- Symptom: the first stopped two-disk Core API attempt failed with `VM storage identity
+  changed during snapshot preflight`, before snapshot metadata or disk changes appeared.
+  Exact request replay and changed-input refusal worked while Controller was offline.
+- Root cause: snapshot preflight required a nonempty typed storage identity. Existing local
+  inspection instead supplies a path/statfs identity string and leaves typed identity empty;
+  the blanket comparison therefore rejected valid local repositories.
+- Fix: bind snapshots to the existing verified local path/filesystem identity, preserving
+  registration generation checks. Recheck the same identity and generation when producing
+  settlement evidence, so a replacement mount with lookalike disk paths cannot release the
+  operation. Reject missing, inconsistent or unverified identities.
+  Keep typed identity verification for other backends; marker-backed SMB hashes omit the
+  reconnect-varying filesystem diagnostic while retaining its stable identity.
+- Regression: snapshot identity checks cover empty-typed local access, changed path or
+  filesystem identity, unexpected typed local identity, NFS mismatch, and stable SMB markers.
+  `go test ./internal/vmhost -count=1` passed (9.609s); `go test -race -timeout 20m
+  ./internal/vmhost` passed (14.315s). The existing forge Go suite runs these tests.
+  Full vmhost and race checks passed again after adding settlement-time identity/generation
+  replacement regressions; independent review found no remaining issue in that change.
+  The [actual failed API run](qa/2026-09-26-recovery-core-api-preparation.md) preserves the
+  reproduction and unchanged two-disk evidence; these unit checks do not prove a successful
+  native capture after the fix.
+- Avoid: assuming every supported storage backend populates the same identity representation,
+  accepting empty identity as a wildcard, or treating a statfs FSID as a filesystem UUID.
+
+## BUG-0604 — Snapshot reconciliation rejected identical native memory definitions
+
+- Date: 2026-09-26. Status: both comparisons corrected; same-operation native capture and settlement verified.
+- Symptom: stopped snapshot creation acquired its master reservation, then reported
+  `needs_attention` because neither disk projection appeared valid. The original disks,
+  markers and native domain remained unchanged; the reservation stayed held.
+- Root cause: the shared domain validator converted observed KiB memory to MiB but
+  compared it to an unconverted expected value. Reconciliation supplies native XML on
+  both sides, so an unchanged KiB definition failed the resource comparison.
+  The first correction covered `memory` but missed the same assumption in
+  `currentMemory`, which libvirt adds to native XML. The same-operation r4 retry
+  therefore remained `needs_attention`, with no native snapshot effects observed.
+  Preflight and current XML were byte-identical; an earlier differing hash came from
+  stripping output whitespace, not a domain change.
+- Fix: compare both memory quantities in KiB without truncation, rejecting negative,
+  overflowing or unsupported values. An omitted unit uses the
+  [libvirt KiB default](https://libvirt.org/formatdomain.html#memory-allocation).
+  Preserve the original snapshot intent, operation ID and master reservation.
+- Regression: `TestValidateManagedDefinitionAcceptsIdenticalKiBMemory` failed before
+  the fix and now checks identical native XML, equivalent KiB/MiB quantities, omitted
+  units, changes of one KiB in either direction, and unsupported units. Full
+  `go test ./internal/vmhost -count=1` passed (10.490s); `go test -race -timeout 20m
+  ./internal/vmhost` passed (14.331s). Initial independent review also missed the
+  second comparison; those results did not establish the complete fix. The extended
+  regression now includes native `currentMemory`; full vmhost tests passed (9.768s)
+  and race tests passed (14.352s). A temporary local test also accepted the actual
+  captured native XML against itself; the private fixture/test was not retained in
+  source. Final independent review found no remaining validator issue. The existing
+  forge Go suite runs the permanent regression. A temporary on-host diagnostic was blocked by the test
+  harness's native-command guard and provides no runtime observation evidence.
+- Native check: the r5 candidate completed the original reserved operation with Controller
+  offline. Independent readback confirmed settled master/native journals, one exact catalog
+  point, both head-to-original-base chains and complete marker reads, with the VM still stopped.
+  The subsequent restart test stopped on a runner readiness error; post-restart replay remains
+  a separate outstanding acceptance check.
+- Avoid: normalizing only one side, truncating away quantity differences, or bypassing
+  domain validation to clear an unresolved snapshot reservation.
+
+## BUG-0605 — Disposable AppArmor guest replaced its pinned SSH host key
+
+- Date: 2026-09-26. Status: corrected; fresh disposable guest run passed.
+- Symptom: the native libvirt CI guest booted, but strict SSH validation rejected its
+  regenerated host key before any snapshot operation.
+- Root cause: cloud-init deleted the host key supplied by the fixture, while the runner's
+  known-hosts file correctly retained the originally pinned key.
+- Fix: set `ssh_deletekeys: false` for this disposable fixture. Keep strict host-key
+  checking and the generated per-fixture private key.
+- Regression: the existing `tests/integration/libvirt_recovery_ci.py` system-guest
+  campaign reproduced the mismatch, then reached and passed the enforcing AppArmor
+  public-consolidation control after correction. Both mirrored recovery-libvirt forge
+  workflows run this campaign; no remote CI run is claimed. Twelve focused Python
+  tests and syntax checks also passed. See [candidate QA](qa/2026-09-26-recovery-libvirt-public-consolidation.md).
+- Avoid: bypassing host-key verification to hide an inconsistent disposable fixture.
+
+## BUG-0606 — Remote native probe was staged above its expected directory depth
+
+- Date: 2026-09-26. Status: corrected; fresh disposable guest run passed.
+- Symptom: the guest probe raised `IndexError` during import, before native operations.
+- Root cause: the runner placed the shared probe directly under `/tmp`, but its root
+  lookup uses the third parent of its source file.
+- Fix: stage the related scripts together under `/tmp/nex-ci/tests/integration`,
+  preserving their expected depth and sibling imports.
+- Regression: the actual system-guest campaign failed at the old import path and then
+  completed the enforcing AppArmor public-consolidation control with the corrected
+  layout. Existing mirrored recovery-libvirt forge workflows execute the same runner.
+  Twelve focused Python tests and syntax checks passed; no remote CI result is claimed.
+  The [candidate QA](qa/2026-09-26-recovery-libvirt-public-consolidation.md) retains the
+  failed setup attempts separately from native results.
+- Avoid: changing shared probe semantics to compensate for a caller staging it in an
+  incompatible layout, or counting an import failure as native test coverage.
+
+## BUG-0607 — Snapshot lab attempts could reuse result-only evidence paths
+
+- Date: 2026-09-26. Status: corrected in the disposable runner; focused checks passed.
+- Symptom: an attempt stopped during preflight could leave a result without a request
+  envelope. Reusing its label risked losing that earlier evidence and performed candidate
+  SSH checks before detecting the collision. The actual failed result was preserved;
+  subsequent native attempts used distinct labels.
+- Root cause: attempt-path refusal was incomplete and occurred after candidate checks.
+- Fix: validate the label and refuse existing result or request paths before any candidate
+  SSH call. Distinguish stale inventory from a missing VM without relaxing freshness gates.
+- Regression: `test_result_only_collision_refuses_attempt_before_candidate_check` creates
+  only a result file and verifies that candidate SSH is never called. All 12 focused
+  `tests.test_core_local_snapshot_api` tests passed. The existing forge Python suite runs
+  this regression. The pre-fix ordering was inspected in source; this test was not run
+  against the old implementation, so no failing-before runtime result is claimed.
+- Avoid: overwriting a failed attempt to obtain a cleaner report, or treating absence of
+  a request envelope as proof that an attempt label has never been used.
+
+## BUG-0608 — Restart verification rejected the transient Core service wrapper
+
+- Date: 2026-09-26. Status: corrected; post-restart exact replay and data checks passed.
+- Symptom: native snapshot capture and master settlement succeeded, but the lab runner
+  stopped immediately after restarting Core with `Core service identity changed during
+  restart verification`. Independent readback confirmed intact completed recovery state.
+- Root cause: systemd briefly reports the setup wrapper before it replaces itself with
+  the Core executable. The bounded readiness loop did not catch the identity check's
+  `RuntimeError`, so that expected transition escaped instead of being retried.
+- Fix: retry transient identity failures until the existing deadline while retaining exact
+  executable, binary hash, package, active-unit and new-PID checks. Also require the
+  certificate-pinned HTTPS endpoint to become ready before reauthentication.
+- Regression: `test_core_restart_readiness_waits_through_wrapper_until_candidate_and_tls_are_ready`
+  exercises the wrapper and HTTPS transitions;
+  `test_core_restart_readiness_does_not_accept_wrong_process_identity` checks bounded
+  refusal. All 14 focused runner tests and syntax checks passed; independent review
+  cleared the correction. The existing forge Python suite executes these checks.
+  The corrected run verified a new Core PID, exact candidate identity, succeeded
+  same-operation replay, unchanged catalog and both disk markers after restart. Its
+  outer result reporting defect is recorded separately as BUG-0609.
+- Avoid: weakening binary identity or TLS checks, treating service activation alone as
+  readiness, or rerunning native capture to compensate for a test-harness failure.
+
+## BUG-0609 — Successful Core restart evidence lacked the runner success status
+
+- Date: 2026-09-26. Status: reporting corrected; complete same-operation runner pass verified.
+- Symptom: the lab runner classified successful Core capture/restart/replay evidence
+  as failed, despite retaining a succeeded operation and both verified disk markers.
+- Root cause: the remote success payload omitted the `status` field required by the
+  outer runner, which correctly defaults an unrecognized result to failure.
+- Fix: emit explicit `status: passed` only after all remote acceptance checks complete;
+  retain the outer runner's fail-closed behavior.
+- Regression: the focused acceptance test now checks the success payload status.
+  All 14 `tests.test_core_local_snapshot_api` tests and syntax checks passed.
+  Existing forge Python tests include this assertion. The original attempt with its
+  complete Core evidence remains preserved and labeled with the reporting defect;
+  it is not rewritten as a passed run. A fresh-label run of the same operation passed
+  restart/replay and fresh Controller A adoption with both markers intact and root locked.
+- Avoid: treating a missing outcome as success or discarding verified intermediate
+  evidence because the final reporting envelope was incomplete.
+
+## BUG-0610 — Replacement runner read the wrong candidate package field
+
+- Date: 2026-09-26. Status: corrected; focused checks passed.
+- Symptom: replacement-Controller preflight refused the successful Core evidence before
+  stopping Controller or submitting a Core request.
+- Root cause: the consumer read `core_candidate.package_version`; the producer records
+  the installed package under `core_candidate.version`.
+- Fix: read the exact producer field and retain the package and executable hash checks.
+- Regression: all 10 `tests.test_core_snapshot_controller_replacement` tests passed,
+  including candidate identity against the producer-shaped record; syntax, privacy and
+  documentation gates passed. The existing forge Python suite includes these tests.
+  No failing-before unit execution is claimed; the actual failed invocation is preserved.
+- Avoid: adding schema fallbacks for a misspelled internal field or relaxing candidate
+  identity validation to bypass a harness mismatch.
+
+## BUG-0611 — Replacement runner confused guest and host Controller addresses
+
+- Date: 2026-09-26. Status: corrected; focused checks passed.
+- Symptom: the fresh disposable Controller started, but readiness polling could not
+  reach it. Controller A stayed running and Core enrollment was unchanged.
+- Root cause: host-side polling used the guest-advertised enrollment address, and the
+  reused adoption helper received a full URL although it adds HTTPS to a host:port.
+  Independent review also found that preflight failure logging targeted a directory
+  deliberately created only after preflight, masking a possible SSH error. A later
+  attempt reached Controller but exposed a cookie bug: the helper replaced a supplied
+  empty cookie jar because it tested its truth value. The subsequent authenticated
+  request therefore failed; repeated login polling exhausted the login rate limit.
+- Fix: use the local listener for host-side administration, retain the advertised origin
+  for guest enrollment, pass host:port to adoption, and place preflight failure evidence
+  in the existing private preparation directory under a unique filename. Preserve the
+  supplied cookie jar using an explicit None check; readiness must not repeatedly log in.
+- Regression: all 13 replacement-runner tests passed, including endpoint construction,
+  port mismatch, preflight evidence paths, and a real local HTTP Set-Cookie/login followed
+  by an authenticated request using the supplied jar. Syntax and privacy checks passed;
+  the documentation gate awaits the concurrent safety-fix assessments. Existing forge
+  Python tests run these regressions. The failed readiness
+  invocation and terminated fresh Controller fixture remain preserved separately.
+- Avoid: passing interchangeable URL strings between helpers with different contracts,
+  or recording an error somewhere that does not exist yet.
+
+## BUG-0614 — Replacement Core script used the wrong cookie-processor module
+
+- Date: 2026-09-26. Status: corrected; executable regressions passed; native replacement pending.
+- Symptom: replacement verification stopped after Controller A was stopped and B started,
+  before any Core API request. The preserved traceback reported that `http.cookiejar`
+  has no `HTTPCookieProcessor` attribute.
+- Root cause: remote opener setup referred to the cookie-storage module rather than
+  `urllib.request`, which supplies the HTTP handler.
+- Recovery evidence: read-only inspection confirmed Core still pointed to Controller A,
+  the snapshot journal remained succeeded and settled, the VM stayed stopped and root
+  was locked. No second enrollment was attempted under an ambiguous result.
+- Fix/check: use the correct existing standard-library handler and execute remote setup
+  in a regression before another native attempt. All 15 focused replacement-runner
+  tests and syntax/privacy checks passed. Existing forge Python tests include the check.
+  Read-only reconciliation proved enrollment had not happened; the owned old Controller
+  was restored and freshly adopted the snapshot before the empty new Controller stopped.
+- Avoid: assuming Python compilation checks resolve attribute names, or blindly repeating
+  enrollment after a remote script fails.
+
+## BUG-0615 — Generated interruption payload omitted required helpers
+
+- Date: 2026-09-26. Status: corrected; focused executable regression passed.
+- Symptom: the fresh system-guest interruption probe failed before any block commit or
+  daemon signal because `active_blockjob` was undefined; its error handler then failed
+  because `sys` was also missing.
+- Root cause: the system-guest adapter embeds a smaller source prefix than the original
+  runner. The interruption branch depended on symbols supplied only by that old prefix.
+- Fix: include the existing anchored block-job parser and required import in the shared
+  remote campaign itself.
+- Regression: execute the generated system payload without the original prefix, invoke
+  the parser, and check the error-handler import. All 15 focused tests and syntax checks
+  passed; existing forge Python tests include this check. The failed paused fixture and
+  native report remain preserved. A fresh corrected native run passed the partial
+  non-READY interruption, same confined QEMU identity, daemon restart, job reconciliation,
+  second-disk completion, retained-data/reopen/revert checks; independent artifact review
+  cleared it. The exact candidate receipt is embedded in the new result.
+- Avoid: using source-string assertions or compilation alone to prove dynamically
+  assembled Python payloads have the runtime names they need.
+
+## BUG-0616 — Replacement runner omitted the temporary Core PAM login setup
+
+- Date: 2026-09-26. Status: corrected; executable regressions passed; native replacement pending.
+- Symptom: the corrected remote payload reached the local session endpoint and received
+  HTTP 401 before enrollment. Core root remained locked.
+- Root cause: the earlier snapshot runner temporarily sets the disposable root password
+  in its outer harness; the replacement runner reused the login flow without that setup.
+- Fix/check: reuse the established lab-only PAM flow: require the initially locked account,
+  set the supplied private password, perform the session login, and relock in a finally
+  block before subsequent session/CSRF operations. Exercise both success and login failure.
+  All 15 focused replacement-runner tests passed, including executable helper checks
+  for successful login and failed login with relocking; syntax/privacy checks passed.
+  Existing forge Python tests include these checks. Read-only reconciliation confirmed
+  no enrollment, then restored the old Controller before stopping the empty replacement.
+  Native replacement remains pending.
+- Avoid: leaving the disposable root account unlocked after authentication or treating a
+  failed session request as evidence that enrollment occurred.
+
+## BUG-0613 — Native start hook did not enforce snapshot recovery fences
+
+- Date: 2026-09-26. Status: corrected; focused and full vmhost tests passed;
+  independent review clear. The installed r6 hook also refused an isolated copied
+  unresolved-intent fixture; this was a CLI check, not a real libvirt start.
+- Symptom: a direct libvirt start for a managed local-storage VM could pass startup
+  validation while its snapshot intent or reservation remained unresolved.
+- Root cause: API admission checked recovery state, but the native hook validated only
+  host authority, storage and shared-storage permits.
+- Fix: reuse the recovery refusal in the hook's existing `checkStorageStartup` path
+  after managed identity validation and before any repository verifier call. It reads
+  the existing journal slice and acquires no mutation lock.
+- Regression: before the fix, both unresolved cases returned success and invoked the
+  healthy repository verifier once. Afterward they refuse with zero verifier calls;
+  settled state succeeds with one call. The actual StorageGuard entry point also
+  refuses unresolved state; unrelated appliance coverage remains passing. Focused
+  tests and `go test ./internal/vmhost -count=1` passed. The existing forge Go suite
+  runs these regressions. Documentation checks and independent review passed.
+- Avoid: applying recovery fences only to API callers, or adding another journal/cache
+  for the native hook instead of reading the same durable intent.
+
+## BUG-0612 — VM deletion could discard the retained snapshot catalog
+
+- Date: 2026-09-26. Status: corrected; focused, agent race and API checks passed;
+  independent review cleared the lock-held race correction; final race suites passed.
+  The r6 candidate refused both authenticated keep/wipe deletes with the retained snapshot
+  and data unchanged; independent artifact review cleared the scoped authority check.
+  This single-host master fixture uses local authority, not a cross-host peer exchange.
+- Symptom: local-storage VM deletion could bypass master admission, while shared delete
+  admission checked the definition but not retained snapshots. Owner deletion inventory
+  could then remove the master record holding the snapshot catalog.
+- Root cause: deletion reused incomplete definition checks and tombstone pruning did not
+  preserve snapshot recovery records. A read-only master check also leaves a race:
+  a snapshot may finish after the check but before native delete acquires its lock.
+- Fix: every managed local/shared delete uses an authenticated exact `delete-check`
+  acknowledgement from the current master. Retained snapshots, unresolved transitions
+  and frozen authority refuse it for both disk choices. Conflicting owner tombstones
+  are rejected and pruning retains the protected record. The native deletion path must
+  also refuses retained successful snapshot journals under its existing mutation lock.
+  Pending delete commands are recognized by snapshot ingress, so later requests cannot
+  overtake them. The native retained-point refusal covers both disk choices.
+- Regression: disabling the new gate made all four local/shared × keep/wipe cases fail;
+  local cases admitted deletion with no error. Restoring it passed the focused tests,
+  including catalog preservation and exact acknowledgement checks. Agent race tests
+  passed (54.583s); 74 API checks, generated-reference, privacy and documentation gates
+  passed. Final agent/vmhost race runs after the execution-lock correction passed
+  (54.140s and 14.200s); both keep/wipe engine cases passed after a test-only expansion.
+  Independent review cleared the source. Existing forge Go/Python suites run these
+  regressions; no remote CI is claimed.
+- Avoid: assuming keeping disks preserves snapshot identity or firmware state, or treating
+  a stale deletion report as authority to discard recovery records.
+
+## BUG-0617 — Replacement verifier assumed marker and outcome response fields
+
+- Date: 2026-09-26. Status: corrected; replacement was reconciled without re-enrollment.
+- Symptom: enrollment with the fresh Controller succeeded, then the runner failed with
+  a missing marker `offset` field during readback. A later outcome assertion also looked
+  in an inventory projection that intentionally omits operation outcomes.
+- Root cause: the consumer assumed marker `offset`/`length`/`path` fields although the
+  producer emits `source` and its readback string; Controller exposes adopted outcomes
+  through the operations API rather than `inventory.managed.outcomes`.
+- Fix: consume the actual marker shape and query the authenticated operations API.
+  Regressions execute the marker verification helper against producer-shaped evidence
+  and check the actual operation response shape; final suite results are recorded in
+  the replacement change assessment.
+- Recovery evidence: read-only continuation verified the switched Core identity,
+  succeeded/settled journal, both disk markers and fresh Controller host/pool/catalog/
+  operation adoption. No second enrollment or snapshot request was sent. The original
+  failed runner result remains preserved. The continuation cannot prove byte equality
+  of Controller A's preserved files: its pre-enrollment fingerprint was held only in
+  memory and lost on failure. Future runs persist that fingerprint before enrollment.
+- Avoid: changing infrastructure again to repair a verifier, or inventing a missing
+  before-state fingerprint after an operation completes.
+
+## BUG-0618 — Retained snapshots lost historical resource dependencies after edits
+
+- Date: 2026-09-26. Status: implemented and independently reviewed; bounded r7 native
+  dependency checks passed, shared-storage lock/lease walkthrough remains open.
+- Symptom: after a VM changed disks, media or networks, destructive resource operations
+  could see only current references and remove resources required by its older snapshots.
+- Root cause: the master snapshot descriptor retained specification/disk digests but no
+  captured resource IDs; local removal guards also inspected only current VM definitions.
+  A read-only resource-removal preflight additionally raced remote VM/snapshot admission.
+- Fix: retain compact captured dependency sets in Core snapshot descriptors,
+  enforce historical dependencies locally and on the master, and serialize destructive
+  network/media removal against remote admissions with a durable Core mutation marker.
+  Missing legacy dependency data remains unknown, not empty. Ordinary storage leases,
+  starts and non-destructive metadata/recheck operations must remain available.
+- Required checks: historical media/disk/network references after edits, exact reservation
+  and settlement, invalid/legacy descriptors, removal/admission interleavings, interrupted
+  marker replay, authority transfer, and normal operations remaining available. Native
+  acceptance must use a new matching Controller/Core build; r6 predates this change.
+- Verification: focused admission, retry, legacy-journal and authority tests passed, as did
+  the full agent/protocol/vmhost race suite and independent review. Core's existing worker
+  reconciles exact unresolved removals after fresh admission, and retires a matching marker
+  from definitive journal evidence after a crash. Legacy ambiguous failures remain protected;
+  only the explicit pre-effects refusal stage proves a failed removal safe to settle.
+- Native r7 evidence: historical network and ISO removal were refused after the current
+  definition changed; ordinary storage recheck succeeded. Storage detach also saw a
+  retained old disk and ISO, so it is not an isolated snapshot-only native result
+  ([walkthrough](qa/2026-09-26-recovery-snapshot-resource-dependencies.md)). The public edit
+  lifecycle retains removed disk chains, preventing construction of that isolated state.
+  `TestPoolStorageDetachSnapshotHistoryBlocksOldRepositoryAfterCurrentDefinitionMoves`
+  instead isolates the master guard: current storage B, historical snapshot storage A,
+  exact refusal for A. The focused test passed; forge's Go suite runs it. See the
+  [contract/native boundary](qa/2026-09-26-snapshot-only-storage-detach-boundary.md).
+- Avoid: retaining only live VM dependencies, blocking ordinary leases to compensate, or
+  holding a global lock across native work instead of recording an uncertain mutation.
+
+## BUG-0619 — Branch probe inspected a disk path absent after native revert
+
+- Date: 2026-09-26. Status: harness correction checked; separate fresh branch run passed; original fixture preserved.
+- Symptom: the fresh branched-history probe failed after its first commit response when
+  `qemu_chains` tried to inspect a hard-coded point-C file that no longer existed after
+  native revert. Its error finalizer also could not inspect a current file held by paused QEMU.
+- Root cause: a shared observer assumed the linear fixture's filenames rather than the
+  current and retained native branch graph.
+- Recovery boundary: preserve the domain, disk tree and failed report. Inspect native jobs,
+  active heads and saved metadata before any continuation; do not repeat the commit merely
+  because the harness failed to report it. The original failed run is not a successful branch result.
+- Fix: inspect actual current and retained graph references, allowing an absent abandoned
+  post-point file only when nothing references it. Persist native command replies before
+  running observers so an observer failure cannot discard the operation's result.
+- Regression: the focused consolidation harness suite passed 13 checks, including linear
+  and reverted-branch layouts; independent source review found no remaining issue in this
+  correction. The existing discovery suite runs these checks in forge CI; no remote CI
+  result is claimed. Native reconciliation proved the first disk's commit had completed
+  and the second had not. An identity-bound continuation committed only the second disk,
+  then confirmed both bases equivalent to their standalone pre-commit copies. Subsequent
+  branch cleanup on that fixture stayed blocked by foreign references; its failed report
+  and each continuation attempt remain preserved. A separate fresh branch run completed
+  cleanup and retained-point recovery ([evidence](qa/2026-09-26-recovery-s0-branch-nex3.md)).
+- Avoid: dropping a missing-path check globally or rerunning native work to repair a report.
+
+## BUG-0620 — Snapshot acknowledgement could precede authority replication
+
+- Date: 2026-09-26. Status: implemented and independently reviewed; bounded r7 multi-host replication/promotion passed.
+- Symptom: a promoted master could lack an acknowledged snapshot reservation or retained
+  catalog entry after the old master was permanently lost between replica pushes.
+- Root cause: snapshot reserve and settlement acknowledged the master's durable VM record,
+  while authority replication ran asynchronously. Promotion checked the retained replica's
+  ownership and revision but did not recover missing snapshot records from the owner.
+- Fix: acknowledge reserve and settlement only after ready members confirm the
+  exact authority replica, then revalidate the current authority and operation. Retain
+  uncertainty on lost acknowledgements; an exact retry must reconcile the saved record.
+  Peer network calls must not hold the pool's state locks.
+- Regression: real peer-mTLS test fixtures confirm both ready members have the exact pending
+  reservation and completed receipt before acknowledgement, then preserve the catalog through
+  simulated master-loss promotion. An unavailable member prevents acknowledgement without
+  discarding saved state; exact retries converge without duplicate points. Focused tests, the
+  full agent/protocol/vmhost race suite and independent review passed. These are test fixtures,
+  not the mandatory native multi-host campaign; forge CI runs the existing Go suites.
+- Native r7 evidence subsequently captured the exact pending record on the master and both
+  member replicas before native execution, then terminal catalog state after successful
+  settlement. Supported fencing and promotion retained the catalog on the new master
+  ([evidence](qa/2026-09-26-recovery-snapshot-r7-promotion.md)). Post-promotion admission
+  exposed the separate BUG-0641; this does not close S1 or the Phase 6 campaign.
+- Avoid: treating a durable master-local write or an asynchronous replication trigger as
+  proof that acknowledged recovery state survives master loss.
+
+## BUG-0621 — Backup probe could accept a lookalike checkpoint name
+
+- Date: 2026-09-26. Status: corrected before the new native campaign.
+- Symptom: the checkpoint-present backup verifier could accept a different checkpoint
+  whose name contained the required name.
+- Root cause: the verifier used substring matching against the native checkpoint listing.
+- Fix: parse the checkpoint-name column and require an exact match.
+- Regression: the focused backup harness suite passed 19 checks, including lookalike-name
+  rejection, candidate package verification and owner-only output checks; Python compilation
+  and independent source review passed. The existing Python discovery suite runs these
+  checks in forge CI; no remote CI result or new native backup result is claimed here.
+- Avoid: using substring membership as proof of a native resource's identity.
+
+## BUG-0622 — Deep-chain probe omitted foreign live-domain references
+
+- Date: 2026-09-26. Status: corrected before native execution; independent review passed.
+- Symptom: the new deep-chain cleanup probe could check only a foreign domain's inactive
+  definition before unlinking, overlooking a running QEMU's different graph.
+- Root cause: its reference scan omitted the existing fixture's stopped-foreign-domain rule.
+- Fix: reuse the stopped-domain guard and inspect default/inactive definitions, saved
+  snapshots and backing chains before unlinking exact unreferenced files.
+- Regression: `python3 -m unittest tests.test_libvirt_recovery_ci` passed 13 checks,
+  including rejection of a running foreign guest. Python discovery in forge CI includes
+  this suite; no remote CI or native deep-chain success is claimed by this check.
+- Avoid: treating inactive XML as the full graph of a running foreign VM.
+
+## BUG-0623 — Native CI runtime referenced a host-only candidate variable
+
+- Date: 2026-09-26. Status: corrected; independent re-review passed.
+- Symptom: the runtime validation path could raise `NameError` after native probes.
+- Root cause: `runtime_run` referenced a candidate receipt local to `host_run`.
+- Fix: derive the receipt in the runtime validation helper from its supplied candidate.
+- Regression: the focused 13-check suite above passes, including a direct helper call
+  covering this function boundary; forge Python discovery includes the regression.
+- Avoid: validating a synthetic result while leaving the actual runner call unexecuted.
+
+## BUG-0624 — Clean-guest launcher assumed container-only source paths
+
+- Date: 2026-09-26. Status: corrected; fresh native run pending.
+- Symptom: direct workspace invocation booted and installed a disposable guest, then
+  failed to stage probe scripts before any native domain operation.
+- Root cause: local script staging used the container's absolute `/tests` layout.
+- Fix: derive sibling script paths from the running module's directory, supporting both
+  container and workspace invocation. Preserve the failed pre-probe attempt separately.
+- Regression: the focused 13-check suite above passes, including actual sibling-script
+  path checks; forge Python discovery includes the regression.
+- Avoid: assuming the outer launcher runs in the same filesystem layout as its guest.
+
+## BUG-0625 — Midcommit producer and validator disagreed on scope text
+
+- Date: 2026-09-26. Status: corrected before native execution; independent review passed.
+- Symptom: a successful selected midcommit run would fail result validation.
+- Root cause: the producer emitted `midcommit` while the validator required `interrupted`;
+  an independently hard-coded synthetic fixture masked the disagreement.
+- Fix: share the mode-to-scope mapping between producer and validator.
+- Regression: the focused 13-check suite above passes, including the actual shared scope
+  mapping and rejection of stale scope text; forge Python discovery includes the regression.
+- Avoid: maintaining separate expected strings that never exercise producer output.
+
+## BUG-0626 — Deep-chain payload builder referenced an unexported helper
+
+- Date: 2026-09-26. Status: corrected before native execution; independent review passed.
+- Symptom: building the native payload would raise `AttributeError` before guest setup.
+- Root cause: the reused guard existed inside another probe's embedded source, not as an
+  importable module function. Compilation alone did not exercise payload construction.
+- Fix: include the small stopped-domain guard directly in the generated payload without
+  adding source-extraction machinery.
+- Regression: the 14-check native CI suite builds and compiles the complete payload and
+  executes the guard against stopped/running states. Independent review passed; forge
+  Python discovery includes the regression. Native deep-chain execution remains separate.
+- Avoid: assuming an embedded function is a module attribute, or testing only outer syntax.
+
+## BUG-0627 — Candidate verifier rejected architecture-independent packages
+
+- Date: 2026-09-26. Status: corrected before host mutation; independent review passed.
+- Symptom: the backup preflight rejected two valid packages from the selected libvirt build.
+- Root cause: it required every selected package to use the machine architecture, excluding
+  Debian's architecture-independent `all` packages.
+- Fix: accept `amd64` and `all` in this selected amd64 closure while retaining exact package,
+  version and manifest checksum verification.
+- Regression: the backup and consolidation suites passed 35 combined checks, including
+  candidate architecture validation; independent review passed. Forge Python discovery
+  includes these checks. The failed preflight performed no host mutation.
+- Avoid: conflating a package's architecture with the machine architecture.
+
+## BUG-0628 — Branch consumer assumed every chain observation had a state field
+
+- Date: 2026-09-26. Status: corrected before the fresh native rerun; independent review passed.
+- Symptom: the clean branch probe stopped before commit with `KeyError: state`.
+- Root cause: present chain observations contained `images`, while only an explicitly absent,
+  unreferenced post-point file carried the absence state; a caller still indexed `state`.
+- Fix: classify present images and explicit allowed absence, refusing malformed observations.
+  The remaining consumers were traced and already inspect image filenames.
+- Regression: all 14 consolidation tests passed, including actual producer-shaped present
+  and absent post-point observations from the remote payload. Independent review passed;
+  forge Python discovery includes the regression. The original failed attempt is preserved.
+- Avoid: assuming all variants of a native observation share optional fields.
+
+## BUG-0629 — Focused checkpoint restore inherited unrelated fault probes
+
+- Date: 2026-09-26. Status: corrected; actual-run deviation and cleanup independently reviewed.
+- Symptom: the focused checkpoint-present backup/restore invocation also ran inherited
+  capacity-refusal, NFS stall/cancel and shutdown-during-backup probes.
+- Root cause: those branches remained unconditional after adding the focused mode.
+- Fix: skip all three fault probes in checkpoint-restore mode; retain them in the original
+  full campaign mode.
+- Regression: backup and consolidation suites passed 36 checks, including mode selection;
+  independent review passed. Forge Python discovery includes the regression. The successful
+  native run's required backup/restore proof remains valid and is recorded separately from
+  its additional probes in the [QA report](qa/2026-09-26-recovery-s0-backup-nex3-checkpoint.md).
+  Read-only checks confirmed restored traffic-control state, unchanged export configuration,
+  removed source scratch and generated domains, and retained backup outputs. No native run
+  was repeated merely to rewrite its history.
+- Avoid: assuming a newly focused mode skips inherited actions unless every branch is traced.
+
+## BUG-0630 — Branch reopen observer used an exclusive image read
+
+- Date: 2026-09-26. Status: corrected; independent review and fresh native run passed.
+- Symptom: after consolidation and a retained-point reopen, the observer hit QEMU's image
+  write lock instead of completing its read-only checks.
+- Root cause: the paused reopen and failure-only diagnostic paths called an observer
+  intended for stopped domains.
+- Fix: use the existing `qemu_chains` observer with `qemu-img --force-share` in those read-only
+  paths. Native QMP/state checks still establish the controlled fixture's state; sharing an
+  image read does not authorize mutation or prove an uncertain operation completed.
+- Regression: all 14 consolidation checks and independent review passed; forge Python
+  discovery includes the observer regression. The failed native attempt remains preserved.
+  A fresh two-disk branch run subsequently completed retained-point reverts and enforcing
+  paused reopens; its raw artifact passed independent review, as recorded in the
+  [branch report](qa/2026-09-26-recovery-s0-branch-nex3.md).
+- Avoid: using a stopped-image inspection path while QEMU still owns the image.
+
+## BUG-0631 — Deep-chain probe removed a parent from its expected graph too early
+
+- Date: 2026-09-26. Status: corrected; independent review and fresh native graph checks passed.
+- Symptom: the 32-point probe rejected the correct graph after both commits and child
+  metadata redefinition, before metadata deletion or unlinking.
+- Root cause: the expected graph omitted the old parent although that phase had not yet
+  deleted its metadata.
+- Fix: expect both old parent and detached child as roots until metadata-only deletion,
+  then expect the remaining descendants under the detached child.
+- Regression: the native CI suite passed 14 checks, including shared phase-specific graph
+  expectations in the runtime assertion, validator and generated payload; independent
+  review passed. Forge Python discovery includes the regression. The failed guest remains
+  preserved and its completed commits are not replayed. A fresh run traversed the corrected
+  graph phases; its terminal serialization failure remains separately recorded under
+  BUG-0634 ([evidence](qa/2026-09-26-recovery-libvirt-deep32.md)).
+- Avoid: validating an intermediate state against a later phase's expected graph.
+
+## BUG-0632 — Deep-chain verifier read a deleted post-point instead of the saved state
+
+- Date: 2026-09-26. Status: corrected; independent review and fresh native data checks passed; terminal reporting failure recorded separately.
+- Symptom: after public consolidation, metadata deletion and guarded unlink, the 32-point
+  probe reported a retained-data failure without persisting its per-image observations.
+- Root cause: the verifier selected the original post-point path for the first retained
+  snapshot, although its redefined saved source was now the base. Snapshot capture occurs
+  before each subsequent marker write; a point's own post-head is not its saved state.
+- Correction: derive saved sources from native snapshot XML, verify saved and current data
+  before unlink, and persist observation rows and unlink receipts before assertions.
+  All 15 focused native-CI tests and independent generated-payload review passed, including
+  an executable saved-source parser check. Forge Python discovery runs the regression.
+- Evidence: a separate read-only observation boot of the preserved guest found all 31
+  saved points, all retained post-heads and both current heads readable with their expected
+  markers and payloads. All 126 image-chain observations succeeded and referenced no
+  deleted oldest top. The outer image checksum remained unchanged. This reconciles the
+  failed fixture; it does not turn its original failed report into a passing run.
+- Avoid: inferring saved disk paths from creation order or losing diagnostics after effects.
+
+## BUG-0633 — Lab candidate installer chmod failed after stopping Core
+
+- Date: 2026-09-26. Status: corrected; independent review and native installation retry passed.
+- Symptom: candidate installation stopped the selected disposable Core service, then
+  failed before replacing its executable.
+- Root cause: the private installer passed a path to `os.fchmod`, which requires an open
+  file descriptor, and performed candidate preparation after the service stop.
+- Fix: stage, chmod and hash the candidate before stopping Core; reuse tested helpers to
+  atomically replace only the expected installed executable. The unchanged previous
+  executable was restarted and verified before preparing another attempt.
+- Regression: all 16 Core snapshot harness tests passed, including real temporary-file
+  staging, executable mode and digest checks, atomic replacement and preservation when
+  the installed target digest changes. Forge Python discovery runs these checks.
+  The native retry installed the exact r7 executable with the service active, the original
+  VM stopped, both disk markers intact and the local root account locked. Exact request
+  replay remains a separate acceptance check.
+- Avoid: treating compilation as proof of filesystem operations or placing reversible
+  preparation inside a service outage.
+
+## BUG-0634 — Deep-chain report failed while printing its terminal result
+
+- Date: 2026-09-26. Status: corrected; output regression and independent native-evidence review passed.
+- Symptom: the fresh 32-point probe reached its final output after consolidation, retained
+  data checks, guarded unlink and native reopen, then reported a harness failure.
+- Root cause: both terminal print paths passed `flush=True` to `json.dumps` instead of
+  `print`. Compilation and data-validation tests did not execute those output statements.
+- Correction: put flushing on `print` and execute both terminal output paths in the
+  regression check. The original failed report remains unchanged; any native acceptance
+  must refer to separately reviewed observations, not a rewritten success status.
+- Evidence: the preserved report contains the terminal serialization exception and the
+  preceding native observations. Independent review verified both commits, saved/post/current
+  data, chains, reference scan, exact unlinks and enforcing-AppArmor same-UUID reopen.
+  All 15 focused tests passed, including executable terminal emission and the producer/validator
+  data shape. Forge Python discovery runs these checks. The original runner still returned
+  failure; only the independently inspected native lifecycle observations are accepted.
+  No destructive step was repeated to repair report formatting.
+- Avoid: coupling a completed native operation's truth to terminal formatting, or treating
+  a compile-only check as proof that an output path executes.
+
+## BUG-0635 — Firmware lab emitted a CPU model as a libvirt CPU mode
+
+- Date: 2026-09-26. Status: corrected and independently reviewed; fresh native run passed.
+- Symptom: libvirt refused the firmware fixture's domain definition before snapshot creation.
+- Root cause: the nested QEMU fixture emitted `qemu64` as the CPU `mode` attribute,
+  confusing a CPU model with libvirt's mode enumeration.
+- Fix: omit the CPU element and use the native QEMU default for this selected TCG fixture.
+- Regression: all 11 focused firmware tests passed, including parsing the generated XML
+  to verify QEMU domain type, no invalid CPU element, both disks, TPM and Secure Boot.
+  Python compilation and independent review passed; forge Python discovery runs the test.
+  The original pre-snapshot refusal is preserved separately; the fresh run5 definition and
+  full firmware recovery passed ([evidence](qa/2026-09-26-recovery-s0-firmware-public-delete.md)).
+- Avoid: translating an execution backend into an unchecked domain XML attribute.
+
+## BUG-0636 — Firmware lab used a device role as the disk source type
+
+- Date: 2026-09-26. Status: corrected and independently reviewed; fresh native run passed.
+- Symptom: libvirt refused the corrected firmware fixture at domain definition because
+  its seed CD-ROM used `type='cdrom'`; no snapshot operation ran.
+- Root cause: the new fixture confused the disk source type with its device role.
+- Fix: reuse the proven file-backed CD-ROM form, `type='file' device='cdrom'`, and run
+  native XML schema validation before definition when the validator is installed.
+- Regression: all 11 focused firmware tests passed, including the generated CD-ROM
+  attributes; Python compilation and independent review passed. Forge Python discovery
+  includes the regression. The local workstation lacks the native XML validator, so no
+  local schema-validation success is claimed. Fresh run5 native definition and recovery
+  passed ([evidence](qa/2026-09-26-recovery-s0-firmware-public-delete.md)).
+- Avoid: recreating already-tested native XML with guessed attribute values.
+
+## BUG-0637 — Firmware probe assumed the retained base had no backing image
+
+- Date: 2026-09-26. Status: corrected and independently reviewed; fresh native run passed; failed fixture preserved.
+- Symptom: after two public commits, the probe rejected a retained chain containing the
+  expected boot disk overlay and its cloud-image base.
+- Root cause: its expected chain ended at the overlay instead of including that disk's
+  complete previously observed backing suffix.
+- Fix: bind expectations to the complete observed preflight suffix and preserve exact
+  source identities. Immediate standalone-reference comparisons and retained B/current C
+  comparisons are recorded before unlink. All 14 focused firmware tests and independent
+  review passed; forge discovery includes the regressions. Fresh run5 verified every
+  complete backing chain and all twelve logical comparisons before/after consolidation
+  ([evidence](qa/2026-09-26-recovery-s0-firmware-public-delete.md)).
+- Earlier preserved fixture: read-only reconciliation confirmed the stopped domain and both
+  completed-job receipts. Boot-disk logical comparisons passed, but second-disk comparisons differed
+  from the saved references. That discrepancy remains unresolved and prevents continuation;
+  a correct chain expectation alone is not permission to delete files in that older fixture.
+- Avoid: assuming a fixture's named base is standalone or weakening a data check to proceed.
+
+## BUG-0638 — Firmware marker fixture did not remount its second disk after reboot
+
+- Date: 2026-09-26. Status: corrected and independently reviewed; fresh native run passed.
+- Symptom: later marker writes targeted the mount directory without first mounting the
+  data disk; the final readback also concatenated values without the newlines its assertion
+  expected.
+- Root cause: the initial mount was not persisted across guest boots, and output formatting
+  was assumed instead of exercised.
+- Fix: mount and verify `/dev/vdb` before each data-disk marker write/read and delimit
+  readback explicitly. All 14 focused firmware tests passed, including executable shell
+  checks rejecting the wrong mounted source; independent review and compilation passed.
+  Forge discovery includes the regressions. Fresh run5 boot verified the mounted second
+  disk and both retained markers ([evidence](qa/2026-09-26-recovery-s0-firmware-public-delete.md)).
+  These bugs do not explain the separate historical logical-image mismatch.
+- Avoid: equating a directory path with a mounted disk or treating parsed source as executed proof.
+
+## BUG-0639 — Read-only lab queries booted their source image writable
+
+- Date: 2026-09-26. Status: forensic boot corrected privately; preservation limits remain open.
+- Symptom: diagnostic commands were read-only, but their outer guest boot used the original
+  qcow2 image writable and later terminated QEMU without a guest shutdown.
+- Root cause: the collector confused command scope with disk immutability; guest boot and
+  filesystem recovery can write even when the inspection commands do not.
+- Correction: subsequent forensic boots use QEMU's disposable snapshot overlay and verify
+  the source image checksum before/after. The first such query preserved the source hash.
+  Earlier writable boots and abrupt stops cannot be retroactively called immutable.
+- Evidence: the firmware fixture's second-disk reference mismatch remains under investigation;
+  no causal attribution to native consolidation or outer shutdown is established. Reusable
+  preservation regression coverage remains outstanding.
+- Avoid: describing an entire forensic run as read-only solely from its guest commands.
+
+## BUG-0640 — Firmware probe cleaned its fixture before serializing its result
+
+- Date: 2026-09-26. Status: corrected; nested regression, fresh native receipt and independent review passed.
+- Symptom: the remote probe returned, then JSON encoding failed on a `PosixPath` in its
+  result. No complete result reached the outer collector.
+- Root cause: receipt fields retained Python path objects, and successful cleanup ran
+  before the result was serialized and durably retained.
+- Fix: all comparison producers emit JSON-safe arguments; retain an atomic mode-0600
+  receipt before cleanup and refresh it afterward. On persistence failure preserve the
+  fixture and emit a serializable diagnostic instead of masking the first error.
+- Evidence: the outer clone shut down gracefully and the original image stayed unchanged.
+  Subsequent immutable-overlay inspection found no new domain or work directory. The
+  executed source removes both only on successful cleanup; this supports a control-flow
+  inference, not a recovered native acceptance receipt. That attempt could not establish acceptance.
+- Follow-up: persisting a receipt before cleanup exposed additional path-valued comparison
+  arguments in the next run. No receipt was saved, so the guarded cleanup retained the
+  fixture. Fix all comparison-result producers and exercise their nested output through
+  JSON encoding; a regression of only the first helper output was insufficient.
+- Avoid: deleting the only recoverable state before proving that the evidence can be saved.
+
+- Regression: `python3 -m unittest tests.test_recovery_s0_firmware -q` passed all 17
+  tests, including all six nested comparison labels with path arguments. Forge Python
+  discovery runs them. Fresh run5 persisted its complete successful receipt and verified
+  cleanup ([evidence](qa/2026-09-26-recovery-s0-firmware-public-delete.md)); earlier failed
+  receipts remain failed and are not overwritten.
+
+## BUG-0641 — Snapshot admission waits for the fenced former master after promotion
+
+- Date: 2026-09-26. Status: implementation, regressions and independently reviewed r8
+  native promotion, survivor snapshot and safe-rejoin walkthrough passed.
+- Symptom: after supported promotion powered off the former master, a new snapshot
+  reservation persisted on the new master and surviving member but was not acknowledged
+  to the owner. The owner remained in `local-intent`/`needs_attention`; no native create ran.
+- Root cause: the promoted membership still lists the fenced former master as ready,
+  while snapshot admission requires every ready member to acknowledge the exact replica.
+  A focused three-host mTLS regression reproduced successful fencing/promotion followed by
+  failed snapshot reservation with the former master's server stopped.
+- Required correction: preserve exact acknowledgements from eligible members and use a
+  durable, proven exclusion transition for fenced hosts. Mere unreachability is not grounds
+  to skip a member. A returning host must not promote stale state before re-adoption.
+  The reviewed implementation records signed `replica_ack_excluded` membership state for
+  snapshot reserve/settlement and ordinary replica-push failure aggregation. Destructive
+  resource-removal, storage-lease preparation, restart authority confirmation and future
+  promotion fence requirements remain intact. Returning hosts need accepted current
+  inventory and an exact replica POST acknowledgement; the clear rechecks current signed
+  content and membership under the existing state locks.
+- Evidence: the original pending operation settled after the old master safely returned;
+  that conservative-path result alone did not exercise the correction. A fresh r8 campaign
+  then fenced the current master through the supported API, recorded its exclusion, and
+  completed a new snapshot while it stayed powered off. Its isolated return persisted
+  `unconfirmed` restriction before peer connectivity; after rejoin the master accepted
+  current inventory, both members acknowledged the current replica and the exclusion
+  cleared. The five-point catalog and disk markers remained intact. Independent raw
+  review passed; see the [native evidence](qa/2026-09-26-recovery-snapshot-promotion-r8.md).
+- Regression: failing-before-fix, returning-host, unproven-offline-host, invalid-fence,
+  canonical-digest and concurrent-content checks pass. Both
+  `go test ./internal/protocol ./internal/agent -count=1` and the same command with
+  `-race` passed; forge's existing Go suite runs them. These fixtures use in-process mTLS
+  and simulated fence observations; the separate native campaign used actual disposable
+  guest power-off. Physical fencing hardware and the Phase 6 disaster campaign are not
+  established by this result.
+- Avoid: ejecting a host only to make the test pass or relaxing acknowledgements after a timeout.
+
+## BUG-0642 — Native snapshot crash hook matched the API display name
+
+- Date: 2026-09-26. Status: harness correction, executable regression and independently
+  reviewed native post-effect crash/recovery passed for the stopped two-disk r8 fixture.
+- Symptom: the preserved snapshot request completed normally after member rejoin, but
+  the post-native fault hook recorded zero invocations and did not hold the response.
+- Root cause: its exact target was the operator-visible snapshot name; Core calls
+  `snapshot-create-as` with `nex-` followed by the immutable operation ID.
+- Correction: the shared harness builder embeds the native target derived from the
+  operation ID and matches the snapshot-name positional argument after `snapshot-create-as`.
+  Metadata calls and a matching string in a description cannot trigger it. Execute the
+  generated shell against a fake native command before the fresh lab fault-test request.
+- Evidence: the original request succeeded and its descriptor was retained on the master
+  and both signed member replicas. That result proves replay and settlement, not a Core
+  crash. It remains unchanged; the crash campaign needs a distinct operation, not a retry
+  intended to repeat the completed snapshot.
+- Regression: `python3 -m unittest tests.test_core_local_snapshot_api -q` passed 18 tests.
+  The executable check exercises the actual generated shell with display-name mismatch,
+  a matching description, metadata reads, exact create hold/release and duplicate refusal
+  before invoking the fake native command. Independent review passed; forge Python
+  discovery runs these tests. The corrected r8 campaign held the successful native call,
+  observed the native client time out with the effect unresolved, then killed the exact
+  Core service before settlement and reconciled the same operation after restart. The
+  service kill did not interrupt an active native call. Native invocation count stayed one; the master catalog and both signed member
+  replicas retained the settled point, and both disk chains and markers verified. Independent
+  review passed. This covers the stopped two-disk post-effect boundary, not running guests
+  or other interruption points; see the [crash evidence](qa/2026-09-26-recovery-snapshot-core-crash-r8.md).
+- Avoid: assuming an API label is the native identifier or calling a missed injection a
+  recovery test.
+
+## BUG-0643 — Unresolved snapshots released queued power requests prematurely
+
+- Date: 2026-09-26. Status: queue correction, native predecessor regression checks and
+  independent review passed; managed native lab acceptance remains open.
+- Symptom: a snapshot changed from `pending` to `needs_attention`, allowing a queued
+  same-VM power request to dispatch. The native recovery guard refused the request before
+  effects, but the request failed instead of remaining queued. An older explicit predecessor
+  can also bypass a snapshot-only queue dependency.
+- Root cause: queue admission and selection treated only `pending` snapshots as unresolved;
+  dependency handling did not consistently combine the caller's prerequisite with the local
+  snapshot hold. Emergency dispatch must preserve the original journal payload for exact replay.
+- Correction: hold ordinary same-VM work for pending or attention-required snapshots while
+  preserving its original prerequisite; keep emergency reducing-power requests available.
+  Native execution must accept a snapshot prerequisite only after exact successful settlement.
+- Regression: `go test ./internal/agent -run
+  '^TestNeedsAttentionSnapshotKeepsSameVMPowerBehindBothSnapshotKinds$' -count=1` passed.
+  Reverting only the two unresolved-status checks reproduced the failure for both create
+  and revert; restoring them passed. The two
+  `TestManagedPowerAfterSettledSnapshot*PredecessorExecutes` checks pass, proving exactly
+  one simulated native start after settled create/revert. The explicit failed-predecessor
+  test covers failed, pending, attention-required and wrong-VM refusals before native calls.
+  Full agent/localcore and vmhost checks passed; vmhost race checks passed. The existing
+  forge Go suite runs these tests, with privileged snapshot fixtures explicitly covered
+  as recorded in BUG-0646.
+- Avoid: replacing an explicit failed prerequisite with a successful snapshot, mutating the
+  stored request to bypass a dependency, or describing this safe refusal as a native start.
+
+## BUG-0644 — Failed start preflight left durable VM state at starting
+
+- Date: 2026-09-26. Status: reproduced in the disposable lab; operation/epoch binding
+  regressions and independent review pass; corrected native walkthrough remains pending.
+- Symptom: memory preflight refused a selected stopped VM before native start. Its result
+  was terminally failed, but the master still recorded `starting` and rejected a subsequent
+  stopped configuration update. Emergency Force stop succeeded without changing that record.
+- Root cause: start admission advances the master state before native preflight; failed
+  completion removes the local permit and returns before reconciling the owner state.
+  Inventory deliberately does not turn an in-flight start into a stopped record, and
+  emergency reducing-power operations do not depend on a master acknowledgement.
+- Required correction: reconcile proven failed starts through authenticated owner evidence
+  tied to the exact start epoch. Preserve conservative handling of ambiguous effects and
+  stale results; never infer stopped state from a timeout or unreachable host.
+- Regression: normal-start failure, stale/ambiguous refusal, restart inventory, start-after-create
+  failure and signed replica persistence tests pass; the full agent and race suites passed.
+  Further review found that the existing synthetic automatic-start failure also represents
+  unconfirmed native requests and interrupted starts. A successful VM creation plus a
+  currently shut-off guest is not proof that its automatic start failed before effects.
+  Callback and inventory settlement must preserve that uncertainty. A journal
+  `start_outcome` records whether the failure preceded native dispatch; old error prose
+  cannot establish that boundary and remains uncertain. Focused callback, inventory,
+  legacy and unknown-marker tests passed in independent review without skips; the final
+  full Go suite passed, and the full vmhost race suite passed. Native reproduction is preserved privately, and the
+  corrected native walkthrough remains pending. Legacy unbound reservations remain fenced;
+  the lab retains the original failed fixture and uses a separate new VM for revert work.
+- Avoid: editing the durable master record by hand, weakening memory reserve checks or
+  treating a successful emergency stop as proof that master reconciliation completed.
+
+## BUG-0645 — Stopped-revert validation used the post-capture overlay
+
+- Date: 2026-09-26. Status: implementation correction, executor regressions and independent
+  review passed; real managed-revert walkthrough remains outstanding.
+- Symptom: a correct native revert would fail validation and remain reserved instead of
+  settling. The expected backing suffix included the overlay created after capture.
+- Root cause: revert copied the create journal's `ExpectedAfter` disk chain. That overlay
+  contains writes made after the retained point; native revert creates a fresh head over
+  the immutable pre-capture chain recorded in `Before`.
+- Correction: bind the revert base to `Before`, while retaining separate exact checks of
+  the selected capture journal and native snapshot metadata. Also project the new VM
+  revision into reported inventory only after successful master settlement; omitting the
+  revert from that projection leaves a stale revision that the master correctly rejects.
+- Evidence: independent comparison with the preserved native branch experiment confirmed
+  the fresh reverted head uses the pre-capture suffix. Review also identified absent-path
+  firmware manifest handling: the manifest helper returns `Exists=false`, not an
+  `os.ErrNotExist` error. Staging and interrupted-rename checks now use that contract.
+- Regression: firmware staging/resume, old-before/new-after settlement projection, reserved
+  native-call completion and persisted-native-stage no-repeat tests pass through the public
+  executor. Full vmhost normal and race tests passed. These tests simulate native tools and
+  storage; real managed-revert acceptance remains outstanding. Forge's existing Go suite
+  runs the package and its explicit privileged step runs the snapshot fixtures.
+  The existing API contract regression also detected missing `snapshot-revert` entries in
+  the aggregate `Command` and `Operation` kind enums. After correcting both and regenerating
+  the reference, the API/CI/documentation Python selection passed all 118 tests.
+- Avoid: teaching a simulated native response to match the wrong expected chain, publishing
+  a new revision before settlement or counting raw `virsh` tests as Core executor coverage.
+
+## BUG-0646 — Snapshot fixtures skipped locally and failed their root-owned storage preflight
+
+- Date: 2026-09-26. Status: fixture correction, both privileged regressions and all 34 tests
+  in the explicit privileged snapshot selection passed locally.
+- Symptom: ordinary package tests passed while two snapshot recovery tests skipped under
+  a non-root account. Running them as root failed before the native command because the
+  fixture's storage directory was not executable by QEMU.
+- Root cause: `stoppedSnapshotTestFixture` requires root ownership but creates the storage
+  root and VM directories through `MkdirAll(..., 0700)`. Production correctly requires
+  executable storage ancestry. The restarted-engine fake also omitted the ordinary
+  `qemu-img info` response needed by its full chain check. The general Go CI command did
+  not explicitly guarantee privileged execution.
+- Correction: create fixture directories through the existing managed-directory helper,
+  supply the fake image metadata response, and add an
+  explicit privileged snapshot test-binary run to both forge workflow copies. Keep the
+  production ancestry check intact.
+- Regression: `sudo -n /usr/bin/go test ./internal/vmhost -run
+  '^(TestBlockedSnapshotCaptureAllowsUnrelatedVMStart|TestPersistedNativeSnapshotRetryReconcilesWithoutRepeatingCreate)$'
+  -count=1 -v` reproduced both failures before native effects and then passed both corrected
+  fixtures without skips. The broader compiled race-enabled privileged snapshot selection
+  exposed an incomplete new predecessor-test fixture; after supplying its current disk
+  projection and simulated chain observer, the exact forge-step commands passed all 34
+  selected tests without skips: `go test -race -c -o .cache/vmhost-snapshot.test
+  ./internal/vmhost`, then `sudo -n .cache/vmhost-snapshot.test -test.run 'Test.*Snapshot'
+  -test.v -test.timeout 5m`. No remote CI run has been triggered.
+  Previous non-root package passes are not execution evidence for these
+  tests; the separately recorded native lab evidence is unchanged.
+- Avoid: treating skipped tests as passing coverage or relaxing production directory
+  ownership checks to make an invalid test fixture pass.
+
+## BUG-0647 — Native stopped revert failed post-effect validation
+
+- Date: 2026-09-26. Status: fixed; observe-only lab recovery and focused regressions passed.
+- Symptom: a two-disk UEFI/Secure Boot/vTPM VM captured point A successfully, then
+  changed guest data, EFI/TPM state, name, CPU and memory. The first Core API revert
+  invoked native revert once and left the VM stopped with fresh heads backed by A's
+  original disk layers, but reported `needs_attention` instead of settling.
+- Observed checks: the reverted definition failed Core comparison, and the retained
+  native snapshot metadata failed its expected writable-disk projection. The current
+  native definition shows A's CPU/memory and the current VM name.
+- Root cause: native revert rewrites the selected snapshot's external disk metadata to
+  its fresh heads and may create a qcow2 overlay for an attached read-only ISO. Core
+  compared post-native metadata and CD-ROM sources to the pre-revert capture digests.
+- Correction: wire `verifyRevertedNativeSnapshot` after native/resume so writable snapshot
+  metadata must match live heads, immutable identity is retained, and verified ISO
+  overlays are accepted. Record `ObservedTargetNativeXMLSHA256` without changing the
+  reservation intent. Fix the settled-media projection fixture virsh argv (`$3`) and use a
+  full managed domain for next-definition checks. Exact same-operation retry must observe
+  the existing native effect and must not invoke `snapshot-revert` again.
+- Regression: `go test ./internal/vmhost -run 'SnapshotRevert|SettledSnapshotMedia' -count=1`
+  passed. Disposable-lab observe-only retry of the preserved operation settled with native
+  counter remaining `1`, master pending recovery cleared at revision 3, and guest markers
+  restored to point A with Secure Boot enabled.
+- Avoid: editing the master or operation journal, issuing a new revert to bypass the
+  reservation, booting an incompletely verified restore, or dropping metadata checks
+  merely to obtain a successful result.
+
+## BUG-0648 — Backup authority refs re-enter poolPeerMu during snapshot reservation
+
+- Date: 2026-09-27. Status: fixed; focused agent regressions passed; disposable-lab
+  product backup path not exercised by this fix.
+- Symptom: Broad `go test ./internal/agent/ -run '…Catalog…'` hung in snapshot reservation after S6 added compact backup authority refs to the pool replica.
+- Root cause: `reservePoolVMSnapshotLocked` holds `poolPeerMu` while `poolVMReplicaFits` → `buildPoolAuthorityReplicaForMembership` → `PoolBackupAuthorityRefs` → `masterBackupPool`/`ListPoolBackupPolicies` → `Membership`, which locks `poolPeerMu` again on the same goroutine.
+- Fix: `PoolBackupAuthorityRefs` loads policy/run files directly and never calls `Membership`; the authority builder already verified this host is master.
+- Regression: `TestPoolBackupAuthorityRefsDoesNotReenterPeerLock` (2s timeout under `poolPeerMu`); Catalog-matching and backup schedule tests under a package timeout.
+- Avoid: calling `Membership` (or any `poolPeerMu` taker) from code reachable while snapshot/authority paths already hold `poolPeerMu`.
+
+## BUG-0649 — Backup-now exact retry failed after a published recovery point
+
+- Date: 2026-09-27. Status: fixed; focused vmhost/agent regressions passed; lab redeploy still outstanding.
+- Symptom: Browser Back up now returned HTTP 202, then the Controller operation settled `failed` with `backup recovery point already exists` while the NFS directory for that operation id already held `manifest.json` and disk artifacts. Catalog GET still showed prior points.
+- Root cause: Controller-dispatched `backup-now` executes without `acceptBackupRequest`, so `pool-backup-runs/{id}.json` was never reserved before publish. Publish succeeded, settle failed (`needs_attention`), and the next heal retry called `PublishBackupRecoveryPoint` again, which refused the existing directory as a hard failure.
+- Fix: `ensureBackupRunReserved` during backup/restore execute (idempotent with Core-local admission). `PublishBackupRecoveryPoint` treats an already-complete matching published point as success for exact same-key retry; mismatched key fields still refuse with `already exists`.
+- Regression: `TestPublishBackupRecoveryPointExactRetrySettlesWithoutRepublish`; `TestBackupNowControllerPathReservesRunAndExactPublishRetrySettles`.
+- Avoid: treating a published recovery-point directory as a failed conflict on exact same-key retry, or settling backup-now without a durable run reservation on the Controller path.
+
+## BUG-0650 — Restore-as-new needs_attention with missing pool-backup-runs journal
+
+- Date: 2026-09-27. Status: fixed; focused agent regression passed; lab redeploy still outstanding.
+- Symptom: Restore as new created the stopped guest and disk on the host (`vm-create` succeeded) while the Controller restore operation settled `needs_attention` because `pool-backup-runs/{id}.json` was missing.
+- Root cause: Same Controller dispatch gap as BUG-0649 — restore-as-new ran `RegisterRestoredAsNew` then `SettlePoolBackupRun` without a reserved run file when the command arrived via the managed journal rather than Core-local `acceptBackupRequest`.
+- Fix: `ensureBackupRunReserved` at the start of restore-as-new (and replace/test-restore) execution so settle always finds the durable run record; exact same-key reserve retries remain idempotent; changed input for the same operation id returns conflict.
+- Regression: `TestRestoreAsNewControllerPathReservesMissingRunBeforeSettle`.
+- Avoid: assuming only Core-local admission creates `pool-backup-runs/` before native restore effects.
+
+## BUG-0651 — Promoted master loses backup policies/catalog/runs (503 backup ops)
+
+- Date: 2026-09-27. Status: fixed; focused agent promote fixtures passed; live nested Campaign B re-run **pass** (same-day overlay redeploy `4f569d0e…4095d9`: survivor retained policies/catalog/runs, restore-as-new from NFS while former master down, fresh Controller adopted same IDs).
+- Symptom: After fence-verified master promotion (Campaign B), the survivor listed empty backup policies/catalog/runs and returned `503 backup operation unavailable` for repository test/catalog rebuild, while the signed authority replica still carried `backup_authority` summaries and NFS still held recovery-point payloads.
+- Root cause: `PoolBackupAuthority` only replicated compact policy/run refs, and `adoptPoolAuthorityFromReplica` never materialized backup repositories, policy definitions, run history or catalog index into the survivor's durable stores. Becoming master alone did not recover those files.
+- Fix: Expand `backup_authority` to carry repositories, full policy definitions, retained run history and catalog index (still no NFS payloads). Adopt that state during promotion activation with rollback; when the catalog index is empty but a repository mount is usable, auto-import validated manifests.
+- Regression: `TestPoolPromotionRetainsBackupAuthority`; `TestPoolPromotionRebuildsCatalogFromNFSWhenIndexEmpty`; `TestAdoptPoolBackupAuthorityAndRebuildFromMount`.
+- Avoid: treating compact backup_authority refs as sufficient for takeover, or advertising backup mutating APIs on a promoted master before durable backup stores are present.
+
+## BUG-0652 — Member peer backup result rejected on Controller heartbeat
+
+- Date: 2026-09-27. Status: fixed in source; focused regressions passed; native
+  member heartbeat retest pending for this changed binary.
+- Symptom: a Core3 member executed a direct backup delegated by Core2's pool
+  master. The master-owned operation succeeded, but Core3's next Controller
+  report included that operation's result. Controller correctly rejected the
+  result as belonging to Core2, so Core3's heartbeat failed and its status
+  became stale.
+- Root cause: authenticated peer admission created an ordinary local journal
+  entry and completion reset its acknowledgement. The report path then treated
+  that entry as a Controller-owned operation. Older member journals also lack
+  any peer-origin marker.
+- Fix: persist a peer-dispatched marker on admission and exact peer replay;
+  omit marked entries from Controller results and synthetic outcomes while
+  retaining the journal for safe peer retry. Before reporting, identify older
+  member entries through matching local backup run records; preserve a former
+  master's own Controller results. Keep Controller's foreign-host result
+  rejection intact.
+- Regression: `go test ./internal/agent -run
+  'TestMemberPeerBackupResultDoesNotBlockControllerReport|TestFormerMasterKeepsControllerOwnedBackupResult|TestPeerBackupAdmissionRetainsJournalForExactReplay'
+  -count=1` passed all three focused cases. `go test ./internal/agent
+  -count=1` passed. A real Core3 report after redeploy has not yet been recorded.
+- Compatibility limit: a pre-marker Controller-direct backup on a current
+  member could match the same local run pattern as a peer command and have its
+  result suppressed. Current Controller sends backup operations to the master;
+  the older journal format cannot prove which caller admitted such an entry.
+- Avoid: weakening Controller operation ownership checks or deleting the
+  member journal to make heartbeat pass; both lose a safety boundary or exact
+  peer replay evidence.
+
+## BUG-0653 — Background restore completion occupied the foreground Run slot
+
+- Date: 2026-09-27. Status: fixed in source; focused and package regressions
+  passed; native retry still pending for the changed candidate.
+- Symptom: Core2 admitted a second Core-local restore and retained its pending
+  journal and reserved backup run, but it produced no staging or target effects.
+  Restarting the agent dispatched that same pending restore immediately.
+- Root cause: multiple background completion branches passed their completed
+  operation ID as the foreground `active` argument to `completeManagedCommand`
+  and assigned its unchanged return to the foreground slot. A successful
+  member restore could block the next restore; a v3 restore entering
+  `needs_attention` also blocked the unrelated v4 restore.
+- Fix: background branches call a dedicated completion wrapper with no
+  foreground ID and do not assign its return to `active`. The selector fences
+  another backup or restore for the same VM while an earlier one needs
+  attention, but lets independent targets proceed. A temporary terminal-ID
+  gate-clearing workaround was removed.
+- Regression: `TestSettledMemberRestoreDoesNotBlockNextLocalRestore` and
+  `TestAttentionRestoreReleasesGateButFencesSameTarget` failed before their
+  respective fixes and passed afterward. `go test ./internal/agent
+  ./internal/protocol ./internal/vmhost -count=1` passed. Native settlement
+  of the second restore is not yet recorded.
+- Avoid: restarting the agent as the recovery procedure for every queued
+  restore, or clearing `needs_attention` gates without reconciling native work.
+
+## BUG-0654 — Definite restore placement refusal stranded a provisional VM owner
+
+- Date: 2026-09-27. Status: fixed for new creator-marked owner records in
+  source; focused agent/vmhost tests passed. The pre-fix Core2 v3 owner record
+  lacks creator provenance and remains `needs_attention` for audited repair.
+- Symptom: a restore-as-new request met a definite native capacity refusal
+  before target effects, but Core reported `needs_attention`, retained the
+  restore pin and left the pool master's provisional VM owner row in place.
+- Root cause: after master placement admission, the error path could not prove
+  that the row belonged to this exact restore or safely remove it. A generic
+  failure settlement would have risked releasing protection while a target
+  definition existed.
+- Fix: new `pool-vms.json` owner records retain `create_operation_id`. The
+  executing Core proves the exact target has no managed journal, libvirt
+  domain, disk directory, NVRAM or TPM state, then uses pinned mTLS action
+  `release-restore-placement` to ask the master to remove only the matching
+  pending restore/test owner. The master checks current member identity,
+  complete spec, pending run, creator ID, epoch and inventory before a durable
+  delete. A successful exact replay is acknowledged; any uncertain or legacy
+  record stays fenced and pinned.
+- Regression: `TestRestorePlacementPeerReleaseRequiresExactOwner` covers
+  missing absence claim, wrong member/spec/operation, legacy blank creator,
+  exact success and replay. `TestRestoreAsNewPreEffectPlacementRefusalFailsAndReleasesPin`
+  and the test-restore counterpart check definite failure and pin release.
+  `TestRestoreAsNewTargetAbsentRequiresNoNativeEffects` checks the local
+  absence proof. Focused `go test ./internal/agent ./internal/vmhost -run
+  'TestRestorePlacementPeerReleaseRequiresExactOwner|TestRestoreAsNewPreEffectPlacementRefusalFailsAndReleasesPin|TestTestRestorePreEffectPlacementRefusalFailsAndReleasesPin|TestRestoreAsNewTargetAbsentRequiresNoNativeEffects'
+  -count=1` passed. Native v4 recovery has not yet been recorded.
+- Avoid: deleting a master VM owner row based on a timeout, a Boolean alone,
+  or a legacy row without the exact creator operation; do not clear the pin
+  before both native absence and durable master release are established.
+
+## BUG-0655 — One restore pin blocked another target using the same point
+
+- Date: 2026-09-27. Status: fixed in source; focused and package tests passed;
+  native rerun pending. The unresolved v3 restore remains pinned.
+- Symptom: the v3 restore's `needs_attention` pin on an immutable recovery
+  point caused a second restore to a different VM ID from that same point to
+  fail admission before its run was created.
+- Root cause: `pool-backup-pins.json` keyed pins by recovery point ID, so only
+  one restore operation could hold that point even when the targets were
+  independent. Pin ownership and prune protection were conflated.
+- Fix: persist pins by operation ID; allow distinct operations to pin the
+  same point, preserve same-target command conflict, and remove only the exact
+  operation's pin at settlement. Reading older point-keyed state reindexes
+  valid values without dropping an unresolved pin and rejects mismatched or
+  duplicate operation keys. Retention and catalog rebuild still treat a point
+  as protected while any pin refers to it. Signed backup authority transfer
+  carries each operation pin and validates unique operation IDs.
+- Regression: `TestDistinctRestoreTargetsSharePointPinsAndSameTargetConflicts`
+  covers legacy pin migration, distinct-target admission, same-target
+  refusal after journal-less promotion, and separate pin clearance.
+  `TestBackupPinStoreRejectsCorruptKeysAndDuplicateOperations` and
+  `TestBackupAuthorityPinsPermitSamePointButRequireUniqueOperations` cover
+  corrupt persisted and replicated pins. Activation and reservation tests
+  also passed. `go test ./internal/agent ./internal/protocol ./internal/vmhost
+  -count=1` and the repository privacy test passed; no native rerun has yet
+  proven the changed binary.
+- Avoid: using recovery point ID as a unique restore identity or clearing
+  every pin for a point when only one restore settles.
+
+## BUG-0656 — Promoted master could replay an inherited uncertain restore
+
+- Date: 2026-09-27. Status: fixed in source; focused and package tests passed;
+  native promotion/retry remains unverified for this changed binary.
+- Symptom: an exact restore request retried after master promotion could find
+  the inherited `needs_attention` run and pin but no executing command in the
+  promoted master's journal. Treating the request as new work risked a second
+  native restore for an outcome that had not been observed.
+- Root cause: admission used the local command journal as its only exact replay
+  boundary; signed authority transferred runs and pins, not the former
+  master's native execution command.
+- Fix: when no local command exists, Core checks the retained restore run and
+  its exact intent before admission. An exact retry returns that durable run
+  outcome without enqueuing native work; changed intent conflicts. A fenced
+  promotion maps inherited pending runs and metadata receipts to
+  `needs_attention` and preserves restore pins. Planned master change/eject
+  refuses unresolved backup journal work, pending runs or pending receipts
+  before freezing authority.
+- Regression: `TestDistinctRestoreTargetsSharePointPinsAndSameTargetConflicts`
+  checks journal-less promotion replay and changed-intent conflict alongside
+  distinct-target admission. `TestAuthorityFreezeRefusesUnresolvedBackup`,
+  `TestPoolTransferRefusesPendingBackupBeforeFreeze` and
+  `TestInheritedPendingBackupNeedsAttentionAndKeepsPin` cover transfer gates
+  and inherited status/pin. `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1` passed as reported by the code owners. No
+  changed-binary native promotion/retry run is claimed.
+- Avoid: reconstructing a former master's execution command from a run or
+  treating a missing local journal as evidence that native effects never
+  started.
+
+## BUG-0657 — Backup history growth could outpace the signed member replica
+
+- Date: 2026-09-27. Status: fixed in source with focused tests; native
+  near-boundary transfer and promotion remain unverified.
+- Symptom: Core could accept more backup metadata than the bounded signed
+  authority could carry to a member. That member then lacked a current
+  complete backup history for promotion. This was identified by source review;
+  no native over-capacity incident is claimed.
+- Root cause: repository, policy, run, catalog, pin and receipt writers did
+  not all check the future signed-authority size before committing. A later
+  replica encode could refuse after master state had grown.
+- Fix: the master now preflights the projected authority before metadata
+  writes, reserves byte headroom for pending run/catalog and receipt outcomes,
+  bounds persisted error text, and serializes scheduler and verification
+  writers with authority changes. Protection preflights before its repository
+  marker changes. A capacity refusal leaves the proposed metadata unaccepted.
+  The byte bound is 64 MiB; the encoder's packing rule prevents the 1024-page
+  count from being reached first for valid records.
+- Regression: five `TestBackupAuthorityCapacity*` tests cover refused new
+  runs, run/catalog settlement, pending outcome headroom and pre-marker
+  protection refusal. `TestPoolBackupAuthoritySparsePagesRemainBelowPageLimit`
+  confirms the packing bound. The code owner ran the focused tests and
+  `go test ./internal/agent ./internal/protocol ./internal/vmhost -count=1`
+  plus repository privacy; all passed. The tests were added after the guard,
+  so no observed pre-fix red run is claimed. No native capacity refusal,
+  near-boundary peer transfer or promotion was exercised.
+- Avoid: accepting an operation merely because the current master can store
+  it locally, or treating the 64 MiB limit as unbounded retained history.
+
+## BUG-0658 — Test restore verification and cleanup trusted a reused VM ID
+
+- Date: 2026-09-27. Status: fixed in source; focused and affected Go package
+  tests passed; current-binary native Verify/Cleanup rerun remains open.
+- Symptom: a successful test run and pool VM owner row could still refer to a
+  VM ID after the original test VM was deleted or replaced. Recording a pass
+  or cleaning by that ID risked attributing a replacement VM to the restore
+  or deleting it. This was found by source review, not a claimed native
+  destructive reproduction.
+- Root cause: master-side run and VM ownership records alone did not prove
+  that the current native definition was created by the exact test-restore
+  operation. Member-host verification lacked a current native proof path,
+  and cleanup needed creator binding through native delete and settlement.
+- Fix: Core requires the exact successful test run, master VM specification,
+  native creator journal and current VM identity. A new current-master
+  authenticated read-only peer `POST /api/v1/pool/backup/verify-test` obtains
+  member proof before recording a result. `passed` requires current disks and
+  firmware; `failed` permits damaged artifacts while requiring unchanged
+  creator and definition. Cleanup keeps that binding through native deletion
+  and master settlement; a lost delete reply reconciles only with an exact
+  successful native receipt and target absence. Blank legacy creator or
+  missing native journal fails closed. A pending verification receipt survives
+  interrupted peer proof for exact retry.
+- Regression: `TestBackupVerificationRequiresMatchingSuccessfulTestRun`,
+  `TestMemberTestVerificationBindsNativeProofAndRun`,
+  `TestRunTestVerificationWaitsForNativeProofWithoutBlockingReports`,
+  `TestTestRestoreCleanupReconcilesLostNativeDeleteReply`,
+  `TestTestRestoreCleanupRefusesReusedPoolVMAtSettlement` and vmhost tests for
+  creator binding and damaged-artifact failed results passed. The owners ran
+  `go test ./internal/agent ./internal/protocol ./internal/vmhost -count=1`,
+  privacy unittest and diff check successfully. No observed pre-fix red test
+  run or native Verify/Cleanup rerun is claimed.
+- Avoid: treating a matching UUID, a historical successful run, or an absent
+  post-delete VM alone as proof of the current VM's restore origin.
+
+## BUG-0659 — First-use TPM restore could not establish the native state root
+
+- Date: 2026-09-27. Status: source correction and focused tests passed;
+  bounded native exact-operation recovery and UEFI firmware boot passed.
+  Guest OS boot and TPM-sealed application-data recovery remain open.
+- Symptom: the disposable member's first UEFI/vTPM restore stopped before
+  guest boot because `/var/lib/libvirt/swtpm` did not yet exist. Its retained
+  native journal stayed at `allocating` and the restore remained
+  `needs_attention`; the target and pin were preserved.
+- Root cause: the TPM placement path assumed libvirt had already created its
+  swtpm root. An initial repair draft also checked ancestor symlinks only
+  after a possible chmod of an empty 0700 leaf, allowing a changed parent
+  symlink to redirect that mutation.
+- Fix: Core creates only the exact missing native root with mode 0711 after
+  validating every ancestor. The allocating journal durably records whether
+  that root was absent; an exact retry may repair only an empty 0700 root
+  owned by the Core process after ancestor validation. A symlink, nonempty
+  root or changed native intent refuses. Core now resumes only the exact
+  retained allocating restore, binds its immutable manifest and disk
+  descriptors, and requires full staged/placed artifact proof before binding
+  older unbound journals. Later ambiguous native stages remain observation
+  only.
+- Native follow-up: the older pending allocation journal carried a null
+  pre-copy disk chain. A newer reader initially refused that legacy shape
+  before reconciliation; the corrected reader accepts only that pending
+  allocating restore form and new pre-copy journals omit the empty chain.
+- Regression: `TestBackupTPMRootAccessibleCreatesOnlyMissingNativeRoot`
+  checks first creation, symlink rejection, empty reserved repair, nonempty
+  refusal and a symlinked ancestor without changing the foreign leaf.
+  `TestAllocatingRestoreResumesOnlyExactRetainedOperation` and
+  `TestBindLegacyRestoreAllocationRequiresCompleteExistingArtifacts` check
+  exact retry, preserved pin on failure and changed-artifact refusal.
+  `TestReadLegacyAllocatingRestoreWithReservedEmptyDiskChain` checks the
+  narrow older journal form. Code
+  owners reported full `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1`, privacy and diff checks passing. No observed
+  pre-fix red regression run is claimed. On the disposable member, the
+  changed Core service restarted and reconciled the original v5 operation
+  without a new restore POST: member journal and master run reached
+  `defined`/`succeeded` and `registered`/`succeeded`; the restored stopped
+  domain used libvirt's default UUID TPM tree. Artifact disk marker, NVRAM
+  and TPM state hashes matched before start. An isolated start reached UEFI
+  firmware with swtpm using that UUID tree; NVRAM and TPM state changed after
+  boot and the disk marker stayed intact. The disk had no guest OS, so this
+  does not prove OS boot or TPM-sealed data recovery. ACPI shutdown timed out
+  and the exact disposable VM was stopped through libvirt. This native retry
+  exercised first-use TPM root creation, legacy null-chain normalization and
+  exact legacy binder; interrupted 0700 root repair remains unit-tested only.
+- Avoid: assuming a host has already run a TPM VM, chmodding a path before
+  checking ancestors, or replaying an uncertain restore with new target or
+  recovery-point content.
+
+## BUG-0660 — Test restore point pin could clear before cleanup
+
+- Date: 2026-09-27. Status: fixed in source with focused and package tests;
+  native member restore and prune rerun remain open.
+- Symptom: a successful member test restore could clear the recovery-point
+  pin as soon as its peer result settled, while its isolated test VM still
+  existed. Retention could then prune that point before verification/cleanup.
+  A separate interruption between terminal settlement and pin clear could
+  leave ordinary restore pins retained longer than intended.
+- Root cause: direct peer settlement treated every successful restore as
+  eligible for pin release; the restart path did not reconcile terminal pin
+  clears. Test restore has a different lifetime: its pin ends only after
+  proven cleanup.
+- Fix: direct peer settlement retains the pin for a successful test restore
+  and for all uncertain results; it clears only failed test or terminal
+  ordinary restore pins. Periodic Core reconciliation clears stale terminal
+  ordinary pins after a durable run proves the exact outcome, while keeping
+  successful test and attention pins until their respective safe endpoints.
+- Regression: `TestMemberTestRestoreSettlementKeepsSuccessfulPin`,
+  `TestSuccessfulTestRestoreStaysPinnedUntilCleanup` and
+  `TestTerminalRestorePinsReconcileAfterRestart` passed. Code owners reported
+  full `go test ./internal/agent ./internal/protocol ./internal/vmhost
+  -count=1`, privacy and diff checks passing. No native member/prune rerun or
+  observed pre-fix red test is claimed.
+- Avoid: treating a successful test restore as finished protection while its
+  test VM remains, or clearing pins from an uncertain run.
+
+## BUG-0661 — Promoted master could strand pending test cleanup receipt
+
+- Date: 2026-09-27. Status: fixed in source with focused and package tests;
+  native promotion/cleanup rerun remains open.
+- Symptom: a promoted master inherited a pending test-cleanup metadata
+  receipt and the successful test run but not the former master's command
+  journal. With no command to drive reconciliation, the test VM and pin could
+  remain indefinitely pending after a lost reply or master loss.
+- Root cause: signed backup authority transfers receipts and runs, not the
+  prior master's execution journal; cleanup recovery previously looked only
+  for an existing local command.
+- Fix: the writable promoted master derives a cleanup command only when one
+  successful test run produces the exact inherited pending receipt intent
+  digest. It durably rehydrates that command and uses the existing
+  authenticated owner-host cleanup and native-origin guards. A mismatch or
+  ambiguous run leaves the receipt and pin untouched. The recovered journal
+  is marked peer-dispatched/internal so the promoted Core does not report the
+  former master's Controller operation as its own. Fresh restore
+  reconciliation now reports the current native failure while preserving
+  the prior reason only when the allocation journal is unavailable.
+- Regression: `TestPromotedMasterRecoversOnlyExactPendingTestCleanup` checks
+  mismatch refusal, exact rehydration, internal result ownership and pin
+  retention before owner proof.
+  Code owners reported full `go test ./internal/agent ./internal/protocol
+  ./internal/vmhost -count=1`, privacy and diff checks passing. No native
+  promotion/cleanup replay or observed pre-fix red run is claimed.
+- Avoid: replaying a pending receipt as a new cleanup without an exact run
+  and intent match, or removing the point pin before native deletion and
+  master owner settlement.
+
+## BUG-0662 — Controller kept an old attention row after Core restore succeeded
+
+- Date: 2026-09-27. Status: fixed in source and observed in the disposable
+  changed-binary Controller rerun; wider Phase 6 acceptance remains open.
+- Symptom: the original v5 restore reconciled to `succeeded` in the executing
+  Core journal and master's backup run, and the Core-backed backup-runs API
+  showed that result, but the Controller's generic operation row still showed
+  `needs_attention` after it acknowledged the later authenticated Result.
+- Root cause: Controller report handling allowed only ZFS provisioning to
+  move from `needs_attention` to a later terminal Result. It acknowledged a
+  backup Result for the same host and operation ID without updating that
+  operation row. Once ACKed, Core's managed outcome could also be obscured by
+  a native `vm-create` outcome with the same restore operation ID.
+- Fix: a later `succeeded` or `failed` backup Result from the authenticated
+  operation-owning host may settle the same Controller row. Core backup runs
+  and resource projections alone do not drive this transition; a foreign
+  host result remains rejected. Core continues reporting the durable
+  Controller-owned backup Journal outcome, including repository, policy,
+  protect, catalog and test metadata work, after Result ACK and suppresses a
+  same-ID native `vm-create` outcome; peer-dispatched member work stays
+  excluded. Controller adopts only an explicit same-host, same-kind Core
+  outcome into its own nonterminal row when a late Result is no longer sent.
+  The own-operation lookup now also binds the host and kind in both the
+  operation and managed-resource rows, so a colliding ID from another host or
+  resource kind becomes a separate adopted outcome.
+- Regression: `TestBackupResultRecoversControllerAttention` failed before
+  the fix and passed afterward; existing cross-host rejection remains
+  covered. `TestAcknowledgedBackupRestoreOutcomesRemainInDurableInventory`
+  checks recurring restore history, native same-ID collision and peer
+  exclusion; `TestBackupOutcomeRecoversAcknowledgedControllerAttention`
+  checks Controller catch-up after ACK.
+  `TestAcknowledgedBackupMetadataOutcomesRemainInDurableInventory` checks
+  metadata kinds and peer exclusion;
+  `TestBackupMetadataOutcomeRecoversAcknowledgedControllerAttention` checks
+  Controller test-verification catch-up after ACK.
+  `TestBackupOutcomeAdoptionSurvivesOperationIDCollisions` failed before and
+  passed after the scoped lookup correction. Full affected Go packages,
+  privacy and diff checks passed as reported by the owners. In the disposable
+  v12 rerun, Controller C changed the historical v5 operation row from
+  `needs_attention` to `succeeded` using the recurring authenticated Core
+  outcome. No database edit or new restore POST was used. Core2 and Core3
+  were fresh, and all 14 nested VMs were stopped at the final checkpoint.
+- Avoid: acknowledging a later authoritative Result while leaving an older
+  uncertain UI task row unchanged, or letting an internal native `vm-create`
+  hide the Core-owned restore outcome.
+
+## BUG-0663 — Transient member test-restore reply was treated as a different operation
+
+- Date: 2026-09-27. Status: source fix and focused regression passed; a later
+  disposable member test restore completed, but the original raw peer reply
+  was not captured.
+- Symptom: a member test restore briefly returned a peer error described as a
+  different operation while its durable run and command journal were settling.
+  The exact status pair on that earlier wire reply is unavailable.
+- Root cause: source review found that the master treated a terminal member
+  run paired with a lagging `pending` or `needs_attention` journal Result as a
+  permanent inconsistency. This is a source-based explanation consistent with
+  the observed transient, not a proven reconstruction of the absent reply.
+- Fix: the authenticated peer reply still requires the exact operation ID,
+  intent, pool, executing member host, repository, point and VM target. Only
+  the expected lag of the journal Result behind a terminal run is retryable;
+  reversed or contradictory status, changed identity or target remains a
+  permanent refusal. No peer request or response schema changed.
+- Regression: `TestPeerTestRestoreWaitsForJournalToCatchUpWithRun` failed
+  before the fix and passed afterward as reported by the owner; it checks
+  retryable lag and permanent reverse skew. `TestPeerRestoreReplyRejectsSameOperationDifferentTarget`
+  checks target, pool and host binding. An independent focused run of both
+  tests passed with `go test ./internal/agent -run
+  'TestPeerTestRestoreWaitsForJournalToCatchUpWithRun|TestPeerRestoreReplyRejectsSameOperationDifferentTarget'
+  -count=1`. The owner reported full agent/protocol, privacy and diff checks
+  passing; the primary operator later reported `go test ./...` passing.
+- Native evidence: a separate disposable Core3 BIOS test restore reached a
+  succeeded run with its exact point pin and creator record. The inspected
+  boot screen showed no bootable device, so the operator recorded Failed.
+  Verify and typed-ID Cleanup receipts succeeded; native VM, disk and firmware
+  were absent, and the master owner row and exact pin were removed. This
+  establishes that bounded workflow, not the exact earlier status-skew cause.
+- Avoid: making a status observation race authorize a changed peer identity or
+  target, or replaying a settled native restore as a new effect.
+
+## BUG-0664 — Restore manifest was not bound to the master's catalog point
+
+- Date: 2026-09-27. Status: corrected in source with focused regressions;
+  changed-binary native tamper and member retry checks remain open.
+- Symptom: restore validated the repository owner and internal manifest and
+  artifact digests, but did not compare the selected point's manifest digest
+  with the pool master's catalog. A complete, internally valid replacement
+  payload under the same recovery-point ID could be used for a different VM
+  restore than the catalog point the operator selected.
+- Root cause: the restore run's durable reservation held point identity and
+  command intent, but not the master's catalog `manifest_sha256`. A member
+  started without that catalog entry and therefore could not make the same
+  comparison before native placement.
+- Fix: Core pins the selected master catalog digest in each new restore run.
+  Local as-new, test and replace paths compare that durable digest, current
+  catalog entry and repository manifest before copy or cutover. The current
+  master sends the catalog point over authenticated
+  `POST /api/v1/pool/backup/restore`; the member retains the digest in its
+  run and returns it on GET/POST from that durable run. The master compares
+  member digest and shared payload before accepting success. A changed or
+  missing catalog point, legacy run without a digest and old member lacking
+  the route fail closed; unresolved runs retain their point pins.
+- Regression: independent focused `go test ./internal/agent -run
+  'TestRestoreManifestMustMatchMasterCatalogDigest|TestCleanMemberRestorePeerPersistsMasterCatalogDigest|TestRestorePeerRefusesOlderMemberWithoutCatalogRoute|TestRestoreReplaceRefusesChangedValidCatalogManifestBeforeCopy|TestPoolBackupAuthorityPagesRetainRestoreManifestDigest'
+  -count=1` passed. It covers a valid same-ID payload replacement, all three
+  member restore kinds, old-member route refusal, replace before-copy refusal
+  and signed-authority digest retention. No observed pre-fix red run or native
+  payload-tamper walkthrough is claimed.
+- Avoid: treating an internally valid repository payload as authority for the
+  recovery point selected from the master's catalog, or using a member's
+  current catalog as a substitute for its retained restore-run digest.
+
+## BUG-0665 — Policy tab switch could change an uncertain request's retry body
+
+- Date: 2026-09-27. Status: fixed in UI source with a red/green focused
+  regression; no current-binary browser rewalk for this batch.
+- Symptom: switching from Policies to Recovery points after an uncertain
+  policy create unmounted the local draft, while the parent retained its
+  request ID. Returning to Policies could submit changed fields under the
+  same ID instead of replaying the original request body.
+- Root cause: the policy panel's conditional mount discarded local draft and
+  uncertain-request state across tab changes.
+- Fix: the parent keeps the policy panel mounted and passes an active flag.
+  The off-tab panel returns no visible DOM or listeners after its hooks, while
+  retaining the draft and uncertainty flag for exact retry.
+- Regression: the UI owner reported that the expanded
+  `web/src/backup-policies.test.mjs` failed before the mount correction and
+  passed afterward. Focused source assertions in
+  `web/src/backup-repositories.test.mjs` and `web/src/backups-retry.test.mjs`
+  cover held IDs and frozen or reopened drafts for repository create and
+  restore flows; those two reviewed flows required no production code change.
+  Full web typecheck, tests, build and repository privacy check passed as
+  reported by the UI owner. Browser interaction for this exact tab-switch
+  retry was not rerun.
+- Avoid: retaining a mutation request ID in one component while destroying
+  the only copy of its uncertain body in another.

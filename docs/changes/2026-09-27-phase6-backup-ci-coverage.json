@@ -1,0 +1,41 @@
+{
+  "summary": "Add hermetic Phase 6 backup CI regression covering NFS/temp repo registration, stopped publish, corrupt-manifest refusal, and restore-as-new registration records under go test ./....",
+  "paths": [
+    "internal/agent/backup_ci_test.go",
+    "internal/vmhost/managed_backup_test.go",
+    "docs/changes/2026-09-27-phase6-backup-ci-coverage.json",
+    "CHANGELOG.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI/unit regression only; operator backup workflows and guide pages are unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API, command, or inventory contract changes; tests exercise existing S4 backup behavior.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not close Phase 6; disposable-lab NFS/libvirt campaigns remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Test coverage only; durable backup state remains Core-owned as already recorded for Phase 6 S4–S7."
+  },
+  "verification": {
+    "method": "go test -count=1 ./internal/agent/ -run 'TestPhase6BackupHermeticCIRegression|TestBackupRepositoryCRUDAndInventoryFlags|TestBackupIncompleteNeverCataloged|TestCatalogRebuildImportsValidatedManifestsOnly|TestRestoreAsNewDoesNotSucceedWithoutCapturedSpec'; go test -count=1 ./internal/vmhost/ -run 'TestPublishBackupRecoveryPointRequiresCompleteManifest|TestReadBackupManifestRefusesCorruptPayload|TestBuildRestoreAsNewSpecUsesNewIdentityAndDisconnectedNICs|TestRegisterRestoredAsNewRefusesInvalidInputs'; go test -count=1 ./internal/protocol/ -run 'TestBackupManifestRefusesIncompleteAndCorrupt|TestBackupRepositoryRequiresExternalNFS'; python3 scripts/check_docs.py --worktree. CI pickup: .github/workflows/github.yml and .github/workflows/phase1.yml (and matching .gitea/workflows/phase1.yml) already run go test ./... / go test -race ./...; no workflow edit required.",
+    "evidence": [
+      "internal/agent/backup_ci_test.go",
+      "internal/vmhost/managed_backup_test.go",
+      ".github/workflows/github.yml",
+      ".github/workflows/phase1.yml",
+      ".gitea/workflows/phase1.yml"
+    ],
+    "limits": [
+      "Full restore-as-new libvirt define and root-owned storage ancestry remain disposable-lab gated; hermetic CI proves publish/copy/spec and durable registered run records, plus registration failure before define without managed storage"
+    ]
+  }
+}

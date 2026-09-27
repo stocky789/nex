@@ -431,6 +431,86 @@ func TestExclusiveDiskSkipsMissingOtherDomainSources(t *testing.T) {
 	}
 }
 
+func TestExclusiveDiskFindsBackingOmittedFromDomainXML(t *testing.T) {
+	e := testEngine(t)
+	dir := t.TempDir()
+	owned := filepath.Join(dir, "deep-base.qcow2")
+	head := filepath.Join(dir, "foreign-head.qcow2")
+	for _, path := range []string{owned, head} {
+		if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, other := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	t.Setenv("VMHOST_IDS", id+"\n"+other)
+	t.Setenv("VMHOST_XML", `<domain><devices><disk device="disk"><source file="`+head+`"/></disk></devices></domain>`)
+	t.Setenv("VMHOST_CHAIN_JSON", `[{"filename":"`+head+`","format":"qcow2","backing-filename":"deep-base.qcow2","full-backing-filename":"`+owned+`"},{"filename":"`+owned+`","format":"qcow2"}]`)
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; dumpxml) printf '%s\n' "$VMHOST_XML";; *) exit 2;; esac`)
+	fakeCommand(t, "qemu-img", `printf '%s\n' "$VMHOST_CHAIN_JSON"`)
+	if err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: owned}); err == nil || !strings.Contains(err.Error(), "another domain") {
+		t.Fatalf("partial XML hid a foreign backing reference: %v", err)
+	}
+}
+
+func TestExclusiveDiskFindsExternalDataFileOmittedFromDomainXML(t *testing.T) {
+	e := testEngine(t)
+	dir := t.TempDir()
+	owned := filepath.Join(dir, "owned.qcow2")
+	head := filepath.Join(dir, "foreign-head.qcow2")
+	for _, path := range []string{owned, head} {
+		if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, other := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	t.Setenv("VMHOST_IDS", id+"\n"+other)
+	t.Setenv("VMHOST_XML", `<domain><devices><disk device="disk"><source file="`+head+`"/></disk></devices></domain>`)
+	t.Setenv("VMHOST_CHAIN_JSON", `[{"filename":"`+head+`","format":"qcow2","format-specific":{"type":"qcow2","data":{"data-file":"`+owned+`"}}}]`)
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; dumpxml) printf '%s\n' "$VMHOST_XML";; *) exit 2;; esac`)
+	fakeCommand(t, "qemu-img", `printf '%s\n' "$VMHOST_CHAIN_JSON"`)
+	if err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: owned}); err == nil || !strings.Contains(err.Error(), "exclusive ownership") {
+		t.Fatalf("partial XML hid a foreign external data-file reference: %v", err)
+	}
+}
+
+func TestExclusiveDiskIgnoresMediaAndAcceptsForeignRawDisk(t *testing.T) {
+	e := testEngine(t)
+	dir := t.TempDir()
+	owned := filepath.Join(dir, "managed.qcow2")
+	raw := filepath.Join(dir, "foreign.raw")
+	for _, path := range []string{owned, raw} {
+		if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, other := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	t.Setenv("VMHOST_IDS", id+"\n"+other)
+	t.Setenv("VMHOST_XML", `<domain><devices><disk device="cdrom"><source file="`+owned+`"/></disk><disk device="disk"><source file="`+raw+`"/></disk></devices></domain>`)
+	t.Setenv("VMHOST_CHAIN_JSON", `[{"filename":"`+raw+`","format":"raw"}]`)
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; dumpxml) printf '%s\n' "$VMHOST_XML";; *) exit 2;; esac`)
+	fakeCommand(t, "qemu-img", `printf '%s\n' "$VMHOST_CHAIN_JSON"`)
+	if err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: owned}); err != nil {
+		t.Fatalf("valid foreign raw disk or media source blocked ownership: %v", err)
+	}
+}
+
+func TestCheckImageWithBackingStillRejectsUnsafeFormatMetadata(t *testing.T) {
+	fakeCommand(t, "qemu-img", `printf '%s\n' "$VMHOST_IMAGE_JSON"`)
+	for name, data := range map[string]string{
+		"safe backing":      `{"format":"qcow2","backing-filename":"base.qcow2"}`,
+		"nested data file":  `{"format":"qcow2","format-specific":{"data-file":"external.raw"}}`,
+		"nested encryption": `{"format":"qcow2","format-specific":{"encrypted":true}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("VMHOST_IMAGE_JSON", data)
+			got := checkImageWithBacking(context.Background(), "/disk.qcow2", true)
+			if name == "safe backing" && got != nil || name != "safe backing" && got == nil {
+				t.Fatalf("checkImageWithBacking()=%v", got)
+			}
+		})
+	}
+}
+
 func TestPowerStateChecksJobsOnlyForRunningGuests(t *testing.T) {
 	e := testEngine(t)
 	fakeCommand(t, "virsh", `case "$3" in domstate) printf '%s\n' "$VMHOST_STATE";; domjobinfo) if [ "$VMHOST_STATE" = 'shut off' ]; then exit 9; fi; printf '%s\n' "$VMHOST_JOB";; *) exit 2;; esac`)

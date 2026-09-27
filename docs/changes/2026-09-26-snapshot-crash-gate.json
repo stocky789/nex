@@ -1,0 +1,33 @@
+{
+  "summary": "Build and execute the post-native snapshot crash wrapper with the operation-derived native name and an action/position-scoped gate. API impact: none.",
+  "paths": [
+    "tests/integration/core_local_snapshot_api.py",
+    "tests/test_core_local_snapshot_api.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This is a contributor-only fault-injection helper; it adds no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The helper invokes a test wrapper around virsh and changes no Core, Controller or client API contract.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The regression closes a harness targeting defect only. The unique-operation native crash campaign remains pending and no milestone changes status.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The helper creates temporary test files only; it adds no product state."
+  },
+  "verification": {
+    "method": "`python3 -m unittest tests.test_core_local_snapshot_api -q` passed 18 tests; `python3 -m py_compile tests/integration/core_local_snapshot_api.py tests/test_core_local_snapshot_api.py` passed. Independent review confirmed positional matching, metadata/name non-matches, successful gate release and duplicate refusal. The native post-effect crash campaign has not yet rerun with a unique operation.",
+    "evidence": [
+      "tests/integration/core_local_snapshot_api.py",
+      "tests/test_core_local_snapshot_api.py"
+    ]
+  }
+}

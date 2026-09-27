@@ -212,6 +212,24 @@ func TestManagedWorkerBackgroundCompletionPreservesForeground(t *testing.T) {
 	}
 }
 
+func TestManagedWorkerAcceptsRecoveryReplayNeedsAttention(t *testing.T) {
+	s := &Store{dir: t.TempDir(), State: State{Journal: map[string]JournalEntry{
+		"snapshot-op": {Command: &protocol.Command{OperationID: "snapshot-op", Kind: "vm-snapshot-create"}, Status: "pending"},
+	}}}
+	done := managedCompletion{result: protocol.Result{
+		OperationID: "snapshot-op", Status: "needs_attention", Error: "snapshot recovery reservation is unresolved",
+		ObservedAt: time.Now().UTC(),
+	}}
+	active, err := completeManagedCommand(s, "snapshot-op", done, nil)
+	if err != nil || active != "" {
+		t.Fatalf("needs_attention replay was rejected: active=%q err=%v", active, err)
+	}
+	entry := s.State.Journal["snapshot-op"]
+	if entry.Status != "needs_attention" || entry.Error != done.result.Error {
+		t.Fatalf("recovery replay result was not preserved: %+v", entry)
+	}
+}
+
 func TestMemberSuccessfulEjectAndDiskRemovalReleaseUnusedReservations(t *testing.T) {
 	membership := protocol.PoolMembership{MasterHostID: "master-1"}
 	for _, command := range []protocol.Command{
@@ -466,6 +484,140 @@ func TestResultBacklogDrainsInControllerSizedBatches(t *testing.T) {
 		if !result.Acknowledged {
 			t.Fatalf("result %s lost from acknowledgment", id)
 		}
+	}
+}
+
+func TestMemberPeerBackupResultDoesNotBlockControllerReport(t *testing.T) {
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ReportRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		for _, result := range req.Results {
+			if result.OperationID == "peer-backup" {
+				http.Error(w, "result operation does not belong to host", http.StatusBadRequest)
+				return
+			}
+		}
+		if req.Inventory.Managed != nil {
+			for _, outcome := range req.Inventory.Managed.Outcomes {
+				if outcome.OperationID == "peer-backup" {
+					http.Error(w, "peer operation duplicated in outcomes", http.StatusBadRequest)
+					return
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s := testStore(t)
+	s.State = identity
+	s.State.PoolID = "pool-1"
+	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: "peer-backup", Kind: "backup-now", VM: &protocol.VMCreateSpec{ID: "vm-1", HostID: identity.HostID}, Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1"}}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "succeeded", Command: &cmd, ObservedAt: time.Now().UTC()}
+	if err := savePoolBackupRun(s, protocol.BackupRun{OperationID: cmd.OperationID, Kind: cmd.Kind, PoolID: "pool-1", VMID: "vm-1", HostID: identity.HostID, RepositoryID: "repo-1", RecoveryPointID: cmd.OperationID, IntentSHA256: strings.Repeat("a", 64), Stage: "published", Status: "succeeded", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.State.Journal[cmd.OperationID].PeerDispatched {
+		t.Fatal("legacy peer operation was not durably classified")
+	}
+	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
+		t.Fatalf("peer result blocked the next heartbeat: %v", err)
+	}
+}
+
+func TestFormerMasterKeepsControllerOwnedBackupResult(t *testing.T) {
+	s := testStore(t)
+	s.State.HostID, s.State.PoolID = "former-master", "pool-1"
+	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "new-master"}, Transfer: &poolTransferRecord{Role: "source"}}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := protocol.Command{OperationID: "master-backup", Kind: "backup-now"}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "succeeded", Command: &cmd}
+	if err := savePoolBackupRun(s, protocol.BackupRun{OperationID: cmd.OperationID, Kind: cmd.Kind, PoolID: "pool-1", VMID: "vm-1", HostID: s.State.HostID, RepositoryID: "repo-1", RecoveryPointID: cmd.OperationID, IntentSHA256: strings.Repeat("a", 64), Stage: "published", Status: "succeeded", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := markLegacyPeerBackupJournal(s); err != nil {
+		t.Fatal(err)
+	}
+	if s.State.Journal[cmd.OperationID].PeerDispatched {
+		t.Fatal("former master's Controller result was reclassified as peer work")
+	}
+}
+
+func TestPeerBackupAdmissionRetainsJournalForExactReplay(t *testing.T) {
+	s := testStore(t)
+	cmd := protocol.Command{OperationID: "peer-backup", Kind: "backup-now", VM: &protocol.VMCreateSpec{ID: "vm-1", HostID: "member-1"}, Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1"}}
+	response := protocol.ReportResponse{Commands: []protocol.Command{cmd}}
+	if err := applyResponseWithPeer(s, response, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := completeManagedCommand(s, cmd.OperationID, managedCompletion{result: protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}, background: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResponseWithPeer(s, response, true); err != nil {
+		t.Fatalf("exact peer retry refused: %v", err)
+	}
+	entry := s.State.Journal[cmd.OperationID]
+	if !entry.PeerDispatched || entry.Status != "succeeded" || len(commandOutcomes(s.State.Journal, nil)) != 0 {
+		t.Fatalf("peer replay or projection lost origin: %+v", entry)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state State
+	if err := json.Unmarshal(raw, &state); err != nil || !state.Journal[cmd.OperationID].PeerDispatched {
+		t.Fatalf("peer origin was not durable: %v", err)
+	}
+}
+
+func TestSettledMemberRestoreDoesNotBlockNextLocalRestore(t *testing.T) {
+	s := testStore(t)
+	member := protocol.Command{OperationID: "restore-member", Kind: protocol.BackupKindRestoreNew,
+		Restore: &protocol.RestoreAsNewRequest{NewVMID: "vm-member"}}
+	local := protocol.Command{OperationID: "restore-local", Kind: protocol.BackupKindRestoreNew,
+		Restore: &protocol.RestoreAsNewRequest{NewVMID: "vm-local"}}
+	s.State.Journal = map[string]JournalEntry{
+		member.OperationID: {Order: 1, Status: "pending", Command: &member},
+		local.OperationID:  {Order: 2, Status: "pending", Command: &local},
+	}
+	if err := completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{OperationID: member.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}, background: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextManagedCommand(s.State.Journal, ""); got != local.OperationID {
+		t.Fatalf("settled member restore kept the local restore queued: got %q", got)
+	}
+}
+
+func TestAttentionRestoreReleasesGateButFencesSameTarget(t *testing.T) {
+	s := testStore(t)
+	uncertain := protocol.Command{OperationID: "restore-v3", Kind: protocol.BackupKindRestoreNew,
+		Restore: &protocol.RestoreAsNewRequest{NewVMID: "vm-v3"}}
+	distinct := protocol.Command{OperationID: "restore-v4", Kind: protocol.BackupKindRestoreNew,
+		Restore: &protocol.RestoreAsNewRequest{NewVMID: "vm-v4"}}
+	sameTarget := protocol.Command{OperationID: "restore-v3-again", Kind: protocol.BackupKindRestoreNew,
+		Restore: &protocol.RestoreAsNewRequest{NewVMID: "vm-v3"}}
+	s.State.Journal = map[string]JournalEntry{
+		uncertain.OperationID:  {Order: 1, Status: "pending", Command: &uncertain},
+		distinct.OperationID:   {Order: 2, Status: "pending", Command: &distinct},
+		sameTarget.OperationID: {Order: 3, Status: "pending", Command: &sameTarget},
+	}
+	if err := completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{OperationID: uncertain.OperationID, Status: "needs_attention", Error: "placement needs inspection", ObservedAt: time.Now().UTC()}, background: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextManagedCommand(s.State.Journal, ""); got != distinct.OperationID {
+		t.Fatalf("attention on a different VM blocked restore: got %q", got)
+	}
+	s.State.Journal[distinct.OperationID] = JournalEntry{Order: 2, Status: "succeeded", Command: &distinct}
+	if got := nextManagedCommand(s.State.Journal, ""); got != "" {
+		t.Fatalf("attention on the same VM allowed a second restore: %q", got)
 	}
 }
 

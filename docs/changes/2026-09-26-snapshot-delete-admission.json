@@ -1,0 +1,67 @@
+{
+  "summary": "Refuse every managed VM delete while its pool master has pending snapshot recovery or retained snapshot catalog entries, regardless of the disk-retention choice. Reject conflicting owner delete tombstones instead of pruning that durable catalog. API impact: changed peer contract for the authenticated `delete-check` action.",
+  "paths": [
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_inventory_test.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_vm_test.go",
+    "internal/agent/run.go",
+    "internal/agent/snapshot_test.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_recovery_test.go",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/API.md",
+    "docs/guide/delete-virtual-machine.md",
+    "docs/guide/vm-snapshots.md",
+    "docs/changes/2026-09-26-snapshot-delete-admission.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "VM deletion now requires a reachable current pool master and is refused while snapshots remain, even when disks would be retained. The delete and snapshot guides state this behavior and the current lack of snapshot deletion.",
+    "pages": [
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/vm-snapshots.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Managed VM deletion now calls the authenticated pool peer `delete-check` action for local-storage and shared-storage VMs. The master confirms the exact VM definition and refuses pending recovery, invalid catalogs, or retained snapshot descriptors; members reject missing or mismatched acknowledgements. The peer OpenAPI description and generated HTML were updated. No Controller-facing route changed.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json",
+      "docs/api/peer.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This closes the existing S1 data-loss gate; snapshot deletion and catalog transfer remain separate planned work.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The existing pool master `pool-vms.json` record owns retained snapshot descriptors and pending recovery. This change adds no durable state. Fresh Controllers continue to read the catalog from the current pool master.",
+    "reason": "Deletion admission and the snapshot catalog are Core-owned. A rejected delete leaves the master record unchanged; a conflicting stale tombstone is refused before inventory or owner-record mutation."
+  },
+  "verification": {
+    "method": "Focused Go tests exercised local and shared managed VMs with both DeleteDisks values, authenticated member-to-master refusal and success acknowledgements, malformed/legacy acknowledgement rejection, frozen-authority refusal while preserving emergency stop, and owner tombstones conflicting with retained or pending snapshot state. The vmhost execution-lock regression verifies both delete choices stop before native commands for a settled snapshot, and that a failed-before-effects snapshot does not retain the local gate. Snapshot admission also rejects a pending delete. Full agent and vmhost packages ran under the race detector. The pre-fix regression failed because delete passed the retained-snapshot gate; these are software tests with fake libvirt observations, not native deletion experiments, and the disposable candidate was left untouched.",
+    "evidence": [
+      "internal/agent/pool_vm_test.go",
+      "internal/agent/pool_vm_inventory_test.go",
+      "internal/agent/snapshot_test.go",
+      "internal/vmhost/managed_recovery_test.go",
+      "docs/API.md",
+      "docs/guide/delete-virtual-machine.md",
+      "docs/guide/vm-snapshots.md"
+    ],
+    "checks": [
+      "go test ./internal/vmhost -run 'TestManagedDeleteRefusesSettledSnapshotUnderExecutionLock|TestFailedBeforeEffectsSnapshotDoesNotRetainDeleteGate' -count=1 — passed",
+      "go test ./internal/agent -run 'TestSnapshotAdmissionWaitsForPendingDelete|TestPoolVMDeleteAdmissionRefusesRetainedSnapshotsForLocalAndSharedVMs' -count=1 — passed",
+      "go test -race -count=1 -timeout 20m ./internal/vmhost — passed (14.200s)",
+      "go test -race -count=1 -timeout 20m ./internal/agent — passed (54.140s)",
+      "python3 scripts/generate_api.py — passed",
+      "python3 -m unittest tests.test_api_contract -q — 74 passed"
+    ]
+  }
+}

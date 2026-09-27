@@ -1,0 +1,35 @@
+{
+  "summary": "Stage candidate SHA256SUMS and build-inputs into the recovery-libvirt runtime container for AppArmor guest provenance",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/changes/2026-09-26-forge-ci-candidate-provenance-stage.json",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_libvirt_recovery_ci.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "CI staging fix only; operator workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller or Core API contract change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Does not change the published roadmap board.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "CI packaging/staging only; no durable pool or Controller state."
+  },
+  "verification": {
+    "method": "Forge run 4520 failed after the readonly-media probe with RuntimeError candidate lacks its checksum manifest or build-input record in apparmor_guest_run(/candidate). host_run now copies SHA256SUMS and build-inputs.txt with the selected debs. python3 unittest for candidate_provenance missing-manifest regression.",
+    "evidence": [
+      "tests/integration/libvirt_recovery_ci.py",
+      "tests/test_libvirt_recovery_ci.py"
+    ]
+  }
+}

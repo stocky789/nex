@@ -1,0 +1,36 @@
+Subject: virt-aa-helper: complete partial backing chain metadata
+
+Origin: Nex recovery S0 native probe, 2026-09-25
+License: LGPL-2.1-or-later, as in src/security/virt-aa-helper.c
+
+When domain XML specifies only a prefix of a disk's backing chain, probe from
+the last explicit source so AppArmor grants read access to the remaining
+backing files. An explicit empty backingStore remains a terminator and is not
+probed past. Keep the existing total chain-depth limit when probing a suffix.
+---
+ src/security/virt-aa-helper.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+--- a/src/security/virt-aa-helper.c
++++ b/src/security/virt-aa-helper.c
+@@ -887,5 +887,7 @@ get_files(vahControl * ctl)
+     for (i = 0; i < ctl->def->ndisks; i++) {
+         virDomainDiskDef *disk = ctl->def->disks[i];
++        virStorageSource *backing;
++        size_t depth = 1;
+ 
+         if (virStorageSourceIsEmpty(disk->src))
+             continue;
+@@ -893,7 +895,10 @@ get_files(vahControl * ctl)
+          * implementation.
+          */
+-        if (!disk->src->backingStore)
+-            virStorageSourceGetMetadata(disk->src, -1, -1, 200, false);
++        for (backing = disk->src; virStorageSourceIsBacking(backing->backingStore);
++             backing = backing->backingStore, depth++)
++            ;
++        if (!backing->backingStore && depth <= 200)
++            virStorageSourceGetMetadata(backing, -1, -1, 201 - depth, false);
+ 
+          /* XXX should handle open errors more careful than just ignoring them.
+          */

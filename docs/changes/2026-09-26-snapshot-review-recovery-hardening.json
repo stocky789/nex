@@ -1,0 +1,82 @@
+{
+  "summary": "Harden snapshot create/revert/delete recovery, Controller adoption settlement, metadata replica ack, UI retry identity, release payload publish, and build snapshot URL validation after staged Phase 5/6 review.",
+  "paths": [
+    ".gitea/workflows/phase1.yml",
+    ".gitea/workflows/recovery-libvirt.yml",
+    ".gitea/workflows/release.yml",
+    ".github/workflows/phase1.yml",
+    ".github/workflows/recovery-libvirt.yml",
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "installer/build.sh",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_vm.go",
+    "internal/agent/pool_vm_inventory.go",
+    "internal/agent/pool_vm_metadata_test.go",
+    "internal/agent/pool_vm_recovery_test.go",
+    "internal/agent/run.go",
+    "internal/agent/snapshot.go",
+    "internal/agent/snapshot_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/managed.go",
+    "internal/controller/snapshot_adoption_test.go",
+    "internal/controller/snapshots.go",
+    "internal/localcore/snapshots.go",
+    "internal/localcore/snapshots_test.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/pool_test.go",
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_snapshot.go",
+    "internal/vmhost/managed_snapshot_delete.go",
+    "internal/vmhost/managed_snapshot_delete_test.go",
+    "internal/vmhost/managed_snapshot_revert.go",
+    "internal/vmhost/managed_snapshot_revert_test.go",
+    "internal/vmhost/managed_snapshot_test.go",
+    "internal/vmhost/pool.go",
+    "internal/vmhost/pool_test.go",
+    "packaging/libvirt/build-matched-libvirt.sh",
+    "scripts/build-source.py",
+    "tests/integration/libvirt_recovery_ci.py",
+    "tests/test_build_source.py",
+    "web/src/vm-list.test.mjs",
+    "web/src/vm-list.tsx",
+    "web/src/vm-snapshots.tsx",
+    "website/src/routes/roadmap/+page.svelte"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator snapshot steps are unchanged; fixes cover recovery, adoption, retry identity, and build/release safety already described in docs/guide/vm-snapshots.md.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Tightens existing snapshot ValidFor Mode rejection, Controller adoption/settlement of snapshot outcomes, and metadata replica acknowledgement without new endpoints.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "updated",
+    "reason": "Removed open board items that contradicted completed browser create/list/revert/delete.",
+    "pages": [
+      "website/src/routes/roadmap/+page.svelte"
+    ]
+  },
+  "state": {
+    "owner": "core",
+    "record": "Pool master pool-vms.json snapshot catalog, PendingRecovery/PendingSnapshot, replica acks, and executing-host managed snapshot journals. Fresh Controller adopts catalog and operation outcomes through authenticated host APIs.",
+    "reason": "Snapshot recovery and catalog mutation remain Core-owned; Controller only mirrors and relays."
+  },
+  "verification": {
+    "method": "go test ./internal/agent/ ./internal/controller/ ./internal/localcore/ ./internal/protocol/ ./internal/vmhost/ -count=1; node web/src/vm-list.test.mjs; python3 -m unittest tests.test_build_source tests.test_source_bundle; python3 scripts/check_docs.py --worktree",
+    "evidence": [
+      "internal/agent/pool_vm_metadata_test.go",
+      "internal/agent/snapshot_test.go",
+      "internal/controller/snapshot_adoption_test.go",
+      "internal/vmhost/managed_snapshot_test.go",
+      "internal/vmhost/managed_snapshot_delete_test.go",
+      "internal/vmhost/managed_snapshot_revert_test.go",
+      "web/src/vm-list.test.mjs"
+    ]
+  }
+}

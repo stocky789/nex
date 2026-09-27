@@ -1,0 +1,35 @@
+Subject: qemu: preserve read-only media when reverting external snapshots
+Origin: Nex recovery BUG0647, 2026-09-26
+License: LGPL-2.1-or-later, as in src/qemu/qemu_snapshot.c
+
+External snapshot revert creates a fresh overlay for each aligned disk. Skip
+read-only disks and non-disk devices: revert already restores their source
+from the saved domain definition, and they do not need writable snapshot heads.
+Keep the exclusion in the transient revert definition so snapshot metadata
+does not invent an external media overlay.
+--- a/src/qemu/qemu_snapshot.c
++++ b/src/qemu/qemu_snapshot.c
+@@ -2400,6 +2400,23 @@ qemuSnapshotRevertExternalPrepare(virDom
+         return -1;
+     }
+ 
++    /* The reverted domain definition restores read-only media sources. Do not
++     * put CD-ROMs, other non-disk devices, or read-only disks behind a new
++     * writable overlay. Keep this in tmpsnapdef so metadata records the same
++     * exclusion. */
++    for (i = 0; i < tmpsnapdef->ndisks; i++) {
++        virDomainSnapshotDiskDef *snapdisk = &tmpsnapdef->disks[i];
++        virDomainDiskDef *domdisk = domdef->disks[i];
++
++        if (domdisk->device == VIR_DOMAIN_DISK_DEVICE_DISK &&
++            !domdisk->src->readonly)
++            continue;
++
++        snapdisk->snapshot = VIR_DOMAIN_SNAPSHOT_LOCATION_NO;
++        g_clear_pointer(&snapdisk->src->path, g_free);
++        snapdisk->src->format = VIR_STORAGE_FILE_NONE;
++    }
++
+     for (i = 0; i < tmpsnapdef->ndisks; i++) {
+         virDomainSnapshotDiskDef *snapdisk = &tmpsnapdef->disks[i];
+         virDomainDiskDef *domdisk = domdef->disks[i];

@@ -1,0 +1,31 @@
+{
+  "summary": "Record bounded native evidence for public off-branch snapshot consolidation on a disposable Core candidate; API impact: none.",
+  "paths": [
+    "docs/qa/2026-09-25-recovery-s0-branch.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This records a contributor-only native probe and does not implement or change an operator workflow. The existing user guide remains the operator reference; no new operator instructions apply.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe used existing libvirt and QEMU commands on a disposable Core candidate; no Nex or client-facing API contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The QA note records one bounded native sequence and explicitly leaves S0 open; it does not change plan status or product scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only uniquely named disposable domain metadata and disk images were used; no product or durable Nex state was changed."
+  },
+  "verification": {
+    "method": "On a package-based Debian 13 Core candidate running libvirt 11.3.0-3+deb13u3+nex2 and QEMU 10.0.13, create two 128 MiB qcow2 disks with markers and snapshot tree A→B→C, revert B, then create D so B has children C and D. Verify saved markers, current D, flags, and source-derived off-branch references; make standalone copies of A tops and compare them. Run `virsh blockcommit <domain> vda --base <base> --top <A-top> --wait --verbose` and the equivalent vdb command without `--delete`, stopping after each and comparing the resulting bases to the standalone copies. The domain was destroyed and restarted paused between the two commits; libvirtd was not restarted. Run `qemu-img rebase -u -F qcow2 -f qcow2 -b <base> <C-saved-source>` per target and compare each rebased source to its pre-rebase logical copy. Redefine B with its parent removed and saved disk sources changed to equivalent bases, verify C/D remain children of B, then run `virsh snapshot-delete <domain> A --metadata`. Scan all remaining snapshot XML, current and saved chains, scratch image headers, other persistent domain source chains, and other snapshot XML before unlinking only A's now-unreferenced top files. A pre-unlink `stat` check was run, but its stdout was not retained, so this record does not independently substantiate the files' link counts. Revert C and D separately, reopen each with `virsh start <domain> --paused` under its UUID-specific enforcing AppArmor profile, stop, and verify markers and chains. Both commits, both rebases, metadata-only deletion, reference scans, C/D reverts and paused reopens passed. The probe used no guest OS and proves no Nex Core operation or public API. Two other fresh attempts were preserved and excluded: the first private observer failed on an expected absent abandoned C post-point head before checking its saved point; the second failed because a probe-created directory was mode 0700 and inaccessible to libvirt-qemu. In the successful attempt, two private assertions were corrected after they misparsed virsh blank lines and overmatched UUID-suffixed revert overlays; native reconciliation confirmed successful operations. `python3 -m unittest discover -s tests -p 'test_repository_privacy.py'` passed (1 test); `git diff --check` passed. `python3 scripts/check_docs.py --worktree` is currently blocked by unassessed changes owned by another lane: `internal/vmhost/managed_delete_evidence.go` and `internal/vmhost/managed_recovery_test.go`. The checked source-chain paths and raw command observations remain in ignored local lab scratch, not in this public record.",
+    "evidence": [
+      "docs/qa/2026-09-25-recovery-s0-branch.md"
+    ]
+  }
+}

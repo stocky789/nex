@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 6 disposable-lab product NFS backup/restore: redeployed overlay binary, enrolled core1, registered NFS repo, stopped backup-now, moved originals aside, restore-as-new succeeded. Campaign A/B not run.",
+  "paths": [
+    "docs/qa/2026-09-27-phase6-product-backup-lab.md",
+    "docs/qa/2026-09-27-phase6-lab-install.md",
+    "docs/qa/2026-09-27-phase6-s4-lab-walkthrough.md",
+    "docs/changes/2026-09-27-phase6-product-backup-lab.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Contributor disposable-lab QA evidence only; operator guide workflows unchanged.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Exercised existing Core-local backup repository, backup-now, and restore-as-new contracts; no API shape change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Records live product-path progress for Phase 6; Campaign A/B and online/policy live ticks remain open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Pool backup repositories, catalog, runs, and the restored managed VM persist on the pool master's Nex Core; a fresh Controller would adopt them via host inventory/APIs.",
+    "record": "pool-backup-repositories.json, pool-backup-catalog/, pool-backup-runs/, managed VM journals on the pool master; NFS recovery-point payload under the registered repository mount"
+  },
+  "verification": {
+    "method": "Rebuilt nex-core-local into ignored cache; overlay-installed on core1/core2/core3 and verified SHA-256 49bffb9dd583eaf1a04013ab46196f88359b07fc8e76d06aa318b96f1d1f2e5c with :9443 active. Enrolled core1 via ephemeral loopback Controller. Registered NFS backup repo (storage repo-nfs subdirectory phase6-product), tested access, stopped backup-now, moved original disks aside, restore-as-new to new stopped VM. Online crash and Campaign A/B not run. Policy local upsert returned 400. python3 -m unittest discover -s tests -p 'test_repository_privacy.py'; python3 scripts/check_docs.py --worktree.",
+    "evidence": [
+      "docs/qa/2026-09-27-phase6-product-backup-lab.md",
+      "docs/qa/2026-09-27-phase6-lab-install.md",
+      "docs/qa/2026-09-27-phase6-s4-lab-walkthrough.md"
+    ]
+  }
+}

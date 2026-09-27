@@ -109,14 +109,20 @@ type clockXML struct {
 }
 
 // managedTPM is the emulated TPM. tpm-crb is the interface Windows 11 expects on a modern
-// machine type; the emulator backend is swtpm, which libvirt starts per domain and whose state
-// lives in /var/lib/libvirt/swtpm/<uuid> (removed on undefine --tpm, see deleteVM).
+// machine type; libvirt starts swtpm per domain and stores its state in
+// /var/lib/libvirt/swtpm/<uuid>, including after restore.
 type managedTPM struct {
 	Model   string `xml:"model,attr"`
 	Backend struct {
-		Type    string `xml:"type,attr"`
-		Version string `xml:"version,attr"`
+		Type    string            `xml:"type,attr"`
+		Version string            `xml:"version,attr"`
+		Source  *managedTPMSource `xml:"source,omitempty"`
 	} `xml:"backend"`
+}
+
+type managedTPMSource struct {
+	Type string `xml:"type,attr"`
+	Path string `xml:"path,attr"`
 }
 
 func emulatedTPM() *managedTPM {
@@ -194,7 +200,8 @@ func checkFirmwareAndTPM(got, want managedDomain) error {
 	if (gotTPM == nil) != (wantTPM == nil) {
 		return errors.New("VM TPM differs from the requested configuration")
 	}
-	if wantTPM != nil && gotTPM.Model != wantTPM.Model {
+	if wantTPM != nil && (gotTPM.Model != wantTPM.Model ||
+		(wantTPM.Backend.Source != nil && (gotTPM.Backend.Source == nil || *gotTPM.Backend.Source != *wantTPM.Backend.Source))) {
 		return errors.New("VM TPM differs from the requested configuration")
 	}
 	for _, name := range []string{"secure-boot", "enrolled-keys"} {

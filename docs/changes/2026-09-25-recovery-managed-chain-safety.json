@@ -1,0 +1,46 @@
+{
+  "summary": "Track complete managed VM disk chains locally and refuse unsafe chain changes or reuse; API impact: existing contract.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_chain.go",
+    "internal/vmhost/managed_chain_test.go",
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "internal/vmhost/delete_resume_test.go",
+    "internal/vmhost/delete_test.go",
+    "internal/vmhost/defaults_test.go",
+    "internal/vmhost/firmware_test.go",
+    "internal/vmhost/managed_update_test.go",
+    "internal/vmhost/memory_test.go",
+    "internal/vmhost/power_test.go"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "There is no new operator workflow; existing power troubleshooting already tells operators to inspect the VM on its host when the host cannot establish a safe state.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing VM power, edit/delete and storage operations can now fail closed when the host cannot reconcile its managed disk chain. No contract fields, endpoint, capability, or snapshot operation are added; reservation evidence remains internal and has no operation producer yet.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The S1 implementation advances the planned host-side chain-safety gate without changing milestone status or scope.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Nex Core's vmhost managed journal stores ordered disk heads and backing-layer paths; the pool master continues to own VM authority and immutable recovery reservations. A replacement Controller re-adopts VM definitions through the existing Core inventory while chain paths remain host-local.",
+    "reason": "Backing paths are host-specific execution state and must persist with the executing Core; pool authorization bindings remain in the master-owned pool VM record."
+  },
+  "verification": {
+    "method": "`go test -race -timeout 20m ./internal/vmhost` passed after the historical-delete ownership guard. Focused regressions cover ordered chain parsing, malformed/truncated/cyclic/deep chains, paused guests selecting live XML, full foreign backing references omitted from partial domain XML, raw foreign disk and CD-ROM handling, external-data/encryption refusal, BUG-0591 where a foreign domain references a disk retained by an earlier successful VM revision, and empty recovery reservations on a fresh host. Existing lifecycle fixtures use a test-only chain observer where they model libvirt without qemu-img.",
+    "evidence": [
+      "internal/vmhost/managed_chain_test.go",
+      "internal/vmhost/engine_test.go",
+      "internal/vmhost/delete_resume_test.go",
+      "internal/vmhost/delete_test.go"
+    ]
+  }
+}

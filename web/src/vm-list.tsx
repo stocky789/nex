@@ -60,6 +60,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
   const [hidden, setHidden] = useState(() => hiddenColumns(readPreference(columnsKey)));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [bulk, setBulk] = useState<Bulk | null>(null);
+  const [bulkSnapIDs, setBulkSnapIDs] = useState<string[] | null>(null);
   const hostNames = useMemo(() => new Map(data.hosts.map(h => [h.id, h.hostname || h.id])), [data.hosts]);
   const poolNames = useMemo(() => new Map(data.pools.map(p => [p.id, p.name || p.id])), [data.pools]);
   const networkNames = useMemo(() => new Map(data.networks.map(n => [n.id, n.name || n.id])), [data.networks]);
@@ -180,7 +181,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
         <b>{targets.length} selected</b>
         <button type="button" className="sm" disabled={busy || unavailable} onClick={() => setBulk({ action: "start", ids: targets.map(v => v.id) })}><Icon kind="start" />Start</button>
         <button type="button" className="sm" disabled={busy || unavailable} onClick={() => setBulk({ action: "shutdown", ids: targets.map(v => v.id) })}><Icon kind="shutdown" />Shut down</button>
-        <button type="button" className="sm" disabled title="Available with snapshots (Phase 5)"><Icon kind="snapshot" />Snapshot</button>
+        <button type="button" className="sm" disabled={busy || unavailable} onClick={() => setBulkSnapIDs(targets.map(v => v.id))}><Icon kind="snapshot" />Snapshot</button>
         <button type="button" className="sm" disabled title="Available with live migration (Phase 7)"><Icon kind="migrate" />Migrate</button>
         <button type="button" className="link" onClick={() => setChecked([])}>Clear</button>
       </div>}
@@ -200,6 +201,7 @@ export function VMList({ data, vms, pool, network, selectedID, operationID, api,
       <p className="note">A stale or unreachable host does not mean its VMs have stopped.</p>
     </div>
     {bulk && <BulkPower bulk={bulk} data={data} api={api} reload={reload} onNotice={onNotice} onDone={sent => { setBulk(null); if (sent) setChecked([]); }} />}
+    {bulkSnapIDs && <BulkSnapshot ids={bulkSnapIDs} data={data} api={api} reload={reload} onNotice={onNotice} onDone={sent => { setBulkSnapIDs(null); if (sent) setChecked([]); }} />}
     {createOperation ? <Panel icon="vm" title="New VM" badge={<Badge value={createOperation.status} />} onClose={close}>
       <section className="tile" aria-label="Creation task">
         <h2>Creation {createOperation.status}</h2>
@@ -265,6 +267,76 @@ function BulkPower({ bulk, data, api, reload, onNotice, onDone }: { bulk: Bulk; 
       <div className="actions">
         <button type="button" disabled={working} onClick={() => dialog.current?.close()}>Cancel</button>
         <button className="primary" disabled={working || !pending.length}>{working ? "Requesting…" : `${Object.keys(errors).length ? "Retry" : item.label} ${pending.length} VM${pending.length === 1 ? "" : "s"}`}</button>
+      </div>
+    </form>
+  </dialog>;
+}
+
+const snapRequestID = () => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return "snap" + Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("").slice(0, 20);
+};
+
+export function bulkSnapSkip(vm: VM, host?: Data["hosts"][number]): string {
+  if (vm.protected) return "Controller appliance: use its own panel.";
+  if (!host || host.revoked || host.connection !== "fresh") return "Skipped: the host is not freshly connected.";
+  if (vm.freshness !== "fresh") return "Skipped: current VM state is unknown.";
+  if (vm.state !== "shut off") return `Skipped: the VM is observed ${stateText(vm.state)}; stop it first.`;
+  return "";
+}
+
+function BulkSnapshot({ ids, data, api, reload, onNotice, onDone }: {
+  ids: string[]; data: Data; api: API; reload: () => Promise<void>;
+  onNotice: (text: string) => void; onDone: (sent: boolean) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const requests = useRef<Record<string, string>>({});
+  const sentAny = useRef(false);
+  const [name, setName] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [sent, setSent] = useState<string[]>([]);
+  const [working, setWorking] = useState(false);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  const targets = ids.flatMap(id => data.vms.filter(v => v.id === id)).map(vm => ({
+    vm, skip: bulkSnapSkip(vm, data.hosts.find(h => h.id === vm.host_id)),
+  }));
+  const pending = targets.filter(t => !t.skip && !sent.includes(t.vm.id));
+  const nameLocked = sent.length > 0 || working;
+  async function submit() {
+    const trimmed = name.trim();
+    if (!trimmed || !pending.length) return;
+    setWorking(true);
+    const failed: Record<string, string> = {};
+    const done: string[] = [];
+    await Promise.all(pending.map(async ({ vm }) => {
+      requests.current[vm.id] ??= snapRequestID();
+      try {
+        await api(`vms/${encodeURIComponent(vm.id)}/snapshots`, "POST", {
+          request_id: requests.current[vm.id], name: trimmed,
+        });
+        delete requests.current[vm.id];
+        done.push(vm.id);
+      } catch (e) { failed[vm.id] = (e as Error).message; }
+    }));
+    if (done.length) sentAny.current = true;
+    const total = sent.length + done.length;
+    setSent([...sent, ...done]); setErrors(failed); setWorking(false);
+    if (total) onNotice(`Snapshot request submitted for ${total} VM${total === 1 ? "" : "s"}. Follow each task in Tasks.`);
+    await reload();
+    if (!Object.keys(failed).length) dialog.current?.close();
+  }
+  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="bulk-snap-title" onCancel={e => { if (working) e.preventDefault(); }} onClose={() => onDone(sentAny.current)}>
+    <form onSubmit={e => { e.preventDefault(); if (!working && pending.length && name.trim()) void submit(); }}>
+      <h2 id="bulk-snap-title">Snapshot {targets.length} VM{targets.length === 1 ? "" : "s"}?</h2>
+      <label>Name<input value={name} onChange={e => { setName(e.target.value); requests.current = {}; }} maxLength={64} required disabled={nameLocked} autoFocus /></label>
+      <ul className="bulk-targets">{targets.map(({ vm, skip }) => <li key={vm.id}>
+        <strong>{vm.name}</strong>
+        <small className={errors[vm.id] ? "task-error" : undefined}>{errors[vm.id] || skip || (sent.includes(vm.id) ? "Requested" : "Will be requested")}</small>
+      </li>)}</ul>
+      <div className="actions">
+        <button type="button" disabled={working} onClick={() => dialog.current?.close()}>Cancel</button>
+        <button className="primary" disabled={working || !pending.length || !name.trim()}>{working ? "Requesting…" : `${Object.keys(errors).length ? "Retry" : "Snapshot"} ${pending.length} VM${pending.length === 1 ? "" : "s"}`}</button>
       </div>
     </form>
   </dialog>;

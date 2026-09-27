@@ -1,0 +1,33 @@
+{
+  "summary": "Refuse local VM operations when another domain's qcow2 external data file aliases an owned disk.",
+  "paths": [
+    "internal/vmhost/engine.go",
+    "internal/vmhost/engine_test.go",
+    "docs/API.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This tightens an existing fail-closed storage ownership check and adds no operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing host-side VM operations now refuse a foreign domain whose qcow2 external data file aliases an owned image. Request and response shapes are unchanged.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is a focused correctness fix within the existing disk exclusivity safety gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "The fix changes only validation of qemu-img metadata during an existing ownership check; it adds no durable state."
+  },
+  "verification": {
+    "method": "The new regression failed before the fix because exclusiveDisk returned nil for a foreign qcow2 whose format-specific data-file named the owned disk. The focused external-data, omitted-backing, and valid-foreign-raw tests passed after the fix. `go test -race ./internal/vmhost` and `go test ./internal/agent` passed.",
+    "evidence": [
+      "internal/vmhost/engine_test.go"
+    ]
+  }
+}

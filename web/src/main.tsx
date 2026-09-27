@@ -879,7 +879,7 @@ function App() {
               openHostConsole={openHostConsole} onRefreshInventory={refreshInventory} onReenroll={() => open("reenroll")} onRevoke={() => open("revoke")} />
             : kind === "storage" || kind === "networks" ? <><h1 className="sr-only">{kind === "storage" ? "Storage" : "Networks"}</h1>{!pool && <p className="empty">Choose a pool in the scope menu to see its {kind}.</p>}</>
             : section ? <SettingsHead section={section} pool={pool} master={masterHost} hostCount={scopedHosts.length} />
-            : kind === "backups" ? <LazyBackups />
+            : kind === "backups" ? <LazyBackups api={api} data={data} pool={pool} busy={busy} unavailable={Boolean(error)} reload={reload} onNotice={setNotice} vmFilter={new URLSearchParams(search).get("vm") || undefined} flow={new URLSearchParams(search).get("flow") || undefined} />
             : kind === "containers" ? <LazyContainers />
             : kind === "tasks" ? <LazyTasks data={data} upload={upload} onCancelUpload={cancelUpload} />
             : kind === "events" ? <LazyEvents entries={data.audit} data={data} conditions={attentionItems(data, data.hosts, data.vms, data.storage.filter(s => !s.tombstone), update?.core_available_version)} />
@@ -890,7 +890,7 @@ function App() {
               render a heading above, and this mount supplies the real tables. */}
           {pool && <LazyScreen><LazyManagedVMs key={`${session.username}/${pool.id}`} account={session.username} poolID={pool.id} poolName={pool.name} masterHostID={pool.master_host_id} tab={kind === "vms" ? (creating ? "Virtual machines" : "") : kind === "storage" ? "Storage" : kind === "networks" ? "Networking" : ""} hosts={data.hosts} storage={data.storage} networks={data.networks} media={data.media} vms={data.vms} api={api} reload={reload} setTab={showPoolTab} unavailable={Boolean(error)} upload={upload} onCancelUpload={cancelUpload} startIsoUpload={startIsoUpload} creating={kind === "vms" && creating} onCloseCreate={() => setCreating(false)} onNotice={setNotice} /></LazyScreen>}
           {/* Settings sections that are not pool resources follow the resource sections, in the nav's order. */}
-          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} updates={{
+          {section && <LazyScreen><LazySettings section={section} pool={pool} hosts={scopedHosts} api={api} busy={busy} unavailable={Boolean(error)} onEnrollHost={() => open("enroll")} onNotice={setNotice} updates={{
               update,
               note: updateNote,
               phase: updatePhase,

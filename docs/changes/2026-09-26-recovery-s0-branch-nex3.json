@@ -1,0 +1,35 @@
+{
+  "summary": "Exercise +nex3 public off-branch snapshot consolidation in a fresh enforcing-AppArmor guest and make the probe correctly observe present and absent image chains while paused. API impact: none.",
+  "paths": [
+    "tests/integration/recovery_s0_consolidate.py",
+    "tests/test_recovery_s0_consolidate.py",
+    "docs/qa/2026-09-26-recovery-s0-branch-nex3.md"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "This changes a contributor-only disposable probe and documents a bounded native experiment; it does not implement an operator workflow.",
+    "pages": []
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The probe uses existing libvirt and QEMU commands directly. No Nex Controller/Core or client-facing API contract changed.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "The QA note records one bounded +nex3 observation, excludes integrated snapshot data-delete, and leaves the S0 acceptance gate open.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Only isolated synthetic guest domains, snapshot metadata, and qcow2 files were used; no durable Nex pool or Controller state changed."
+  },
+  "verification": {
+    "method": "The fresh Debian 13 qemu:///system guest ran the checksum-verified 11.3.0-3+deb13u3+nex3 package set under enforcing AppArmor and host TCG. Its two-disk branch probe completed both public no-delete blockcommits, compared bases to standalone precommit copies, rebased only the two observed off-branch C children after proving equivalence, explicitly redefined metadata, deleted A metadata-only, scanned references, unlinked only exact unreferenced A tops, then reverted/reopened C and D with expected markers/payloads and the enforcing profile. The raw branch result SHA256 is 92d57937c12af5f2549f08bfd8e95ea974a637c584ff4c3b68cca496bd037956 and its ignored execution receipt binds the result to the candidate manifest. Earlier clean3/clean4 attempts are preserved and excluded: clean3 stopped before commit from a probe observation-shape error; clean4 reached metadata deletion/unlink but its first paused reopen was not inspected because plain qemu-img info hit the QEMU file lock. The corrected observer uses the actual chain-result shape and --force-share for live/paused QEMU. `python3 -m unittest tests.test_recovery_s0_consolidate -q` passed 14 tests; `python3 -m py_compile tests/integration/recovery_s0_consolidate.py tests/test_recovery_s0_consolidate.py` passed. This does not establish integrated snapshot-delete, other backends, interruption recovery, guest boot, or full S0 acceptance.",
+    "evidence": [
+      "tests/integration/recovery_s0_consolidate.py",
+      "tests/test_recovery_s0_consolidate.py",
+      "docs/qa/2026-09-26-recovery-s0-branch-nex3.md"
+    ]
+  }
+}
