@@ -10029,3 +10029,12 @@ Append resolved defects with their evidence and the approach to avoid.
   `go test ./internal/vmhost -count=1` passed.
 - Avoid: doing unbounded remote ISO hashing inside a short placement timeout, or wrapping
   every compare failure as "CPU incompatible".
+
+## BUG-0675 — DHCP Controller resume left host permanently stale
+
+- Date: 2026-09-28
+- Symptom: After updating Core via apt and rebooting, Controller came up but the host stayed stale/unknown in the Controller GUI; apt reported both packages already at the newest version and refused further upgrades; Core local deployment stayed `needs_attention` with `controller address verification failed: ... connection refused`.
+- Root cause: On Resume, a DHCP Controller deployment skips `ResumeAgent` and rediscovers the guest IP via qemu-ga, then verifies TLS once. Guest-agent DHCP can succeed before `nex-controller` listens on :8443, so verification fails, the operation is marked `needs_attention`, and the embedded agent never starts. Nothing retries until `nex-core-local` is restarted after the Controller is already up.
+- Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes after rediscovery; if that still fails, Resume falls back to starting the enrolled agent on its last known endpoint so the host is not permanently blind.
+- Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify (`connection refused`) and passes with the retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bounded failure. `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1` ok. Lab recovery: restarting `nex-core-local` after Controller was listening cleared `needs_attention`, resumed reporting (`connection healthy`, `nex-controller` `running`).
+- Avoid: treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback when verification fails.

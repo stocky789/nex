@@ -2,6 +2,7 @@
 package localcore
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/netip"
@@ -17,6 +19,11 @@ import (
 
 	"nex.local/nex/internal/vmhost"
 )
+
+// dhcpControllerReadyWait bounds how long DHCP resume keeps verifying the
+// rediscovered Controller address. Guest-agent DHCP often succeeds before
+// nex-controller is listening on :8443.
+var dhcpControllerReadyWait = 5 * time.Minute
 
 func deploymentTLS(v DeployRequest) (string, string, error) {
 	if v.NetworkMode == "dhcp" {
@@ -248,13 +255,40 @@ func (s *Service) refreshDHCPController(id string, d deployment) {
 	}
 	endpoint, err := s.engine.WaitControllerURL(s.ctx, id)
 	if err == nil {
-		err = refreshDHCPAgent(s.ctx, s.cfg.AgentStateDir, endpoint, d.Certificate, controllerServerName(d.Request))
+		err = refreshDHCPAgentReady(s.ctx, s.cfg.AgentStateDir, endpoint, d.Certificate, controllerServerName(d.Request))
 	}
 	if err != nil {
+		// Keep the enrolled agent reporting on its last known endpoint so a Controller
+		// that is still booting does not leave the host permanently stale.
+		if resumeErr := ResumeAgent(s.ctx, s.cfg.AgentStateDir); resumeErr != nil {
+			err = fmt.Errorf("%w; also could not resume agent: %v", err, resumeErr)
+		}
 		op.Status = "needs_attention"
 		op.Error = err.Error()
 	} else {
 		op.Status, op.Stage, op.ControllerURL = "ready", "ready", endpoint
 	}
 	s.update(id, op)
+}
+
+// refreshDHCPAgentReady retries TLS verification of a rediscovered DHCP Controller
+// address until the appliance accepts connections or the deadline expires.
+func refreshDHCPAgentReady(ctx context.Context, dir, endpoint, trust, serverName string) error {
+	wait, cancel := context.WithTimeout(ctx, dhcpControllerReadyWait)
+	defer cancel()
+	var err error
+	for {
+		err = refreshDHCPAgent(wait, dir, endpoint, trust, serverName)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-wait.Done():
+			if wait.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("Controller is not ready: %v; check the appliance and retry", err)
+			}
+			return err
+		case <-time.After(time.Second):
+		}
+	}
 }

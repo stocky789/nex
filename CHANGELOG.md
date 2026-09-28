@@ -6,12 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.17` →
-> Debian `0.4.17`).
+> development software. Builds use the newest numbered changelog heading (`0.4.18` →
+> Debian `0.4.18`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.18] — 2026-09-28
+
+### Bug Fixes
+
+- After a host reboot, Core no longer stays stuck with unknown host and VM state when the
+  Controller appliance gets its DHCP address before its management service is listening.
 
 ## [0.4.17] — 2026-09-28
 

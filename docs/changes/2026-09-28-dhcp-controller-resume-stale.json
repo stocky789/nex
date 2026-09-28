@@ -1,0 +1,33 @@
+{
+  "summary": "Retry DHCP Controller TLS verification on Core resume so host reporting is not left permanently stale after reboot.",
+  "paths": [
+    "internal/localcore/deploy.go",
+    "internal/localcore/deploy_refresh_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-28-dhcp-controller-resume-stale.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator update and reboot steps are unchanged; Core now recovers host reporting after the existing reboot race."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API contract changed; only local DHCP resume timing and agent start behavior."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix inside existing Core local resume path."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable setting; agent enrollment and Controller URL remain Core-owned as before."
+  },
+  "verification": {
+    "method": "New DHCP refresh regressions failed before (single-shot connection refused) and passed after. Lab host recovered after nex-core-local restart once Controller was listening; connection healthy and Controller VM running.",
+    "evidence": [
+      "internal/localcore/deploy_refresh_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}
