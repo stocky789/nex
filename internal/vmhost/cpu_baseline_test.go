@@ -97,6 +97,18 @@ func TestNativeCPUCompareChecksWholePersistedCPU(t *testing.T) {
 	}
 }
 
+func TestNativeCPUComparePreservesContextDeadline(t *testing.T) {
+	err := nativeCPUCompare(context.Background(), "ArbitraryCPU-v7", []protocol.CPUFeature{{Name: "aes", Policy: "require"}}, "q35", func(context.Context, ...string) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("deadline = %v", err)
+	}
+	if strings.Contains(err.Error(), "not verified compatible") {
+		t.Fatalf("deadline reported as CPU incompatibility: %v", err)
+	}
+}
+
 func TestManagedCPUFeaturesRenderedAndVerified(t *testing.T) {
 	v := managedTestVM()
 	v.CPU.Model = "ArbitraryCPU-v7"

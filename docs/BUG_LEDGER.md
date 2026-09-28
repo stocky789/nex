@@ -10009,3 +10009,23 @@ Append resolved defects with their evidence and the approach to avoid.
   -timeout 20m ./...` on pushes and pull requests; no CI run is claimed.
 - Avoid: adding negotiated capabilities without checking the receiver's bounded report
   count and an actual post-negotiation report.
+
+## BUG-0674 — Large ISO VM create reported as CPU incompatibility
+
+- Date: 2026-09-28.
+- Symptom: creating a guest that attached a multi-GiB install ISO on remote storage failed
+  after about 20–24 seconds with `CPU baseline … is not verified compatible with this
+  host's KVM runtime`. The same CPU baseline created guests without that ISO successfully.
+  The Controller process did not restart.
+- Root cause: VM placement preflight is hard-capped at 20 seconds, but it fully SHA-256'd
+  the install ISO under `context.Background()` (overrunning the deadline). The following
+  native CPU compare then ran with an already cancelled context; that failure was wrapped
+  as a CPU incompatibility.
+- Fix: placement checks ISO presence and recorded size only (same approach as BUG-0541);
+  create/update Execute still verifies the digest before defining the guest. Native CPU
+  compare now preserves context cancellation/deadline errors instead of renaming them.
+- Regression: `TestCheckVMPlacementMediaUsesPresenceNotDigest` and
+  `TestNativeCPUComparePreservesContextDeadline` failed before and passed after.
+  `go test ./internal/vmhost -count=1` passed.
+- Avoid: doing unbounded remote ISO hashing inside a short placement timeout, or wrapping
+  every compare failure as "CPU incompatible".

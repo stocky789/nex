@@ -189,3 +189,47 @@ func TestCheckVMPlacementHonorsCancellationWhileLocked(t *testing.T) {
 		t.Fatalf("placement lock cancellation = %v", err)
 	}
 }
+
+// Placement is capped at 20s on the host. A multi-GiB ISO on remote storage cannot be
+// fully hashed in that window; preflight only checks presence and recorded size, and
+// Execute still verifies the digest before defining the guest.
+func TestCheckVMPlacementMediaUsesPresenceNotDigest(t *testing.T) {
+	e, v, s := placementEngine(t)
+	placementNative(t, s, func(uint64) error { return nil })
+	mediaDir := filepath.Join(s.Path, "nex-media")
+	if err := os.MkdirAll(mediaDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(mediaDir, "media-1.iso")
+	body := make([]byte, 32774)
+	copy(body[32769:], []byte("CD001"))
+	if err := os.WriteFile(path, body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	media := protocol.Media{
+		ID: "media-1", PoolID: v.PoolID, HostID: v.HostID, StorageID: s.ID,
+		Name: "install.iso", SizeBytes: int64(len(body)),
+		SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+	}
+	if err := e.save(managedJournal{
+		Command:   protocol.Command{OperationID: "iso", Kind: "iso-import", Media: &media},
+		Result:    protocol.Result{OperationID: "iso", Status: "succeeded"},
+		MediaPath: path,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	withMedia := v
+	withMedia.MediaID = media.ID
+	withMedia.Boot = protocol.VMBoot{Firmware: "bios", MediaBootOrder: 1}
+	withMedia.Disks = append([]protocol.VMDisk(nil), v.Disks...)
+	withMedia.Disks[0].BootOrder = 2
+	if _, err := e.CheckVMPlacement(context.Background(), protocol.Command{OperationID: "place-media", Kind: "vm-create", VM: &withMedia}); err != nil {
+		t.Fatalf("placement hashed or rejected a present ISO: %v", err)
+	}
+	if err := os.WriteFile(path, body[:len(body)-1], 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CheckVMPlacement(context.Background(), protocol.Command{OperationID: "place-media-size", Kind: "vm-create", VM: &withMedia}); err == nil || !strings.Contains(err.Error(), "ISO size changed") {
+		t.Fatalf("wrong-size ISO = %v", err)
+	}
+}

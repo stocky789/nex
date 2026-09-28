@@ -244,6 +244,9 @@ func nativeCPUCompare(ctx context.Context, model string, features []protocol.CPU
 		return query(ctx, "hypervisor-cpu-compare", path, "--error", "--virttype", "kvm", "--arch", "x86_64", "--machine", machine)
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("CPU baseline comparison interrupted: %w", err)
+		}
 		return fmt.Errorf("CPU baseline %s is not verified compatible with this host's KVM runtime", model)
 	}
 	return nil

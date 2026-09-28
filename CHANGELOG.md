@@ -6,12 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
-> development software. Builds use the newest numbered changelog heading (`0.4.16` →
-> Debian `0.4.16`).
+> development software. Builds use the newest numbered changelog heading (`0.4.17` →
+> Debian `0.4.17`).
 
 ## [Unreleased]
 
 > **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+
+## [0.4.17] — 2026-09-28
+
+### Bug Fixes
+
+- Creating a VM with a large install ISO no longer fails with a false CPU compatibility
+  error after about twenty seconds.
 
 ## [0.4.16] — 2026-09-28
 

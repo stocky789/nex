@@ -252,8 +252,11 @@ func placementMedia(ctx context.Context, js []managedJournal, v protocol.VMCreat
 				return err
 			}
 		}
-		if err = verifyISO(path, m); err != nil {
-			return err
+		// Placement is capped at 20s. Full SHA-256 of a multi-GiB ISO on remote storage
+		// overruns that bound (BUG-0541); create/update Execute still verifies the digest
+		// before defining the guest. Presence and recorded size are enough for preflight.
+		if !sharedISOPresent(path, m.SizeBytes) {
+			return errors.New("ISO size changed or is not a regular file")
 		}
 	}
 	return nil

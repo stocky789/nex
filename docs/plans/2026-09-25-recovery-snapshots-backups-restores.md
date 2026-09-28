@@ -82,6 +82,9 @@ Use that page for resume order, lab notes and what not to re-open.
 
 Parent: [platform plan, Phase 5](2026-09-08-nex-platform.md#5-snapshots-and-rollback) and
 [Phase 6](2026-09-08-nex-platform.md#6-backups-scheduling-and-restoration).
+The [destination expansion](2026-09-28-backup-repository-destinations.md) plans
+SMB3, S3, SFTP and FTP repositories and automatic health alerts after this
+NFS-only Phase 6 scope. It is not implemented or accepted by this plan change.
 Design authority: [console design guide](../design/controller-console/README.md) and its
 [reference](../design/controller-console/reference.html).
 

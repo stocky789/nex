@@ -1,0 +1,36 @@
+{
+  "summary": "Fix VM create with large install ISOs failing as a false CPU incompatibility.",
+  "paths": [
+    "internal/vmhost/placement.go",
+    "internal/vmhost/placement_test.go",
+    "internal/vmhost/cpu_baseline.go",
+    "internal/vmhost/cpu_baseline_test.go",
+    "docs/BUG_LEDGER.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-28-large-iso-vm-create-cpu-falsehood.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Operator create steps are unchanged; only a false failure during create is removed."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No Controller/Core API contract changed; placement and create still use the same commands and result shape."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fix inside the existing VM create path."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable setting; Core still owns VM definitions and media digests."
+  },
+  "verification": {
+    "method": "New placement and CPU-compare regressions failed before and passed after. Full internal/vmhost package tests passed. On the disposable lab host, the previously failing multi-GiB ISO create completed as succeeded in about 24s after deploying the fixed Core binary; Controller stayed up with NRestarts=0.",
+    "evidence": [
+      "internal/vmhost/placement_test.go",
+      "internal/vmhost/cpu_baseline_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

@@ -66,7 +66,7 @@ against the selected dated `trixie` snapshot and build timestamps change. Retain
 manifest and cache for each tested build. The dated snapshot is already pinned;
 a complete package lock and source bundle remain release requirements.
 
-The current working version is `0.4.16`; it is not a release merely because the build
+The current working version is `0.4.17`; it is not a release merely because the build
 resolves that changelog version. The recipe includes OpenZFS packages for VM storage
 repositories; release publication does not treat them differently from any other ISO
 component. External redistribution still follows [licensing](../docs/LICENSING.md).
@@ -77,7 +77,7 @@ Set `NEX_NETINST_BASE_URL` to the HTTPS directory where this release's Nex paylo
 will be published, then run the same builder:
 
 ```sh
-NEX_NETINST_BASE_URL=https://downloads.example.org/releases/0.4.16 ./installer/build.sh
+NEX_NETINST_BASE_URL=https://downloads.example.org/releases/0.4.17 ./installer/build.sh
 ```
 
 The build creates both the existing full ISO and

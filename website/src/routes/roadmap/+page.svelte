@@ -166,6 +166,7 @@
         "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope"
       ],
       open: [
+        "Backup repositories beyond NFS: SMB3, S3-compatible, SFTP, FTPS and opt-in plaintext FTP, with Core-owned periodic health alerts and native backup/restore lab acceptance",
         "Nested disposable lab is not physical failure-domain certification",
         "Quiesced online and UEFI online backup remain refused until proven",
         "Current candidate needs a live browser re-walk of backup, restore, policy and error flows after follow-up fixes",
