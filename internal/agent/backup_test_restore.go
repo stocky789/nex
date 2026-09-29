@@ -39,10 +39,10 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	if err != nil {
 		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failTestRestoreRun(store, cmd, observed, "backup repository mount path is missing"), nil
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, req.RecoveryPointID)
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
 	if err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
@@ -58,7 +58,7 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 		return failTestRestoreRun(store, cmd, observed, "recovery point lacks a captured VM specification; re-backup before test restore"), nil
 	}
 	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
-	if err := vmhost.CopyBackupArtifactsLocal(ctx, pointDir, localDir, manifest); err != nil {
+	if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
 	asNew := protocol.RestoreAsNewRequest{

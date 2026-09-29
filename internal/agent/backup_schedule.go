@@ -3,6 +3,7 @@ package agent
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -242,6 +243,7 @@ func prepareScheduledBackupRun(s *Store, run protocol.BackupRun) (protocol.Backu
 		VM:     &vm,
 		Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode},
 	}
+	run.HostID = vm.HostID
 	intent, err := backupIntentSHA256(cmd)
 	if err != nil {
 		return protocol.BackupRun{}, protocol.Command{}, err
@@ -268,18 +270,46 @@ func lookupPoolVMSpec(s *Store, vmID string) (protocol.VMCreateSpec, error) {
 
 // Run now from a policy: new operation identity, does not move next_dispatch.
 func ReservePolicyRunNow(s *Store, policyID, vmID, operationID string) (protocol.BackupRun, error) {
+	if !protocol.ValidSnapshotOperationID(operationID) || vmID == "" {
+		return protocol.BackupRun{}, ErrBackupInvalid
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return protocol.BackupRun{}, err
+	}
+	if existing, err := loadPoolBackupRun(s, operationID); err == nil {
+		if existing.Kind != protocol.BackupKindPolicyRunNow || existing.PolicyID != policyID || existing.VMID != vmID {
+			return protocol.BackupRun{}, ErrBackupConflict
+		}
+		if existing.Status == "pending" {
+			prepared, cmd, err := prepareScheduledBackupRun(s, existing)
+			if err != nil || prepared.IntentSHA256 != existing.IntentSHA256 ||
+				(existing.HostID != "" && existing.HostID != prepared.HostID) {
+				return existing, ErrBackupConflict
+			}
+			if existing.HostID == "" {
+				entry, ok := s.State.Journal[operationID]
+				if !ok || entry.Status != "pending" || entry.Command == nil || entry.Command.Kind != protocol.BackupKindPolicyRunNow {
+					return existing, ErrBackupConflict
+				}
+				existing.HostID = prepared.HostID
+				if err := saveScheduledBackupRun(s, existing); err != nil {
+					return existing, err
+				}
+			}
+			if err := queuePolicyRunNowBackup(s, cmd, policyID, vmID); err != nil {
+				return existing, err
+			}
+		}
+		return existing, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return protocol.BackupRun{}, err
+	}
 	policy, err := GetPoolBackupPolicy(s, policyID)
 	if err != nil {
 		return protocol.BackupRun{}, err
 	}
 	if vmID == "" || !containsString(policy.VMIDs, vmID) {
 		return protocol.BackupRun{}, ErrBackupInvalid
-	}
-	if !protocol.ValidSnapshotOperationID(operationID) {
-		return protocol.BackupRun{}, ErrBackupInvalid
-	}
-	if err := requirePoolAuthorityWritable(s); err != nil {
-		return protocol.BackupRun{}, err
 	}
 	vm, err := lookupPoolVMSpec(s, vmID)
 	if err != nil {
@@ -325,12 +355,26 @@ func ReservePolicyRunNow(s *Store, policyID, vmID, operationID string) (protocol
 	if err != nil {
 		return protocol.BackupRun{}, err
 	}
-	if vm.HostID == s.State.HostID {
-		if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}}); err != nil {
-			return reserved, err
-		}
+	if err := queuePolicyRunNowBackup(s, cmd, policyID, vmID); err != nil {
+		return reserved, err
 	}
 	return reserved, nil
+}
+
+func queuePolicyRunNowBackup(s *Store, cmd protocol.Command, policyID, vmID string) error {
+	if entry, ok := s.State.Journal[cmd.OperationID]; ok && entry.Command != nil && entry.Command.Kind == protocol.BackupKindPolicyRunNow {
+		if entry.Status != "pending" || entry.Command.BackupPolicy == nil || entry.Command.BackupPolicy.ID != policyID ||
+			entry.Command.VM == nil || entry.Command.VM.ID != vmID {
+			return ErrBackupConflict
+		}
+		entry.Command = &cmd
+		s.State.Journal[cmd.OperationID] = entry
+		return s.Save()
+	}
+	if cmd.VM.HostID != s.State.HostID {
+		return nil // Core-local member runs use the master's peer scheduler.
+	}
+	return applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}})
 }
 
 func containsString(list []string, want string) bool {

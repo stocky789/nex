@@ -27,6 +27,9 @@ func PoolWitnessClusterName(poolID string) string {
 // host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
 	HostID string `json:"host_id"`
+	// Hostname is reported by this Core and retained by the pool master.
+	// Older membership records omit it until upgraded peers can verify its replica.
+	Hostname string `json:"hostname,omitempty"`
 	// SanlockHostID is assigned once by the pool master and remains stable for this
 	// membership identity. Sanlock host IDs are 1..2000; zero means this legacy member
 	// cannot participate in storage leases.
@@ -133,6 +136,10 @@ type PoolMember struct {
 	FenceCredentialVersion uint64 `json:"fence_credential_version,omitempty"`
 }
 
+func ValidPoolHostname(name string) bool {
+	return len(strings.TrimSpace(name)) > 0 && len(name) <= 200 && !strings.ContainsAny(name, "\r\n\x00")
+}
+
 // PoolMembership is retained by the master and copied to a member only after the member
 // proves the master's certificate-bound identity.  Generation prevents an old peer request
 // from resurrecting an ejected member.
@@ -237,8 +244,12 @@ const PoolMaintenanceCapability = "pool-maintenance-v1"
 // upgrade-required reason; the master never degrades to an unsigned or partial copy.
 const PoolAuthorityReplicaCapability = "pool-authority-replica-v2"
 
+// PoolMembershipHostnameCapability gates hostnames in membership reports to Controllers.
+const PoolMembershipHostnameCapability = "pool-membership-hostname-v1"
+
 // PoolBackupPagedAuthorityCapability permits bounded, signed backup authority pages.
 const PoolBackupPagedAuthorityCapability = "pool-backup-authority-pages-v1"
+const PoolBackupLargeAuthorityCapability = "pool-backup-authority-pages-v2"
 
 // PoolAuthorityTransferCapability gates a planned master change and a member eject: the
 // transfer command, the two peer endpoints below and the reported transfer status.  It is
@@ -1337,6 +1348,7 @@ type PoolAuthorityRecord struct {
 // returns the same acknowledgement; a refusal carries a bounded reason, never a drop.
 type PoolReplicaAck struct {
 	HostID                string `json:"host_id"`
+	BackupPageVersion     int    `json:"backup_page_version,omitempty"`
 	Generation            uint64 `json:"generation"`
 	Digest                string `json:"digest,omitempty"`
 	SanlockHostGeneration uint64 `json:"sanlock_host_generation,omitempty"`
@@ -1348,13 +1360,15 @@ type PoolReplicaAck struct {
 // PoolReplicaStatus is observed state on both sides: what a host holds and how fresh that
 // observation is.  The Controller mirrors it for display and stores none of it.
 type PoolReplicaStatus struct {
-	Generation   uint64    `json:"generation"`
-	Digest       string    `json:"digest,omitempty"`
-	MasterHostID string    `json:"master_host_id,omitempty"`
-	SignedAt     time.Time `json:"signed_at"`
-	ReceivedAt   time.Time `json:"received_at"`
-	Verified     bool      `json:"verified"`
-	Error        string    `json:"error,omitempty"`
+	MembershipHostnameVersion int       `json:"membership_hostname_version,omitempty"`
+	BackupPageVersion         int       `json:"backup_page_version,omitempty"`
+	Generation                uint64    `json:"generation"`
+	Digest                    string    `json:"digest,omitempty"`
+	MasterHostID              string    `json:"master_host_id,omitempty"`
+	SignedAt                  time.Time `json:"signed_at"`
+	ReceivedAt                time.Time `json:"received_at"`
+	Verified                  bool      `json:"verified"`
+	Error                     string    `json:"error,omitempty"`
 }
 
 // PoolCommand is sent to the pool master, except for the join action, which is sent to the
@@ -1939,6 +1953,9 @@ func (m PoolMembership) Valid() error {
 		_, hexErr := hex.DecodeString(member.CertificateSHA256)
 		if member.HostID == "" || seen[member.HostID] || len(member.CertificateSHA256) != 64 || hexErr != nil || member.Generation != m.Generation || (member.Status != "ready" && member.Status != "pending" && member.Status != "failed" && member.Status != "ejected") {
 			return errors.New("invalid pool member record")
+		}
+		if member.Hostname != "" && !ValidPoolHostname(member.Hostname) {
+			return errors.New("invalid pool member hostname")
 		}
 		if member.SanlockHostID > PoolSanlockMaxHostID || member.SanlockHostID != 0 && leaseIDs[member.SanlockHostID] ||
 			m.StorageLease != nil && member.SanlockHostID == 0 {

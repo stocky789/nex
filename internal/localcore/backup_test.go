@@ -55,6 +55,22 @@ func TestBackupMetadataReceiptReplay(t *testing.T) {
 	}
 }
 
+func TestBackupCatalogPendingResponseAccepted(t *testing.T) {
+	s, _ := testService(t)
+	requests := backupIngressChannel(t, s)
+	cookie, csrf := loginLocal(t, s)
+	for _, path := range []string{"/api/local/v1/pool/backup-catalog/import", "/api/local/v1/pool/backup-catalog/rebuild"} {
+		go func() {
+			request := <-requests
+			request.Reply <- agent.BackupResponse{Result: &protocol.Result{OperationID: request.Command.OperationID, Status: "pending"}}
+		}()
+		w := callLocal(s, http.MethodPost, path, map[string]any{"operation_id": "catalog-pending", "repository_id": "repo-1"}, cookie, csrf, "https://core.test")
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("pending catalog response: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func backupIngressChannel(t *testing.T, s *Service) <-chan agent.BackupRequest {
 	t.Helper()
 	handoffAgents.Lock()

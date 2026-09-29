@@ -3,9 +3,11 @@ package protocol
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +23,9 @@ const (
 	BackupKindBackupNow   = "backup-now"
 	BackupKindRestoreNew  = "backup-restore-as-new"
 	BackupRepoKindNFS     = "nfs"
+	BackupRepoKindSMB3    = "smb3"
+	BackupRepoKindS3      = "s3"
+	BackupRepoKindSFTP    = "sftp"
 )
 
 // ValidBackupConsistency reports whether consistency is a known backup capture mode.
@@ -38,39 +43,145 @@ func BackupConsistencyRunning(consistency string) bool {
 	return consistency == BackupCaptureOnline || consistency == BackupCaptureQuiesced
 }
 
-// BackupRepository is the master-owned NFS backup destination registration.
-// Destination kind is external NFS only for product registration.
+// BackupRepository is the master-owned backup destination registration.
+// Schema validity does not imply that a Core supports the destination kind.
 type BackupRepository struct {
-	ID         string              `json:"id"`
-	PoolID     string              `json:"pool_id"`
-	Name       string              `json:"name"`
-	Kind       string              `json:"kind"`
-	Source     NFSStorageSource    `json:"source"`
-	Identity   *NFSStorageIdentity `json:"identity,omitempty"`
-	Generation uint64              `json:"generation,omitempty"`
-	MountPath  string              `json:"mount_path,omitempty"`
-	Access     StorageAccess       `json:"access,omitempty"`
+	ID                   string                            `json:"id"`
+	PoolID               string                            `json:"pool_id"`
+	Name                 string                            `json:"name"`
+	Kind                 string                            `json:"kind"`
+	Source               NFSStorageSource                  `json:"source,omitempty,omitzero"`
+	Identity             *NFSStorageIdentity               `json:"identity,omitempty"`
+	SMBSource            *SMBStorageSource                 `json:"smb_source,omitempty"`
+	S3Source             *BackupS3Source                   `json:"s3_source,omitempty"`
+	SFTPSource           *BackupSFTPSource                 `json:"sftp_source,omitempty"`
+	SMBIdentity          *SMBStorageIdentity               `json:"smb_identity,omitempty"`
+	RemoteIdentity       *BackupRemoteIdentity             `json:"remote_identity,omitempty"`
+	CredentialRef        string                            `json:"credential_ref,omitempty"`
+	Health               BackupRepositoryHealth            `json:"health,omitempty"`
+	LastHealthTransition *BackupRepositoryHealthTransition `json:"last_health_transition,omitempty"`
+	Generation           uint64                            `json:"generation,omitempty"`
+	MountPath            string                            `json:"mount_path,omitempty"`
+	Access               StorageAccess                     `json:"access,omitempty"`
 	// MemberAccess is master-reported per-host observed write/restore access.
 	MemberAccess []PoolStorageAccess `json:"member_access,omitempty"`
 	CreatedAt    time.Time           `json:"created_at,omitempty"`
 	UpdatedAt    time.Time           `json:"updated_at,omitempty"`
 }
 
+type BackupS3Source struct {
+	Endpoint string `json:"endpoint"`
+	Bucket   string `json:"bucket"`
+	Prefix   string `json:"prefix,omitempty"`
+}
+
+type BackupSFTPSource struct {
+	Host          string `json:"host"`
+	Port          uint16 `json:"port,omitempty"`
+	Root          string `json:"root"`
+	HostKeySHA256 string `json:"host_key_sha256"`
+}
+
+// Fingerprint is a Core-observed, backend-specific destination identity.
+type BackupRemoteIdentity struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+type BackupRepositoryHealth struct {
+	Status     string    `json:"status,omitempty"`
+	ObservedAt time.Time `json:"observed_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+type BackupRepositoryHealthTransition struct {
+	Status string    `json:"status"`
+	At     time.Time `json:"at"`
+	Error  string    `json:"error,omitempty"`
+}
+
 func (r BackupRepository) Valid() error {
 	if !ValidSnapshotOperationID(r.ID) || (r.PoolID != "" && len(r.PoolID) > 128) ||
-		!ValidResourceName(r.Name) || r.Kind != BackupRepoKindNFS {
+		!ValidResourceName(r.Name) {
 		return errors.New("backup repository identity is invalid")
 	}
-	if strings.TrimSpace(r.Source.Server) == "" || strings.TrimSpace(r.Source.Export) == "" ||
-		strings.ContainsAny(r.Source.Server, "/\\\x00") || strings.ContainsRune(r.Source.Export, '\x00') ||
-		(r.Source.Directory != "" && (filepath.IsAbs(r.Source.Directory) || strings.Contains(r.Source.Directory, "..") ||
-			strings.ContainsRune(r.Source.Directory, '\x00'))) {
-		return errors.New("backup repository NFS source is invalid")
+	if r.CredentialRef != "" && !ValidSnapshotOperationID(r.CredentialRef) {
+		return errors.New("backup repository credential reference is invalid")
+	}
+	if r.Health.Status != "" && r.Health.Status != "online" && r.Health.Status != "offline" && r.Health.Status != "unknown" {
+		return errors.New("backup repository health is invalid")
+	}
+	if (r.Health.Status == "online" || r.Health.Status == "offline") && r.Health.ObservedAt.IsZero() {
+		return errors.New("backup repository health observation time is missing")
+	}
+	if r.LastHealthTransition != nil && (r.LastHealthTransition.Status != "offline" && r.LastHealthTransition.Status != "recovered" || r.LastHealthTransition.At.IsZero()) {
+		return errors.New("backup repository health transition is invalid")
+	}
+	switch r.Kind {
+	case BackupRepoKindNFS:
+		if r.SMBSource != nil || r.S3Source != nil || r.SFTPSource != nil || r.SMBIdentity != nil || r.RemoteIdentity != nil || !validBackupNFS(r.Source) {
+			return errors.New("backup repository NFS source is invalid")
+		}
+	case BackupRepoKindSMB3:
+		if r.Source != (NFSStorageSource{}) || r.SMBSource == nil || r.S3Source != nil || r.SFTPSource != nil || r.Identity != nil || r.RemoteIdentity != nil || !validBackupHost(r.SMBSource.Server) || !validBackupComponent(r.SMBSource.Share) || !validBackupRelative(r.SMBSource.Directory) {
+			return errors.New("backup repository SMB3 source is invalid")
+		}
+	case BackupRepoKindS3:
+		if r.Source != (NFSStorageSource{}) || r.SMBSource != nil || r.S3Source == nil || r.SFTPSource != nil || r.Identity != nil || r.SMBIdentity != nil || !validBackupS3(*r.S3Source) {
+			return errors.New("backup repository S3 source is invalid")
+		}
+	case BackupRepoKindSFTP:
+		if r.Source != (NFSStorageSource{}) || r.SMBSource != nil || r.S3Source != nil || r.SFTPSource == nil || r.Identity != nil || r.SMBIdentity != nil || !validBackupHost(r.SFTPSource.Host) || !validBackupRoot(r.SFTPSource.Root) || !validBackupHostKey(r.SFTPSource.HostKeySHA256) {
+			return errors.New("backup repository SFTP source is invalid")
+		}
+	default:
+		return errors.New("backup repository kind is invalid")
+	}
+	if r.Kind != BackupRepoKindNFS && r.Kind != BackupRepoKindSMB3 && r.MountPath != "" {
+		return errors.New("remote backup repository cannot have a mount path")
 	}
 	if r.MountPath != "" && (!filepath.IsAbs(r.MountPath) || filepath.Clean(r.MountPath) != r.MountPath) {
 		return errors.New("backup repository mount path is invalid")
 	}
 	return nil
+}
+
+func validBackupNFS(source NFSStorageSource) bool {
+	return !(strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Export) == "" ||
+		strings.ContainsAny(source.Server, "/\\\x00") || strings.ContainsRune(source.Export, '\x00') ||
+		(source.Directory != "" && (filepath.IsAbs(source.Directory) || strings.Contains(source.Directory, "..") ||
+			strings.ContainsRune(source.Directory, '\x00'))))
+}
+
+func validBackupHost(host string) bool {
+	return host != "" && strings.TrimSpace(host) == host && !strings.ContainsAny(host, "/\\\x00@ ")
+}
+
+func validBackupComponent(value string) bool {
+	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00")
+}
+
+func validBackupRelative(path string) bool {
+	return path == "" || !filepath.IsAbs(path) && filepath.Clean(path) == path && path != ".." &&
+		!strings.HasPrefix(path, "../") && !strings.ContainsAny(path, "\\\x00")
+}
+
+func validBackupRoot(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
+}
+
+func validBackupS3(source BackupS3Source) bool {
+	endpoint, err := url.Parse(source.Endpoint)
+	return err == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil &&
+		endpoint.Path == "" && endpoint.RawQuery == "" && endpoint.Fragment == "" &&
+		validBackupComponent(source.Bucket) && validBackupRelative(source.Prefix)
+}
+
+func validBackupHostKey(fingerprint string) bool {
+	if !strings.HasPrefix(fingerprint, "SHA256:") {
+		return false
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(fingerprint, "SHA256:"))
+	return err == nil && len(decoded) == sha256.Size
 }
 
 // BackupDiskArtifact describes one complete standalone disk image in a recovery point.

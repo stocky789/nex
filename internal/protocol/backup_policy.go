@@ -104,25 +104,26 @@ func (o BackupPolicyVMOverride) Valid() error {
 
 // BackupPolicy is one master-owned job/schedule definition under pool-backup-policies.json.
 type BackupPolicy struct {
-	ID             string                   `json:"id"`
-	ScheduleID     string                   `json:"schedule_id"`
-	PoolID         string                   `json:"pool_id"`
-	Name           string                   `json:"name"`
-	Enabled        bool                     `json:"enabled"`
-	Paused         bool                     `json:"paused"`
-	RepositoryID   string                   `json:"repository_id"`
-	CaptureMode    string                   `json:"capture_mode"`
-	TimeZone       string                   `json:"time_zone"`
-	Rule           BackupScheduleRule       `json:"rule"`
-	VMIDs          []string                 `json:"vm_ids"`
-	Retention      BackupRetention          `json:"retention"`
-	Limits         BackupPolicyLimits       `json:"limits,omitempty"`
-	Overrides      []BackupPolicyVMOverride `json:"overrides,omitempty"`
-	Revision       uint64                   `json:"revision"`
-	NextDispatchAt time.Time                `json:"next_dispatch_at,omitempty"`
-	LastDispatchAt time.Time                `json:"last_dispatch_at,omitempty"`
-	CreatedAt      time.Time                `json:"created_at,omitempty"`
-	UpdatedAt      time.Time                `json:"updated_at,omitempty"`
+	ID               string                   `json:"id"`
+	ScheduleID       string                   `json:"schedule_id"`
+	PoolID           string                   `json:"pool_id"`
+	Name             string                   `json:"name"`
+	Enabled          bool                     `json:"enabled"`
+	Paused           bool                     `json:"paused"`
+	RepositoryID     string                   `json:"repository_id"`
+	CaptureMode      string                   `json:"capture_mode"`
+	TimeZone         string                   `json:"time_zone"`
+	Rule             BackupScheduleRule       `json:"rule"`
+	VMIDs            []string                 `json:"vm_ids"`
+	Retention        BackupRetention          `json:"retention"`
+	Limits           BackupPolicyLimits       `json:"limits,omitempty"`
+	Overrides        []BackupPolicyVMOverride `json:"overrides,omitempty"`
+	Revision         uint64                   `json:"revision"`
+	ExpectedRevision *uint64                  `json:"expected_revision,omitempty"`
+	NextDispatchAt   time.Time                `json:"next_dispatch_at,omitempty"`
+	LastDispatchAt   time.Time                `json:"last_dispatch_at,omitempty"`
+	CreatedAt        time.Time                `json:"created_at,omitempty"`
+	UpdatedAt        time.Time                `json:"updated_at,omitempty"`
 }
 
 func (p BackupPolicy) Valid() error {
@@ -319,7 +320,9 @@ const PoolBackupBundleLimit = 64 << 20
 
 // PoolBackupManifest binds every byte of a paged authority to the signed replica.
 type PoolBackupManifest struct {
+	Version          int      `json:"version,omitempty"`
 	SHA256           string   `json:"sha256"`
+	PageCount        int      `json:"page_count,omitempty"`
 	PageSHA256       []string `json:"page_sha256"`
 	PageBytes        []int    `json:"page_bytes"`
 	TotalBytes       int      `json:"total_bytes"`
@@ -332,11 +335,22 @@ type PoolBackupManifest struct {
 }
 
 func (m PoolBackupManifest) Valid() error {
-	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 || m.TotalBytes > PoolBackupBundleLimit ||
-		len(m.PageSHA256) == 0 || len(m.PageSHA256) != len(m.PageBytes) || len(m.PageSHA256) > 1024 ||
+	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 ||
 		m.Repositories < 0 || m.Repositories > 256 || m.Definitions < 0 || m.Definitions > 1000 ||
-		m.History < 0 || m.History > 100000 || m.Catalog < 0 || m.Catalog > 100000 ||
-		m.Pins < 0 || m.Pins > 100000 || m.MetadataReceipts < 0 || m.MetadataReceipts > 100000 {
+		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 {
+		return errors.New("backup authority manifest exceeds bound or is invalid")
+	}
+	if m.Version == 2 {
+		if len(m.PageSHA256) != 0 || len(m.PageBytes) != 0 || m.PageCount <= 0 ||
+			m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
+			(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
+			return errors.New("backup authority v2 manifest is invalid")
+		}
+		return nil
+	}
+	if m.Version != 0 || m.PageCount != 0 || m.TotalBytes > PoolBackupBundleLimit ||
+		m.History > 100000 || m.Catalog > 100000 || m.Pins > 100000 || m.MetadataReceipts > 100000 ||
+		len(m.PageSHA256) == 0 || len(m.PageSHA256) != len(m.PageBytes) || len(m.PageSHA256) > 1024 {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
 	}
 	total := 0
@@ -375,8 +389,7 @@ type BackupRunRef struct {
 }
 
 func (a PoolBackupAuthority) Valid() error {
-	if len(a.Repositories) > 256 || len(a.Definitions) > 1000 || len(a.History) > 100000 ||
-		len(a.Catalog) > 100000 || len(a.Pins) > 100000 || len(a.Policies) > 1000 || len(a.Runs) > 100000 || len(a.MetadataReceipts) > 100000 {
+	if len(a.Repositories) > 256 || len(a.Definitions) > 1000 || len(a.Policies) > 1000 {
 		return errors.New("backup authority exceeds bound")
 	}
 	seenRepo, seenDef, seenHist, seenCat := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}

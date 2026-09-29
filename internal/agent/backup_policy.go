@@ -115,6 +115,9 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 	}
 	now := time.Now().UTC()
 	if existing, ok := state.Policies[policy.ID]; ok {
+		if policy.ExpectedRevision == nil || *policy.ExpectedRevision != existing.Revision {
+			return protocol.BackupPolicy{}, ErrBackupConflict
+		}
 		if existing.ScheduleID != policy.ScheduleID {
 			return protocol.BackupPolicy{}, ErrBackupConflict
 		}
@@ -128,11 +131,15 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 			policy.LastDispatchAt = existing.LastDispatchAt
 		}
 	} else {
+		if policy.ExpectedRevision != nil {
+			return protocol.BackupPolicy{}, ErrBackupConflict
+		}
 		if policy.Revision == 0 {
 			policy.Revision = 1
 		}
 		policy.CreatedAt = now
 	}
+	policy.ExpectedRevision = nil
 	if policy.Enabled && !policy.Paused {
 		next, err := protocol.NextBackupOccurrence(policy.Rule, policy.TimeZone, now)
 		if err != nil {
@@ -244,6 +251,7 @@ func PoolBackupAuthorityRefs(s *Store) (*protocol.PoolBackupAuthority, error) {
 	for _, repo := range reposState.Repositories {
 		repo.Access = protocol.StorageAccess{}
 		repo.MemberAccess = nil
+		repo.Health = protocol.BackupRepositoryHealth{}
 		repos = append(repos, repo)
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].ID < repos[j].ID })
@@ -317,4 +325,107 @@ func PoolBackupAuthorityRefs(s *Store) (*protocol.PoolBackupAuthority, error) {
 		return nil, nil
 	}
 	return auth, nil
+}
+
+// Walk one durable record at a time for v2 replica construction. Directory
+// entries are sorted by os.ReadDir, so unchanged host state has stable bytes.
+func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool, error) {
+	nonempty := false
+	visit := func(kind byte, record any) error {
+		nonempty = true
+		return emit(kind, record)
+	}
+	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return false, err
+	}
+	repoIDs := make([]string, 0, len(repos.Repositories))
+	for id := range repos.Repositories {
+		repoIDs = append(repoIDs, id)
+	}
+	sort.Strings(repoIDs)
+	for _, id := range repoIDs {
+		repo := repos.Repositories[id]
+		repo.Access, repo.MemberAccess, repo.Health = protocol.StorageAccess{}, nil, protocol.BackupRepositoryHealth{}
+		if err := visit(1, repo); err != nil {
+			return false, err
+		}
+	}
+	policies, err := loadPoolBackupPolicies(s)
+	if err != nil {
+		return false, err
+	}
+	policyIDs := make([]string, 0, len(policies.Policies))
+	for id := range policies.Policies {
+		policyIDs = append(policyIDs, id)
+	}
+	sort.Strings(policyIDs)
+	for _, id := range policyIDs {
+		if err := visit(2, policies.Policies[id]); err != nil {
+			return false, err
+		}
+	}
+	for _, group := range []struct {
+		kind byte
+		path string
+	}{
+		{3, poolBackupRunsPath(s)},
+		{4, poolBackupCatalogPath(s)},
+		{6, poolBackupReceiptsPath(s)},
+	} {
+		entries, err := os.ReadDir(group.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(group.path, entry.Name()))
+			if err != nil {
+				return false, err
+			}
+			switch group.kind {
+			case 3:
+				var run protocol.BackupRun
+				if json.Unmarshal(raw, &run) != nil || run.Valid() != nil || run.OperationID+".json" != entry.Name() {
+					return false, errors.New("backup run record is corrupt")
+				}
+				err = visit(3, run)
+			case 4:
+				var point protocol.BackupRecoveryPoint
+				if json.Unmarshal(raw, &point) != nil || point.Valid() != nil || point.ID+".json" != entry.Name() {
+					return false, errors.New("backup catalog entry is corrupt")
+				}
+				err = visit(4, point)
+			case 6:
+				var receipt protocol.BackupMetadataReceipt
+				if json.Unmarshal(raw, &receipt) != nil || receipt.Valid() != nil || receipt.OperationID+".json" != entry.Name() {
+					return false, errors.New("backup metadata receipt is corrupt")
+				}
+				err = visit(6, receipt)
+			}
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	pins, err := loadPoolBackupPins(s)
+	if err != nil {
+		return false, err
+	}
+	pinIDs := make([]string, 0, len(pins.Pins))
+	for id := range pins.Pins {
+		pinIDs = append(pinIDs, id)
+	}
+	sort.Strings(pinIDs)
+	for _, id := range pinIDs {
+		if err := visit(5, pins.Pins[id]); err != nil {
+			return false, err
+		}
+	}
+	return nonempty, nil
 }

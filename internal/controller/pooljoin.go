@@ -717,6 +717,9 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 	for _, member := range members {
 		host := hosts[member.HostID]
 		view := poolMemberView{HostID: member.HostID, Name: member.HostID, Role: "member", Status: "unknown", Connection: "unknown", Checks: []poolMemberCheck{}, Failures: []poolMemberFailure{}}
+		if member.Hostname != "" {
+			view.Name = member.Hostname
+		}
 		if member.HostID == out.MasterHostID {
 			view.Role = "master"
 		}

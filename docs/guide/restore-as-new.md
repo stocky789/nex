@@ -39,6 +39,9 @@ choice after inspection.
 - Source VM missing from inventory: restore still works from the catalog entry; the
   list marks the source as unavailable.
 - Storage list empty or refused: pick storage Core reports usable for the target host.
+- Recovery point not found: the task fails before a restore run, pin or VM is
+  created. Recheck the selected repository and point in the catalog; if the
+  point is imported later, start a new restore request.
 - Firmware-state refusal: check that the recovery point contains complete,
   intact NVRAM or vTPM state; do not discard an artifact to bypass the refusal.
 - Catalog or manifest mismatch: Core refuses a point whose repository manifest

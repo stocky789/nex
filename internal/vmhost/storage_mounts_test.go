@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 )
@@ -552,6 +553,85 @@ func TestRemoteMountRejectsReplacementAndAdminUnit(t *testing.T) {
 	if got, err := os.ReadFile(unitPath); err != nil || string(got) != "[Mount]\nWhat=admin:/vms\n" {
 		t.Fatalf("administrator unit changed: %q, %v", got, err)
 	}
+}
+
+func TestFailedFirstRemoteMountStartLeavesNoUnit(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	s := protocol.StorageRegistration{ID: "smb", PoolID: "pool", HostID: "host", Generation: 1,
+		Kind: protocol.StorageKindSMB, Source: protocol.StorageSource{SMB: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}}}
+	starts := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[0] == "enable" && args[1] == "--now" {
+			starts++
+			if starts == 1 {
+				return nil, errors.New("share unavailable")
+			}
+		}
+		return nil, nil
+	}
+	if _, err := prepareRemote(context.Background(), s, "//smb.example.test/backups", "cifs", "credentials=/private/first"); err == nil {
+		t.Fatal("first unavailable mount succeeded")
+	}
+	_, unitPath := remoteUnitPath(s)
+	if _, err := os.Stat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed first mount left its unit: %v", err)
+	}
+	if _, err := prepareRemote(context.Background(), s, "//smb.example.test/backups", "cifs", "credentials=/private/second"); err != nil {
+		t.Fatalf("new request after service recovery: %v", err)
+	}
+}
+
+func TestRemotePreparationsDoNotRaceFailedFirstMountCleanup(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	s := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1,
+		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"}}}
+	firstStarted, releaseFirst, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	starts := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[0] == "enable" && args[1] == "--now" {
+			mu.Lock()
+			starts++
+			current := starts
+			mu.Unlock()
+			if current == 1 {
+				close(firstStarted)
+				<-releaseFirst
+				return nil, errors.New("share unavailable")
+			}
+			close(secondStarted)
+		}
+		return nil, nil
+	}
+	firstDone := make(chan error, 1)
+	go func() { _, err := prepareNFS(context.Background(), s); firstDone <- err }()
+	<-firstStarted
+	secondDone := make(chan error, 1)
+	go func() { _, err := prepareNFS(context.Background(), s); secondDone <- err }()
+	select {
+	case <-secondStarted:
+		close(releaseFirst)
+		<-firstDone
+		<-secondDone
+		t.Fatal("second preparation started before failed first mount cleaned up")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err == nil {
+		t.Fatal("unavailable first mount succeeded")
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second preparation did not resume after cleanup")
+	}
+	<-secondDone
 }
 
 func TestSMBCredentialRotationRestoresWorkingUnitOnRestartFailure(t *testing.T) {

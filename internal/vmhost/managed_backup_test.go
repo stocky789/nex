@@ -53,6 +53,284 @@ func TestVerifyBackupRepositoryRejectsWrongMountedSource(t *testing.T) {
 	}
 }
 
+func TestSMBBackupRegistrationUsesSealedMountAndPrivateCredential(t *testing.T) {
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "pool-1"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1",
+	}
+	registration := backupStorageRegistration(repo)
+	if registration.Kind != protocol.StorageKindSMB || registration.Source.SMB != repo.SMBSource ||
+		registration.Identity.SMB != repo.SMBIdentity || registration.CredentialReceipt != repo.CredentialRef ||
+		registration.Source.NFS != nil {
+		t.Fatalf("incorrect SMB backup storage registration: %+v", registration)
+	}
+	repo.SMBIdentity.Server = "other.example.test"
+	repo.MountPath = remoteMountPath(registration)
+	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
+		t.Fatal("backup repository must reject a changed SMB source before mount access")
+	}
+}
+
+func TestBackupFilesystemPublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := probeBackupFilesystemPublication(root); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("publication probe left repository entries: %v, %v", entries, err)
+	}
+	if err := probeBackupFilesystemPublication(filepath.Join(root, "absent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing repository root must fail: %v", err)
+	}
+}
+
+func TestPrepareSMBBackupRefusesForeignOwnerBeforePublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	previousPrepare, previousProbe := prepareBackupSMB, probeBackupPublication
+	t.Cleanup(func() { prepareBackupSMB, probeBackupPublication = previousPrepare, previousProbe })
+	called := false
+	prepareBackupSMB = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	probeBackupPublication = func(string) error { called = true; return nil }
+	_, err := PrepareBackupRepository(context.Background(), protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		CredentialRef: "receipt-1",
+	})
+	if err == nil || called {
+		t.Fatalf("foreign-owned repository was probed: err=%v called=%v", err, called)
+	}
+}
+
+func TestPrepareSMBBackupRefusesExistingForeignOwnerBeforeNativeMountWork(t *testing.T) {
+	previousRoot, previousRun := storageMountRoot, nativeRun
+	storageMountRoot = t.TempDir()
+	t.Cleanup(func() { storageMountRoot, nativeRun = previousRoot, previousRun })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "selected"},
+		CredentialRef: "receipt-1",
+	}
+	root := filepath.Join(remoteMountPath(backupStorageRegistration(repo)), repo.SMBSource.Directory)
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	nativeCalls := 0
+	nativeRun = func(context.Context, string, ...string) ([]byte, error) {
+		nativeCalls++
+		return nil, errors.New("native mount work should not begin")
+	}
+	stateDir := t.TempDir()
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil || nativeCalls != 0 {
+		t.Fatalf("foreign owner was touched before refusal: err=%v native calls=%d", err, nativeCalls)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign owner caused credential materialization: %v", err)
+	}
+	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(root)
+	if err != nil || ownerRepo != "foreign-repo" || ownerPool != "foreign-pool" {
+		t.Fatalf("foreign owner changed: %q %q %v", ownerRepo, ownerPool, err)
+	}
+}
+
+func TestPrepareSMBBackupRefusesForeignOwnerDiscoveredAfterMount(t *testing.T) {
+	previousRun, previousMount, previousUnits := nativeRun, storageMountRoot, storageUnitRoot
+	base := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(base, "mounts"), filepath.Join(base, "units")
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = previousRun, previousMount, previousUnits })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "selected"},
+		CredentialRef: "receipt-1",
+	}
+	mount := remoteMountPath(backupStorageRegistration(repo))
+	root := filepath.Join(mount, repo.SMBSource.Directory)
+	probeCalls := 0
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "id":
+			return []byte("1000\n"), nil
+		case "findmnt":
+			return []byte("//smb.example.test/backups cifs rw,vers=3.1.1,seal,cache=strict,uid=1000,gid=1000,file_mode=0600,dir_mode=0700 " + mount + "\n"), nil
+		case "systemctl":
+			if len(args) > 0 && args[0] == "enable" {
+				if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return nil, nil
+		case "runuser":
+			probeCalls++
+			return nil, errors.New("QEMU probe must not touch a foreign repository")
+		}
+		return nil, errors.New("unexpected native command")
+	}
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, filepath.Join(base, "state"), protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil {
+		t.Fatal("foreign owner discovered after mount was accepted")
+	}
+	if probeCalls != 0 {
+		t.Fatalf("QEMU probed foreign repository %d times", probeCalls)
+	}
+	if _, err := os.Stat(filepath.Join(mount, smbMarkerName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("share marker was written before owner proof: %v", err)
+	}
+}
+
+func TestVerifySMBBackupRefusesForeignOwnerBeforePublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "foreign-repo", "foreign-pool"); err != nil {
+		t.Fatal(err)
+	}
+	previousInspect, previousProbe := inspectBackupSMB, probeBackupPublication
+	t.Cleanup(func() { inspectBackupSMB, probeBackupPublication = previousInspect, previousProbe })
+	inspectBackupSMB = func(context.Context, protocol.StorageRegistration) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	called := false
+	probeBackupPublication = func(string) error { called = true; return nil }
+	err := VerifyBackupRepository(context.Background(), protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1", MountPath: root,
+	})
+	if err == nil || called {
+		t.Fatalf("foreign-owned repository was probed: err=%v called=%v", err, called)
+	}
+}
+
+func TestVerifySMBBackupReadSkipsPublicationProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := ClaimBackupRepositoryOwner(root, "repo-1", "pool-1"); err != nil {
+		t.Fatal(err)
+	}
+	previousInspect, previousQEMU, previousProbe := inspectBackupSMB, probeBackupQEMUAccess, probeBackupPublication
+	t.Cleanup(func() {
+		inspectBackupSMB, probeBackupQEMUAccess, probeBackupPublication = previousInspect, previousQEMU, previousProbe
+	})
+	inspectBackupSMB = func(context.Context, protocol.StorageRegistration) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	qemuCalls, publicationCalls := 0, 0
+	probeBackupQEMUAccess = func(context.Context, string) error { qemuCalls++; return nil }
+	probeBackupPublication = func(string) error { publicationCalls++; return errors.New("repository is read-only") }
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
+		CredentialRef: "receipt-1", MountPath: root,
+	}
+	if err := VerifyBackupRepositoryRead(context.Background(), repo); err != nil {
+		t.Fatalf("read verification: %v", err)
+	}
+	if qemuCalls != 0 || publicationCalls != 0 {
+		t.Fatalf("read verification wrote to repository: QEMU=%d publication=%d", qemuCalls, publicationCalls)
+	}
+	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
+		t.Fatal("writable verification accepted denied publication")
+	}
+	if qemuCalls != 1 || publicationCalls != 1 {
+		t.Fatalf("writable verification skipped probes: QEMU=%d publication=%d", qemuCalls, publicationCalls)
+	}
+	repo.SMBIdentity.MarkerID = strings.Repeat("b", 32)
+	if err := VerifyBackupRepositoryRead(context.Background(), repo); err == nil {
+		t.Fatal("read verification accepted wrong share marker")
+	}
+}
+
+func TestPrepareBackupRepositorySMBUsesPrivateCredentialFile(t *testing.T) {
+	root, stateDir := t.TempDir(), t.TempDir()
+	previousPrepare := prepareBackupSMB
+	t.Cleanup(func() { prepareBackupSMB = previousPrepare })
+	prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, _ string) (storageAccess, error) {
+		credential, err := credentialFile(ctx, registration)
+		if err != nil {
+			return storageAccess{}, err
+		}
+		info, err := os.Stat(credential)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("credential mode: %v, %v", info, err)
+		}
+		if data, err := os.ReadFile(credential); err != nil || string(data) != "username=backup\npassword=private-example-secret\n" {
+			t.Fatalf("credential body: %q, %v", data, err)
+		}
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1",
+	}
+	creds := protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}
+	for i := 0; i < 2; i++ {
+		prepared, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, creds)
+		if err != nil || prepared.MountPath != root || prepared.SMBIdentity == nil {
+			t.Fatalf("prepare %d: %+v, %v", i, prepared, err)
+		}
+	}
+	creds.Secret = "different-private-secret"
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, creds); err == nil {
+		t.Fatal("same credential reference accepted different private material")
+	}
+	if err := RetireBackupRepositorySMBCredential(stateDir, "../receipt-1"); err == nil {
+		t.Fatal("credential cleanup accepted a path outside private state")
+	}
+	if err := RetireBackupRepositorySMBCredential(stateDir, repo.CredentialRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old materialized credential remained: %v", err)
+	}
+	if err := RetireBackupRepositorySMBCredential(stateDir, repo.CredentialRef); err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+}
+
+func TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMaterial(t *testing.T) {
+	stateDir := t.TempDir()
+	previousUnits := storageUnitRoot
+	storageUnitRoot = t.TempDir()
+	t.Cleanup(func() { storageUnitRoot = previousUnits })
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
+		CredentialRef: "new-receipt",
+	}
+	registration := backupStorageRegistration(repo)
+	_, unitPath := remoteUnitPath(registration)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldUnit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs",
+		smbMountOptions(filepath.Join(stateDir, "backup-smb-credentials", "old-receipt"), "1000", "1000"))
+	if err := os.WriteFile(unitPath, oldUnit, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, protocol.StorageCredentials{Username: "backup", Secret: "new-secret"}); err == nil {
+		t.Fatal("mounted repository accepted credential rotation without a dependency-safe remount")
+	}
+	if data, err := os.ReadFile(unitPath); err != nil || string(data) != string(oldUnit) {
+		t.Fatalf("failed rotation changed the mount unit: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed rotation materialized new credentials: %v", err)
+	}
+}
+
 func TestPublishBackupRecoveryPointRequiresCompleteManifest(t *testing.T) {
 	root := t.TempDir()
 	if err := ClaimBackupRepositoryOwner(root, "repo-1", "pool-1"); err != nil {

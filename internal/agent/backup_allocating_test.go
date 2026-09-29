@@ -61,6 +61,17 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 	if got := attentionRestoreRun(s, cmd, time.Now().UTC(), "prior native allocation was interrupted"); got.Status != "needs_attention" {
 		t.Fatalf("attention state: %+v", got)
 	}
+	// Admission may refuse the terminal run after native registration, leaving
+	// the reserved run pending while the command journal records uncertainty.
+	run, err := loadPoolBackupRun(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status, run.Stage = "pending", "reserved"
+	if err := savePoolBackupRun(s, run); err != nil {
+		t.Fatal(err)
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Command: &cmd, Status: "needs_attention"}
 	previousStage, previousBind := restoreAsNewAllocating, bindLegacyRestoreAsNewAllocating
 	previousRegister, previousObserve := registerBackupRestoredAsNew, reconcileRestoredAsNew
 	t.Cleanup(func() {
@@ -124,7 +135,7 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 		got.Error != "native retry still unavailable" || registrations != 1 || observations != 0 {
 		t.Fatalf("failed exact resume did not stay uncertain: %+v %v; registrations=%d observations=%d", got, err, registrations, observations)
 	}
-	if run, err := loadPoolBackupRun(s, cmd.OperationID); err != nil || run.Status != "needs_attention" {
+	if run, err := loadPoolBackupRun(s, cmd.OperationID); err != nil || run.Status != "pending" {
 		t.Fatalf("failed resume settled run: %+v %v", run, err)
 	}
 	if pins, err := ActiveBackupRestorePins(s); err != nil || !pins["point-1"] {

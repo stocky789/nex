@@ -4,6 +4,15 @@
 // and POST /api/v1/vms/{id}/backup (request_id; create body is flat name/kind/source).
 
 export type BackupNFSSource = { server: string; export: string; directory?: string };
+export type BackupKind = "nfs" | "smb3" | "s3" | "sftp";
+
+export function availableBackupKinds(connection?: string, capabilities: string[] = []): BackupKind[] {
+  const kinds: BackupKind[] = ["nfs"];
+  if (connection === "fresh") for (const kind of ["smb3", "s3", "sftp"] as BackupKind[]) {
+    if (capabilities.includes(`backup-destination-${kind}-v1`)) kinds.push(kind);
+  }
+  return kinds;
+}
 
 export type BackupStorageAccess = {
   status?: string;
@@ -32,15 +41,26 @@ export type BackupRepository = {
   id: string;
   pool_id: string;
   name: string;
-  kind: "nfs";
+  kind: BackupKind;
   source: BackupNFSSource;
+  smb_source?: { server: string; share: string; directory?: string };
+  s3_source?: { endpoint: string; bucket: string; prefix?: string };
+  sftp_source?: { host: string; port?: number; root: string; host_key_sha256: string };
   generation?: number;
   mount_path?: string;
   access?: BackupStorageAccess;
   member_access?: BackupMemberAccess[];
+  health?: { status?: "online" | "offline" | "unknown"; observed_at?: string; error?: string };
+  last_health_transition?: { status: "offline" | "recovered"; at: string; error?: string };
   created_at?: string;
   updated_at?: string;
 };
+
+export function repositoryHealth(repo: BackupRepository, now = Date.now()): "online" | "offline" | "unknown" {
+  const observed = Date.parse(repo.health?.observed_at || "");
+  if (!Number.isFinite(observed) || observed > now || now - observed > 2 * 60_000) return "unknown";
+  return repo.health?.status === "online" || repo.health?.status === "offline" ? repo.health.status : "unknown";
+}
 
 export type BackupRecoveryPoint = {
   id: string;
@@ -69,6 +89,44 @@ export type BackupRun = {
   updated_at: string;
 };
 
+export type BackupPage<T> = { items: T[]; next_cursor?: string; generation: string; total: number };
+export type BackupCatalogPage = BackupPage<BackupRecoveryPoint> & {
+  untested_count: number;
+  last_restore_test?: { result: string; tested_at: string };
+  backup_days_14: string[];
+};
+export type BackupRunPage = BackupPage<BackupRun> & {
+  attention_count: number;
+  last_backup_run?: { status: string; updated_at: string };
+};
+
+export function backupPage<T>(response: T[] | BackupPage<T>): BackupPage<T> {
+  return Array.isArray(response) ? { items: response, generation: "", total: response.length } : response;
+}
+
+export function refreshBackupPage<T extends { items: unknown[]; generation: string; next_cursor?: string }>(current: T | null, next: T, sameScope: boolean): T {
+  return sameScope && next.generation && current?.generation === next.generation && current.items.length > next.items.length
+    ? { ...next, items: current.items, next_cursor: current.next_cursor } : next;
+}
+
+export async function collectBackupPageItems<T>(first: BackupPage<T>, requestPage: (cursor: string, generation: string) => Promise<BackupPage<T>>): Promise<T[]> {
+  const items = [...first.items];
+  let cursor = first.next_cursor;
+  while (cursor) {
+    const page = await requestPage(cursor, first.generation);
+    if (page.generation !== first.generation) throw new Error("Backup inventory changed during loading.");
+    items.push(...page.items);
+    cursor = page.next_cursor;
+  }
+  return items;
+}
+
+export function appendBackupPage<T>(current: BackupPage<T> | null, next: BackupPage<T>, key: (item: T) => string): BackupPage<T> {
+  if (!current || current.generation !== next.generation) return next;
+  const ids = new Set(current.items.map(key));
+  return { ...next, items: [...current.items, ...next.items.filter(item => !ids.has(key(item)))] };
+}
+
 export type BackupOpReply = { operation?: { id?: string }; id?: string };
 
 export const backupOpID = (reply: BackupOpReply) => reply.operation?.id || reply.id || "";
@@ -83,7 +141,10 @@ export const rid = (prefix: string) => {
   return prefix + Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("").slice(0, 20);
 };
 
-export const nfsTarget = (r: BackupRepository) => {
+export const repositoryTarget = (r: BackupRepository) => {
+  if (r.kind === "smb3" && r.smb_source) return `//${r.smb_source.server}/${r.smb_source.share}${r.smb_source.directory ? `/${r.smb_source.directory}` : ""}`;
+  if (r.kind === "s3" && r.s3_source) return `${r.s3_source.endpoint}/${r.s3_source.bucket}${r.s3_source.prefix ? `/${r.s3_source.prefix}` : ""}`;
+  if (r.kind === "sftp" && r.sftp_source) return `${r.sftp_source.host}:${r.sftp_source.port || 22}${r.sftp_source.root}`;
   const s = r.source;
   if (!s?.server || !s.export) return "—";
   return `${s.server}:${s.export}${s.directory ? `/${s.directory}` : ""}`;

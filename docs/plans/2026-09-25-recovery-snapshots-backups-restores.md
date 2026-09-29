@@ -16,17 +16,17 @@ independent correction review, interrupted-request and native restore reruns,
 and proof that promotion preserves complete retained history as the replica
 grows. The bounded Campaign A/B and browser results remain evidence for their
 tested builds; they do not certify these later edits.
-The current paged authority refuses more than 64 MiB or 1024 pages without
-truncating records. The encoder's packing rule means the 64 MiB byte bound
-arrives before the page-count bound for valid records. The new admission
-guard refuses growth that would cross the bound, preserving a previously
-complete replica. An older oversized history, or a failed replica push,
-still prevents complete-history takeover. Phase 6 stays
-open for a near-boundary transfer/promotion check and a product decision on
-history capacity and continued takeover beyond it. Current Core source adds
-master-side capacity preflight for new backup metadata and reserves room for
-pending operation outcomes. A focused sparse-page assertion passed; near-boundary
-native transfer/promotion proof remains open.
+The legacy version 0 authority transfer refused more than 64 MiB or 1024 pages
+without truncating records. The current candidate adds incremental v2 signed
+pages to retain complete history beyond that bound. A native three-Core
+overlay verified transfer of 1,052 directly seeded runs beyond 64 MiB to
+both members, and a matched Controller overlay read all 1,052 runs through
+authenticated pages. Those overlays precede the latest admission and page
+guards. Core source now checks live, exact member replica status before
+admitting more backup metadata and reserves room for pending outcomes.
+Failed replica push or incomplete member history still prevents safe takeover.
+Phase 6 remains open for a final-candidate native retry, fence-verified
+promotion preserving all retained history, and post-promotion adoption.
 Test-result recording now requires the exact successful restore creator and
 current native VM identity on the owner host. The current master obtains
 authenticated member proof when needed. Passed requires intact current

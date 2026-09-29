@@ -185,6 +185,48 @@ func TestReplacementControllerWithTheMasterGoneCanPromote(t *testing.T) {
 	}
 }
 
+func TestReplacementControllerShowsOfflineMemberNameFromCore(t *testing.T) {
+	l := newGoneMasterLab(t)
+	first := l.enroll(goneMasterFirst, "core-first", 200)
+	membership := l.membership(goneMasterID, 7)
+	membership.Members[0].Hostname = "core-former-master"
+	l.report(first, "core-first", 1, protocol.ManagedState{Membership: membership})
+
+	var view poolMembersView
+	read(t, l.a.call("GET", "/api/v1/pools/"+goneMasterPool+"/members", nil, nil, 200), &view)
+	former := memberRow(t, view, goneMasterID)
+	if former.Name != "core-former-master" || former.Connection != "unknown" {
+		t.Fatalf("a fresh Controller lost the Core-owned offline member identity: %+v", former)
+	}
+	var hosts []protocol.Host
+	read(t, l.a.call("GET", "/api/v1/hosts", nil, nil, 200), &hosts)
+	for _, host := range hosts {
+		if host.ID == goneMasterID {
+			t.Fatalf("membership must not invent an enrolled host or control identity: %+v", host)
+		}
+	}
+}
+
+func TestPoolMembershipHostnameCapabilityAcknowledgement(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	for i, test := range []struct {
+		version      int
+		capabilities []string
+		want         bool
+	}{
+		{protocol.LegacyVersion, []string{protocol.PoolMembershipHostnameCapability}, false},
+		{protocol.Version, nil, false},
+		{protocol.Version, []string{protocol.PoolMembershipHostnameCapability}, true},
+	} {
+		response := a.report(cert, protocol.ReportRequest{Version: test.version, Sequence: uint64(i + 1), Capabilities: test.capabilities})
+		if (response.PoolMembershipHostname != nil) != test.want || test.want && !*response.PoolMembershipHostname {
+			t.Fatalf("unexpected membership hostname acknowledgement: %+v", response.PoolMembershipHostname)
+		}
+	}
+}
+
 // TestAMemberCannotAdmitAHostThroughAGoneMastersRecord: while the recorded master has never
 // enrolled, the members' reports are the evidence, and each is a payload that member fully
 // controls. One member listing an extra host must not let that host enroll into the pool.

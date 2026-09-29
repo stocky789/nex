@@ -294,6 +294,71 @@ func TestPromotionRefusalFromCoreIsSurfacedVerbatim(t *testing.T) {
 	}
 }
 
+func TestPromotionOperationRecoversAfterCoreCompletes(t *testing.T) {
+	l := newPromotionLab(t)
+	var accepted promotionAcceptance
+	read(t, l.a.call("POST", l.promotePath(), map[string]any{"request_id": "recover-promote", "host_id": l.member.id, "confirmation": l.poolName(t), "fence_confirmed": true, "fence_host_ids": []string{l.master.id}}, nil, 202), &accepted)
+	if commands := l.send(&l.member, nil).Commands; len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+		t.Fatalf("promotion command = %+v", commands)
+	}
+	operation := func() protocol.Operation {
+		var operations []protocol.Operation
+		read(t, l.a.call("GET", "/api/v1/operations", nil, nil, 200), &operations)
+		for _, candidate := range operations {
+			if candidate.ID == accepted.Operation.ID {
+				return candidate
+			}
+		}
+		t.Fatalf("promotion operation %s missing", accepted.Operation.ID)
+		return protocol.Operation{}
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention", Error: "temporary fencer failure", ObservedAt: time.Now().UTC()}}
+	})
+	if got := operation(); got.Status != "needs_attention" {
+		t.Fatalf("interrupted promotion = %+v", got)
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "succeeded", ObservedAt: time.Now().UTC()}}
+	})
+	if got := operation(); got.Status != "succeeded" || got.Error != "" {
+		t.Fatalf("recovered promotion = %+v", got)
+	}
+}
+
+func TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedResult(t *testing.T) {
+	l := newPromotionLab(t)
+	var accepted promotionAcceptance
+	read(t, l.a.call("POST", l.promotePath(), map[string]any{"request_id": "recover-old-controller", "host_id": l.member.id, "confirmation": l.poolName(t), "fence_confirmed": true, "fence_host_ids": []string{l.master.id}}, nil, 202), &accepted)
+	if commands := l.send(&l.member, nil).Commands; len(commands) != 1 || commands[0].OperationID != accepted.Operation.ID {
+		t.Fatalf("promotion command = %+v", commands)
+	}
+	l.send(&l.member, func(r *protocol.ReportRequest) {
+		r.Results = []protocol.Result{{OperationID: accepted.Operation.ID, Status: "needs_attention", Error: "temporary fencer failure", ObservedAt: time.Now().UTC()}}
+	})
+	// An older Controller acknowledges Core's later success without settling its
+	// operation row. Core then has no unacknowledged result to send after upgrade.
+	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: accepted.Operation.ID, Stage: "repoint", Status: "needs_attention", ObservedAt: time.Now().UTC()}
+	l.send(&l.member, nil)
+	if last := l.members(t).LastPromotion; last == nil || last.Status != "needs_attention" {
+		t.Fatalf("unfinished promotion settled: %+v", last)
+	}
+	cfg := l.a.c.cfg
+	if err := l.a.c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.a.c = reopened
+	l.member.inv.Managed.Promotion = &protocol.PoolPromotionStatus{OperationID: accepted.Operation.ID, Stage: "done", Status: "succeeded", ObservedAt: time.Now().UTC()}
+	l.send(&l.member, nil)
+	if last := l.members(t).LastPromotion; last == nil || last.Status != "succeeded" || last.Error != "" {
+		t.Fatalf("durable promotion did not settle old receipt: %+v", last)
+	}
+}
+
 func TestPromotionMembershipConflictIsMarkedConflict(t *testing.T) {
 	l := newPromotionLab(t)
 	var accepted promotionAcceptance

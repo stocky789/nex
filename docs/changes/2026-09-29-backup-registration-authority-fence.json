@@ -1,0 +1,38 @@
+{
+  "summary": "Fence backup repository preparation to the current pool master before remote writes. API impact: existing contract.",
+  "paths": [
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-backup-registration-authority-fence.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The authority guard adds no separate operator step; the four-kind destination guide update is recorded with capability enablement.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Existing registration now refuses member or frozen authority before destination preparation; routes and payloads are unchanged.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This corrects a safety defect in the open destination acceptance gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "Existing pool-master repository inventory and destination owner marker; authenticated Core master inventory lets a fresh Controller adopt the repository.",
+    "reason": "Core alone decides whether this pool may claim or prepare a destination."
+  },
+  "verification": {
+    "method": "Focused member-registration, transfer-freeze and missing-owner adoption regressions failed before their corrections and passed afterward. Focused SFTP, peer SFTP and registration tests, a serial full Go suite and diff check passed; independent read-only correction review found no blocker. On matched Core binary SHA-256 af5f3ed6e16f5f410515d9ba30ac5ddf84fca816c975a1acabcff364e87b994c, a fresh disposable two-Core SFTP root registered on the master, the member reported fresh read/write access, and a protected stopped two-disk point backed up and restored with exact markers and full hashes. Exact replays and cleanup passed; 64 prior catalog hashes and source disks stayed intact; all fixture processes stopped. A member-local registration returned 503 before remote files appeared, but used a mismatched master receipt because Controller refused member credential handoff. Forge CI is pending.",
+    "evidence": ["internal/agent/backup_repository_sftp_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The native result covers one confined disposable OpenSSH profile. The valid-credential member-registration refusal has focused source proof only. Signed release delivery and forge CI remain open."
+  }
+}

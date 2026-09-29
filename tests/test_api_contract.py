@@ -151,6 +151,31 @@ class APIContractTests(unittest.TestCase):
         self.assertNotRegex(html, r'(?:src|href)="https?://')
         self.assertIn('aria-label="API operations"', html)
 
+    def test_backup_policy_update_requires_expected_revision(self):
+        if self.contract_file != 'openapi.json':
+            return
+        operation = self.api['paths']['/api/v1/pools/{id}/backup-policies/{policy_id}']['put']
+        request = operation['requestBody']['content']['application/json']['schema']
+        self.assertIn('expected_revision', request['required'])
+        self.assertEqual(request['properties']['expected_revision']['minimum'], 1)
+        self.assertIn('400', operation['responses'])
+        self.assertIn('409', operation['responses'])
+
+    def test_backup_history_page_contract(self):
+        if self.contract_file != 'openapi.json':
+            return
+        schemas = self.api['components']['schemas']
+        self.assertIn('backup_inventory_pages', schemas['ReportResponse']['properties'])
+        for route, page in [('backup-runs', 'BackupRunPage'), ('backup-catalog', 'BackupCatalogPage')]:
+            operation = self.api['paths']['/api/v1/pools/{id}/' + route]['get']
+            result = operation['responses']['200']['content']['application/json']['schema']['oneOf']
+            self.assertIn({'$ref': '#/components/schemas/' + page}, result)
+            self.assertEqual(schemas[page]['properties']['items']['maxItems'], 64)
+            for field in ('cursor', 'generation'):
+                self.assertIn(field, {p['name'] for p in operation['parameters']})
+            for status in ('400', '409', '413', '502', '503', '504'):
+                self.assertIn(status, operation['responses'])
+
 
     def test_appliance_dto_fields_types_and_required_members(self):
         self.check_dtos('internal/controller/appliance.go', {
@@ -247,6 +272,15 @@ class PeerAPIContractTests(APIContractTests):
         return '\n'.join(p.read_text() for d in dirs for p in sorted((ROOT / d).glob('*.go'))
                          if not p.name.endswith('_test.go'))
 
+    def test_backup_peer_access_and_missing_operation_contract(self):
+        access = self.api['paths']['/api/v1/pool/backup/access']['post']
+        self.assertEqual(access['security'], [{'PoolMasterCertificate': []}])
+        self.assertEqual(access['requestBody']['content']['application/json']['schema'],
+                         {'$ref': '#/components/schemas/BackupRepository'})
+        self.assertEqual(access['responses']['200']['content']['application/json']['schema'],
+                         {'$ref': '#/components/schemas/PoolStorageAccess'})
+        self.assertIn('404', self.api['paths']['/api/v1/pool/backup/{operation_id}']['get']['responses'])
+
     def test_all_runtime_api_routes_are_documented_and_implemented(self):
         # Peer routes use prefix/suffix dispatch: path shapes come from handlers, methods from Core callers.
         source = self.go_source('internal/agent', 'internal/localcore')
@@ -340,12 +374,17 @@ class PeerAPIContractTests(APIContractTests):
             else:
                 package, go = schema['x-go-type'].split('.')
                 body = re.search(r'type ' + go + r' struct\s*{(.*?)}\n', self.go_source('internal/' + package), re.S)[1]
-            tags = re.findall(r'`json:"([^"]+)"`', body)
-            if tags:
-                fields = {tag.split(',')[0] for tag in tags}
-                emitted = {tag.split(',')[0] for tag in tags if 'omitempty' not in tag}
-            else:  # Untagged structs marshal with Go field names.
-                fields = emitted = set(re.findall(r'(?<![.\w\[\]*])[A-Z]\w*', body))
+            fields = set()
+            emitted = set()
+            for line in body.splitlines():
+                declaration = re.match(r'\s*([A-Z]\w*(?:,\s*[A-Z]\w*)*)\s+\S+(?:\s+`json:"([^"]+)"`)?', line)
+                if not declaration:
+                    continue
+                names, tag = declaration.groups()
+                names = [tag.split(',')[0]] if tag else [name.strip() for name in names.split(',')]
+                fields.update(names)
+                if not tag or 'omitempty' not in tag:
+                    emitted.update(names)
             self.assertEqual(set(schema['properties']), fields, name)
             self.assertEqual(set(schema['required']), emitted, name)
 
@@ -479,6 +518,24 @@ class PoolJoinContractTests(unittest.TestCase):
         self.assertEqual(set(schema['required']),
                          {tag.split(',')[0] for tag in fields if 'omitempty' not in tag}, schema_name)
         return schema
+
+    def test_core_membership_retains_optional_hostnames(self):
+        peer = json.loads((ROOT / 'docs/api/peer-openapi.json').read_text())
+        join = peer['components']['schemas']['PeerJoinRequest']
+        self.assertIn('hostname', join['properties'])
+        self.assertNotIn('hostname', join['required'])
+        advertise = peer['components']['schemas']['PeerAdvertiseRequest']
+        self.assertIn('hostname', advertise['properties'])
+        self.assertNotIn('hostname', advertise['required'])
+        self.assertIn('membership_hostname_version', peer['components']['schemas']['PoolReplicaStatus']['properties'])
+        for contract in (self.api, self.local, peer):
+            member = contract['components']['schemas']['PoolMember']
+            self.assertIn('hostname', member['properties'])
+            self.assertNotIn('hostname', member['required'])
+        self.assertIn('Core-owned membership', self.api['components']['schemas']['PoolMemberView']['properties']['name']['description'])
+        response = self.api['components']['schemas']['ReportResponse']
+        self.assertIn('pool_membership_hostname', response['properties'])
+        self.assertNotIn('pool_membership_hostname', response['required'])
 
     def test_routes_are_admin_gated_and_documented(self):
         controller = (ROOT / 'internal/controller/controller.go').read_text()

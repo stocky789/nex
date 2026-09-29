@@ -18,6 +18,10 @@ var writeImportedBackupProtectMarker = vmhost.WriteBackupProtectMarker
 // ImportPoolBackupCatalog scans a repository and merges validated manifests into the catalog.
 // Existing protected flags, test results and restore pins are preserved across rebuild.
 func ImportPoolBackupCatalog(s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
+	return importPoolBackupCatalog(context.Background(), s, repositoryID)
+}
+
+func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
 	if !protocol.ValidSnapshotOperationID(repositoryID) {
 		return nil, ErrBackupInvalid
 	}
@@ -28,15 +32,13 @@ func ImportPoolBackupCatalog(s *Store, repositoryID string) ([]protocol.BackupRe
 	if err != nil {
 		return nil, err
 	}
-	if repo.MountPath == "" {
-		return nil, errors.New("backup repository mount path is missing")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := verifyBackupRepository(ctx, repo); err != nil {
+	backend, err := openBackupRepositoryStorage(s, repo)
+	if err != nil {
 		return nil, err
 	}
-	scanned, err := vmhost.ScanBackupRepositoryPoints(repo.MountPath, repo.ID, repo.PoolID)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	scanned, err := backend.Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +76,7 @@ func ImportPoolBackupCatalog(s *Store, repositoryID string) ([]protocol.BackupRe
 			}
 		}
 		if point.Protected {
-			if err := writeImportedBackupProtectMarker(filepath.Join(repo.MountPath, point.ID), true); err != nil {
+			if err := backend.SetProtected(ctx, point.ID, true); err != nil {
 				return imported, err
 			}
 		}
@@ -88,10 +90,14 @@ func ImportPoolBackupCatalog(s *Store, repositoryID string) ([]protocol.BackupRe
 
 // RebuildPoolBackupCatalogFromRepository scans and imports before removing stale entries.
 func RebuildPoolBackupCatalogFromRepository(s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
+	return rebuildPoolBackupCatalogFromRepository(context.Background(), s, repositoryID)
+}
+
+func rebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
 	if err := masterBackupPool(s, s.State.PoolID); err != nil {
 		return nil, err
 	}
-	imported, err := ImportPoolBackupCatalog(s, repositoryID)
+	imported, err := importPoolBackupCatalog(ctx, s, repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +122,16 @@ func RebuildPoolBackupCatalogFromRepository(s *Store, repositoryID string) ([]pr
 	if err != nil {
 		return imported, err
 	}
-	entries, err := os.ReadDir(repo.MountPath)
+	backend, err := openBackupRepositoryStorage(s, repo)
 	if err != nil {
 		return imported, err
 	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if name[0] != '.' && protocol.ValidSnapshotOperationID(name) && !seen[name] {
+	entries, err := backend.Entries(ctx)
+	if err != nil {
+		return imported, err
+	}
+	for _, name := range entries {
+		if name != "" && name[0] != '.' && protocol.ValidSnapshotOperationID(name) && !seen[name] {
 			return imported, errors.New("repository contains an unreadable or invalid recovery point: " + name)
 		}
 	}

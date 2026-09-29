@@ -45,10 +45,10 @@ func executeRestoreReplace(ctx context.Context, store *Store, cmd protocol.Comma
 	if err != nil {
 		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failReplaceRun(store, cmd, observed, "backup repository mount path is missing"), nil
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, req.RecoveryPointID)
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
 	if err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
@@ -89,7 +89,7 @@ func executeRestoreReplace(ctx context.Context, store *Store, cmd protocol.Comma
 		}
 	}
 	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
-	if err := vmhost.CopyBackupArtifactsLocal(ctx, pointDir, localDir, manifest); err != nil {
+	if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 		return failReplaceRun(store, cmd, observed, err.Error()), nil
 	}
 	paths := map[string]string{}

@@ -45,6 +45,10 @@ assert.match(rows, /^<details class="pool-status"><summary>/, "the pool's own fa
 assert.equal((rows.match(/Fencing: not reported/g) || []).length, 1, "and the pool's fencing sentence is said once, behind its About disclosure");
 assert.match(rows, /data-host-id="host-a"/);
 assert.match(rows, /data-host-id="host-b"/);
+assert.doesNotMatch(rows, /href="#\/hosts\/host-a"/, "a member absent from this Controller's Hosts inventory has no broken link");
+const adopted = table({ report, hosts: [{ id: "host-b" }] });
+assert.match(adopted, /href="#\/hosts\/host-b"/, "an enrolled member keeps its Host panel link");
+assert.doesNotMatch(adopted, /href="#\/hosts\/host-a"/, "an offline former master stays visible without a broken Host panel link");
 assert.match(rows, /Pool master/);
 assert.match(rows, />Member</);
 assert.match(rows, /uplink lab0 does not exist on this host/);
