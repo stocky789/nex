@@ -1,0 +1,52 @@
+{
+  "summary": "Fix final-review findings: retention ranks by capture time, prunes without holding the backup lock and off the Run loop; S3/SFTP time out on silence only; eject unmounts outside the lock and keeps its new pool ID across retries. API impact: none.",
+  "paths": [
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_protect.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/run.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_repository_storage.go",
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_credentials.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/backup_flow_test.go",
+    "internal/agent/backup_cleanup_test.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "internal/agent/backup_peer_reconcile_test.go",
+    "docs/guide/backup-policies.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-backup-review-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The retention note now states that points are kept by capture time and a late-settling older point is removed by a later backup.",
+    "pages": [
+      "docs/guide/backup-policies.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No request, response, peer or Controller contract changes; retention, transport timeouts and eject cleanup are internal Core behaviour.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Defect fixes in the current backup destination slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "Adds NewPoolID to the ejected host's own pool transfer record in its Core pool peer state, so an interrupted eject resumes with the same new pool identity. It is host-local, not pool-scoped; a fresh Controller adopts the resulting pool from the host as before. The pruning set is in-memory only.",
+    "record": "Pool peer state on the ejected host (poolPeerState.Transfer.NewPoolID); the ejected host recovers it itself on resume, and a Controller reads the resulting pool from that host."
+  },
+  "verification": {
+    "method": "Focused go tests for each fix, each shown failing through go test -overlay with the fix reverted (old ranking, lock-held prune, bump-before-delete, write-without-renew S3 conn, old SFTP keepalive timer, per-attempt pool ID, lock-held unmount, unconditional online cleanup), then the full agent and vmhost package tests.",
+    "evidence": [
+      "docs/BUG_LEDGER.md"
+    ],
+    "limits": "Transport timeouts were not measured on a throttled real link; no lab, NFS, S3 or SFTP service was used. Activation context, retention-note capacity and log suppression have no dedicated tests."
+  }
+}

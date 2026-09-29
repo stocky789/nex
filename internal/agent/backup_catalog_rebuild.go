@@ -15,12 +15,8 @@ import (
 
 var writeImportedBackupProtectMarker = vmhost.WriteBackupProtectMarker
 
-// ImportPoolBackupCatalog scans a repository and merges validated manifests into the catalog.
+// importPoolBackupCatalog scans a repository and merges validated manifests into the catalog.
 // Existing protected flags, test results and restore pins are preserved across rebuild.
-func ImportPoolBackupCatalog(s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
-	return importPoolBackupCatalog(context.Background(), s, repositoryID)
-}
-
 func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
 	if !protocol.ValidSnapshotOperationID(repositoryID) {
 		return nil, ErrBackupInvalid
@@ -38,11 +34,24 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	scanned, err := backend.Scan(ctx)
-	if err != nil {
-		return nil, err
+	// The scan runs unlocked. If retention deletes a point meanwhile, scan again
+	// rather than cataloging a point that no longer exists.
+	var scanned []protocol.BackupRecoveryPoint
+	for attempt := 0; ; attempt++ {
+		pruned := poolBackupPruneSeq.Load()
+		scanned, err = backend.Scan(ctx)
+		if err != nil {
+			return nil, err
+		}
+		poolBackupAuthorityMu.Lock()
+		if poolBackupPruneSeq.Load() == pruned {
+			break
+		}
+		poolBackupAuthorityMu.Unlock()
+		if attempt == 2 {
+			return nil, ErrBackupUnavailable
+		}
 	}
-	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	if err := masterBackupPool(s, s.State.PoolID); err != nil {
 		return nil, err
@@ -63,24 +72,36 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 			byID[point.ID] = point
 		}
 	}
-	imported := make([]protocol.BackupRecoveryPoint, 0, len(scanned))
-	for _, point := range scanned {
+	for i, point := range scanned {
 		if prior, ok := byID[point.ID]; ok {
-			if prior.Protected {
-				point.Protected = true
-			}
+			// The catalog holds the operator's latest protection choice; the scanned
+			// marker may predate an unprotect made during the scan.
+			point.Protected = prior.Protected
 			if prior.LastTestResult != "" {
 				point.LastTestResult = prior.LastTestResult
 				point.LastTestedAt = prior.LastTestedAt
 				point.LastTestVMID = prior.LastTestVMID
 			}
 		}
+		if err := point.Valid(); err != nil {
+			return nil, err
+		}
+		scanned[i] = point
+	}
+	if err := checkBackupCatalogPointCapacity(s, scanned...); err != nil {
+		return nil, err
+	}
+	imported := make([]protocol.BackupRecoveryPoint, 0, len(scanned))
+	for _, point := range scanned {
+		if err := ctx.Err(); err != nil {
+			return imported, err
+		}
 		if point.Protected {
 			if err := backend.SetProtected(ctx, point.ID, true); err != nil {
 				return imported, err
 			}
 		}
-		if err := savePoolBackupCatalogEntry(s, point); err != nil {
+		if err := writePoolBackupCatalogEntry(s, point); err != nil {
 			return imported, err
 		}
 		imported = append(imported, point)
@@ -89,11 +110,7 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 }
 
 // RebuildPoolBackupCatalogFromRepository scans and imports before removing stale entries.
-func RebuildPoolBackupCatalogFromRepository(s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
-	return rebuildPoolBackupCatalogFromRepository(context.Background(), s, repositoryID)
-}
-
-func rebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
+func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
 	if err := masterBackupPool(s, s.State.PoolID); err != nil {
 		return nil, err
 	}

@@ -4,9 +4,8 @@ package protocol
 import "time"
 
 const (
-	LegacyVersion    = 1
-	Version          = 2
-	BackupCapability = "backup-v1"
+	LegacyVersion = 1
+	Version       = 2
 )
 
 type Site struct {
@@ -163,12 +162,6 @@ type ManagedState struct {
 	// Reported=true with an empty slice is an authoritative empty list.
 	BackupRepositories         []BackupRepository `json:"backup_repositories,omitempty"`
 	BackupRepositoriesReported bool               `json:"backup_repositories_reported,omitempty"`
-	// BackupCatalog indexes completed recovery points; the repository remains authoritative.
-	BackupCatalog         []BackupRecoveryPoint `json:"backup_catalog,omitempty"`
-	BackupCatalogReported bool                  `json:"backup_catalog_reported,omitempty"`
-	// BackupRuns are retained master-owned backup/restore run records.
-	BackupRuns         []BackupRun `json:"backup_runs,omitempty"`
-	BackupRunsReported bool        `json:"backup_runs_reported,omitempty"`
 	// BackupPolicies are master-owned job/schedule definitions.
 	BackupPolicies         []BackupPolicy `json:"backup_policies,omitempty"`
 	BackupPoliciesReported bool           `json:"backup_policies_reported,omitempty"`
@@ -309,24 +302,17 @@ type ReportRequest struct {
 }
 type ReportResponse struct {
 	DetectedOS             *bool                     `json:"detected_os,omitempty"`
-	PoolMembershipHostname *bool                     `json:"pool_membership_hostname,omitempty"`
 	Commands               []Command                 `json:"commands"`
 	AcknowledgedResults    []string                  `json:"acknowledged_results"`
 	Consoles               []ConsoleRequest          `json:"consoles,omitempty"`
 	CredentialOffers       []StorageCredentialOffer  `json:"credential_offers,omitempty"`
 	StorageRepositories    *StorageRepositorySupport `json:"storage_repositories,omitempty"`
-	BackupSupport          *BackupSupport            `json:"backup_support,omitempty"`
-	BackupInventoryPages   *bool                     `json:"backup_inventory_pages,omitempty"`
 	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
 	ISODownloadProgress    *bool                     `json:"iso_download_progress,omitempty"`
 	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
 	PoolRequests           []PoolRequest             `json:"pool_requests,omitempty"`
-}
-
-type BackupSupport struct {
-	Capability string `json:"capability"`
 }
 
 // StorageClusterCapability acknowledges the proof request identifier. A Core

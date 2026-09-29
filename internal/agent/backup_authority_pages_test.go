@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -462,11 +464,12 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 			t.Fatal(err)
 		}
 		pushReplicas(t, master)
-		if sent := lab.pageDataBytes.Load() - beforeWireBytes; sent == 0 || sent > 70<<10 {
+		// Records are packed, so an append resends at most the final page.
+		if sent := lab.pageDataBytes.Load() - beforeWireBytes; sent == 0 || sent > protocol.PoolBackupPageLimit {
 			t.Fatalf("one appended run transferred %d page bytes", sent)
 		}
 		nextBytes := poolBackupBlobBytes(t, candidate)
-		if nextBytes-beforeBytes <= 0 || nextBytes-beforeBytes > 70<<10 {
+		if nextBytes-beforeBytes <= 0 || nextBytes-beforeBytes > protocol.PoolBackupPageLimit {
 			t.Fatalf("one appended run stored %d new blob bytes", nextBytes-beforeBytes)
 		}
 		beforeBytes = nextBytes
@@ -606,6 +609,61 @@ func TestBackupAuthorityV2RefusesMemberBehindMasterGeneration(t *testing.T) {
 	}
 	if _, err := loadPoolBackupMetadataReceipt(master, receipt.OperationID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lagging member receipt was persisted: %v", err)
+	}
+}
+
+// Admission proves every member holds the current replica, so a commit or
+// membership change during those checks must refuse the growth.
+func TestBackupAuthorityAdmissionRechecksAfterMemberProof(t *testing.T) {
+	lab := promotionLab(t, 1)
+	master := lab.host("master-1")
+	previous := poolBackupBundleLimit
+	poolBackupBundleLimit = 1
+	t.Cleanup(func() { poolBackupBundleLimit = previous })
+	pushReplicas(t, master)
+	for _, change := range []struct {
+		name  string
+		apply func() error
+	}{
+		{"authority", func() error {
+			_, err := advancePoolAuthorityGeneration(master, "concurrent-commit")
+			return err
+		}},
+		{"membership", func() error {
+			poolPeerMu.Lock()
+			defer poolPeerMu.Unlock()
+			state, err := loadPoolPeer(master)
+			if err == nil {
+				state.Membership.Generation++
+				for i := range state.Membership.Members {
+					state.Membership.Members[i].Generation = state.Membership.Generation
+				}
+				err = savePoolPeer(master, state)
+			}
+			return err
+		}},
+	} {
+		pushReplicas(t, master)
+		var once sync.Once
+		lab.intercept.Store(func(hostID string, r *http.Request) {
+			if hostID == "member-1" && r.Method == http.MethodGet && r.URL.Path == poolReplicaPath {
+				once.Do(func() {
+					if err := change.apply(); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+		})
+		receipt := protocol.BackupMetadataReceipt{OperationID: "repo-register-" + change.name, Kind: "backup-repository-register",
+			IntentSHA256: fmt.Sprintf("%064x", 1), Status: "pending", ObservedAt: time.Now().UTC()}
+		err := savePoolBackupMetadataReceipt(master, receipt)
+		lab.intercept.Store(func(string, *http.Request) {})
+		if err == nil {
+			t.Fatalf("%s change during member proof allowed backup authority growth", change.name)
+		}
+		if _, err := loadPoolBackupMetadataReceipt(master, receipt.OperationID); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s change: refused receipt was persisted: %v", change.name, err)
+		}
 	}
 }
 
@@ -914,23 +972,16 @@ func TestBackupAuthorityV2RequiresCurrentMemberSupport(t *testing.T) {
 	t.Cleanup(func() { poolBackupBundleLimit = previous })
 	second := first
 	second.OperationID = "run-second"
-	poolReplicaMu.Lock()
-	status := poolReplicaObservations[master.dir][candidate.State.HostID]
-	status.BackupPageVersion = 1
-	poolReplicaObservations[master.dir][candidate.State.HostID] = status
-	poolReplicaMu.Unlock()
+	lab.drop(candidate.State.HostID, "!"+poolReplicaPath)
 	if err := savePoolBackupRun(master, second); err == nil {
-		t.Fatal("v1-only candidate allowed v2 growth")
+		t.Fatal("unconfirmed candidate allowed v2 growth")
 	}
 	if _, err := loadPoolBackupRun(master, second.OperationID); !os.IsNotExist(err) {
 		t.Fatalf("refused run persisted: %v", err)
 	}
-	status.BackupPageVersion = 2
-	poolReplicaMu.Lock()
-	poolReplicaObservations[master.dir][candidate.State.HostID] = status
-	poolReplicaMu.Unlock()
+	lab.drop(candidate.State.HostID, "")
 	if err := savePoolBackupRun(master, second); err != nil {
-		t.Fatalf("v2 candidate blocked growth: %v", err)
+		t.Fatalf("current candidate blocked growth: %v", err)
 	}
 }
 
@@ -1054,7 +1105,7 @@ func TestBackupAuthorityV2ProtectsRepositoryAndCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-protect")
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := PoolBackupAuthorityRefs(s)

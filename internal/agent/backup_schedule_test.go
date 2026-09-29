@@ -56,9 +56,9 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 	if err := savePoolBackupRun(member, memberRun); err != nil {
 		t.Fatal(err)
 	}
-	work, ok, err := nextPendingPeerBackup(master)
-	if err != nil || !ok || work.repo.MountPath != "" || !reflect.DeepEqual(work.repo.Identity, work.localRepo.Identity) || work.repo.Access.Status != "" {
-		t.Fatalf("peer work retained host-local repository fields: %+v ok=%v err=%v", work.repo, ok, err)
+	work, ok := nextPendingPeerBackup(master, peerBackoff{}, time.Now())
+	if !ok || work.repo.MountPath != "" || !reflect.DeepEqual(work.repo.Identity, work.localRepo.Identity) || work.repo.Access.Status != "" {
+		t.Fatalf("peer work retained host-local repository fields: %+v ok=%v", work.repo, ok)
 	}
 	queue := make(chan BackupRequest)
 	peerBackupRequests.Store(member, queue)
@@ -125,7 +125,7 @@ func TestPeerTestRestoreWaitsForJournalToCatchUpWithRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-1")
-	if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	point, err := getCatalogPoint(master, "repo-1", "point-1")
@@ -176,12 +176,20 @@ func TestPeerTestRestoreWaitsForJournalToCatchUpWithRun(t *testing.T) {
 	if second.err != nil || second.reply.Result.Status != "succeeded" || second.reply.Run == nil || second.reply.Run.Stage != "registered" {
 		t.Fatalf("settled peer result: %+v", second)
 	}
-	for _, status := range []string{"pending", "needs_attention"} {
-		reply := second.reply
-		reply.Result.Status = status
-		var permanent permanentPeerBackupError
-		if err := validatePeerBackupReply(context.Background(), work, reply); err == nil || errors.As(err, &permanent) {
-			t.Fatalf("journal %s while run succeeded must remain retryable: %v", status, err)
+	pending := second.reply
+	pending.Result.Status = "pending"
+	if err := validatePeerBackupReply(context.Background(), work, pending); err == nil || errors.As(err, &permanent) {
+		t.Fatalf("pending journal while run succeeded must remain retryable: %v", err)
+	}
+	// A journal needing attention is authoritative; the master records it and re-observes.
+	for _, runStatus := range []string{"succeeded", "failed"} {
+		attention := second.reply
+		attention.Result.Status = "needs_attention"
+		memberRun := *attention.Run
+		memberRun.Status = runStatus
+		attention.Run = &memberRun
+		if err := validatePeerBackupReply(context.Background(), work, attention); err != nil {
+			t.Fatalf("needs-attention journal with %s run was refused: %v", runStatus, err)
 		}
 	}
 	inconsistent := second.reply
@@ -202,7 +210,7 @@ func TestMemberRestorePeerRoundTripPreservesRegisteredStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-1")
-	if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	point, err := getCatalogPoint(master, "repo-1", "point-1")
@@ -276,7 +284,7 @@ func TestCleanMemberRestorePeerPersistsMasterCatalogDigest(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ImportPoolBackupCatalog(master, "repo-1"); err != nil {
+			if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
 				t.Fatal(err)
 			}
 			point, err := getCatalogPoint(master, "repo-1", "point-1")

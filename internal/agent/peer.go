@@ -189,7 +189,6 @@ func PoolPeerHandler(s *Store) http.Handler {
 			// exactly as before.
 			var v struct {
 				Origin                string                      `json:"origin,omitempty"`
-				Hostname              string                      `json:"hostname,omitempty"`
 				SystemUUID            string                      `json:"system_uuid,omitempty"`
 				BMC                   *protocol.PoolHostBMC       `json:"bmc,omitempty"`
 				Watchdog              *protocol.PoolHostWatchdog  `json:"watchdog,omitempty"`
@@ -202,12 +201,8 @@ func PoolPeerHandler(s *Store) http.Handler {
 			}
 			origin, err := peerOrigin(v.Origin)
 			uuid := vmhost.NormalizedSystemUUID(v.SystemUUID)
-			if err != nil && (v.Origin != "" || v.Hostname == "" && uuid == "" && v.BMC == nil && v.Watchdog == nil && v.WatchdogArmed == nil && v.SanlockHostGeneration == 0) {
+			if err != nil && (v.Origin != "" || uuid == "" && v.BMC == nil && v.Watchdog == nil && v.WatchdogArmed == nil && v.SanlockHostGeneration == 0) {
 				http.Error(w, "invalid peer origin", 400)
-				return
-			}
-			if v.Hostname != "" && !protocol.ValidPoolHostname(v.Hostname) {
-				http.Error(w, "invalid peer hostname", 400)
 				return
 			}
 			if v.BMC != nil && v.BMC.Valid() != nil {
@@ -222,21 +217,6 @@ func PoolPeerHandler(s *Store) http.Handler {
 				http.Error(w, "invalid watchdog arming report", 400)
 				return
 			}
-			var checked protocol.PoolMembership
-			if v.Hostname != "" {
-				poolPeerMu.Lock()
-				current, loadErr := loadPoolPeer(s)
-				if loadErr == nil {
-					if row, ok := poolMemberByID(current.Membership, member.HostID); ok && row.Hostname != v.Hostname {
-						checked = current.Membership
-					}
-				}
-				poolPeerMu.Unlock()
-				if checked.PoolID != "" && poolHostnamePeersReady(r.Context(), s, checked) != nil {
-					http.Error(w, "pool member hostname upgrade is waiting for peers", http.StatusConflict)
-					return
-				}
-			}
 			poolPeerMu.Lock()
 			state, e := loadPoolPeer(s)
 			// A member's advertised endpoint is part of the membership, which is a
@@ -247,9 +227,6 @@ func PoolPeerHandler(s *Store) http.Handler {
 			if e == nil {
 				e = poolAuthorityWritable(state)
 			}
-			if e == nil && checked.PoolID != "" && !samePoolHostnamePeers(checked, state.Membership) {
-				e = errors.New("pool membership changed during hostname check")
-			}
 			if e == nil {
 				for i := range state.Membership.Members {
 					if state.Membership.Members[i].HostID != member.HostID {
@@ -257,9 +234,6 @@ func PoolPeerHandler(s *Store) http.Handler {
 					}
 					record := &state.Membership.Members[i]
 					changed := false
-					if v.Hostname != "" && record.Hostname != v.Hostname {
-						record.Hostname, changed = v.Hostname, true
-					}
 					if err == nil && record.PeerOrigin != origin.String() {
 						record.PeerOrigin, changed = origin.String(), true
 					}
@@ -477,8 +451,8 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if request.HostID == "" || len(request.HostID) > 128 || len(request.Offer) > 4096 {
 		return peerJoinResponse{}, errors.New("invalid join identity")
 	}
-	if request.Hostname != "" && !protocol.ValidPoolHostname(request.Hostname) {
-		return peerJoinResponse{}, errors.New("invalid join hostname")
+	if !protocol.ValidPoolHostname(request.Hostname) {
+		return peerJoinResponse{}, errors.New("joining Core must report a valid hostname")
 	}
 	// Check-then-bind is one critical section under this lock, which is why two concurrent
 	// redemptions cannot both admit a member. That is only sound because one process owns
@@ -540,13 +514,6 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 		}
 		return peerJoinResponse{}, errors.New("issued membership is unavailable")
 	}
-	if request.Hostname == "" {
-		for _, member := range state.Membership.Members {
-			if member.Hostname != "" {
-				return peerJoinResponse{}, errors.New("joining Core must report a hostname before joining this pool")
-			}
-		}
-	}
 	cert, err := signPeerCSR(state, csr)
 	if err != nil {
 		return peerJoinResponse{}, err
@@ -578,13 +545,7 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if idErr != nil {
 		return peerJoinResponse{}, idErr
 	}
-	// Multi-host pools admit first, then record the name once every current peer proves
-	// it can verify the signed replica containing that field.
-	hostname := ""
-	if len(state.Membership.Members) == 1 && state.Membership.Members[0].Hostname != "" {
-		hostname = request.Hostname
-	}
-	member := protocol.PoolMember{HostID: request.HostID, Hostname: hostname, SanlockHostID: hostLeaseID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
+	member := protocol.PoolMember{HostID: request.HostID, Hostname: request.Hostname, SanlockHostID: hostLeaseID, CertificateSHA256: hash, Generation: state.Membership.Generation, Status: "ready", ObservedAt: time.Now().UTC()}
 	if replace >= 0 {
 		state.Membership.Members[replace] = member
 	} else {
@@ -829,104 +790,6 @@ func postPoolAdvertise(ctx context.Context, s *Store, body map[string]any) error
 	return nil
 }
 
-func poolHostnamePeersReady(ctx context.Context, s *Store, membership protocol.PoolMembership) error {
-	for _, member := range membership.Members {
-		if member.HostID == s.State.HostID || member.Status != "ready" {
-			continue
-		}
-		if member.PeerOrigin == "" {
-			return errors.New("pool member has no peer origin")
-		}
-		client, err := PoolMemberPeerClient(s, member.PeerOrigin, member.HostID)
-		if err != nil {
-			return err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(member.PeerOrigin, "/")+poolReplicaPath, nil)
-		if err != nil {
-			client.CloseIdleConnections()
-			return err
-		}
-		response, err := client.Do(req)
-		client.CloseIdleConnections()
-		if err != nil {
-			return err
-		}
-		var status protocol.PoolReplicaStatus
-		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<16)).Decode(&status)
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK || decodeErr != nil || status.MembershipHostnameVersion < 1 {
-			return errors.New("pool member does not support durable hostnames")
-		}
-	}
-	return nil
-}
-
-func samePoolHostnamePeers(a, b protocol.PoolMembership) bool {
-	if a.PoolID != b.PoolID || a.MasterHostID != b.MasterHostID || a.Generation != b.Generation || len(a.Members) != len(b.Members) {
-		return false
-	}
-	for i, member := range a.Members {
-		other := b.Members[i]
-		if member.HostID != other.HostID || member.CertificateSHA256 != other.CertificateSHA256 || member.Status != other.Status || member.PeerOrigin != other.PeerOrigin {
-			return false
-		}
-	}
-	return true
-}
-
-// ReportPoolHostname repairs old membership records from each host's own name. A member
-// reports over mTLS; only the master writes membership after every ready peer can read it.
-func ReportPoolHostname(ctx context.Context, s *Store) error {
-	hostname, err := osHostname()
-	if err != nil {
-		return err
-	}
-	if !protocol.ValidPoolHostname(hostname) {
-		return errors.New("invalid local hostname")
-	}
-	poolPeerMu.Lock()
-	state, err := loadPoolPeer(s)
-	poolPeerMu.Unlock()
-	if err != nil {
-		return err
-	}
-	if state.Membership.Valid() != nil {
-		return errors.New("pool membership is unavailable")
-	}
-	row, ok := poolMemberByID(state.Membership, s.State.HostID)
-	if !ok || row.Hostname == hostname {
-		return nil
-	}
-	if state.Membership.MasterHostID != s.State.HostID {
-		return postPoolAdvertise(ctx, s, map[string]any{"hostname": hostname})
-	}
-	if err := poolHostnamePeersReady(ctx, s, state.Membership); err != nil {
-		return err
-	}
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
-	current, err := loadPoolPeer(s)
-	if err != nil {
-		return err
-	}
-	if !samePoolHostnamePeers(state.Membership, current.Membership) {
-		return errors.New("pool membership changed during hostname check")
-	}
-	if err := poolAuthorityWritable(current); err != nil {
-		return err
-	}
-	for i := range current.Membership.Members {
-		if current.Membership.Members[i].HostID == s.State.HostID {
-			if current.Membership.Members[i].Hostname == hostname {
-				return nil
-			}
-			current.Membership.Members[i].Hostname = hostname
-			return savePoolPeer(s, current)
-		}
-	}
-	return errors.New("local pool member is unavailable")
-}
-
 // acceptPoolSystemUUID decides whether the master may write a member's reported machine
 // identity into its row. The certificate proves which *host* is calling; it says nothing
 // about which machine that host is running on, so two refusals stand between a host and its
@@ -1012,16 +875,7 @@ func RetryPoolPeerOrigin(ctx context.Context, s *Store) error {
 	poolPeerMu.Lock()
 	state, err := loadPoolPeer(s)
 	origin := state.PendingPeerOrigin
-	pendingRehome := state.PendingRehome != nil
 	poolPeerMu.Unlock()
-	if err != nil {
-		return err
-	}
-	if pendingRehome {
-		if err := ResumePoolRehome(ctx, s); err != nil {
-			return err
-		}
-	}
 	if origin == "" {
 		return err
 	}
@@ -1205,6 +1059,12 @@ func ResumePoolRehome(ctx context.Context, s *Store) error {
 			poolVMMu.Unlock()
 			if vmErr != nil {
 				err = errors.New("the previous pool's VM ownership records could not be cleared")
+			}
+			if err == nil {
+				err = eraseForeignBackupRepositories(ctx, s)
+			}
+			if err == nil {
+				err = eraseForeignBackupCredentials(s)
 			}
 			if err == nil && pending.BackupCredentialSync {
 				if err = pullPeerBackupCredentials(ctx, s, state.MasterURL); err != nil {

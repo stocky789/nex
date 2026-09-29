@@ -385,6 +385,9 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 				continue
 			}
 			raw, err := os.ReadFile(filepath.Join(group.path, entry.Name()))
+			if errors.Is(err, os.ErrNotExist) {
+				continue // Pruned since the listing; an unlocked sizing walk just omits it.
+			}
 			if err != nil {
 				return false, err
 			}

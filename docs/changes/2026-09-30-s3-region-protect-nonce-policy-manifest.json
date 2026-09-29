@@ -1,0 +1,58 @@
+{
+  "summary": "Add an optional S3 region, make protection markers conditional and unique, and record the creating policy in the backup manifest so catalog rebuild recovers it. API impact: changed contract.",
+  "paths": [
+    "internal/protocol/backup.go",
+    "internal/protocol/backup_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_schedule.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/backup_catalog_rebuild.go",
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "internal/agent/backup_repository_storage.go",
+    "internal/agent/backup_repository_storage_test.go",
+    "internal/vmhost/backup_catalog_scan.go",
+    "internal/vmhost/managed_backup_test.go",
+    "web/src/backup-repositories.tsx",
+    "web/src/backup-repositories.test.mjs",
+    "web/src/backup-types.ts",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/backup-policies.md",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-s3-region-protect-nonce-policy-manifest.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can set an S3 region, learn that provider upload refusals fail the run, and that rebuilt points keep their policy and are pruned.",
+    "pages": ["docs/guide/backup-repositories.md", "docs/guide/backup-policies.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "S3 repository source gains optional region; the backup manifest and backup-now request gain optional policy_id.",
+    "pages": ["docs/api/local-openapi.json", "docs/api/peer-openapi.json", "docs/api/openapi.json", "docs/api/local.html", "docs/api/peer.html", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Applies owner decisions 6 and 7 and the BUG-0746 follow-up.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The region is part of the master's repository record and the policy ID is stored in the manifest in the repository itself, so a fresh Controller and a rebuilt master recover both from Core.",
+    "record": "pool backup repository record s3_source.region; recovery point manifest policy_id"
+  },
+  "verification": {
+    "method": "Focused Go tests against a fake S3 and an in-process SFTP server, filesystem marker test, rebuild-then-prune test, and web unit tests. No lab, real S3 provider or browser run.",
+    "evidence": ["internal/agent/backup_repository_s3_test.go", "internal/agent/backup_repository_sftp_test.go", "internal/agent/backup_repository_storage_test.go", "internal/vmhost/managed_backup_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "The fake S3 is not evidence of a real provider's conditional-write behavior. A stalled protect that lands after a newer unprotect can still recreate the marker (the safe direction)."
+  }
+}

@@ -4,13 +4,16 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -24,7 +27,9 @@ type backupRepositoryStorage interface {
 	Verify(context.Context) error
 	Probe(context.Context) error
 	CaptureWorkDir(operationID string, online bool) string
-	ReadPoint(context.Context, string) (protocol.BackupManifest, string, error)
+	// StatPoint checks the manifest, markers and artifact sizes without reading
+	// artifact content. A manifest is published only after its artifacts verify.
+	StatPoint(context.Context, string) (protocol.BackupManifest, string, error)
 	Publish(context.Context, protocol.BackupManifest, map[string]string) (string, error)
 	CopyArtifacts(context.Context, string, string, protocol.BackupManifest) error
 	Scan(context.Context) ([]protocol.BackupRecoveryPoint, error)
@@ -68,16 +73,20 @@ func openBackupRepositoryStorage(s *Store, repo protocol.BackupRepository) (back
 		if repo.SMBIdentity == nil || repo.SMBIdentity.MarkerID == "" {
 			return nil, errors.New("backup repository SMB identity is unavailable")
 		}
-		if _, err := ResolveBackupCredential(s, repo); err != nil {
-			return nil, err
-		}
 	default:
 		return nil, errors.New("backup repository backend is unavailable")
 	}
 	return filesystemBackupStorage{repo: repo, stateDir: s.dir, s: s}, nil
 }
 
+// Verify gates writes. SMB reads use the already authenticated mount, but writes still need
+// the repository's current credential.
 func (b filesystemBackupStorage) Verify(ctx context.Context) error {
+	if b.repo.Kind == protocol.BackupRepoKindSMB3 {
+		if _, err := ResolveBackupCredential(b.s, b.repo); err != nil {
+			return err
+		}
+	}
 	return verifyBackupRepository(ctx, b.repo)
 }
 
@@ -135,7 +144,7 @@ func (b filesystemBackupStorage) CaptureWorkDir(operationID string, online bool)
 	return filepath.Join(b.stateDir, "backup-staging", operationID)
 }
 
-func (b filesystemBackupStorage) ReadPoint(ctx context.Context, pointID string) (protocol.BackupManifest, string, error) {
+func (b filesystemBackupStorage) StatPoint(ctx context.Context, pointID string) (protocol.BackupManifest, string, error) {
 	if !protocol.ValidSnapshotOperationID(pointID) {
 		return protocol.BackupManifest{}, "", ErrBackupInvalid
 	}
@@ -143,7 +152,19 @@ func (b filesystemBackupStorage) ReadPoint(ctx context.Context, pointID string) 
 		return protocol.BackupManifest{}, "", err
 	}
 	pointDir := filepath.Join(b.repo.MountPath, pointID)
-	if _, err := os.Lstat(pointDir); err != nil {
+	info, err := os.Lstat(pointDir)
+	if err != nil {
+		return protocol.BackupManifest{}, "", err
+	}
+	if !info.IsDir() {
+		if fenced, _ := filesystemAbortFence(pointDir, pointID); fenced {
+			return protocol.BackupManifest{}, "", os.ErrNotExist
+		}
+		return protocol.BackupManifest{}, "", ErrBackupConflict
+	}
+	if _, err := os.Lstat(b.deleteIntentPath(pointID)); err == nil {
+		return protocol.BackupManifest{}, "", ErrBackupConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return protocol.BackupManifest{}, "", err
 	}
 	manifest, digest, err := vmhost.ReadBackupManifest(pointDir)
@@ -156,7 +177,7 @@ func (b filesystemBackupStorage) ReadPoint(ctx context.Context, pointID string) 
 	if manifest.RecoveryPointID != pointID || manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
 		return protocol.BackupManifest{}, "", ErrBackupConflict
 	}
-	if err := vmhost.VerifyPublishedBackupRecoveryPoint(pointDir, manifest); err != nil {
+	if err := vmhost.CheckPublishedBackupArtifactSizes(pointDir, manifest); err != nil {
 		return protocol.BackupManifest{}, "", err
 	}
 	return manifest, digest, nil
@@ -188,11 +209,6 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 	if _, err := getCatalogPoint(b.s, b.repo.ID, pointID); err == nil {
 		return ErrBackupConflict
 	} else if !errors.Is(err, ErrBackupNotFound) {
-		return err
-	}
-	if _, err := os.Lstat(filepath.Join(b.repo.MountPath, ".staging-"+pointID)); err == nil {
-		return ErrBackupConflict
-	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	final := filepath.Join(b.repo.MountPath, pointID)
@@ -230,6 +246,11 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 	if err = f.Close(); err != nil {
 		return err
 	}
+	// With the fence in place a delayed rename of the staging directory fails, so a
+	// staging copy left by a failed publish can go.
+	if err := os.RemoveAll(filepath.Join(b.repo.MountPath, ".staging-"+pointID)); err != nil {
+		return err
+	}
 	dir, err := os.Open(b.repo.MountPath)
 	if err != nil {
 		return err
@@ -249,32 +270,26 @@ func (b filesystemBackupStorage) Scan(ctx context.Context) ([]protocol.BackupRec
 	if err := b.verifyRead(ctx); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(b.repo.MountPath)
+	pending, err := b.pendingDeletes()
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
-		id, ok := strings.CutPrefix(entry.Name(), ".nex-delete-")
-		if !ok {
-			continue
-		}
-		if !protocol.ValidSnapshotOperationID(id) {
-			return nil, ErrBackupConflict
-		}
-		if _, _, err := b.readDeleteIntent(id); err != nil {
-			return nil, err
-		}
-		if _, err := os.Lstat(filepath.Join(b.repo.MountPath, id)); err == nil {
-			return nil, ErrBackupConflict
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
+	points, err := vmhost.ScanBackupRepositoryPoints(b.repo.MountPath, b.repo.ID, b.repo.PoolID)
+	if err != nil {
+		return nil, err
 	}
-	return vmhost.ScanBackupRepositoryPoints(b.repo.MountPath, b.repo.ID, b.repo.PoolID)
+	return slices.DeleteFunc(points, func(point protocol.BackupRecoveryPoint) bool {
+		_, deleting := pending[point.ID]
+		return deleting
+	}), nil
 }
 
 func (b filesystemBackupStorage) Entries(ctx context.Context) ([]string, error) {
 	if err := b.verifyRead(ctx); err != nil {
+		return nil, err
+	}
+	pending, err := b.pendingDeletes()
+	if err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(b.repo.MountPath)
@@ -283,6 +298,9 @@ func (b filesystemBackupStorage) Entries(ctx context.Context) ([]string, error) 
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if _, deleting := pending[entry.Name()]; deleting {
+			continue
+		}
 		if protocol.ValidSnapshotOperationID(entry.Name()) {
 			fenced, err := filesystemAbortFence(filepath.Join(b.repo.MountPath, entry.Name()), entry.Name())
 			if err != nil {
@@ -319,6 +337,16 @@ func filesystemAbortFence(path, id string) (bool, error) {
 	return string(data) == marker, nil
 }
 
+// maxBackupProtectMarker bounds a marker read: "protected\n" + a 64-character
+// point ID + "\n" + a 26-character nonce + "\n" is 102 bytes.
+const maxBackupProtectMarker = 128
+
+// newBackupProtectMarker is unique per protect, so a conditional removal or
+// replacement can tell it apart from a newer marker for the same point.
+func newBackupProtectMarker(pointID string) []byte {
+	return []byte("protected\n" + pointID + "\n" + rand.Text() + "\n")
+}
+
 func (b filesystemBackupStorage) Protected(ctx context.Context, pointID string) (bool, error) {
 	if !protocol.ValidSnapshotOperationID(pointID) {
 		return false, ErrBackupInvalid
@@ -338,7 +366,7 @@ func (b filesystemBackupStorage) Protected(ctx context.Context, pointID string) 
 }
 
 func (b filesystemBackupStorage) SetProtected(ctx context.Context, pointID string, protected bool) error {
-	if _, _, err := b.ReadPoint(ctx, pointID); err != nil {
+	if _, _, err := b.StatPoint(ctx, pointID); err != nil {
 		return err
 	}
 	return writeImportedBackupProtectMarker(filepath.Join(b.repo.MountPath, pointID), protected)
@@ -351,75 +379,95 @@ func (b filesystemBackupStorage) Delete(ctx context.Context, pointID string) err
 	if err := b.Verify(ctx); err != nil {
 		return err
 	}
+	intent, pins, err := b.recordDeleteIntent(ctx, pointID)
+	if err != nil {
+		return err
+	}
+	// Removal runs outside poolPeerMu: a recorded intent is finished on any retry.
+	b.sweepDeleteIntents(pins)
+	return b.finishDelete(pointID, intent)
+}
+
+// recordDeleteIntent checks authority, pins and protection under poolPeerMu and
+// durably records what the delete will remove.
+func (b filesystemBackupStorage) recordDeleteIntent(ctx context.Context, pointID string) (filesystemDeleteIntent, map[string]bool, error) {
 	poolPeerMu.Lock()
 	defer poolPeerMu.Unlock()
 	state, err := loadPoolPeer(b.s)
 	if err != nil {
-		return err
+		return filesystemDeleteIntent{}, nil, err
 	}
 	if err := poolAuthorityWritable(state); err != nil {
-		return err
+		return filesystemDeleteIntent{}, nil, err
 	}
 	pins, err := ActiveBackupRestorePins(b.s)
 	if err != nil {
-		return err
+		return filesystemDeleteIntent{}, nil, err
 	}
 	if pins[pointID] {
-		return ErrBackupConflict
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
 	catalog, err := getCatalogPoint(b.s, b.repo.ID, pointID)
 	if err != nil || catalog.PoolID != b.repo.PoolID || catalog.Protected {
-		return ErrBackupConflict
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
 	protected, err := b.Protected(ctx, pointID)
 	if err != nil {
-		return err
+		return filesystemDeleteIntent{}, nil, err
 	}
 	if protected {
-		return ErrBackupConflict
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
 	intent, exists, err := b.readDeleteIntent(pointID)
 	if err != nil {
-		return err
+		return filesystemDeleteIntent{}, nil, err
+	}
+	if exists {
+		if intent.Digest != catalog.ManifestSHA256 {
+			return filesystemDeleteIntent{}, nil, ErrBackupConflict
+		}
+		return intent, pins, nil
 	}
 	pointDir := filepath.Join(b.repo.MountPath, pointID)
+	manifest, digest, err := b.StatPoint(ctx, pointID)
+	if err != nil || digest != catalog.ManifestSHA256 {
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	}
+	root, _, err := openFilesystemDeleteDir(pointDir, manifest)
+	if err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	if root == nil {
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	}
+	root.Close()
+	manifestRaw, err := os.ReadFile(filepath.Join(pointDir, "manifest.json"))
+	if err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	sum := sha256.Sum256(manifestRaw)
+	if hex.EncodeToString(sum[:]) != digest {
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	}
+	intent = filesystemDeleteIntent{Manifest: manifestRaw, Digest: digest}
+	raw, err := json.Marshal(intent)
+	if err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	if err := vmhost.AtomicWrite(b.deleteIntentPath(pointID), raw, 0600); err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	return intent, pins, nil
+}
+
+// finishDelete removes a point recorded by its delete intent. It is safe to repeat.
+func (b filesystemBackupStorage) finishDelete(pointID string, intent filesystemDeleteIntent) error {
 	var manifest protocol.BackupManifest
-	if !exists {
-		var digest string
-		manifest, digest, err = b.ReadPoint(ctx, pointID)
-		if err != nil || digest != catalog.ManifestSHA256 {
-			return ErrBackupConflict
-		}
-		root, err := openFilesystemDeleteDir(pointDir, manifest)
-		if err != nil {
-			return err
-		}
-		if root == nil {
-			return ErrBackupConflict
-		}
-		root.Close()
-		manifestRaw, err := os.ReadFile(filepath.Join(pointDir, "manifest.json"))
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256(manifestRaw)
-		if hex.EncodeToString(sum[:]) != digest {
-			return ErrBackupConflict
-		}
-		intent = filesystemDeleteIntent{Manifest: manifestRaw, Digest: digest}
-		raw, err := json.Marshal(intent)
-		if err != nil {
-			return err
-		}
-		if err := vmhost.AtomicWrite(b.deleteIntentPath(pointID), raw, 0600); err != nil {
-			return err
-		}
-	} else if intent.Digest != catalog.ManifestSHA256 {
-		return ErrBackupConflict
-	} else if err := json.Unmarshal(intent.Manifest, &manifest); err != nil {
+	if err := json.Unmarshal(intent.Manifest, &manifest); err != nil {
 		return ErrBackupConflict
 	}
-	root, err := openFilesystemDeleteDir(pointDir, manifest)
+	pointDir := filepath.Join(b.repo.MountPath, pointID)
+	root, litter, err := openFilesystemDeleteDir(pointDir, manifest)
 	if err != nil {
 		return err
 	}
@@ -440,7 +488,7 @@ func (b filesystemBackupStorage) Delete(ctx context.Context, pointID string) err
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		for _, name := range filesystemDeleteNames(manifest) {
+		for _, name := range append(filesystemDeleteNames(manifest), litter...) {
 			if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
@@ -453,6 +501,53 @@ func (b filesystemBackupStorage) Delete(ctx context.Context, pointID string) err
 		return err
 	}
 	return syncBackupDirectory(b.repo.MountPath)
+}
+
+// sweepDeleteIntents finishes deletions whose catalog entries are already gone and drops their
+// intents, so intents do not accumulate and a lost catalog entry cannot strand a half-deleted
+// point. Failures are left for the next delete.
+func (b filesystemBackupStorage) sweepDeleteIntents(pins map[string]bool) {
+	pending, err := b.pendingDeletes()
+	if err != nil {
+		return
+	}
+	for id, intent := range pending {
+		if pins[id] {
+			continue
+		}
+		if _, err := getCatalogPoint(b.s, b.repo.ID, id); !errors.Is(err, ErrBackupNotFound) {
+			continue
+		}
+		if b.finishDelete(id, intent) == nil {
+			_ = os.Remove(b.deleteIntentPath(id))
+		}
+	}
+}
+
+// pendingDeletes returns the recorded delete intents; their points must not be read or listed.
+func (b filesystemBackupStorage) pendingDeletes() (map[string]filesystemDeleteIntent, error) {
+	entries, err := os.ReadDir(b.repo.MountPath)
+	if err != nil {
+		return nil, err
+	}
+	pending := map[string]filesystemDeleteIntent{}
+	for _, entry := range entries {
+		id, ok := strings.CutPrefix(entry.Name(), ".nex-delete-")
+		if !ok {
+			continue
+		}
+		if !protocol.ValidSnapshotOperationID(id) {
+			return nil, ErrBackupConflict
+		}
+		intent, exists, err := b.readDeleteIntent(id)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			pending[id] = intent
+		}
+	}
+	return pending, nil
 }
 
 func (b filesystemBackupStorage) deleteIntentPath(id string) string {
@@ -500,48 +595,57 @@ func filesystemDeleteNames(manifest protocol.BackupManifest) []string {
 	return names
 }
 
-func openFilesystemDeleteDir(pointDir string, manifest protocol.BackupManifest) (*os.Root, error) {
+// openFilesystemDeleteDir opens a point for deletion and returns the file-manager and
+// interrupted-write litter it may also remove. Any other entry refuses the delete by name.
+func openFilesystemDeleteDir(pointDir string, manifest protocol.BackupManifest) (*os.Root, []string, error) {
 	info, err := os.Lstat(pointDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !info.IsDir() {
-		return nil, ErrBackupConflict
+		return nil, nil, ErrBackupConflict
 	}
 	root, err := os.OpenRoot(pointDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opened, err := root.Stat(".")
 	if err != nil || !os.SameFile(info, opened) {
 		root.Close()
-		return nil, ErrBackupConflict
+		return nil, nil, ErrBackupConflict
 	}
 	dir, err := root.Open(".")
 	if err != nil {
 		root.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	entries, err := dir.ReadDir(-1)
 	dir.Close()
 	if err != nil {
 		root.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	allowed := map[string]bool{}
 	for _, name := range filesystemDeleteNames(manifest) {
 		allowed[name] = true
 	}
+	var litter []string
 	for _, entry := range entries {
-		if !allowed[entry.Name()] || !entry.Type().IsRegular() {
+		name := entry.Name()
+		litterName := name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini" ||
+			strings.HasPrefix(name, "._") || strings.HasPrefix(name, ".write-")
+		if !entry.Type().IsRegular() || !allowed[name] && !litterName {
 			root.Close()
-			return nil, ErrBackupConflict
+			return nil, nil, fmt.Errorf("%w: recovery point %s contains unexpected entry %q", ErrBackupConflict, filepath.Base(pointDir), name)
+		}
+		if litterName {
+			litter = append(litter, name)
 		}
 	}
-	return root, nil
+	return root, litter, nil
 }
 
 func syncBackupDirectory(path string) error {

@@ -22,8 +22,9 @@ func backupInventoryPage(w http.ResponseWriter, r *http.Request, s *Store, catal
 		http.Error(w, "backup history unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	// 409 is reserved for a changed generation between pages.
 	if membership, err := Membership(s); err != nil || membership.MasterHostID != s.State.HostID {
-		http.Error(w, "pool master required", http.StatusConflict)
+		http.Error(w, "pool master required", http.StatusServiceUnavailable)
 		return
 	}
 	q := r.URL.Query()
@@ -40,46 +41,49 @@ func backupInventoryPage(w http.ResponseWriter, r *http.Request, s *Store, catal
 			return
 		}
 	}
-	poolBackupAuthorityMu.Lock()
-	defer poolBackupAuthorityMu.Unlock()
 	// ponytail: each page reads the retained records; add an on-disk index if
 	// measured page latency exceeds the reverse channel's ten-second deadline.
+	// The lock covers only the reads; a slow reader never holds it.
+	poolBackupAuthorityMu.Lock()
+	var points []protocol.BackupRecoveryPoint
+	var repos []protocol.BackupRepository
+	var runs []protocol.BackupRun
+	var loadErr error
 	if catalog {
-		points, err := loadPoolBackupCatalog(s)
-		if err != nil {
-			http.Error(w, "backup catalog unavailable", http.StatusServiceUnavailable)
-			return
+		points, loadErr = loadPoolBackupCatalog(s)
+		if loadErr == nil {
+			repos, loadErr = ListPoolBackupRepositories(s)
 		}
+	} else {
+		runs, loadErr = listPoolBackupRuns(s)
+	}
+	poolID, hostID := s.State.PoolID, s.State.HostID
+	poolBackupAuthorityMu.Unlock()
+	if loadErr != nil {
+		http.Error(w, "backup history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if catalog {
 		seen := make(map[string]bool, len(points))
 		for _, point := range points {
-			if point.PoolID != s.State.PoolID || seen[point.ID] {
+			if point.PoolID != poolID || seen[point.ID] {
 				http.Error(w, "backup catalog is invalid", http.StatusServiceUnavailable)
 				return
 			}
 			seen[point.ID] = true
 		}
-		repos, err := ListPoolBackupRepositories(s)
-		if err != nil {
-			http.Error(w, "backup repositories unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		serveBackupCatalogPage(w, q, points, repos, s.State.HostID, cursor)
-		return
-	}
-	runs, err := listPoolBackupRuns(s)
-	if err != nil {
-		http.Error(w, "backup runs unavailable", http.StatusServiceUnavailable)
+		serveBackupCatalogPage(w, q, points, repos, hostID, cursor)
 		return
 	}
 	seen := make(map[string]bool, len(runs))
 	for _, run := range runs {
-		if run.PoolID != s.State.PoolID || seen[run.OperationID] {
+		if run.PoolID != poolID || seen[run.OperationID] {
 			http.Error(w, "backup runs are invalid", http.StatusServiceUnavailable)
 			return
 		}
 		seen[run.OperationID] = true
 	}
-	serveBackupRunPage(w, q, runs, s.State.HostID, cursor)
+	serveBackupRunPage(w, q, runs, hostID, cursor)
 }
 
 func pageGeneration(v any) string {
@@ -114,11 +118,18 @@ func pageReady(w http.ResponseWriter, q url.Values, generation string, cursor, t
 	return true
 }
 
+// A page generation covers which records exist and their order, not their
+// status, so settlements and protection changes never restart a walk. Run
+// order is fixed by the immutable creation time, and runs are never deleted.
 func serveBackupRunPage(w http.ResponseWriter, q url.Values, all []protocol.BackupRun, master string, cursor int) {
+	ids := make([]string, len(all))
+	for i, run := range all {
+		ids[i] = run.OperationID
+	}
 	generation := pageGeneration(struct {
 		Master string
-		Runs   []protocol.BackupRun
-	}{master, all})
+		Runs   []string
+	}{master, ids})
 	if !pageReady(w, q, generation, cursor, len(all)) {
 		return
 	}
@@ -163,12 +174,15 @@ func serveBackupCatalogPage(w http.ResponseWriter, q url.Values, all []protocol.
 	for _, repo := range repos {
 		repoNames[repo.ID] = strings.ToLower(repo.Name)
 	}
+	ids := make([]string, len(all))
+	for i, point := range all {
+		ids[i] = point.ID
+	}
 	generation := pageGeneration(struct {
 		Master string
-		Points []protocol.BackupRecoveryPoint
+		Points []string
 		Names  map[string]string
-		Day    string
-	}{master, all, repoNames, time.Now().UTC().Format("2006-01-02")})
+	}{master, ids, repoNames})
 	if !pageReady(w, q, generation, cursor, len(all)) {
 		return
 	}

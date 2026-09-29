@@ -1,0 +1,34 @@
+{
+  "summary": "Let S3 catalog rebuild accept a prune that already removed its point, release the owner claim of a probe-refused registration, keep the multipart proof on adoption, abort interrupted and orphaned multipart uploads, recognise abort/delete records by their own digest, and refuse nested or '.' prefixes. API impact: none.",
+  "paths": [
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "docs/guide/backup-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-s3-repository-review-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "S3 troubleshooting now says a refused registration releases the prefix and that '.' and nested prefixes are refused.",
+    "pages": ["docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Internal Core S3 repository behaviour only; registration already reports refusal through the existing task result. No route, payload, permission or result shape change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects the current destination safety and recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. The repository's owner object, markers and manifests keep their formats; a fresh Controller adopts the master's inventory as before."
+  },
+  "verification": {
+    "method": "Eight focused tests failed against the prior sources through go test -overlay and pass after the fix; go test -run 'TestS3|TestPeerS3' ./internal/agent/ passed; focused -race on the new tests passed.",
+    "evidence": ["internal/agent/backup_repository_s3_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "Fake S3 only; no real provider or lab run. Forge CI remains open."
+  }
+}

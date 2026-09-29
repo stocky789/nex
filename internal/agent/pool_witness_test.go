@@ -19,7 +19,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,27 +26,6 @@ import (
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
 )
-
-func TestReportAdvertisesWitnessRegistration(t *testing.T) {
-	reports := make(chan protocol.ReportRequest, 1)
-	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request protocol.ReportRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
-			return
-		}
-		reports <- request
-		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
-	}))
-	s := testStore(t)
-	s.State = identity
-	if err := report(context.Background(), s, NewMonitor(time.Second, nil), RunConfig{ProbeInterval: time.Second, ProbeTimeout: time.Second}); err != nil {
-		t.Fatal(err)
-	}
-	if request := <-reports; !slices.Contains(request.Capabilities, protocol.PoolWitnessCapability) {
-		t.Fatal("Core omitted the witness capability required by Controller registration")
-	}
-}
 
 func TestPoolWitnessRegistrationRetryRotationAndReplicaRetry(t *testing.T) {
 	s := testStore(t)
@@ -98,8 +76,8 @@ func TestPoolWitnessRegistrationRetryRotationAndReplicaRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	membership := protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 3,
-		Members: []protocol.PoolMember{{HostID: "master", CertificateSHA256: strings.Repeat("a", 64), Generation: 3, Status: "ready"},
-			{HostID: "member", CertificateSHA256: strings.Repeat("b", 64), Generation: 3, Status: "ready"}}}
+		Members: []protocol.PoolMember{{HostID: "master", Hostname: "master", CertificateSHA256: strings.Repeat("a", 64), Generation: 3, Status: "ready"},
+			{HostID: "member", Hostname: "member", CertificateSHA256: strings.Repeat("b", 64), Generation: 3, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +213,8 @@ func TestPoolWitnessPendingDoesNotArmTwoHostWatchdogs(t *testing.T) {
 	membership := protocol.PoolMembership{PoolID: s.State.PoolID, MasterHostID: s.State.HostID, Generation: 1,
 		Witness: &protocol.PoolWitnessRecord{Kind: "controller", Address: "192.0.2.20:5403", CAPEM: ca, CASHA256: pin,
 			FencingGeneration: 1, ClusterName: protocol.PoolWitnessClusterName(s.State.PoolID)},
-		Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", PeerOrigin: "https://192.0.2.11:9444"},
-			{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready", PeerOrigin: "https://192.0.2.12:9444"}}}
+		Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", PeerOrigin: "https://192.0.2.11:9444"},
+			{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready", PeerOrigin: "https://192.0.2.12:9444"}}}
 	nodes, want, detail := poolClusterIntent(s, membership)
 	if !want || len(nodes) != 2 {
 		t.Fatalf("pending registered qdevice should allow the cluster to form without SBD: nodes=%#v want=%v detail=%s", nodes, want, detail)

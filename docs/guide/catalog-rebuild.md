@@ -37,20 +37,23 @@ discarding their catalog evidence.
 
 ## Expected result
 
-Only manifests with valid identity and matching artifact digests are cataloged.
-Import does not itself prove a point can boot after restore. Protected points keep
+Only manifests with valid identity whose artifacts are present at their recorded
+sizes are cataloged. The scan does not read artifact contents, so a large
+repository rebuilds quickly; restore and test restore verify every artifact
+digest. Import does not itself prove a point can boot after restore. Protected points keep
 protection. Active restore pins on the same master remain and block prune.
 
 ## Troubleshooting
 
 - Empty import: check repository mount, owner marker, and that point directories contain
-  complete `manifest.json` plus matching disk digests.
+  complete `manifest.json` plus disk files of the recorded sizes.
 - Missing keys / incomplete manifests: refused; fix the repository payload, then rebuild again.
 - A pending operation with an error retains the last transient scan failure.
-  Restore repository access, then retry the same operation ID and body. An
-  unresolved delete intent requires the original backup's exact prune retry
-  before rebuild, including on NFS and SMB3. Do not erase the intent just to
-  make the scan pass.
+  Restore repository access, then retry the same operation ID and body. On S3
+  and SFTP an unresolved delete intent requires the original backup's exact
+  prune retry before rebuild. On NFS and SMB3 rebuild leaves out a point whose
+  deletion was interrupted, and the next prune in that repository finishes it.
+  Do not erase an intent just to make the scan pass.
 
 ## Verification
 

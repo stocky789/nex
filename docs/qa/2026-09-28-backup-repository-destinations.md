@@ -10,6 +10,11 @@ boundaries, fenced promotion and fresh Controller adoption for all four kinds.
 The final enabled-build browser and real-clock missed-schedule gates remain
 open, as do release and forge CI acceptance.
 
+**2026-09-29:** every native result below predates the BUG-0716 to BUG-0736
+review fixes and the no-legacy cleanup. Those changes have focused unit tests
+only; no check in this report has been rerun on them. See the
+[destination plan](../plans/2026-09-28-backup-repository-destinations.md#2026-09-29-review-and-fix-pass).
+
 ## Source checks
 
 `go test ./internal/agent ./internal/controller ./internal/protocol ./internal/vmhost ./internal/localcore -count=1`

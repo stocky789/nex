@@ -11,7 +11,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "SFTP remains a disabled candidate; supported operator steps are unchanged.",
+    "reason": "SFTP is an advertised destination. The fence is internal to Core's cleanup of an incomplete upload; the task outcome and operator steps do not change.",
     "pages": []
   },
   "api": {

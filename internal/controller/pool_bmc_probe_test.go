@@ -170,11 +170,6 @@ func TestBMCProbeRefusals(t *testing.T) {
 	anonymous := map[string]any{"request_id": "r7", "endpoint": "bmc.example.test"}
 	l.a.call("POST", "/api/v1/pools/no-such-pool/members/"+l.member.id+"/bmc-probe", anonymous, nil, 404)
 	l.a.call("POST", l.bmcProbePath("no-such-host"), anonymous, nil, 404)
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
-	if body := l.a.call("POST", path, anonymous, nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) {
-		t.Fatalf("the capability gate did not fire: %s", body)
-	}
 	l.forget(&l.master)
 	if body := l.a.call("POST", path, anonymous, nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active") {
 		t.Fatalf("a quiet master was not refused: %s", body)

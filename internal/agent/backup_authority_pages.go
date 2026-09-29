@@ -35,10 +35,11 @@ var activePoolBackupStages = map[string]bool{}
 var poolBackupBundleLimit = protocol.PoolBackupBundleLimit
 
 type poolBackupPageUpload struct {
-	Replica     protocol.PoolAuthorityReplica `json:"replica"`
-	Index       int                           `json:"index"`
-	Data        []byte                        `json:"data"`
-	ReuseSHA256 string                        `json:"reuse_sha256,omitempty"`
+	Replica        *protocol.PoolAuthorityReplica `json:"replica,omitempty"`
+	ManifestSHA256 string                         `json:"manifest_sha256,omitempty"`
+	Index          int                            `json:"index"`
+	Data           []byte                         `json:"data"`
+	ReuseSHA256    string                         `json:"reuse_sha256,omitempty"`
 }
 
 type poolBackupPageProgress struct {
@@ -134,10 +135,8 @@ func storePoolBackupBlob(s *Store, page []byte) (string, error) {
 	data, err := readBoundedPoolBackupFile(path)
 	if err == nil {
 		if !bytes.Equal(data, page) {
-			if err := vmhost.AtomicWrite(path, page, 0600); err != nil {
-				return "", err
-			}
-			return hash, syncPoolBackupDirectory(filepath.Dir(path))
+			// Rewrite the corrupt inode itself so page links to it are repaired too.
+			return hash, rewritePoolBackupBlob(path, page)
 		}
 		return hash, nil
 	}
@@ -151,6 +150,22 @@ func storePoolBackupBlob(s *Store, page []byte) (string, error) {
 		return "", err
 	}
 	return hash, syncPoolBackupDirectory(filepath.Dir(path))
+}
+
+func rewritePoolBackupBlob(path string, page []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(page); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func linkPoolBackupBlob(s *Store, hash, path string) error {
@@ -182,12 +197,23 @@ func linkPoolBackupBlob(s *Store, hash, path string) error {
 	return syncPoolBackupDirectory(filepath.Dir(path))
 }
 
-// Keep the acknowledged root and one predecessor for interrupted peer retries.
-// A nonterminal transfer can still need an older signed replica, so it defers GC.
+// Keep the pushed or acknowledged root and the root of this host's stored
+// replica, which is what a promotion of this host would activate. A running
+// transfer can still need an older signed replica, so it defers GC.
 func gcPoolBackupPages(s *Store, keep string) error {
 	transfer, err := loadPoolTransfer(s)
-	if err != nil || transfer != nil && transfer.Status != "succeeded" {
+	if err != nil || transfer != nil && !poolTransferTerminal(transfer.Stage) {
 		return err
+	}
+	stored := ""
+	poolReplicaMu.Lock()
+	record, err := loadPoolReplicaUnchecked(s)
+	poolReplicaMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if record != nil && record.Replica.BackupManifest != nil {
+		stored = record.Replica.BackupManifest.SHA256
 	}
 	poolBackupBlobMu.Lock()
 	defer poolBackupBlobMu.Unlock()
@@ -202,22 +228,8 @@ func gcPoolBackupPages(s *Store, keep string) error {
 	if err != nil {
 		return err
 	}
-	var previous string
-	var previousTime time.Time
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == keep || strings.HasPrefix(entry.Name(), ".stage-") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if keep != "" && (previous == "" || info.ModTime().After(previousTime)) {
-			previous, previousTime = entry.Name(), info.ModTime()
-		}
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == keep || entry.Name() == previous || strings.HasPrefix(entry.Name(), ".stage-") {
+		if !entry.IsDir() || entry.Name() == keep || entry.Name() == stored || strings.HasPrefix(entry.Name(), ".stage-") {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(parent, entry.Name())); err != nil {
@@ -258,7 +270,9 @@ func gcPoolBackupOrphanBlobs(s *Store) error {
 }
 
 // Check an expanding authority record before it is committed. A master must not
-// accept backup state that its members cannot hold in a signed replica.
+// accept backup state that its members cannot hold in a signed replica. Writes
+// that do not grow the authority, such as settling a reserved run, are never
+// refused: their room was admitted with the reservation.
 func checkPoolBackupAuthorityCapacity(s *Store, edit func(*protocol.PoolBackupAuthority)) error {
 	peer, err := loadPoolPeer(s)
 	if err != nil {
@@ -271,24 +285,48 @@ func checkPoolBackupAuthorityCapacity(s *Store, edit func(*protocol.PoolBackupAu
 	if err != nil {
 		return err
 	}
-	needsV2 := source != nil && (source.TotalBytes > poolBackupBundleLimit ||
-		source.History > 100000 || source.Catalog > 100000 || source.Pins > 100000 || source.MetadataReceipts > 100000)
-	var auth *protocol.PoolBackupAuthority
-	if !needsV2 {
-		auth, err = PoolBackupAuthorityRefs(s)
+	grows := false
+	if source != nil && poolBackupNeedsV2(source) {
+		// A v2 authority is not loaded whole; the edit grows it only by naming a
+		// record the store neither holds nor reserved.
+		auth := &protocol.PoolBackupAuthority{}
+		edit(auth)
+		grows = poolBackupAuthorityEditAdds(s, source, auth)
+	} else {
+		auth, err := PoolBackupAuthorityRefs(s)
 		if err != nil {
 			return err
 		}
+		if auth == nil {
+			auth = &protocol.PoolBackupAuthority{}
+		}
+		before, _, err := poolBackupAuthorityReservedBytes(auth)
+		if err != nil {
+			return err
+		}
+		edit(auth)
+		after, v2, err := poolBackupAuthorityReservedBytes(auth)
+		if err != nil {
+			return err
+		}
+		grows = after > before && (v2 || after > poolBackupBundleLimit)
 	}
-	if auth == nil {
-		auth = &protocol.PoolBackupAuthority{}
+	// The adopting master imports its catalog before it re-points members, so
+	// none of them can confirm its authority yet.
+	if !grows || peer.Transfer != nil && peer.Transfer.Stage == "catalog-rebuild" {
+		return nil
 	}
-	edit(auth)
+	return requirePoolBackupMembersCurrent(s, peer.Membership)
+}
+
+// poolBackupAuthorityReservedBytes is the authority's encoded size plus the
+// room every unresolved run and receipt needs for its terminal outcome.
+func poolBackupAuthorityReservedBytes(auth *protocol.PoolBackupAuthority) (int, bool, error) {
 	manifest, err := encodePoolBackupAuthority(auth, nil)
 	if err != nil {
-		return fmt.Errorf("backup authority cannot be replicated: %w", err)
+		return 0, false, fmt.Errorf("backup authority cannot be replicated: %w", err)
 	}
-	remaining := poolBackupBundleLimit - manifest.TotalBytes
+	used := manifest.TotalBytes
 	cataloged := make(map[string]bool, len(auth.Catalog))
 	for _, point := range auth.Catalog {
 		cataloged[point.ID] = true
@@ -304,12 +342,12 @@ func checkPoolBackupAuthorityCapacity(s *Store, edit func(*protocol.PoolBackupAu
 		terminal.Error = strings.Repeat("\x00", 4096)
 		maximum, _ := json.Marshal(terminal)
 		if len(maximum)+5 > protocol.PoolBackupPageLimit {
-			return errors.New("backup run has no room for its terminal outcome")
+			return 0, false, errors.New("backup run has no room for its terminal outcome")
 		}
-		remaining -= protocol.PoolBackupPageLimit - len(body) - 5
+		used += protocol.PoolBackupPageLimit - len(body) - 5
 		if (run.Kind == protocol.BackupKindBackupNow || run.Kind == protocol.BackupKindScheduled || run.Kind == protocol.BackupKindPolicyRunNow) &&
 			run.RecoveryPointID != "" && !cataloged[run.RecoveryPointID] {
-			remaining -= protocol.PoolBackupPageLimit
+			used += protocol.PoolBackupPageLimit
 		}
 	}
 	for _, receipt := range auth.MetadataReceipts {
@@ -322,19 +360,47 @@ func checkPoolBackupAuthorityCapacity(s *Store, edit func(*protocol.PoolBackupAu
 		terminal.Error = strings.Repeat("\x00", 4096)
 		maximum, _ := json.Marshal(terminal)
 		if len(maximum)+5 > protocol.PoolBackupPageLimit {
-			return errors.New("backup metadata receipt has no room for its terminal outcome")
+			return 0, false, errors.New("backup metadata receipt has no room for its terminal outcome")
 		}
 		if growth := len(maximum) - len(current) + 10; growth > 0 {
-			remaining -= growth
+			used += growth
 		}
 	}
-	if needsV2 || manifest.Version == 2 || remaining < 0 {
-		return requirePoolBackupV2Members(s, peer.Membership)
-	}
-	return nil
+	return used, manifest.Version == 2, nil
 }
 
-func requirePoolBackupV2Members(s *Store, membership protocol.PoolMembership) error {
+// poolBackupAuthorityEditAdds reports whether records an edit wrote into an
+// empty authority are new to the stored v2 authority. A run's reserved point
+// is not new: its settlement was admitted when the run was reserved.
+func poolBackupAuthorityEditAdds(s *Store, source *protocol.PoolBackupManifest, edit *protocol.PoolBackupAuthority) bool {
+	stored := func(dir, id string) bool {
+		_, err := os.Stat(filepath.Join(dir, id+".json"))
+		return err == nil
+	}
+	reserved := map[string]bool{}
+	for _, run := range edit.History {
+		existing, err := loadPoolBackupRun(s, run.OperationID)
+		if err != nil {
+			return true
+		}
+		if existing.Status == "pending" || existing.Status == "needs_attention" {
+			reserved[existing.RecoveryPointID] = true
+		}
+	}
+	for _, point := range edit.Catalog {
+		if !reserved[point.ID] && !stored(poolBackupCatalogPath(s), point.ID) {
+			return true
+		}
+	}
+	for _, receipt := range edit.MetadataReceipts {
+		if !stored(poolBackupReceiptsPath(s), receipt.OperationID) {
+			return true
+		}
+	}
+	return len(edit.Repositories) > source.Repositories || len(edit.Definitions) > source.Definitions || len(edit.Pins) > source.Pins
+}
+
+func requirePoolBackupMembersCurrent(s *Store, membership protocol.PoolMembership) error {
 	members := poolConfirmationPeers(membership, s.State.HostID)
 	required := members[:0]
 	for _, member := range members {
@@ -350,22 +416,15 @@ func requirePoolBackupV2Members(s *Store, membership protocol.PoolMembership) er
 		return errors.New("backup authority growth requires current signed pool authority")
 	}
 	for _, member := range required {
-		poolReplicaMu.Lock()
-		status := poolReplicaObservations[s.dir][member.HostID]
-		poolReplicaMu.Unlock()
-		if status.BackupPageVersion < 2 && !status.ReceivedAt.IsZero() && time.Since(status.ReceivedAt) <= time.Minute {
-			return errors.New("backup authority growth requires a current v2 replica-capable pool member")
-		}
-		status, err = refreshPoolBackupV2MemberStatus(s, member)
+		status, err := refreshPoolBackupMemberStatus(s, member)
 		if err != nil {
 			log.Printf("backup authority growth refused: authenticated member replica status unavailable")
-			return errors.New("backup authority growth requires a current v2 replica-capable pool member")
+			return errors.New("backup authority growth requires every ready pool member to hold the current replica")
 		}
-		if status.BackupPageVersion < 2 || status.Error != "" ||
-			!status.Verified || status.Generation != generation || status.Digest != digest {
-			log.Printf("backup authority growth refused: member replica version=%d verified=%t error=%t generation_match=%t digest_match=%t",
-				status.BackupPageVersion, status.Verified, status.Error != "", status.Generation == generation, status.Digest == digest)
-			return errors.New("backup authority growth requires a current v2 replica-capable pool member")
+		if status.Error != "" || !status.Verified || status.Generation != generation || status.Digest != digest {
+			log.Printf("backup authority growth refused: member replica verified=%t error=%t generation_match=%t digest_match=%t",
+				status.Verified, status.Error != "", status.Generation == generation, status.Digest == digest)
+			return errors.New("backup authority growth requires every ready pool member to hold the current replica")
 		}
 	}
 	currentGeneration, currentDigest, err := PoolAuthorityGeneration(s)
@@ -379,7 +438,7 @@ func requirePoolBackupV2Members(s *Store, membership protocol.PoolMembership) er
 	return nil
 }
 
-func refreshPoolBackupV2MemberStatus(s *Store, member protocol.PoolMember) (protocol.PoolReplicaStatus, error) {
+func refreshPoolBackupMemberStatus(s *Store, member protocol.PoolMember) (protocol.PoolReplicaStatus, error) {
 	if member.PeerOrigin == "" {
 		return protocol.PoolReplicaStatus{}, errors.New("pool member peer origin is unavailable")
 	}
@@ -543,7 +602,7 @@ func encodePoolBackupAuthorityFromStore(s *Store, emit func([]byte) error) (*pro
 		if len(body)+5 > protocol.PoolBackupPageLimit {
 			return errors.New("backup authority record exceeds page limit")
 		}
-		if page.Len() > 0 {
+		if page.Len()+len(body)+5 > protocol.PoolBackupPageLimit {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -553,6 +612,13 @@ func encodePoolBackupAuthorityFromStore(s *Store, emit func([]byte) error) (*pro
 		binary.BigEndian.PutUint32(size[:], uint32(len(body)))
 		_, _ = page.Write(size[:])
 		_, _ = page.Write(body)
+		// Records content decides where a page ends, so one changed or inserted
+		// record leaves the other pages, and their reusable blobs, unchanged.
+		if sha256.Sum256(body)[0] == 0 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
 		switch kind {
 		case 1:
 			m.Repositories++
@@ -582,15 +648,90 @@ func encodePoolBackupAuthorityFromStore(s *Store, emit func([]byte) error) (*pro
 	return m, m.Valid()
 }
 
+const poolBackupCapacityCheck = "pool-backup-authority-capacity"
+
+type poolBackupAuthorityUsage struct {
+	observedAt time.Time
+	manifest   protocol.PoolBackupManifest
+}
+
+var poolBackupAuthorityUsages = map[string]poolBackupAuthorityUsage{}
+var poolBackupAuthorityUsageMu sync.Mutex
+
+// refreshPoolBackupAuthorityUsage measures the stored authority off the heartbeat
+// path; PoolBackupAuthorityCapacityCheck reports the last measurement. Only the
+// pool master measures: members hold a replica of what it limits.
+func refreshPoolBackupAuthorityUsage(s *Store) error {
+	if membership, err := Membership(s); err != nil || membership.MasterHostID != s.State.HostID {
+		poolBackupAuthorityUsageMu.Lock()
+		delete(poolBackupAuthorityUsages, s.dir)
+		poolBackupAuthorityUsageMu.Unlock()
+		return nil
+	}
+	m, err := encodePoolBackupAuthorityFromStore(s, nil)
+	if err != nil {
+		return err
+	}
+	usage := poolBackupAuthorityUsage{observedAt: time.Now().UTC()}
+	if m != nil {
+		usage.manifest = *m
+	}
+	poolBackupAuthorityUsageMu.Lock()
+	poolBackupAuthorityUsages[s.dir] = usage
+	poolBackupAuthorityUsageMu.Unlock()
+	return nil
+}
+
+// PoolBackupAuthorityCapacityCheck warns once a limit Core refuses at, the number of
+// repositories or policies, is 80% used. Sizes and record counts only pick the
+// replication form and are never limits.
+func PoolBackupAuthorityCapacityCheck(s *Store) []protocol.Check {
+	poolBackupAuthorityUsageMu.Lock()
+	usage, ok := poolBackupAuthorityUsages[s.dir]
+	poolBackupAuthorityUsageMu.Unlock()
+	if !ok {
+		return nil
+	}
+	m := usage.manifest
+	var near []string
+	for _, limit := range []struct {
+		name          string
+		used, maximum int
+	}{
+		{"repositories", m.Repositories, protocol.PoolBackupMaxRepositories},
+		{"policies", m.Definitions, protocol.PoolBackupMaxDefinitions},
+	} {
+		if limit.used*5 >= limit.maximum*4 {
+			near = append(near, fmt.Sprintf("%s %d of %d", limit.name, limit.used, limit.maximum))
+		}
+	}
+	check := protocol.Check{Name: poolBackupCapacityCheck, Status: "healthy", Freshness: "fresh", ObservedAt: usage.observedAt}
+	if len(near) != 0 {
+		check.Status = "degraded"
+		check.Error = "backup authority is at 80% or more of its limits: " + strings.Join(near, ", ")
+	}
+	return []protocol.Check{check}
+}
+
+func poolBackupNeedsV2(m *protocol.PoolBackupManifest) bool {
+	return m.TotalBytes > poolBackupBundleLimit || m.History > 100000 || m.Catalog > 100000 ||
+		m.Pins > 100000 || m.MetadataReceipts > 100000
+}
+
+// stagePoolBackupAuthorityFromStore writes a v2 root's pages only when that
+// root is not already staged; a v1-sized authority writes nothing.
 func stagePoolBackupAuthorityFromStore(s *Store) (*protocol.PoolBackupManifest, error) {
-	parent := filepath.Join(s.dir, poolBackupPageDir)
+	m, err := encodePoolBackupAuthorityFromStore(s, nil)
+	if err != nil || m == nil || !poolBackupNeedsV2(m) || verifyPoolBackupAuthorityPages(s, m) == nil {
+		return m, err
+	}
 	temporary, err := newPoolBackupStage(s)
 	if err != nil {
 		return nil, err
 	}
 	defer releasePoolBackupStage(temporary)
 	index := 0
-	m, err := encodePoolBackupAuthorityFromStore(s, func(page []byte) error {
+	m, err = encodePoolBackupAuthorityFromStore(s, func(page []byte) error {
 		path := filepath.Join(temporary, fmt.Sprintf("%04d", index))
 		index++
 		poolBackupBlobMu.Lock()
@@ -601,40 +742,44 @@ func stagePoolBackupAuthorityFromStore(s *Store) (*protocol.PoolBackupManifest, 
 		}
 		return os.Link(poolBackupBlobFile(s, hash), path)
 	})
-	if err != nil {
-		return nil, err
-	}
-	if m == nil {
-		return nil, nil
-	}
-	if m.TotalBytes <= poolBackupBundleLimit && m.History <= 100000 && m.Catalog <= 100000 &&
-		m.Pins <= 100000 && m.MetadataReceipts <= 100000 {
-		// The caller will use the v1 projection. Drop transient blob links too.
-		poolBackupBlobMu.Lock()
-		removeErr := os.RemoveAll(temporary)
-		if removeErr == nil {
-			removeErr = gcPoolBackupOrphanBlobs(s)
-		}
-		poolBackupBlobMu.Unlock()
-		return m, removeErr
-	}
-	destination := filepath.Join(parent, m.SHA256)
-	if err := verifyPoolBackupAuthorityPages(s, m); err == nil {
-		return m, nil
-	}
-	if err := os.RemoveAll(destination); err != nil {
+	if err != nil || m == nil {
 		return nil, err
 	}
 	if err := syncPoolBackupDirectory(temporary); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(temporary, destination); err != nil {
+	parent := filepath.Join(s.dir, poolBackupPageDir)
+	poolBackupBlobMu.Lock()
+	defer poolBackupBlobMu.Unlock()
+	if err := os.RemoveAll(filepath.Join(parent, m.SHA256)); err != nil {
 		return nil, err
 	}
-	if err := syncPoolBackupDirectory(parent); err != nil {
+	if err := os.Rename(temporary, filepath.Join(parent, m.SHA256)); err != nil {
 		return nil, err
 	}
-	return m, nil
+	return m, syncPoolBackupDirectory(parent)
+}
+
+// stagePoolBackupReplicaPages makes a built replica's backup pages readable for
+// the push. The caller holds poolBackupAuthorityMu, so the store cannot move on.
+func stagePoolBackupReplicaPages(s *Store, m *protocol.PoolBackupManifest) error {
+	if m == nil || verifyPoolBackupAuthorityPages(s, m) == nil {
+		return nil
+	}
+	var staged *protocol.PoolBackupManifest
+	var err error
+	if m.Version == 2 {
+		staged, err = stagePoolBackupAuthorityFromStore(s)
+	} else {
+		var auth *protocol.PoolBackupAuthority
+		if auth, err = PoolBackupAuthorityRefs(s); err == nil {
+			staged, err = stagePoolBackupAuthority(s, auth)
+		}
+	}
+	if err == nil && (staged == nil || staged.SHA256 != m.SHA256) {
+		err = errors.New("backup authority changed while its pages were staged")
+	}
+	return err
 }
 
 func stagePoolBackupAuthority(s *Store, auth *protocol.PoolBackupAuthority) (*protocol.PoolBackupManifest, error) {

@@ -52,19 +52,7 @@ func (c *Controller) backupHost(tx *sql.Tx, pool, host string) error {
 		return err
 	}
 	if master != host {
-		if err := c.managedHost(tx, pool, master); err != nil {
-			return err
-		}
-	}
-	for _, target := range []string{host, master} {
-		var raw string
-		if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", target).Scan(&raw); err != nil {
-			return err
-		}
-		var capabilities []string
-		if json.Unmarshal([]byte(raw), &capabilities) != nil || !slices.Contains(capabilities, protocol.BackupCapability) {
-			return fmt.Errorf("host does not support backup-v1; upgrade Nex Core")
-		}
+		return c.managedHost(tx, pool, master)
 	}
 	return nil
 }
@@ -80,22 +68,15 @@ func (c *Controller) backupMasterHost(tx *sql.Tx, pool, target string) (string, 
 	return master, nil
 }
 
-// placementHost only verifies that both Core peers understand the master-owned
-// placement protocol. Resource availability and VM admission are Core's decision.
+// placementHost only verifies that the target host is managed in the pool. Resource
+// availability and VM admission are Core's decision.
 func (c *Controller) placementHost(tx *sql.Tx, pool, host string) error {
 	if err := c.managedHost(tx, pool, host); err != nil {
 		return err
 	}
-	var raw, masterRaw, master string
-	if err := tx.QueryRow("SELECT coalesce(c.capabilities,'[]'),p.master_host_id,coalesce(mc.capabilities,'[]') FROM pools p LEFT JOIN host_capabilities c ON c.host_id=? LEFT JOIN host_capabilities mc ON mc.host_id=p.master_host_id WHERE p.id=?", host, pool).Scan(&raw, &master, &masterRaw); err != nil {
+	var master string
+	if err := tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil {
 		return fmt.Errorf("selected pool not found")
-	}
-	var caps, masterCaps []string
-	if json.Unmarshal([]byte(raw), &caps) != nil || !slices.Contains(caps, protocol.PoolVMPlacementCapability) {
-		return fmt.Errorf("the selected host does not support master-owned VM placement; upgrade Nex Core")
-	}
-	if json.Unmarshal([]byte(masterRaw), &masterCaps) != nil || !slices.Contains(masterCaps, protocol.PoolVMPlacementCapability) {
-		return fmt.Errorf("the pool master does not support master-owned VM placement; upgrade Nex Core")
 	}
 	// Presentation only: a host the master reports as drained is not offered as a placement
 	// target, so the operator sees the reason here instead of waiting for it. The Controller
@@ -580,10 +561,6 @@ func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, us
 	}
 	if err = c.managedHost(tx, body.PoolID, master); err != nil {
 		fail(w, http.StatusConflict, err.Error())
-		return
-	}
-	if !hostSupportsCapability(tx, master, protocol.PoolResourceRemovalCapability) {
-		fail(w, http.StatusConflict, "the pool master does not support removing pool networks yet; upgrade Nex Core")
 		return
 	}
 	var raw, status string

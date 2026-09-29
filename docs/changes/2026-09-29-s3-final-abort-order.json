@@ -11,7 +11,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "S3 remains a gated candidate; supported operator steps do not change.",
+    "reason": "S3-compatible is an advertised destination. The change only orders Core's internal fence writes; task outcomes and operator steps do not change.",
     "pages": []
   },
   "api": {

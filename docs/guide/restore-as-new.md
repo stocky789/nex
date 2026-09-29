@@ -47,15 +47,14 @@ choice after inspection.
 - Catalog or manifest mismatch: Core refuses a point whose repository manifest
   no longer matches the master's catalog digest. Check the repository and
   catalog for an intact point before starting another restore; do not edit a
-  manifest to make it match. A member on an older Core build cannot accept the
-  catalog-bound restore request. Keep the original operation and target for
-  reconciliation, and upgrade that member before retrying through Core.
+  manifest to make it match.
+- A restore that stops before placement, for example on a repository read
+  failure, fails and releases its recovery point; start a new request. Core
+  removes the restore's local artifact copies once it succeeds or fails.
 - Restore remains `needs_attention` during allocation: keep the same VM and
   operation ID, and inspect the host task. The original Core can resume the
   exact retained allocation after restart and verify the result. Do not submit
-  a changed target or assume a promoted master can repeat native work. Older
-  unbound allocations resume only if Core can prove their complete unchanged
-  local and placed artifacts; otherwise leave them for inspection.
+  a changed target or assume a promoted master can repeat native work.
 - Static guest IPs or hostnames inside the image are unchanged; review before attaching
   production networks.
 - Replace existing VM: [Restore a backup over an existing VM](restore-replace.md).

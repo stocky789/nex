@@ -536,6 +536,20 @@ remain open. Independent read-only review found and corrected one stale
 historical SFTP handover sentence. Do not repeat proven
 crash boundaries merely to broaden the lab matrix.
 
+## 2026-09-29 review and fix pass
+
+A second independent source review found defects across every destination,
+dispatch, flow, authority, credential and Controller area; BUG-0716 to
+BUG-0736 fix them, and a cleanup removed old-version compatibility paths under
+the owner's 2026-09-29 no-legacy decision. The
+[destination plan](2026-09-28-backup-repository-destinations.md#2026-09-29-review-and-fix-pass)
+lists what changed, the decisions made (no legacy compatibility; no fixed
+`executeBackupNow` deadline) and the open owner decisions. Only focused unit
+tests have run: **none of these fixes has lab, native-server or forge CI
+evidence**. Before relying on earlier native results, detach lab NFS/SMB3
+backup mount units written by an older build, then rerun the full test suites
+and the native four-kind matrix on the current tree.
+
 ## Final delivery gates
 
 1. SMB3/S3/SFTP capability advertisement and the operator guide are updated

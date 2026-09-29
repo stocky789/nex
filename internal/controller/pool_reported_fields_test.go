@@ -241,7 +241,7 @@ func TestForwardOnlyCancelRefusalsAreConflicts(t *testing.T) {
 func claimInventory(pool, master string, generation uint64, hosts ...string) protocol.Inventory {
 	claim := &protocol.PoolMembership{PoolID: pool, MasterHostID: master, Generation: generation}
 	for _, host := range hosts {
-		claim.Members = append(claim.Members, protocol.PoolMember{HostID: host, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC()})
+		claim.Members = append(claim.Members, protocol.PoolMember{HostID: host, Hostname: host, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC()})
 	}
 	return protocol.Inventory{Managed: &protocol.ManagedState{Membership: claim}}
 }

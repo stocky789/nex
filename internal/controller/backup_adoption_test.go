@@ -17,27 +17,15 @@ func TestFreshControllerRetainsMasterBackupInventory(t *testing.T) {
 	member := a.enroll(a.token(site, ""), csr(t))
 	pool := a.poolOf(master.HostID)
 	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
 	}}
 	repo := protocol.BackupRepository{
 		ID: "repo-1", PoolID: pool, Name: "Primary NFS", Kind: protocol.BackupRepoKindNFS,
 		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
 	}
-	point := protocol.BackupRecoveryPoint{
-		ID: "point-1", RepositoryID: "repo-1", PoolID: pool, SourceVMID: "vm-1",
-		CapturedAt: time.Now().UTC(), Consistency: protocol.BackupCaptureStopped,
-		ManifestSHA256: strings.Repeat("c", 64),
-	}
-	run := protocol.BackupRun{
-		OperationID: "run-1", Kind: protocol.BackupKindBackupNow, PoolID: pool, VMID: "vm-1",
-		RepositoryID: "repo-1", Stage: "published", Status: "succeeded",
-		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-	}
 	inv := &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{
 		Membership:         membership,
 		BackupRepositories: []protocol.BackupRepository{repo}, BackupRepositoriesReported: true,
-		BackupCatalog: []protocol.BackupRecoveryPoint{point}, BackupCatalogReported: true,
-		BackupRuns: []protocol.BackupRun{run}, BackupRunsReported: true,
 	}}
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: inv})
 
@@ -45,16 +33,6 @@ func TestFreshControllerRetainsMasterBackupInventory(t *testing.T) {
 	read(t, a.call("GET", "/api/v1/pools/"+pool+"/backup-repositories", nil, nil, 200), &repos)
 	if len(repos) != 1 || repos[0].ID != "repo-1" || repos[0].Name != "Primary NFS" {
 		t.Fatalf("retained repositories %#v", repos)
-	}
-	var catalog []protocol.BackupRecoveryPoint
-	read(t, a.call("GET", "/api/v1/pools/"+pool+"/backup-catalog", nil, nil, 200), &catalog)
-	if len(catalog) != 1 || catalog[0].ID != "point-1" {
-		t.Fatalf("retained catalog %#v", catalog)
-	}
-	var runs []protocol.BackupRun
-	read(t, a.call("GET", "/api/v1/pools/"+pool+"/backup-runs", nil, nil, 200), &runs)
-	if len(runs) != 1 || runs[0].OperationID != "run-1" {
-		t.Fatalf("retained runs %#v", runs)
 	}
 
 	// Member cannot report master backup authority under its own certificate.
@@ -66,7 +44,7 @@ func TestBackupInventoryMissingReportedIsUnavailable(t *testing.T) {
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
 	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
 	}}
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
 		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
@@ -74,12 +52,6 @@ func TestBackupInventoryMissingReportedIsUnavailable(t *testing.T) {
 	})
 	if body := a.call("GET", "/api/v1/pools/"+pool+"/backup-repositories", nil, nil, 503).Body.String(); !strings.Contains(body, "unavailable") {
 		t.Fatalf("missing reported flag: %s", body)
-	}
-	if body := a.call("GET", "/api/v1/pools/"+pool+"/backup-catalog", nil, nil, 503).Body.String(); !strings.Contains(body, "unavailable") {
-		t.Fatalf("missing catalog flag: %s", body)
-	}
-	if body := a.call("GET", "/api/v1/pools/"+pool+"/backup-runs", nil, nil, 503).Body.String(); !strings.Contains(body, "unavailable") {
-		t.Fatalf("missing runs flag: %s", body)
 	}
 
 	inv := &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{
@@ -95,7 +67,7 @@ func TestBackupInventoryMissingReportedIsUnavailable(t *testing.T) {
 }
 
 func TestControllerBackupNowRelayAndConflict(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.BackupCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	var created createdVM
 	read(t, l.create("create-backup-vm", l.spec("backup-guest"), 202), &created)
 	commands := l.report().Commands
@@ -139,7 +111,7 @@ func TestControllerBackupNowRelayAndConflict(t *testing.T) {
 }
 
 func TestBackupResultRecoversControllerAttention(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.BackupCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	var created createdVM
 	read(t, l.create("create-recovery-vm", l.spec("recovery-guest"), 202), &created)
 	command := l.report().Commands[0]
@@ -185,7 +157,7 @@ func backupOperationStatus(t *testing.T, l *managedLab, id string) string {
 }
 
 func TestBackupOutcomeRecoversAcknowledgedControllerAttention(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.BackupCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	id := "restore-recover-from-outcome"
 	targetID := "22222222-2222-4222-8222-222222222222"
 	l.a.call("POST", "/api/v1/pools/"+l.pool+"/backup-restore", map[string]string{
@@ -210,7 +182,7 @@ func TestBackupOutcomeRecoversAcknowledgedControllerAttention(t *testing.T) {
 }
 
 func TestBackupMetadataOutcomeRecoversAcknowledgedControllerAttention(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.BackupCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	id := "verify-recover-from-outcome"
 	testVMID := "33333333-3333-4333-8333-333333333333"
 	l.a.call("POST", "/api/v1/pools/"+l.pool+"/backup-test-verify", map[string]string{
@@ -280,10 +252,10 @@ func TestBackupMemberOperationsRouteThroughMaster(t *testing.T) {
 	if _, err := a.c.db.Exec("UPDATE hosts SET pool_id=? WHERE id=?", pool, member.HostID); err != nil {
 		t.Fatal(err)
 	}
-	caps := []string{protocol.ManagedVMCapability, protocol.BackupCapability}
+	caps := []string{protocol.ManagedVMCapability}
 	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member.HostID, Hostname: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	masterCert, memberCert := certificate(t, master.CertificatePEM), certificate(t, member.CertificatePEM)
 	masterState := hostDefaults(master.HostID)
@@ -369,7 +341,7 @@ func TestBackupMemberOperationsRouteThroughMaster(t *testing.T) {
 }
 
 func TestControllerBackupNowPendingIncludesReplace(t *testing.T) {
-	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.BackupCapability)
+	l := newManagedLab(t, protocol.ManagedVMCapability)
 	var created createdVM
 	read(t, l.create("create-backup-replace-gate", l.spec("backup-replace-gate"), 202), &created)
 	commands := l.report().Commands
@@ -399,7 +371,7 @@ func TestControllerBackupRepositoryRelay(t *testing.T) {
 	pool := a.poolOf(master.HostID)
 	cert := certificate(t, master.CertificatePEM)
 	a.report(cert, protocol.ReportRequest{
-		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.BackupCapability},
+		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
 	})
 
@@ -431,7 +403,7 @@ func TestBackupMasterActionsReturnOperationAndReplay(t *testing.T) {
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
-		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.BackupCapability},
+		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
 	})
 	protectPath := "/api/v1/pools/" + pool + "/backup-protect"
@@ -473,20 +445,6 @@ func TestBackupMasterActionsReturnOperationAndReplay(t *testing.T) {
 	}, nil, 409)
 }
 
-func TestBackupCapabilityRefusesOlderCore(t *testing.T) {
-	a := newClient(t)
-	master := a.enroll(a.token(a.site(), ""), csr(t))
-	pool := a.poolOf(master.HostID)
-	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
-		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
-		Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
-	})
-	a.call("POST", "/api/v1/pools/"+pool+"/backup-repositories", map[string]any{
-		"request_id": "repo-op", "id": "repo-1", "name": "Primary", "kind": "nfs",
-		"source": map[string]string{"server": "nfs.example.test", "export": "/export/backups"},
-	}, nil, 409)
-}
-
 func TestBackupRestoreRejectsUnsafeVMID(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))
@@ -497,26 +455,11 @@ func TestBackupRestoreRejectsUnsafeVMID(t *testing.T) {
 	}, nil, 400)
 }
 
-func TestBackupReportCapabilityAcknowledgement(t *testing.T) {
-	a := newClient(t)
-	host := a.enroll(a.token(a.site(), ""), csr(t))
-	cert := certificate(t, host.CertificatePEM)
-	for i, caps := range [][]string{{protocol.ManagedVMCapability}, {protocol.ManagedVMCapability, protocol.BackupCapability}} {
-		response := a.report(cert, protocol.ReportRequest{
-			Version: protocol.Version, Sequence: uint64(i + 1), Capabilities: caps,
-			Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(host.HostID)},
-		})
-		if got := response.BackupSupport != nil; got != (i == 1) {
-			t.Fatalf("backup support acknowledgement for capabilities %v: %+v", caps, response.BackupSupport)
-		}
-	}
-}
-
 func TestBackupPolicyCreateAndUpdatePreserveScheduleID(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
-	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	existing := protocol.BackupPolicy{
 		ID: "existing-policy", ScheduleID: "existing-schedule", PoolID: pool, Name: "Existing", Enabled: true,
 		RepositoryID: "repo-1", CaptureMode: protocol.BackupCaptureStopped, TimeZone: "UTC",
@@ -524,7 +467,7 @@ func TestBackupPolicyCreateAndUpdatePreserveScheduleID(t *testing.T) {
 		VMIDs: []string{"vm-1"}, Retention: protocol.BackupRetention{KeepLatest: 2}, Revision: 1,
 	}
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
-		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability, protocol.BackupCapability},
+		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{
 			Membership: membership, BackupPoliciesReported: true, BackupPolicies: []protocol.BackupPolicy{existing},
 		}},
@@ -571,7 +514,7 @@ func TestBackupPolicyCreateAndUpdatePreserveScheduleID(t *testing.T) {
 	body["request_id"] = "update-policy"
 	a.call("PUT", "/api/v1/pools/"+pool+"/backup-policies/existing-policy", body, nil, 200)
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
-		Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability, protocol.BackupCapability},
+		Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory: &protocol.Inventory{Hostname: "core", Managed: &protocol.ManagedState{
 			Membership: membership, BackupPoliciesReported: true, BackupPolicies: []protocol.BackupPolicy{existing},
 			Outcomes: []protocol.ManagedOutcome{{OperationID: "create-policy", Kind: "backup-policy-upsert", ID: "new-policy", Status: "succeeded"}},
@@ -607,13 +550,10 @@ func TestBackupInventoryRejectsForeignPoolRecords(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
-	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	foreign := "other-pool"
-	now := time.Now().UTC()
 	for _, managed := range []*protocol.ManagedState{
 		{BackupRepositoriesReported: true, BackupRepositories: []protocol.BackupRepository{{ID: "repo-1", PoolID: foreign, Name: "Other", Kind: "nfs", Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}}}},
-		{BackupCatalogReported: true, BackupCatalog: []protocol.BackupRecoveryPoint{{ID: "point-1", RepositoryID: "repo-1", PoolID: foreign, SourceVMID: "vm-1", CapturedAt: now, Consistency: "stopped", ManifestSHA256: strings.Repeat("a", 64)}}},
-		{BackupRunsReported: true, BackupRuns: []protocol.BackupRun{{OperationID: "run-1", Kind: "backup-now", PoolID: foreign, RepositoryID: "repo-1", Stage: "published", Status: "succeeded", CreatedAt: now}}},
 		{BackupPoliciesReported: true, BackupPolicies: []protocol.BackupPolicy{{ID: "policy-1", ScheduleID: "schedule-1", PoolID: foreign, Name: "Other", RepositoryID: "repo-1", CaptureMode: "stopped", TimeZone: "UTC", Rule: protocol.BackupScheduleRule{Frequency: "daily"}, VMIDs: []string{"vm-1"}, Retention: protocol.BackupRetention{KeepLatest: 1}, Revision: 1}}},
 	} {
 		managed.Membership = membership
@@ -690,7 +630,7 @@ func TestBackupAuthorityObservationIsRetainedInInventory(t *testing.T) {
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
 	membership := &protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
 	}}
 	repo := protocol.BackupRepository{
 		ID: "repo-1", PoolID: pool, Name: "Primary NFS", Kind: protocol.BackupRepoKindNFS,

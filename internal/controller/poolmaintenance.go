@@ -89,9 +89,6 @@ func (c *Controller) poolMaintenanceTarget(tx *sql.Tx, pool, host string, expect
 	if err != nil {
 		return "", status, err
 	}
-	if !hostSupportsCapability(tx, master, protocol.PoolMaintenanceCapability) {
-		return "", http.StatusConflict, fmt.Errorf("maintenance mode needs %s on the pool master; upgrade the pool master", protocol.PoolMaintenanceCapability)
-	}
 	inv, err := hostInventory(tx, master)
 	if err != nil {
 		return "", http.StatusInternalServerError, fmt.Errorf("inventory unavailable")

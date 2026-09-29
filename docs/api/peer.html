@@ -54,12 +54,12 @@
 <li><a href="#peerCheckSMBBackupCapability">POST /api/v1/pool/backup/capability/smb3</a></li>
 </ul></nav>
 <section id="peerAdvertiseOrigin"><h2>POST <code>/api/v1/pool/advertise</code></h2>
-<p>Advertise member hostname, peer origin and host observations</p><p>Served by the pool master over authenticated member mTLS. Records only the calling member own hostname, peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Hostname is bounded and is written only after every ready peer proves membership_hostname_version 1 through pinned replica GET, then the master rechecks membership and authority before saving. A mixed-version or offline peer defers the name, while legacy origin and other observations continue. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.</p>
+<p>Advertise member peer origin and host observations</p><p>Served by the pool master over authenticated member mTLS. Records only the calling member own peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerAdvertiseOrigin&quot;,
-  &quot;summary&quot;: &quot;Advertise member hostname, peer origin and host observations&quot;,
-  &quot;description&quot;: &quot;Served by the pool master over authenticated member mTLS. Records only the calling member own hostname, peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Hostname is bounded and is written only after every ready peer proves membership_hostname_version 1 through pinned replica GET, then the master rechecks membership and authority before saving. A mixed-version or offline peer defers the name, while legacy origin and other observations continue. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.&quot;,
+  &quot;summary&quot;: &quot;Advertise member peer origin and host observations&quot;,
+  &quot;description&quot;: &quot;Served by the pool master over authenticated member mTLS. Records only the calling member own peer listener origin, system UUID, management-controller and watchdog observations in Core membership. The certificate selects the member; body input cannot name another. Repeats with unchanged values do not rewrite authority. A pending origin is retried by Core. Body at most 4 KiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMemberCertificate&quot;: []
@@ -72,7 +72,7 @@
       &quot;description&quot;: &quot;Origin recorded.&quot;
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Non-POST, invalid JSON, invalid hostname, origin, management-controller or watchdog report, or no usable advertised field.&quot;,
+      &quot;description&quot;: &quot;Non-POST, invalid JSON, invalid origin, management-controller or watchdog report, or no usable advertised field.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -95,7 +95,7 @@
       &quot;description&quot;: &quot;Method not allowed (sent after authentication, before the body is read); `Allow: POST`.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Authority or peer state unavailable, membership changed during the capability check, or a ready peer cannot verify signed membership hostnames; retry after peers reconnect or upgrade.&quot;,
+      &quot;description&quot;: &quot;Authority or peer state unavailable; the member retries after the pool authority is writable again.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -189,7 +189,7 @@
   }
 }</pre></details></section>
 <section id="peerSubmitBackup"><h2>POST <code>/api/v1/pool/backup</code></h2>
-<p>Submit backup or test cleanup work to a member</p><p>The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source, generation and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.</p>
+<p>Submit backup or test cleanup work to a member</p><p>The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;security&quot;: [
@@ -225,7 +225,7 @@
   },
   &quot;operationId&quot;: &quot;peerSubmitBackup&quot;,
   &quot;summary&quot;: &quot;Submit backup or test cleanup work to a member&quot;,
-  &quot;description&quot;: &quot;The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source, generation and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The current pool master sends backup-now or test-cleanup with its Core-owned NFS repository source and observed filesystem identity. The member verifies master mTLS identity and its own mounted filesystem against the supplied NFS identity before owner-marker claim or native effects, then dispatches through its durable Store owner. Restore commands use the catalog-bound /api/v1/pool/backup/restore route. A repeated operation ID returns the retained result only for the same command; changed input is refused. An older member that derives NFS identity from source alone must be upgraded before this peer work is considered safe. Request body is limited to 64 KiB.&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
     &quot;content&quot;: {
@@ -783,7 +783,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;First admission refused: not a master, invalid/expired/mismatched offer, invalid CSR or hostname, already admitted host, an older Core without hostname joining a named pool, or persistence failure. An exact replay of a previously issued offer returns its original certificate even after hostname backfill.&quot;,
+      &quot;description&quot;: &quot;First admission refused: not a master, invalid/expired/mismatched offer, invalid CSR or missing/invalid hostname, already admitted host, or persistence failure. An exact replay of a previously issued offer returns its original certificate.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -1287,12 +1287,12 @@
   }
 }</pre></details></section>
 <section id="peerStagePoolBackupPage"><h2>POST <code>/api/v1/pool/replica/backup-page</code></h2>
-<p>Stage one signed backup authority page on a pool member</p><p>The current pool master sends signed backup authority pages over pinned mutual TLS. Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 before staging. Version 2 uses page_count and the full-stream root; it may send either page bytes or reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob. A missing/corrupt blob returns 404 and the master sends page bytes. Progress probe index -1 with null data returns the next missing page; when all version-2 pages exist it verifies the full root and clears corrupt staging before reporting progress. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority. A member reporting backup_page_version below 2 cannot receive version-2 authority.</p>
+<p>Stage one signed backup authority page in a push session</p><p>The current pool master sends backup authority pages over pinned mutual TLS in a push session. A request carrying the signed replica with index -1 and null data verifies it once, opens a session (expires after 10 minutes, one per member) and returns the next missing page. Page requests carry only manifest_sha256, index and page bytes or reuse_sha256, and are accepted only for the open session&#x27;s manifest and master (409 otherwise). Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 against the verified manifest. Version 2 uses page_count and the full-stream root and may send reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob (404 if missing/corrupt). When all version-2 pages exist the open request verifies the full root, clears staging whose content does not match, and returns 500 without clearing on a read failure. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerStagePoolBackupPage&quot;,
-  &quot;summary&quot;: &quot;Stage one signed backup authority page on a pool member&quot;,
-  &quot;description&quot;: &quot;The current pool master sends signed backup authority pages over pinned mutual TLS. Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 before staging. Version 2 uses page_count and the full-stream root; it may send either page bytes or reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob. A missing/corrupt blob returns 404 and the master sends page bytes. Progress probe index -1 with null data returns the next missing page; when all version-2 pages exist it verifies the full root and clears corrupt staging before reporting progress. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority. A member reporting backup_page_version below 2 cannot receive version-2 authority.&quot;,
+  &quot;summary&quot;: &quot;Stage one signed backup authority page in a push session&quot;,
+  &quot;description&quot;: &quot;The current pool master sends backup authority pages over pinned mutual TLS in a push session. A request carrying the signed replica with index -1 and null data verifies it once, opens a session (expires after 10 minutes, one per member) and returns the next missing page. Page requests carry only manifest_sha256, index and page bytes or reuse_sha256, and are accepted only for the open session&#x27;s manifest and master (409 otherwise). Both formats use the same 256 KiB page limit. Version 0 verifies exact per-page length and SHA-256 against the verified manifest. Version 2 uses page_count and the full-stream root and may send reuse_sha256 with null data, asking the member to link an already durable content-addressed page blob (404 if missing/corrupt). When all version-2 pages exist the open request verifies the full root, clears staging whose content does not match, and returns 500 without clearing on a read failure. Final replica acceptance verifies the full ordered root, total bytes, record frames, unique identities and counts. Staged pages grant no authority.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -1302,7 +1302,7 @@
   &quot;x-audience&quot;: &quot;Core peer: pool master \u2192 pool member&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
-    &quot;description&quot;: &quot;Signed replica, page index and base64 page bytes or version-2 reuse_sha256 hint; index -1 with no data requests progress. Body is bounded by the replica limit plus two page limits.&quot;,
+    &quot;description&quot;: &quot;Session open: signed replica with index -1 and no data. Page: manifest_sha256, index and base64 page bytes or version-2 reuse_sha256. Body is bounded by the replica limit plus two page limits.&quot;,
     &quot;content&quot;: {
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
@@ -1325,13 +1325,13 @@
       &quot;description&quot;: &quot;Only POST is allowed.&quot;
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Replica scope, signature or generation is invalid.&quot;
+      &quot;description&quot;: &quot;Replica scope, signature or generation is invalid, or no push session is open for the named manifest and caller.&quot;
     },
     &quot;500&quot;: {
       &quot;description&quot;: &quot;Page could not be written.&quot;
     },
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Progress probe: next_index is the first missing or invalid page, or page count after full-root validation.&quot;,
+      &quot;description&quot;: &quot;Session open: next_index is the first missing or invalid page, or the page count after full-root validation.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2689,7 +2689,7 @@
   }
 }</pre></details></section>
 <section id="peerSubmitCatalogBoundRestore"><h2>POST <code>/api/v1/pool/backup/restore</code></h2>
-<p>Submit catalog-bound restore work to a member</p><p>The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source, generation and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.</p>
+<p>Submit catalog-bound restore work to a member</p><p>The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;security&quot;: [
@@ -2728,7 +2728,7 @@
   },
   &quot;operationId&quot;: &quot;peerSubmitCatalogBoundRestore&quot;,
   &quot;summary&quot;: &quot;Submit catalog-bound restore work to a member&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source, generation and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends restore-as-new, restore-replace or test-restore with its pinned catalog point and NFS repository source and master-observed filesystem identity. The member verifies its mounted NFS identity before owner-marker claim or native effects, durably binds the manifest digest and refuses a missing or different catalog digest. A lost reply is reconciled by the existing GET for the same operation ID. Old members without this route fail closed; the master retains the uncertain run and point pin. A member that has the route but derives NFS identity from source alone must be upgraded before peer restore is considered safe. Request body is limited to 64 KiB.&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
     &quot;content&quot;: {
@@ -2750,12 +2750,12 @@
   }
 }</pre></details></section>
 <section id="peerDeliverBackupCredential"><h2>POST <code>/api/v1/pool/backup/credential</code></h2>
-<p>Deliver a scoped backup credential to a member</p><p>The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, generation, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material is refused. Body is limited to 128 KiB. Controller never transports this peer secret.</p>
+<p>Deliver a scoped backup credential to a member</p><p>The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material, or a different receipt for an existing repository ID, is refused. Body is limited to 128 KiB. Controller never transports this peer secret.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerDeliverBackupCredential&quot;,
   &quot;summary&quot;: &quot;Deliver a scoped backup credential to a member&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, generation, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material is refused. Body is limited to 128 KiB. Controller never transports this peer secret.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a repository projection, bound receipt metadata and transient secret to a ready member over pinned peer mTLS. The member validates pool, repository, kind, receipt and current master, then writes a private local receipt before replying 204. Exact delivery retries are idempotent; conflicting material, or a different receipt for an existing repository ID, is refused. Body is limited to 128 KiB. Controller never transports this peer secret.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2789,12 +2789,12 @@
   }
 }</pre></details></section>
 <section id="peerProbeBackupRepositoryAccess"><h2>POST <code>/api/v1/pool/backup/access</code></h2>
-<p>Observe a member&#x27;s access to one backup repository</p><p>The authenticated current pool master sends the exact Core-owned repository generation to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, generation, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository, generation and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.</p>
+<p>Observe a member&#x27;s access to one backup repository</p><p>The authenticated current pool master sends the exact Core-owned repository registration to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerProbeBackupRepositoryAccess&quot;,
   &quot;summary&quot;: &quot;Observe a member&#x27;s access to one backup repository&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends the exact Core-owned repository generation to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, generation, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository, generation and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends the exact Core-owned repository registration to a ready member over pinned mTLS. The member compares any local repository&#x27;s pool, ID, kind, source, identity and credential reference; if none exists, it prepares the requested destination transiently through Core adoption before checking the same identity. For NFS, a missing or different master-observed filesystem identity is refused before owner-marker claim. It then probes native read, write and list access without saving a member registration. Mount path is not compared. A probe or repository mismatch returns a 200 observation with readable and writable false and a generic error. The master accepts only the expected member, repository and nonzero observation time, then replaces the peer time with its own receipt time. Transport or older members without this route fail closed; members that derive NFS identity from source alone must be upgraded before their access observation is relied on. The master keeps these access rows in process memory, reports them in repository inventory, and treats rows older than two minutes or stamped in the future as unknown; this route creates no durable access record. Body is limited to 64 KiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2814,7 +2814,7 @@
   },
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Member-observed access for the requested repository generation, including a failed probe as an offline row.&quot;,
+      &quot;description&quot;: &quot;Member-observed access for the requested repository, including a failed probe as an offline row.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2824,7 +2824,7 @@
       }
     },
     &quot;400&quot;: {
-      &quot;description&quot;: &quot;Malformed repository, wrong pool, zero generation or unsupported kind.&quot;
+      &quot;description&quot;: &quot;Malformed repository, wrong pool or unsupported kind.&quot;
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
@@ -2874,12 +2874,12 @@
   }
 }</pre></details></section>
 <section id="peerCheckS3BackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/s3</code></h2>
-<p>Prove member access to one S3 backup repository</p><p>The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, generation, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed generation, receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.</p>
+<p>Prove member access to one S3 backup repository</p><p>The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerCheckS3BackupCapability&quot;,
   &quot;summary&quot;: &quot;Prove member access to one S3 backup repository&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, generation, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed generation, receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a portable S3 repository with its endpoint, bucket, prefix, credential_ref and observed remote fingerprint to a ready member before dispatching work. The member resolves its private receipt, prepares access and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing or incompatible routes on older members permanently refuse work; transport and unavailable backend outcomes can be retried with the same request. Body is limited to 64 KiB. This route does not advertise S3 product availability.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2899,7 +2899,7 @@
   },
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact member-observed S3 generation, private receipt and remote fingerprint.&quot;,
+      &quot;description&quot;: &quot;Exact member-observed S3 private receipt and remote fingerprint.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2920,12 +2920,12 @@
   }
 }</pre></details></section>
 <section id="peerCheckSFTPBackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/sftp</code></h2>
-<p>Prove member access to one SFTP backup repository</p><p>The authenticated current pool master sends a source-only SFTP repository with its generation and credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed generation, receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
+<p>Prove member access to one SFTP backup repository</p><p>The authenticated current pool master sends a source-only SFTP repository with its credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerCheckSFTPBackupCapability&quot;,
   &quot;summary&quot;: &quot;Prove member access to one SFTP backup repository&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master sends a source-only SFTP repository with its generation and credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed generation, receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends a source-only SFTP repository with its credential_ref to a ready member before dispatching work. The member resolves its private receipt, prepares access using the pinned SSH host-key fingerprint and returns its observed receipt and fingerprint. The master requires exact agreement with current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -2945,7 +2945,7 @@
   },
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact member-observed SFTP generation, private receipt and pinned fingerprint.&quot;,
+      &quot;description&quot;: &quot;Exact member-observed SFTP private receipt and pinned fingerprint.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2966,12 +2966,12 @@
   }
 }</pre></details></section>
 <section id="peerCheckSMBBackupCapability"><h2>POST <code>/api/v1/pool/backup/capability/smb3</code></h2>
-<p>Prove member access to one SMB3 backup repository</p><p>The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with generation and credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed generation, receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
+<p>Prove member access to one SMB3 backup repository</p><p>The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;peerCheckSMBBackupCapability&quot;,
   &quot;summary&quot;: &quot;Prove member access to one SMB3 backup repository&quot;,
-  &quot;description&quot;: &quot;The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with generation and credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed generation, receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master asks a ready member to prove access before dispatching SMB3 backup work. Request binds a source-only repository with credential_ref to the master-observed SMB server/share/marker identity. The member resolves its own Core-private receipt, prepares its sealed SMB3 mount, verifies source, owner and write/publication prerequisites, and returns the exact observed receipt and identity. The master compares the response with its current writable authority. Missing route on an older member is a permanent refusal; transport or unavailable backend leaves the run unresolved for retry. Body is limited to 64 KiB.&quot;,
   &quot;security&quot;: [
     {
       &quot;PoolMasterCertificate&quot;: []
@@ -3075,6 +3075,10 @@
         &quot;crash&quot;,
         &quot;quiesced&quot;
       ]
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Creating policy, set by the scheduler; empty for manual backups.&quot;
     }
   },
   &quot;required&quot;: [
@@ -3318,6 +3322,10 @@
     &quot;protected&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
     },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Policy that created the point; retention prunes only that policy&#x27;s points. Empty for manual backups.&quot;
+    },
     &quot;last_test_result&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
@@ -3381,10 +3389,6 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
-    },
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
     },
     &quot;mount_path&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -4289,14 +4293,10 @@
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: 0,
       &quot;description&quot;: &quot;This member&#x27;s own observed generation in its configured sanlock lockspace. The master records it in the member row for future proof checks; it is not proof by itself.&quot;
-    },
-    &quot;hostname&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Optional name reported by this authenticated member for its own Core membership row. Nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL. The master defers a name write until all current ready peers prove membership_hostname_version 1 through pinned peer GET.&quot;
     }
   },
   &quot;required&quot;: [],
-  &quot;description&quot;: &quot;What a member advertises about itself through authenticated peer mTLS: origin, hostname, machine identity, management controller, watchdog and observed sanlock generation. Each field is recorded on its own when safe; old members may omit later fields.&quot;
+  &quot;description&quot;: &quot;What a member advertises about itself through authenticated peer mTLS: origin, machine identity, management controller, watchdog and observed sanlock generation. Each field is recorded on its own when safe.&quot;
 }</pre></details>
 <details id="PeerJoinRequest"><summary>PeerJoinRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -4317,7 +4317,7 @@
     },
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Optional name reported by the joining Core for its durable membership row; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL. Older peers omit it: a first admission to a named pool is refused, but an exact replay of a previously issued offer still returns its original certificate and membership.&quot;
+      &quot;description&quot;: &quot;Name reported by the joining Core for its durable membership row: required, at most 200 UTF-8 bytes of printable characters with no leading or trailing space. A join without one is refused.&quot;
     }
   },
   &quot;required&quot;: [
@@ -4988,12 +4988,13 @@
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
     &quot;replica&quot;: {
-      &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityReplica&quot;
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolAuthorityReplica&quot;,
+      &quot;description&quot;: &quot;Signed replica; present only on the request that opens a push session (index -1).&quot;
     },
     &quot;index&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;minimum&quot;: -1,
-      &quot;description&quot;: &quot;Zero-based page index; -1 with empty data requests durable next-page progress for the signed manifest.&quot;
+      &quot;description&quot;: &quot;Zero-based page index; -1 with the signed replica and empty data opens a push session and returns next-page progress.&quot;
     },
     &quot;data&quot;: {
       &quot;anyOf&quot;: [
@@ -5011,10 +5012,14 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
       &quot;description&quot;: &quot;Version-2 reuse hint: digest of an already durable 256 KiB-or-smaller page blob. Data must be null; missing/corrupt blob returns 404 so the master sends bytes instead. Version 0 rejects reuse.&quot;
+    },
+    &quot;manifest_sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;,
+      &quot;description&quot;: &quot;Root of the manifest verified when the session opened; required on page requests.&quot;
     }
   },
   &quot;required&quot;: [
-    &quot;replica&quot;,
     &quot;index&quot;,
     &quot;data&quot;
   ],
@@ -5754,7 +5759,7 @@
     },
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL.&quot;
+      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. At most 200 UTF-8 bytes of printable characters.&quot;
     },
     &quot;certificate_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -5805,7 +5810,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member did not report backup authority page progress\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, \&quot;pool member refused a backup authority page\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -6480,10 +6485,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
       &quot;description&quot;: &quot;Bounded refusal reason; control characters collapse the whole message to \&quot;pool authority replica refused\&quot;.&quot;
-    },
-    &quot;backup_page_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Maximum backup authority page format this member acknowledges; 2 enables version-2 manifests.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6552,15 +6553,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
       &quot;description&quot;: &quot;The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it. Includes \&quot;pool member refused backup authority page reuse\&quot; when a reusable blob cannot be safely staged.&quot;
-    },
-    &quot;backup_page_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Maximum backup authority page format this member reports; a fresh value of 2 is required before master backup authority may grow beyond version-0 bounds.&quot;
-    },
-    &quot;membership_hostname_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0,
-      &quot;description&quot;: &quot;Authenticated peer GET /api/v1/pool/replica reports 1 when this Core can verify signed membership containing PoolMember.hostname. Absent/0 is an older peer; the master defers name writes until every ready member reports support. This field is not sent in Controller inventory preflight.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9790,6 +9782,10 @@
     },
     &quot;prefix&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;region&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Signing region; empty means us-east-1.&quot;
     }
   },
   &quot;required&quot;: [
@@ -9905,15 +9901,6 @@
     &quot;recipient_host_id&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;description&quot;: &quot;Authenticated member for whom this private credential projection was prepared.&quot;
-    },
-    &quot;retired&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;$ref&quot;: &quot;#/components/schemas/BackupCredentialRetirement&quot;
-      }
     }
   },
   &quot;required&quot;: [
@@ -9971,24 +9958,6 @@
   ],
   &quot;x-go-type&quot;: &quot;agent.backupCredentialReceipt&quot;
 }</pre></details>
-<details id="BackupCredentialRetirement"><summary>BackupCredentialRetirement</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;x-go-type&quot;: &quot;agent.backupCredentialRetirement&quot;,
-  &quot;description&quot;: &quot;A Core-private instruction to retire a superseded member-side backup receipt after newer material is durable.&quot;,
-  &quot;properties&quot;: {
-    &quot;reference&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;kind&quot;: {
-      &quot;type&quot;: &quot;string&quot;
-    }
-  },
-  &quot;required&quot;: [
-    &quot;reference&quot;,
-    &quot;kind&quot;
-  ],
-  &quot;additionalProperties&quot;: false
-}</pre></details>
 <details id="PeerSMBCapabilityRequest"><summary>PeerSMBCapabilityRequest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;x-go-type&quot;: &quot;agent.peerSMBCapabilityRequest&quot;,
@@ -10010,12 +9979,8 @@
 <details id="PeerSMBCapabilityResponse"><summary>PeerSMBCapabilityResponse</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;x-go-type&quot;: &quot;agent.peerSMBCapabilityResponse&quot;,
-  &quot;description&quot;: &quot;Member-observed identity proof for this exact repository generation and private credential receipt.&quot;,
+  &quot;description&quot;: &quot;Member-observed identity proof for this exact repository and private credential receipt.&quot;,
   &quot;properties&quot;: {
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
-    },
     &quot;credential_ref&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -10024,7 +9989,6 @@
     }
   },
   &quot;required&quot;: [
-    &quot;generation&quot;,
     &quot;credential_ref&quot;,
     &quot;identity&quot;
   ],
@@ -10033,12 +9997,8 @@
 <details id="PeerS3CapabilityResponse"><summary>PeerS3CapabilityResponse</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;x-go-type&quot;: &quot;agent.peerS3CapabilityResponse&quot;,
-  &quot;description&quot;: &quot;Member-observed S3 identity proof for this exact repository generation and private credential receipt.&quot;,
+  &quot;description&quot;: &quot;Member-observed S3 identity proof for this exact repository and private credential receipt.&quot;,
   &quot;properties&quot;: {
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
-    },
     &quot;credential_ref&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -10047,7 +10007,6 @@
     }
   },
   &quot;required&quot;: [
-    &quot;generation&quot;,
     &quot;credential_ref&quot;,
     &quot;fingerprint&quot;
   ],
@@ -10056,12 +10015,8 @@
 <details id="PeerSFTPCapabilityResponse"><summary>PeerSFTPCapabilityResponse</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;x-go-type&quot;: &quot;agent.peerSFTPCapabilityResponse&quot;,
-  &quot;description&quot;: &quot;Member-observed SFTP identity proof for this exact repository generation and private credential receipt.&quot;,
+  &quot;description&quot;: &quot;Member-observed SFTP identity proof for this exact repository and private credential receipt.&quot;,
   &quot;properties&quot;: {
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
-    },
     &quot;credential_ref&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -10070,7 +10025,6 @@
     }
   },
   &quot;required&quot;: [
-    &quot;generation&quot;,
     &quot;credential_ref&quot;,
     &quot;fingerprint&quot;
   ],

@@ -14,6 +14,13 @@ UMask=0077
 # not apply while this unit owns the embedded agent.
 StateDirectory=nex/core-local nex-core-agent
 StateDirectoryMode=0700
+# Creates the host key that seals SMB mount credentials (systemd-creds encrypt needs it).
+ExecStartPre=-/usr/bin/systemd-creds setup
+# The backup credential receipt key is sealed in the state directory and loaded into the service
+# as a credential. A missing file would fail the unit, so the first start creates it here; Core
+# creates it itself only when it is missing while running.
+ExecStartPre=/bin/sh -c 'f=/var/lib/nex-core-agent/backup-credential-key/key.cred; [ -e "$f" ] || { mkdir -p -m 0700 "${f%/*}" && head -c 32 /dev/urandom | systemd-creds --no-ask-password encrypt --name=nex-backup-key - "$f"; }'
+LoadCredentialEncrypted=nex-backup-key:/var/lib/nex-core-agent/backup-credential-key/key.cred
 ExecStartPre=/usr/lib/nex/core-local-setup init
 ExecStart=/usr/lib/nex/core-local-setup run
 ExecStopPost=/usr/lib/nex/core-local-setup offline

@@ -96,7 +96,7 @@ func TestBackupMemberProbeAdoptsRemoteCredentialBeforeCheckingAccess(t *testing.
 func TestBackupMemberProbeUsesStableSMBIdentity(t *testing.T) {
 	expected := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Kind: protocol.BackupRepoKindSMB3,
 		SMBSource:   &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
-		SMBIdentity: &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32), FilesystemID: "master-client"}, Generation: 1}
+		SMBIdentity: &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32), FilesystemID: "master-client"}}
 	local := expected
 	identity := *expected.SMBIdentity
 	identity.FilesystemID = "member-client"
@@ -168,14 +168,14 @@ func TestBackupMemberAccessProbeOfflineExpiryAndRestart(t *testing.T) {
 		t.Fatalf("transient member access became durable: %+v, %v", stored, err)
 	}
 	memberRepo := repos[0]
-	memberRepo.Generation++
+	memberRepo.Source.Export = "/export/other"
 	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{memberRepo.ID: memberRepo}}); err != nil {
 		t.Fatal(err)
 	}
 	if access := probe(); access.Readable || access.Writable || access.Error == "" {
-		t.Fatalf("old member repository generation retained success: %+v", access)
+		t.Fatalf("mismatched member repository record retained success: %+v", access)
 	}
-	memberRepo.Generation--
+	memberRepo = repos[0]
 	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{memberRepo.ID: memberRepo}}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,9 +188,9 @@ func TestBackupMemberAccessProbeOfflineExpiryAndRestart(t *testing.T) {
 		t.Fatalf("member recovery: %+v", access)
 	}
 	backupMemberAccessMu.Lock()
-	access := backupMemberAccess[master]["repo-1"][member.State.HostID]
+	access := backupMemberAccess[master.dir]["repo-1"][member.State.HostID]
 	access.ObservedAt = time.Now().Add(-backupHealthFreshness - time.Second)
-	backupMemberAccess[master]["repo-1"][member.State.HostID] = access
+	backupMemberAccess[master.dir]["repo-1"][member.State.HostID] = access
 	backupMemberAccessMu.Unlock()
 	repos, err = ListPoolBackupRepositories(master)
 	if err != nil || repos[0].MemberAccess[0].Readable || repos[0].MemberAccess[0].Error != "awaiting member probe" {
@@ -198,7 +198,7 @@ func TestBackupMemberAccessProbeOfflineExpiryAndRestart(t *testing.T) {
 	}
 	backupMemberAccessMu.Lock()
 	access.ObservedAt = time.Now().Add(time.Hour)
-	backupMemberAccess[master]["repo-1"][member.State.HostID] = access
+	backupMemberAccess[master.dir]["repo-1"][member.State.HostID] = access
 	backupMemberAccessMu.Unlock()
 	repos, err = ListPoolBackupRepositories(master)
 	if err != nil || repos[0].MemberAccess[0].Readable || repos[0].MemberAccess[0].Error != "awaiting member probe" {

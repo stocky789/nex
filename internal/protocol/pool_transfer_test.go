@@ -10,8 +10,8 @@ import (
 
 func transferMembership() PoolMembership {
 	return PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 3, Members: []PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 3, Status: "ready"},
-		{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 3, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 3, Status: "ready"},
+		{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 3, Status: "ready"},
 	}}
 }
 

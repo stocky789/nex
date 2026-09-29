@@ -1194,7 +1194,7 @@ func TestAJoiningHostWithNoAddressYetDoesNotTearThePoolDown(t *testing.T) {
 		for i := range state.Membership.Members {
 			state.Membership.Members[i].Generation = state.Membership.Generation
 		}
-		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-9",
+		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-9", Hostname: "member-9",
 			CertificateSHA256: strings.Repeat("ab", 32), Generation: state.Membership.Generation, Status: "ready"})
 		err = savePoolPeer(master, state)
 	}

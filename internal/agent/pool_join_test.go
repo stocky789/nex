@@ -268,7 +268,7 @@ func TestPoolJoinInvitationBindsCSRAtRedemptionAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-1", CSRPEM: other}); err == nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-1", Hostname: "member.example.test", CSRPEM: other}); err == nil {
 		t.Fatal("bound invitation accepted a replacement key")
 	}
 }
@@ -326,7 +326,7 @@ func TestPoolJoinInvitationIsSingleUseAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: expiredOffer.Token, HostID: "member-3", CSRPEM: thirdCSR}); err == nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: expiredOffer.Token, HostID: "member-3", Hostname: "member-3.example.test", CSRPEM: thirdCSR}); err == nil {
 		t.Fatal("expired invitation was redeemed")
 	}
 }

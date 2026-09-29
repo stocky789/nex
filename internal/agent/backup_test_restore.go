@@ -32,7 +32,7 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid test-restore command", ObservedAt: observed}, nil
 	}
 	if err := ensureBackupRunReserved(store, cmd); err != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
+		return unreservedBackupResult(store, cmd, observed, err), nil
 	}
 	req := *cmd.TestRestore
 	repo, err := GetPoolBackupRepository(store, req.RepositoryID)
@@ -57,7 +57,10 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	if manifest.CapturedSpec == nil {
 		return failTestRestoreRun(store, cmd, observed, "recovery point lacks a captured VM specification; re-backup before test restore"), nil
 	}
-	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
+	localDir, err := createRestoreStaging(store, cmd.OperationID)
+	if err != nil {
+		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
+	}
 	if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 		return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 	}
@@ -90,6 +93,7 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	}, nil); err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
 	}
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
 }
 
@@ -104,6 +108,7 @@ func failTestRestoreRun(store *Store, cmd protocol.Command, observed time.Time, 
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
 	}
 	_ = clearBackupRestorePin(store, cmd.TestRestore.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
 }
 

@@ -53,16 +53,13 @@ master's reported repository, policy, run and catalog inventory without the old 
 - Restore point digest mismatch: Core checks the selected repository manifest
   against the master's catalog digest before native placement. Inspect the
   point and repository; do not replace the manifest under the same point ID.
-  For a member on an older Core build, keep the retained operation and pin,
-  upgrade the member, then reconcile the same operation through Core.
 - Pending test cleanup after promotion: Core retains the point pin and
   reconstructs only an exact pending cleanup proved by its receipt and one
   successful test run. Inspect the owner's native result and the master VM
   inventory; a missing or ambiguous proof needs attention before another
   cleanup attempt.
-- Replica admission refusal: the legacy version 0 transfer has a 64 MiB/1024-page
-  limit. The development candidate uses v2 signed pages for larger complete
-  histories, but Core can refuse new backup metadata when a required member
+- Replica admission refusal: large complete histories travel as signed pages,
+  but Core can refuse new backup metadata when a required member
   lacks the exact current verified replica or cannot be reached. Inspect the
   retained operation and member replica status before retrying; keep the
   existing master available if an exact complete replica cannot be verified.

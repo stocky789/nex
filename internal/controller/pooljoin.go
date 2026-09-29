@@ -239,9 +239,6 @@ func (c *Controller) poolJoinTargets(tx *sql.Tx, pool, host, requestedMaster str
 	if err := c.managedHost(tx, joiningPool, host); err != nil {
 		return "", "", http.StatusConflict, fmt.Errorf("the joining host must be fresh and active")
 	}
-	if !hostSupportsCapability(tx, master, protocol.PoolJoinCapability) || !hostSupportsCapability(tx, host, protocol.PoolJoinCapability) {
-		return "", "", http.StatusConflict, fmt.Errorf("adding a host to a pool needs %s on both hosts; upgrade both hosts", protocol.PoolJoinCapability)
-	}
 	// Only the master of its own single-host pool may join; Core refuses the rest again.
 	masterInventory, err := hostInventory(tx, master)
 	if err != nil {
@@ -535,9 +532,6 @@ type poolMemberView struct {
 	// is nil whenever the host is not reporting now: a stage observed an hour ago is not
 	// this host's present stage.
 	Transfer *protocol.PoolTransferStatus `json:"transfer"`
-	// TransferSupported is this host's own advertised transfer capability, so a promotion
-	// or master change whose target could not perform one is not offered at all.
-	TransferSupported bool `json:"transfer_supported"`
 	// Fence is what the master's membership records about how this host would be excluded.
 	// It is master-derived, so it is nil while the master is not fresh, and it never
 	// carries the credential reference or anything the reference names.
@@ -558,22 +552,10 @@ type poolMembersView struct {
 	MasterSeenAt  string `json:"master_seen_at"`
 	Generation    uint64 `json:"generation"`
 	Authoritative bool   `json:"authoritative"`
-	// MaintenanceSupported is the master's capability: without it there is no toggle,
-	// because the refusal that makes the flag mean anything lives in the master.
-	MaintenanceSupported bool `json:"maintenance_supported"`
-	// ReplicaSupported is the master's capability: without it no member can hold a signed
-	// authority replica at all, and every member row reports state "unsupported".
-	ReplicaSupported bool `json:"replica_supported"`
-	// TransferSupported is the master's capability: without it no master change or eject
-	// is offered at all, because the whole transfer is run by the hosts.
-	TransferSupported bool `json:"transfer_supported"`
-	// HostFencingSupported is the master's capability: without it there is no Host fencing
-	// switch, because the setting that means anything is the master's.
-	HostFencingSupported bool `json:"host_fencing_supported"`
 	// Fence is the pool's own fencing answer as the master reported it with its
 	// membership: the count, the Host fencing setting and Core's prerequisite checklist.
-	// Mirrored verbatim and stored nowhere; nil when the master is not fresh or is too old
-	// to report one, which reads as "not reported" and never as ready.
+	// Mirrored verbatim and stored nowhere; nil when the master is not fresh or has not
+	// reported its membership, which reads as "not reported" and never as ready.
 	Fence *protocol.PoolFenceSummary `json:"fence"`
 	// Authority is the master's own reported authority generation and digest: the only
 	// absolute number in the pool, and what a member's replica generation is compared
@@ -657,9 +639,6 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 		out.MasterConnection, out.MasterSeenAt = master.connection, hostSeenAt(master.seen)
 	}
 	out.Authoritative = out.MasterConnection == "fresh"
-	out.MaintenanceSupported = slices.Contains(master.capabilities, protocol.PoolMaintenanceCapability)
-	out.ReplicaSupported = slices.Contains(master.capabilities, protocol.PoolAuthorityReplicaCapability)
-	out.TransferSupported = slices.Contains(master.capabilities, protocol.PoolAuthorityTransferCapability)
 	if out.Authoritative && master.inventory.Managed != nil {
 		out.Authority, out.Transfer = master.inventory.Managed.Authority, master.inventory.Managed.Transfer
 	}
@@ -684,7 +663,6 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 		}
 	}
 	members := []protocol.PoolMember{}
-	out.HostFencingSupported = slices.Contains(master.capabilities, protocol.PoolHostFencingCapability)
 	if membership != nil {
 		out.Generation, members = membership.Generation, membership.Members
 		if out.Authoritative {
@@ -743,7 +721,6 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 		// member's own replica, checks and restriction while the master is gone, so these
 		// are deliberately outside the authoritative gate below. Everything the master
 		// observes about a member stays unknown without a fresh master.
-		view.TransferSupported = hostSupportsTransfer(host)
 		view.Restricted = memberRestricted(host)
 		if host.connection == "fresh" {
 			view.Checks = memberChecks(host.inventory)
@@ -768,7 +745,7 @@ func (c *Controller) poolMembers(w http.ResponseWriter, r *http.Request, user, c
 			view.Failures = append(view.Failures, uplinkFailures(resources, host, view.Failures)...)
 		}
 		if view.Role == "member" {
-			view.Replica = memberReplica(out.Authoritative, master, host, member, replicaPeak, authority)
+			view.Replica = memberReplica(out.Authoritative, host, member, replicaPeak, authority)
 		}
 		view.Transfer = memberTransfer(host)
 		out.Members = append(out.Members, view)
@@ -798,7 +775,7 @@ func memberChecks(inv protocol.Inventory) []poolMemberCheck {
 // the member says what it holds, the master says what it last saw acknowledged. Neither
 // number is derived, stored or reconciled here. A master or member that is not fresh makes
 // the whole row unknown — a replica that was current an hour ago is not current now.
-func memberReplica(authoritative bool, master, host hostRow, member protocol.PoolMember, peak, authority uint64) *poolMemberReplica {
+func memberReplica(authoritative bool, host hostRow, member protocol.PoolMember, peak, authority uint64) *poolMemberReplica {
 	out := poolMemberReplica{State: "unknown"}
 	if host.id == "" || host.connection != "fresh" {
 		return &out
@@ -818,8 +795,6 @@ func memberReplica(authoritative bool, master, host hostRow, member protocol.Poo
 		}
 	}
 	switch {
-	case !slices.Contains(host.capabilities, protocol.PoolAuthorityReplicaCapability) || (master.id != "" && !slices.Contains(master.capabilities, protocol.PoolAuthorityReplicaCapability)):
-		out.State = "unsupported"
 	case out.Error != "":
 		out.State = "refused"
 	case out.Generation == 0 && out.AcknowledgedGeneration == 0:
@@ -1030,13 +1005,12 @@ func (c *Controller) poolJoinCandidates(w http.ResponseWriter, r *http.Request, 
 	}
 	poolRows.Close()
 	master := hosts[masterID]
-	masterJoins := slices.Contains(master.capabilities, protocol.PoolJoinCapability)
 	out := []joinCandidate{}
 	for _, host := range hosts {
 		if host.poolID == pool || !sitePools[host.poolID] || host.revoked {
 			continue
 		}
-		out = append(out, candidatePreview(tx, host, master, masterJoins, resources))
+		out = append(out, candidatePreview(tx, host, master, resources))
 	}
 	slices.SortFunc(out, func(a, b joinCandidate) int {
 		if a.Name != b.Name {
@@ -1047,7 +1021,7 @@ func (c *Controller) poolJoinCandidates(w http.ResponseWriter, r *http.Request, 
 	write(w, http.StatusOK, map[string]any{"candidates": out})
 }
 
-func candidatePreview(tx *sql.Tx, host, master hostRow, masterJoins bool, resources []poolResource) joinCandidate {
+func candidatePreview(tx *sql.Tx, host, master hostRow, resources []poolResource) joinCandidate {
 	v := joinCandidate{HostID: host.id, Name: host.hostname, Connection: host.connection, Eligible: true, PeerPort: protocol.DefaultPoolPeerPort}
 	if host.inventory.Managed != nil {
 		if u, err := url.Parse(normalizedHTTPSOrigin(host.inventory.Managed.PeerOrigin)); err == nil && u.Host != "" {
@@ -1064,14 +1038,6 @@ func candidatePreview(tx *sql.Tx, host, master hostRow, masterJoins bool, resour
 		add("connection", host.hostname, "compatible", "reporting now")
 	} else {
 		add("connection", host.hostname, "refuses_join", "this host is "+host.connection+"; it cannot be given a join command")
-	}
-	switch {
-	case !slices.Contains(host.capabilities, protocol.PoolJoinCapability):
-		add("capability", protocol.PoolJoinCapability, "refuses_join", "this host does not support being added to a pool; upgrade both hosts")
-	case !masterJoins:
-		add("capability", protocol.PoolJoinCapability, "refuses_join", "the pool master does not support adding a host; upgrade both hosts")
-	default:
-		add("capability", protocol.PoolJoinCapability, "compatible", "both hosts support joining")
 	}
 	if host.inventory.AgentVersion == master.inventory.AgentVersion {
 		add("version", host.inventory.AgentVersion, "compatible", "same Nex Core version as the pool master")

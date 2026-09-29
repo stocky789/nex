@@ -975,8 +975,8 @@ func snapshotRevertReservationForTest(t *testing.T, record poolVMRecord, operati
 func TestPoolVMRecoveryInventoryIsMasterOnlyAndBounded(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
@@ -1102,7 +1102,7 @@ func TestRetainedSnapshotCatalogProtectsHistoricalPoolResources(t *testing.T) {
 
 func TestPoolStorageDetachIsRefusedWhileVMRecoveryUsesRepository(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1158,7 +1158,7 @@ func TestPoolStorageDetachIsRefusedWhileVMRecoveryUsesRepository(t *testing.T) {
 
 func TestPoolStorageDetachSnapshotHistoryBlocksOldRepositoryAfterCurrentDefinitionMoves(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}

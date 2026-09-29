@@ -10,7 +10,7 @@ import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { AttentionList, Badge, Meter, badgeTone, monotone, date } from "./ui";
-import { backupPage, type BackupCatalogPage, type BackupRecoveryPoint, type BackupRun, type BackupRunPage } from "./backup-types";
+import { type BackupCatalogPage, type BackupRecoveryPoint, type BackupRun, type BackupRunPage } from "./backup-types";
 import "./overview.css";
 
 export { monotone };
@@ -92,10 +92,10 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
     }
     let live = true;
     const load = () => {
-      void api<BackupRecoveryPoint[] | BackupCatalogPage>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
-        .then(response => { if (live) { setCatalog(backupPage(response).items); setCatalogPage(Array.isArray(response) ? null : response); setBackupError(false); } }, () => { if (live) { setCatalog(null); setCatalogPage(null); setBackupError(true); } });
-      void api<BackupRun[] | BackupRunPage>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
-        .then(response => { if (live) { setBackupRuns(backupPage(response).items); setRunPage(Array.isArray(response) ? null : response); } }, () => { if (live) { setBackupRuns(null); setRunPage(null); } });
+      void api<BackupCatalogPage>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
+        .then(response => { if (live) { setCatalog(response.items); setCatalogPage(response); setBackupError(false); } }, () => { if (live) { setCatalog(null); setCatalogPage(null); setBackupError(true); } });
+      void api<BackupRunPage>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
+        .then(response => { if (live) { setBackupRuns(response.items); setRunPage(response); } }, () => { if (live) { setBackupRuns(null); setRunPage(null); } });
     };
     setCatalog(null);
     setCatalogPage(null);

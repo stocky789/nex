@@ -36,11 +36,7 @@ Navigation on this page follows the development build 0.4.8 console layout; see
 
 - An administrator session in Nex Controller, and the pool's **Settings** → **Members** section
   open.
-- The pool master **connected and fresh**, and advertising the `pool-maintenance-v1` capability.
-  If it does not, the row's **Details** → **Maintenance** entry shows *Maintenance mode needs
-  pool-maintenance-v1 on the pool master;
-  upgrade the pool master* and no control is offered — the refusal that makes the flag mean
-  anything lives in the master, so Controller will not pretend to set it.
+- The pool master **connected and fresh**.
 - The host must be a member of that pool as the master reports it, and not ejected.
 - The host being drained does **not** need to be reachable. Entering and leaving maintenance never
   contacts it.
@@ -120,8 +116,6 @@ as old as the last successful push while it is not.
 
 - **The Maintenance check shows *Unknown* and the menu item is disabled.** The pool master is not fresh.
   Reconnect the master; nothing about the flag can be read or changed while it is quiet.
-- **No menu item, with an upgrade message under Details.** The pool master does not advertise
-  `pool-maintenance-v1`. Upgrade the master.
 - **"The pool master reports membership generation *n*; reload the pool and retry."** The
   membership changed after the page was loaded. Select **Refresh** in the **Members** section and
   try again.

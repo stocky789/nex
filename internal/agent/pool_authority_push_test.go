@@ -35,38 +35,23 @@ func TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("authority push did not reach generation advance")
 	}
-	writerStarted := make(chan struct{})
-	writerDone := make(chan error, 1)
-	go func() {
-		close(writerStarted)
-		poolBackupAuthorityMu.Lock()
-		defer poolBackupAuthorityMu.Unlock()
-		writerDone <- savePoolBackupMetadataReceipt(s, protocol.BackupMetadataReceipt{
-			OperationID: "receipt-after-snapshot", Kind: "backup-policy-upsert",
-			IntentSHA256: fmt.Sprintf("%064x", 1), Status: "succeeded", ObservedAt: time.Now().UTC(),
-		})
-	}()
-	<-writerStarted
-	earlyCommit := false
-	select {
-	case err := <-writerDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-		earlyCommit = true
-	case <-time.After(100 * time.Millisecond):
+	// The push must hold the backup authority lock until the snapshot is numbered.
+	if poolBackupAuthorityMu.TryLock() {
+		poolBackupAuthorityMu.Unlock()
+		t.Fatal("backup metadata could commit before snapshot generation")
 	}
 	unpause()
 	if err := <-pushDone; err != nil {
 		t.Fatal(err)
 	}
-	if !earlyCommit {
-		if err := <-writerDone; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if earlyCommit {
-		t.Fatal("backup metadata committed before snapshot generation")
+	poolBackupAuthorityMu.Lock()
+	err := savePoolBackupMetadataReceipt(s, protocol.BackupMetadataReceipt{
+		OperationID: "receipt-after-snapshot", Kind: "backup-policy-upsert",
+		IntentSHA256: fmt.Sprintf("%064x", 1), Status: "succeeded", ObservedAt: time.Now().UTC(),
+	})
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
 	}
 	_, numberedDigest, err := PoolAuthorityGeneration(s)
 	if err != nil || numberedDigest != snapshotDigest {

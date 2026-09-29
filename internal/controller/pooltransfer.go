@@ -246,9 +246,6 @@ func (c *Controller) poolTransferTarget(tx *sql.Tx, pool, host, action string, e
 		return "", http.StatusInternalServerError, fmt.Errorf("inventory unavailable")
 	}
 	membership := reportedMembership(inv)
-	if missing, reason := c.poolTransferCapability(tx, pool, master, host, action, membership); missing != "" {
-		return "", http.StatusConflict, fmt.Errorf("%s", reason)
-	}
 	if membership == nil {
 		return "", http.StatusConflict, fmt.Errorf("the pool master has not reported its membership; %s", poolTransferUnreported(action))
 	}
@@ -301,41 +298,6 @@ func poolTransferUnreported(action string) string {
 		return "a master change cannot be cancelled yet"
 	}
 	return "a master change cannot be started yet"
-}
-
-// poolTransferCapability applies Core's version gate: the master, the target of a master
-// change and every ready member must support the transfer, because a member that cannot
-// re-point would keep following a host that is no longer the pool master. A member that is
-// not fresh is not gated on: its capability list is a memory like anything else, and Core
-// checks every participant again.
-func (c *Controller) poolTransferCapability(tx *sql.Tx, pool, master, host, action string, membership *protocol.PoolMembership) (string, string) {
-	missing := ""
-	switch {
-	case !hostSupportsCapability(tx, master, protocol.PoolAuthorityTransferCapability):
-		missing = master
-	case action == "master-change" && host != master && !hostSupportsCapability(tx, host, protocol.PoolAuthorityTransferCapability):
-		missing = host
-	case action != "transfer-cancel" && membership != nil:
-		for _, member := range membership.Members {
-			if member.Status != "ready" || member.HostID == master {
-				continue
-			}
-			if !hostSupportsCapability(tx, member.HostID, protocol.PoolAuthorityTransferCapability) && c.managedHost(tx, pool, member.HostID) == nil {
-				missing = member.HostID
-				break
-			}
-		}
-	}
-	if missing == "" {
-		return "", ""
-	}
-	if action == "eject" {
-		return missing, fmt.Sprintf("ejecting a member needs %s on the pool master and every ready member; upgrade %s", protocol.PoolAuthorityTransferCapability, missing)
-	}
-	if action == "transfer-cancel" {
-		return missing, fmt.Sprintf("cancelling a master change needs %s on the pool master; upgrade %s", protocol.PoolAuthorityTransferCapability, missing)
-	}
-	return missing, fmt.Sprintf("changing the pool master needs %s on the pool master, the selected host and every ready member; upgrade %s", protocol.PoolAuthorityTransferCapability, missing)
 }
 
 // poolTransferOperation is the newest pool-transfer command this Controller holds for a

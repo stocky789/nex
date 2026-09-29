@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,7 @@ func TestPhase6BackupHermeticCIRegression(t *testing.T) {
 	if _, _, err := vmhost.ReadBackupManifest(badDir); err == nil {
 		t.Fatal("corrupt manifest must be refused")
 	}
-	imported, err := ImportPoolBackupCatalog(s, "repo-1")
+	imported, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestPhase6BackupHermeticCIRegression(t *testing.T) {
 	if result.Status != "failed" || result.Error == "" {
 		t.Fatalf("want failed pre-effect placement refusal, got %#v", result)
 	}
-	if _, statErr := os.Stat(filepath.Join(s.dir, "backup-restore", "restore-ci-live")); statErr != nil {
-		t.Fatalf("restore must stage local copies before registration failure: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(s.dir, "backup-restore", "restore-ci-live")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("a failed restore must remove its local copies: %v", statErr)
 	}
 }

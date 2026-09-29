@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -62,7 +63,7 @@ func seedPublishedPoint(t *testing.T, mount, repoID, poolID, pointID string, sou
 
 func replaceCatalogedPointWithValidManifest(t *testing.T, s *Store, repo protocol.BackupRepository, pointID string) {
 	t.Helper()
-	if _, err := ImportPoolBackupCatalog(s, repo.ID); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, repo.ID); err != nil {
 		t.Fatal(err)
 	}
 	pointDir := filepath.Join(repo.MountPath, pointID)
@@ -78,14 +79,14 @@ func replaceCatalogedPointWithValidManifest(t *testing.T, s *Store, repo protoco
 	if err := vmhost.AtomicWrite(filepath.Join(pointDir, "manifest.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := validatedBackupManifest(context.Background(), repo, pointID); err != nil {
+	if _, _, err := (filesystemBackupStorage{repo: repo}).StatPoint(context.Background(), pointID); err != nil {
 		t.Fatalf("replacement manifest must remain fully valid: %v", err)
 	}
 }
 
 func importTestBackupCatalog(t *testing.T, s *Store) {
 	t.Helper()
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -138,7 +139,7 @@ func TestRestoreManifestMustMatchMasterCatalogDigest(t *testing.T) {
 	}
 }
 
-func TestLegacyUnboundRestoreRunRetainsAttentionAndPin(t *testing.T) {
+func TestRestoreRunWithoutManifestBindingRetainsAttentionAndPin(t *testing.T) {
 	s := seedBackupMaster(t)
 	mount := t.TempDir()
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-1")
@@ -149,7 +150,7 @@ func TestLegacyUnboundRestoreRunRetainsAttentionAndPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	importTestBackupCatalog(t, s)
-	cmd := protocol.Command{OperationID: "legacy-restore", Kind: protocol.BackupKindRestoreNew,
+	cmd := protocol.Command{OperationID: "unbound-restore", Kind: protocol.BackupKindRestoreNew,
 		Restore: &protocol.RestoreAsNewRequest{RepositoryID: "repo-1", RecoveryPointID: "point-1",
 			NewVMID: "22222222-2222-4222-8222-222222222222", NewVMName: "Restored", StorageID: "storage-1", HostID: s.State.HostID}}
 	intent, err := backupIntentSHA256(cmd)
@@ -162,22 +163,29 @@ func TestLegacyUnboundRestoreRunRetainsAttentionAndPin(t *testing.T) {
 	if err := reserveRestoreRunWithPin(s, run, protocol.BackupPinKindNew); err != nil {
 		t.Fatal(err)
 	}
-	run.Status, run.Stage, run.Error = "needs_attention", "placement", "legacy native outcome is uncertain"
+	run.Status, run.Stage, run.Error = "needs_attention", "placement", "native outcome is uncertain"
 	if err := SettlePoolBackupRun(s, run, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The retained native journal is what makes the outcome uncertain.
+	if err := os.MkdirAll(filepath.Join(s.dir, "managed-vms"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "managed-vms", cmd.OperationID+".json"), []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if result, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, cmd); err != nil ||
 		result.Status != "needs_attention" || result.Error != ErrBackupConflict.Error() {
-		t.Fatalf("legacy unbound run resumed: %+v err=%v", result, err)
+		t.Fatalf("unbound run resumed: %+v err=%v", result, err)
 	}
 	if result, err := executeRestoreAsNew(context.Background(), s, cmd, time.Now().UTC()); err != nil || result.Status != "needs_attention" {
-		t.Fatalf("legacy unbound run reexecuted: %+v err=%v", result, err)
+		t.Fatalf("unbound run reexecuted: %+v err=%v", result, err)
 	}
 	if pins, err := ActiveBackupRestorePins(s); err != nil || !pins["point-1"] {
-		t.Fatalf("legacy uncertainty lost its point pin: %+v err=%v", pins, err)
+		t.Fatalf("unbound uncertainty lost its point pin: %+v err=%v", pins, err)
 	}
 	if _, err := os.Stat(filepath.Join(s.dir, "backup-restore", cmd.OperationID)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy unbound run copied artifacts: %v", err)
+		t.Fatalf("unbound run copied artifacts: %v", err)
 	}
 }
 
@@ -200,15 +208,16 @@ func TestBackupRetentionRemovesPayloadAfterPublicationAndHonorsPin(t *testing.T)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-a")
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-b")
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
+	tagCatalogPolicy(t, s, "repo-1", "policy-1", "point-a", "point-b")
 	if err := putBackupRestorePin(s, protocol.BackupRestorePin{
 		RecoveryPointID: "point-a", OperationID: "restore-a", Kind: protocol.BackupPinKindNew, CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := prunePublishedBackupPayloads(s, "repo-1", "vm-1", protocol.BackupRetention{KeepLatest: 0}); err != nil {
+	if err := prunePublishedBackupPayloads(context.Background(), s, "repo-1", "vm-1", "policy-1", protocol.BackupRetention{KeepLatest: 0}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(mount, "point-a")); err != nil {
@@ -660,19 +669,19 @@ func TestDistinctRestoreTargetsSharePointPinsAndSameTargetConflicts(t *testing.T
 	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &changed}); !errors.Is(response.Err, ErrBackupConflict) {
 		t.Fatalf("changed intent reused retained restore operation: %+v", response)
 	}
-	legacy := protocol.BackupRestorePin{RecoveryPointID: "point-1", OperationID: first.OperationID,
+	pin := protocol.BackupRestorePin{RecoveryPointID: "point-1", OperationID: first.OperationID,
 		Kind: protocol.BackupPinKindNew, CreatedAt: time.Now().UTC()}
-	if err := savePoolBackupPins(s, poolBackupPinsState{Pins: map[string]protocol.BackupRestorePin{"point-1": legacy}}); err != nil {
+	if err := savePoolBackupPins(s, poolBackupPinsState{Pins: map[string]protocol.BackupRestorePin{first.OperationID: pin}}); err != nil {
 		t.Fatal(err)
 	}
 	second := makeRestore("restore-second", "33333333-3333-4333-8333-333333333333")
 	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &second}); response.Err != nil {
-		t.Fatalf("distinct target blocked by older recovery-point pin: %+v", response)
+		t.Fatalf("distinct target blocked by another restore pin: %+v", response)
 	}
 	state, err := loadPoolBackupPins(s)
 	if err != nil || len(state.Pins) != 2 || state.Pins[first.OperationID].OperationID != first.OperationID ||
 		state.Pins[second.OperationID].OperationID != second.OperationID {
-		t.Fatalf("legacy and new restore pins not retained separately: %+v %v", state, err)
+		t.Fatalf("restore pins not retained separately: %+v %v", state, err)
 	}
 	conflict := makeRestore("restore-same-target", first.Restore.NewVMID)
 	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &conflict}); !errors.Is(response.Err, ErrBackupConflict) {
@@ -843,7 +852,7 @@ func TestBackupRestoreRefusesManifestPointAlias(t *testing.T) {
 	if err := os.Symlink(filepath.Join(mount, "point-real"), filepath.Join(mount, "point-alias")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := validatedBackupManifest(context.Background(), repo, "point-alias"); err == nil {
+	if _, _, err := (filesystemBackupStorage{repo: repo}).StatPoint(context.Background(), "point-alias"); err == nil {
 		t.Fatalf("alias must not select a different recovery point: %v", err)
 	}
 }
@@ -1113,7 +1122,7 @@ func TestRestoreReplaceRefusesChangedValidCatalogManifestBeforeCopy(t *testing.T
 	}
 	vmID := "11111111-1111-4111-8111-111111111111"
 	seedPublishedPoint(t, mount, repo.ID, s.State.PoolID, "point-1", vmID)
-	if _, err := ImportPoolBackupCatalog(s, repo.ID); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, repo.ID); err != nil {
 		t.Fatal(err)
 	}
 	vm := poolVMTestSpec(vmID, "host-a")
@@ -1140,6 +1149,10 @@ func TestRestoreReplaceRefusesChangedValidCatalogManifestBeforeCopy(t *testing.T
 	}
 	run.Status, run.Stage, run.Error = "needs_attention", "cutover-ready", "retained cutover requires observation"
 	if err := SettlePoolBackupRun(s, run, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRetainedOriginal(s, retainedOriginalRecord{OperationID: cmd.OperationID, OriginalVMID: vmID,
+		RecoveryPointID: "point-1", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
 	if observed, err := reconcileRestoreReplaceAttention(context.Background(), s.dir, s.State, cmd); err != nil ||
@@ -1305,7 +1318,7 @@ func TestProtectBlocksPruneAndSurvivesRebuild(t *testing.T) {
 	// Clear catalog files and rebuild from manifests; protect marker + pin must remain.
 	_ = os.Remove(filepath.Join(poolBackupCatalogPath(s), "point-old.json"))
 	_ = os.Remove(filepath.Join(poolBackupCatalogPath(s), "point-new.json"))
-	imported, err := RebuildPoolBackupCatalogFromRepository(s, "repo-1")
+	imported, err := RebuildPoolBackupCatalogFromRepository(context.Background(), s, "repo-1")
 	if err != nil || len(imported) < 2 {
 		t.Fatalf("rebuild: %#v err=%v", imported, err)
 	}
@@ -1339,7 +1352,7 @@ func TestCatalogRebuildImportsValidatedManifestsOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(badDir, "manifest.json"), []byte(`{"version":1,"complete":false}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	imported, err := ImportPoolBackupCatalog(s, "repo-1")
+	imported, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1463,6 +1476,20 @@ func TestCatalogRebuildReceiptReconcilesStaleJournalAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	// Only the writable pool authority may settle a journal from its receipt.
+	transfer := &poolTransferRecord{OperationID: "freeze-journal", Action: "promote", Role: "source",
+		Stage: "freeze", Status: "pending", TargetHostID: "member-1", Frozen: true}
+	if err := savePoolTransfer(reopened, transfer); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); err == nil ||
+		reopened.State.Journal[cmd.OperationID].Status != "needs_attention" {
+		t.Fatalf("frozen authority settled journal: %+v %v", reopened.State.Journal[cmd.OperationID], err)
+	}
+	transfer.Stage, transfer.Status, transfer.Frozen = "aborted", "failed", false
+	if err := savePoolTransfer(reopened, transfer); err != nil {
+		t.Fatal(err)
+	}
 	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); err != nil {
 		t.Fatal(err)
 	}
@@ -1484,6 +1511,64 @@ func TestCatalogRebuildReceiptReconcilesStaleJournalAfterRestart(t *testing.T) {
 	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); !errors.Is(err, ErrBackupConflict) ||
 		reopened.State.Journal[cmd.OperationID].Status != "needs_attention" {
 		t.Fatalf("mismatched intent settled: %+v %v", reopened.State.Journal[cmd.OperationID], err)
+	}
+}
+
+// A receipt settled outside the Run loop, such as by a worker that lost its
+// reply, reaches the Controller-visible journal on a later backup tick.
+func TestRunLoopSettlesCatalogJournalFromLaterReceipt(t *testing.T) {
+	s := seedBackupMaster(t)
+	cmd := protocol.Command{OperationID: "rebuild-run-loop", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+		t.Fatalf("reserve: %+v", response)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "needs_attention", Error: "scan reply lost", Command: &cmd}
+	_, identity := testManagedIdentity(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.ReportResponse{})
+	}))
+	s.State.Controller, s.State.TrustPEM = identity.Controller, identity.TrustPEM
+	s.State.CertificatePEM, s.State.KeyPEM = identity.CertificatePEM, identity.KeyPEM
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	worker := &Store{dir: s.dir, State: copyState(s.State)}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, s, RunConfig{Heartbeat: time.Hour, ProbeInterval: 100 * time.Millisecond, ProbeTimeout: 20 * time.Millisecond})
+	}()
+	// Any answered request proves Run finished its startup reconciliation.
+	runLoopPeerRequest(t, ctx, s, done, BackupRequest{})
+	receipt.Status, receipt.ObservedAt = "succeeded", time.Now().UTC()
+	poolBackupAuthorityMu.Lock()
+	err = savePoolBackupMetadataReceipt(worker, receipt)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
+		var observed State
+		if err == nil && json.Unmarshal(raw, &observed) == nil && observed.Journal[cmd.OperationID].Status == "succeeded" {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Core Run stopped before journal settlement: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("Core Run left the catalog journal needing attention after its receipt settled")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Core Run stopped with error: %v", err)
 	}
 }
 
@@ -1533,23 +1618,18 @@ func TestCatalogRebuildReceiptAdmissionRefusalIsNotPersistenceError(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer := peerState(t, s)
-	peer.Membership.Generation++
-	peer.Membership.Members = append(peer.Membership.Members, protocol.PoolMember{
-		HostID: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready",
-	})
-	if err := savePoolPeer(s, peer); err != nil {
+	// Settlement is never gated on member replicas; a frozen authority is the
+	// admission refusal left for it.
+	if err := savePoolTransfer(s, &poolTransferRecord{OperationID: "freeze-receipt", Action: "promote", Role: "source",
+		Stage: "freeze", Status: "pending", TargetHostID: "member-1", Frozen: true}); err != nil {
 		t.Fatal(err)
 	}
-	previous := poolBackupBundleLimit
-	poolBackupBundleLimit = 1
-	t.Cleanup(func() { poolBackupBundleLimit = previous })
 	got := settleBackupMetadataResponse(s, cmd, receipt, BackupResponse{Result: &protocol.Result{
 		OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC(),
 	}})
 	var persistence persistenceError
 	if got.Err == nil || errors.As(got.Err, &persistence) {
-		t.Fatalf("replica admission refusal was classified as storage failure: %+v", got)
+		t.Fatalf("authority admission refusal was classified as storage failure: %+v", got)
 	}
 	stored, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
 	if err != nil || stored.Status != "pending" {
@@ -1610,7 +1690,7 @@ func TestCatalogRebuildRetainsProtectedAndPinnedMissingPoints(t *testing.T) {
 	for _, id := range []string{"point-protected", "point-pinned", "point-unprotected"} {
 		seedPublishedPoint(t, mount, "repo-1", "pool-1", id)
 	}
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	protected, err := getCatalogPoint(s, "repo-1", "point-protected")
@@ -1632,7 +1712,7 @@ func TestCatalogRebuildRetainsProtectedAndPinnedMissingPoints(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := RebuildPoolBackupCatalogFromRepository(s, "repo-1"); err != nil {
+	if _, err := RebuildPoolBackupCatalogFromRepository(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"point-protected", "point-pinned"} {
@@ -1666,7 +1746,7 @@ func TestCatalogImportReportsProtectMarkerFailure(t *testing.T) {
 	previous := writeImportedBackupProtectMarker
 	writeImportedBackupProtectMarker = func(string, bool) error { return errors.New("marker write failed") }
 	t.Cleanup(func() { writeImportedBackupProtectMarker = previous })
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err == nil || err.Error() != "marker write failed" {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err == nil || err.Error() != "marker write failed" {
 		t.Fatalf("marker failure was hidden: %v", err)
 	}
 }
@@ -1681,7 +1761,7 @@ func TestCatalogRebuildCorruptPointBlocksStaleDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-stale")
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(mount, "point-stale")); err != nil {
@@ -1690,7 +1770,7 @@ func TestCatalogRebuildCorruptPointBlocksStaleDeletion(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(mount, "point-corrupt"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RebuildPoolBackupCatalogFromRepository(s, "repo-1"); err == nil {
+	if _, err := RebuildPoolBackupCatalogFromRepository(context.Background(), s, "repo-1"); err == nil {
 		t.Fatal("corrupt point was silently skipped during stale deletion")
 	}
 	if _, err := getCatalogPoint(s, "repo-1", "point-stale"); err != nil {
@@ -1711,7 +1791,7 @@ func TestCatalogImportReportsPinDurabilityFailure(t *testing.T) {
 	if err := os.WriteFile(poolBackupPinsPath(s), []byte("invalid pins"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err == nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err == nil {
 		t.Fatal("pin durability failure was hidden")
 	}
 	if _, err := getCatalogPoint(s, "repo-1", "point-1"); !errors.Is(err, ErrBackupNotFound) {

@@ -35,7 +35,7 @@ func testPeerS3RepositoryWithFake(t *testing.T, master *Store) (protocol.BackupR
 	}
 	t.Cleanup(func() { newBackupS3Client = previous })
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}, Generation: 1}
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}}
 	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-s3", "register-s3", "private-example-secret")
 	prepared, err := prepareS3BackupRepository(context.Background(), master, repo,
 		protocol.StorageCredentials{Username: "example-key", Secret: "private-example-secret"})
@@ -45,7 +45,7 @@ func testPeerS3RepositoryWithFake(t *testing.T, master *Store) (protocol.BackupR
 	return prepared, fake
 }
 
-func TestPeerS3PreflightRequiresPrivateReceiptExactIdentityAndGeneration(t *testing.T) {
+func TestPeerS3PreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := testPeerS3Repository(t, master)
@@ -79,14 +79,6 @@ func TestPeerS3PreflightRequiresPrivateReceiptExactIdentityAndGeneration(t *test
 		if _, err := preparePeerS3Repository(context.Background(), member, changed); !errors.Is(err, ErrBackupConflict) {
 			t.Fatalf("changed identity or receipt accepted: %v", err)
 		}
-	}
-	stale := repo
-	stale.Generation++
-	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: stale}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := preparePeerS3Repository(context.Background(), member, repo); !errors.Is(err, ErrBackupConflict) {
-		t.Fatalf("stale generation accepted: %v", err)
 	}
 }
 
@@ -158,7 +150,7 @@ func TestPeerS3CapabilityRejectsChangedResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(peerS3CapabilityResponse{Generation: repo.Generation, CredentialRef: repo.CredentialRef, Fingerprint: strings.Repeat("c", 64)})
+		_ = json.NewEncoder(w).Encode(peerS3CapabilityResponse{CredentialRef: repo.CredentialRef, Fingerprint: strings.Repeat("c", 64)})
 	}))
 	defer server.Close()
 	work := pendingPeerBackup{store: master, repo: repo, localRepo: repo,
@@ -179,15 +171,15 @@ func TestPeerS3RestoreVerificationTimeoutCanRetry(t *testing.T) {
 	if err := savePoolBackupRepositories(master, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
 	work := pendingPeerBackup{store: master, localRepo: repo,
 		command: protocol.Command{Kind: protocol.BackupKindRestoreNew},
 		run:     protocol.BackupRun{RecoveryPointID: "point-1"},
 		point:   &protocol.BackupRecoveryPoint{ManifestSHA256: strings.Repeat("a", 64)}}
 	err := verifyPeerBackupPoint(ctx, work, poolBackupPeerResponse{Result: protocol.Result{Status: "succeeded"}})
 	var permanent permanentPeerBackupError
-	if !errors.Is(err, context.Canceled) || errors.As(err, &permanent) {
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &permanent) {
 		t.Fatalf("temporary S3 verification failure cannot be permanent: %v", err)
 	}
 }
@@ -273,11 +265,12 @@ func TestS3PruneResumesInterruptedManifestDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalogS3Point(t, storage, manifest)
+	tagCatalogPolicy(t, master, repo.ID, "policy-1", manifest.RecoveryPointID)
 	fake.mu.Lock()
 	fake.failManifestDelete = true
 	fake.mu.Unlock()
 	retention := protocol.BackupRetention{KeepLatest: 0}
-	if err := prunePublishedBackupPayloads(master, repo.ID, manifest.SourceVMID, retention); err == nil {
+	if err := prunePublishedBackupPayloads(context.Background(), master, repo.ID, manifest.SourceVMID, "policy-1", retention, ""); err == nil {
 		t.Fatal("lost manifest delete reply reported successful prune")
 	}
 	if _, err := getCatalogPoint(master, repo.ID, manifest.RecoveryPointID); err != nil {
@@ -290,7 +283,7 @@ func TestS3PruneResumesInterruptedManifestDeletion(t *testing.T) {
 	if !tombstone {
 		t.Fatal("interrupted prune lost durable S3 deletion record")
 	}
-	if err := prunePublishedBackupPayloads(master, repo.ID, manifest.SourceVMID, retention); err != nil {
+	if err := prunePublishedBackupPayloads(context.Background(), master, repo.ID, manifest.SourceVMID, "policy-1", retention, ""); err != nil {
 		t.Fatalf("S3 prune resume: %v", err)
 	}
 	if _, err := getCatalogPoint(master, repo.ID, manifest.RecoveryPointID); !errors.Is(err, ErrBackupNotFound) {

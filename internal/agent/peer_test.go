@@ -139,7 +139,7 @@ func TestEjectedMemberCanRejoinWithANewCertificate(t *testing.T) {
 		for i := range state.Membership.Members {
 			state.Membership.Members[i].Generation = state.Membership.Generation
 		}
-		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: state.Membership.Generation, Status: "ejected"})
+		state.Membership.Members = append(state.Membership.Members, protocol.PoolMember{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: state.Membership.Generation, Status: "ejected"})
 		err = savePoolPeer(master, state)
 	}
 	poolPeerMu.Unlock()

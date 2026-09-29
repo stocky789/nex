@@ -35,11 +35,6 @@ func TestOversizedBackupHistoryPagesAndMutation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	legacy, _ := json.Marshal(protocol.ReportRequest{Version: protocol.Version, Sequence: 1,
-		Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{BackupRuns: all, BackupRunsReported: true}}})
-	if len(legacy) <= 16<<20 {
-		t.Fatalf("fixture is only %d bytes", len(legacy))
-	}
 	handler := statsChannelHandler(http.NotFoundHandler(), s)
 	var generation, cursor string
 	seen := map[string]bool{}
@@ -80,15 +75,27 @@ func TestOversizedBackupHistoryPagesAndMutation(t *testing.T) {
 	if len(seen) != len(all) {
 		t.Fatalf("only %d/%d runs traversed", len(seen), len(all))
 	}
-	all[0].Error = "changed"
+	// A settlement anywhere in the pool must not restart a walk.
+	all[0].Error, all[0].Status, all[0].UpdatedAt = "changed", "needs_attention", time.Now().UTC()
 	b, _ := json.Marshal(all[0])
 	if err := os.WriteFile(filepath.Join(poolBackupRunsPath(s), all[0].OperationID+".json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest("GET", "/backup-runs?cursor=1&generation="+generation, nil))
+	if w.Code != 200 {
+		t.Fatalf("settled run restarted the history walk: status=%d", w.Code)
+	}
+	added := all[0]
+	added.OperationID = "run-added"
+	b, _ = json.Marshal(added)
+	if err := os.WriteFile(filepath.Join(poolBackupRunsPath(s), added.OperationID+".json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/backup-runs?cursor=1&generation="+generation, nil))
 	if w.Code != 409 {
-		t.Fatalf("changed history page status=%d: %s", w.Code, w.Body.String())
+		t.Fatalf("added run page status=%d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -126,9 +133,18 @@ func TestBackupCatalogPageFiltersAndMutation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(poolBackupCatalogPath(s), points[0].ID+".json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
+	next := "/backup-catalog?vm_id=vm-1&search=guest&cursor=" + page.NextCursor + "&generation=" + page.Generation
 	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest("GET", "/backup-catalog?cursor="+page.NextCursor+"&generation="+page.Generation, nil))
+	handler.ServeHTTP(w, httptest.NewRequest("GET", next, nil))
+	if w.Code != 200 {
+		t.Fatalf("protection change restarted the catalog walk: status=%d", w.Code)
+	}
+	if err := os.Remove(filepath.Join(poolBackupCatalogPath(s), points[1].ID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", next, nil))
 	if w.Code != 409 {
-		t.Fatalf("changed catalog page status=%d: %s", w.Code, w.Body.String())
+		t.Fatalf("removed point page status=%d: %s", w.Code, w.Body.String())
 	}
 }

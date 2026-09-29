@@ -16,7 +16,9 @@ import (
 	"nex.local/nex/internal/vmhost"
 )
 
-func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
+// A repository that refuses writes must not hold a published backup's
+// settlement; Core then completes the journal it missed without a Controller.
+func TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal(t *testing.T) {
 	s := seedBackupMaster(t)
 	mount := t.TempDir()
 	setTestPromotionBackupMount(t, mount)
@@ -62,8 +64,8 @@ func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
 	previousWrite := verifyBackupRepository
 	verifyBackupRepository = func(context.Context, protocol.BackupRepository) error { return errors.New("repository refuses writes") }
 	t.Cleanup(func() { verifyBackupRepository = previousWrite })
-	if err := SettlePoolBackupRun(s, run, &point); err == nil {
-		t.Fatal("retention denial settled the run")
+	if err := SettlePoolBackupRun(s, run, &point); err != nil {
+		t.Fatal("write denial blocked settlement:", err)
 	}
 	canceled, cancelSettlement := context.WithCancel(context.Background())
 	cancelSettlement()
@@ -75,8 +77,8 @@ func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
 	}, background: true}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd}); replay.Err != nil || replay.Result == nil || replay.Result.Status != "needs_attention" {
-		t.Fatalf("denied prune must remain unsettled: %+v", replay)
+	if replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd}); replay.Err != nil || replay.Result == nil || replay.Result.Status != "succeeded" {
+		t.Fatalf("settled run-now replay: %+v", replay)
 	}
 	verifyBackupRepository = previousWrite
 	entry := s.State.Journal[cmd.OperationID]
@@ -91,44 +93,9 @@ func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, s, RunConfig{Heartbeat: 100 * time.Millisecond, ProbeInterval: 100 * time.Millisecond, ProbeTimeout: 20 * time.Millisecond})
-	}()
-	for {
-		run, err := loadPoolBackupRun(s, cmd.OperationID)
-		if err == nil && run.Status == "succeeded" {
-			break
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("Core Run stopped before retry settlement: %v", err)
-		case <-time.After(20 * time.Millisecond):
-		case <-ctx.Done():
-			t.Fatal("Core Run did not reconcile the published policy backup")
-		}
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Core Run stopped with error: %v", err)
-	}
-	replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
-	if replay.Err != nil || replay.Result == nil || replay.Result.Status != "succeeded" {
-		t.Fatalf("settled policy run did not survive exact replay: %+v", replay)
-	}
-	if run, err := loadPoolBackupRun(s, cmd.OperationID); err != nil || run.Status != "succeeded" {
-		t.Fatalf("retained run: %+v, %v", run, err)
-	}
-	if receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID); err != nil || receipt.Status != "succeeded" {
-		t.Fatalf("retained receipt: %+v, %v", receipt, err)
-	}
-	if points, err := loadPoolBackupCatalog(s); err != nil || len(points) != 1 || points[0].ID != cmd.OperationID {
-		t.Fatalf("catalog changed on exact retry: %+v, %v", points, err)
-	}
 	runUntil := func(operationID string) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		done := make(chan error, 1)
 		go func() {
 			done <- Run(ctx, s, RunConfig{Heartbeat: 100 * time.Millisecond, ProbeInterval: 100 * time.Millisecond, ProbeTimeout: 20 * time.Millisecond})
@@ -152,6 +119,20 @@ func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatalf("Core Run stopped with error: %v", err)
 		}
+	}
+	runUntil(cmd.OperationID)
+	replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
+	if replay.Err != nil || replay.Result == nil || replay.Result.Status != "succeeded" {
+		t.Fatalf("settled policy run did not survive exact replay: %+v", replay)
+	}
+	if run, err := loadPoolBackupRun(s, cmd.OperationID); err != nil || run.Status != "succeeded" {
+		t.Fatalf("retained run: %+v, %v", run, err)
+	}
+	if receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID); err != nil || receipt.Status != "succeeded" {
+		t.Fatalf("retained receipt: %+v, %v", receipt, err)
+	}
+	if points, err := loadPoolBackupCatalog(s); err != nil || len(points) != 1 || points[0].ID != cmd.OperationID {
+		t.Fatalf("catalog changed on exact retry: %+v, %v", points, err)
 	}
 	entry = s.State.Journal[cmd.OperationID]
 	entry.Status = "needs_attention" // Crash after durable run/receipt, before journal completion.
@@ -188,8 +169,8 @@ func TestPolicyRunNowResumesPublishedRetentionAfterWriteRecovery(t *testing.T) {
 		PoolID: scheduled.PoolID, SourceVMID: scheduled.VMID, CapturedAt: manifest.CapturedAt,
 		Consistency: manifest.Consistency, ManifestSHA256: digest}
 	verifyBackupRepository = func(context.Context, protocol.BackupRepository) error { return errors.New("repository refuses writes") }
-	if err := SettlePoolBackupRun(s, scheduled, &point); err == nil {
-		t.Fatal("scheduled retention denial settled the run")
+	if err := SettlePoolBackupRun(s, scheduled, &point); err != nil {
+		t.Fatal("scheduled write denial blocked settlement:", err)
 	}
 	if err := completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
 		OperationID: scheduled.OperationID, Status: "needs_attention", ObservedAt: time.Now().UTC(),
@@ -250,9 +231,20 @@ func TestPolicyRunNowAcknowledgesReservedRun(t *testing.T) {
 		t.Fatalf("settled receipt: %+v, %v", receipt, err)
 	}
 
-	// A crash between run settlement and receipt update leaves the old receipt pending.
-	receipt.Status, receipt.ObservedAt = "pending", response.Result.ObservedAt
-	if err := savePoolBackupMetadataReceipt(s, receipt); err != nil {
+	// A crash between run settlement and receipt update leaves the old receipt
+	// pending; a repeated settlement or an exact replay settles it.
+	pendingReceipt := receipt
+	pendingReceipt.Status, pendingReceipt.ObservedAt = "pending", response.Result.ObservedAt
+	if err := savePoolBackupMetadataReceipt(s, pendingReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := SettlePoolBackupRun(s, run, &point); err != nil {
+		t.Fatal(err)
+	}
+	if receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID); err != nil || receipt.Status != "succeeded" {
+		t.Fatalf("repeated settlement left receipt: %+v, %v", receipt, err)
+	}
+	if err := savePoolBackupMetadataReceipt(s, pendingReceipt); err != nil {
 		t.Fatal(err)
 	}
 	replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
@@ -392,13 +384,11 @@ func TestControllerPolicyRunNowMemberUsesOneDispatcher(t *testing.T) {
 	if run.HostID != member.State.HostID {
 		t.Fatalf("member policy run reserved for %q, want %q", run.HostID, member.State.HostID)
 	}
-	// An older pending reservation may lack HostID; metadata replay binds it before dispatch.
-	run.HostID = ""
 	if _, err := ReservePoolBackupRun(master, run); err != nil {
 		t.Fatal(err)
 	}
-	if _, ready, err := nextPendingPeerBackup(master); err != nil || ready {
-		t.Fatalf("scheduler dispatched before Controller journal recovery: ready=%v err=%v", ready, err)
+	if _, ready := nextPendingPeerBackup(master, peerBackoff{}, time.Now()); ready {
+		t.Fatal("scheduler dispatched before Controller journal recovery")
 	}
 	response := acceptBackupRequest(context.Background(), master, BackupRequest{Command: &cmd})
 	if response.Err != nil || response.Result == nil {
@@ -408,8 +398,8 @@ func TestControllerPolicyRunNowMemberUsesOneDispatcher(t *testing.T) {
 	if err != nil || bound.HostID != member.State.HostID {
 		t.Fatalf("member run-now replay was not bound to member: %+v, %v", bound, err)
 	}
-	if _, ready, err := nextPendingPeerBackup(master); err != nil || ready {
-		t.Fatalf("scheduler duplicated Controller-owned member dispatch: ready=%v err=%v", ready, err)
+	if _, ready := nextPendingPeerBackup(master, peerBackoff{}, time.Now()); ready {
+		t.Fatal("scheduler duplicated Controller-owned member dispatch")
 	}
 	vm.HostID = master.State.HostID
 	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {
@@ -454,7 +444,7 @@ func TestControllerPolicyRunNowRunLoopDispatchesAfterReservation(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -463,7 +453,11 @@ func TestControllerPolicyRunNowRunLoopDispatchesAfterReservation(t *testing.T) {
 	for {
 		run, err := loadPoolBackupRun(s, cmd.OperationID)
 		if err == nil && run.Status == "failed" {
-			break // Missing repository makes execution fail after the worker has dispatched.
+			// Only the backup worker's execution reports the missing repository.
+			if run.Error != ErrBackupRepoNotFound.Error() || run.HostID != s.State.HostID {
+				t.Fatalf("reserved run failed before local execution: %+v", run)
+			}
+			break
 		}
 		select {
 		case err := <-done:

@@ -44,7 +44,7 @@ func maintenanceMembership(t *testing.T, s *Store, master string, members ...pro
 }
 
 func maintenanceMember(host string, maintenance bool) protocol.PoolMember {
-	return protocol.PoolMember{HostID: host, CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready", Maintenance: maintenance}
+	return protocol.PoolMember{HostID: host, Hostname: host, CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready", Maintenance: maintenance}
 }
 
 func maintenanceCommand(master, member string, enabled bool, expected uint64) protocol.Command {
@@ -227,8 +227,8 @@ func TestPoolMaintenanceRefusesPlacementAndStartButNeverStop(t *testing.T) {
 // Draining a host must not disturb the membership rules every peer check depends on.
 func TestPoolMaintenanceDoesNotAffectMembershipValidity(t *testing.T) {
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 7, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
-		{HostID: "member-2", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready", Maintenance: true, MaintenanceSince: time.Now().UTC()},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
+		{HostID: "member-2", Hostname: "member-2", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready", Maintenance: true, MaintenanceSince: time.Now().UTC()},
 	}}
 	if err := membership.Valid(); err != nil {
 		t.Fatalf("a drained member invalidated the membership: %v", err)

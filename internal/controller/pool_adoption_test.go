@@ -101,8 +101,8 @@ func TestFreshControllerAdoptsMemberVMUsingMasterRemoteStorage(t *testing.T) {
 	member := a.enroll(a.token(site, ""), csr(t))
 	pool := a.poolOf(master.HostID)
 	membership := protocol.PoolMembership{PoolID: pool, MasterHostID: master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: master.HostID, Hostname: master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: member.HostID, Hostname: member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	remote := protocol.StorageRegistration{
 		ID: "pool-nfs", PoolID: pool, HostID: master.HostID, Name: "Pool NFS", Kind: protocol.StorageKindNFS,

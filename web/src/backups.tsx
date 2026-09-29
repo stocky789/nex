@@ -5,7 +5,7 @@ import type { Storage } from "./managed";
 import { Badge, Panel, Section, date } from "./ui";
 import { Icon } from "./icons";
 import {
-  appendBackupPage, backupOpID, backupPage, collectBackupPageItems, refreshBackupPage, rid, stableBody,
+  appendBackupPage, backupOpID, collectBackupPageItems, refreshBackupPage, rid, stableBody,
   type BackupCatalogPage, type BackupRecoveryPoint, type BackupRepository, type BackupRun, type BackupRunPage,
 } from "./backup-types";
 import { BackupPolicies, type BackupPolicy } from "./backup-policies";
@@ -47,6 +47,12 @@ export function replacementTarget(point: BackupRecoveryPoint | null, vms: Data["
   return point ? vms.find(v => v.id === point.source_vm_id) : undefined;
 }
 
+// retentionWarnings lists succeeded backups whose retention could not remove some
+// expired points; Core records that on the run's error.
+export function retentionWarnings(runs: BackupRun[] | null) {
+  return (runs || []).filter(run => run.status === "succeeded" && run.error && run.kind !== "backup-test-restore");
+}
+
 export function activeTestRestores(runs: BackupRun[] | null, point: BackupRecoveryPoint | null, vms: Data["vms"], poolID: string) {
   if (!point) return [];
   return (runs || [])
@@ -62,7 +68,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [repos, setRepos] = useState<BackupRepository[] | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[] | null>(null);
-  const [runPage, setRunPage] = useState<BackupRunPage | null>(null);
   const [pointRuns, setPointRuns] = useState<BackupRun[] | null>(null);
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
@@ -103,7 +108,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const catalogScope = useRef("");
   const runGen = useRef(0);
   const runAbort = useRef<AbortController | null>(null);
-  const runScope = useRef("");
+  const runLoading = useRef("");
   const filters = useRef({ filterVM, filterRepo, query });
   filters.current = { filterVM, filterRepo, query };
   const selectedIDRef = useRef(selectedID);
@@ -140,9 +145,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     const gen = ++catalogGen.current;
     const scope = currentFilterKey();
     try {
-      const response = await api<BackupRecoveryPoint[] | BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, abort.signal);
+      const page = await api<BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, abort.signal);
       if (gen !== catalogGen.current || abort.signal.aborted) return;
-      const page = backupPage(response) as BackupCatalogPage;
       const sameScope = catalogScope.current === scope;
       catalogScope.current = scope;
       setCatalogPage(current => refreshBackupPage(current, page, sameScope));
@@ -154,36 +158,29 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     }
   };
 
-  const runPath = () => {
-    const pointID = selectedIDRef.current;
-    return `pools/${encodeURIComponent(poolID)}/backup-runs${pointID ? `?recovery_point_id=${encodeURIComponent(pointID)}` : ""}`;
-  };
-
+  // loadRuns collects the selected point's complete run history. A poll keeps the
+  // previous history on screen and never restarts a collection still in progress.
   const loadRuns = async (retry = 0) => {
-    if (!poolID) { setRunPage({ items: [], generation: "", total: 0, attention_count: 0 }); return; }
     const pointID = selectedIDRef.current;
+    if (!poolID || !pointID || (retry === 0 && runLoading.current === pointID)) return;
     runAbort.current?.abort();
     const abort = new AbortController();
     runAbort.current = abort;
     const gen = ++runGen.current;
-    const base = runPath();
-    if (pointID) setPointRuns(null);
+    runLoading.current = pointID;
+    const base = `pools/${encodeURIComponent(poolID)}/backup-runs?recovery_point_id=${encodeURIComponent(pointID)}`;
     try {
-      const response = await api<BackupRun[] | BackupRunPage>(base, "GET", undefined, undefined, undefined, abort.signal);
+      const response = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, abort.signal);
       if (gen !== runGen.current || abort.signal.aborted) return;
-      const page = backupPage(response) as BackupRunPage;
-      const sameScope = runScope.current === pointID;
-      runScope.current = pointID;
-      setRunPage(current => refreshBackupPage(current, page, sameScope));
-      setRunError("");
-      if (!pointID) { setPointRuns(null); return; }
-      const all = await collectBackupPageItems(page, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, abort.signal));
+      const all = await collectBackupPageItems(response, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, abort.signal));
       if (gen !== runGen.current || abort.signal.aborted) return;
+      runLoading.current = "";
       setPointRuns(all);
+      setRunError("");
     } catch (err) {
       if (gen !== runGen.current || abort.signal.aborted) return;
+      runLoading.current = "";
       if ((err as { status?: number }).status === 409 && retry < 2) { await loadRuns(retry + 1); return; }
-      setPointRuns(null);
       setRunError(`Test restore history unavailable: ${String(err)}`);
     }
   };
@@ -233,30 +230,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     }
   };
 
-  const loadMoreRuns = async () => {
-    if (!runPage?.next_cursor || loadingMore || !selectedID) return;
-    setLoadingMore("runs");
-    const base = runPath();
-    const cursor = runPage.next_cursor;
-    const pointID = selectedID;
-    const path = `${base}${base.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(runPage.generation)}`;
-    try {
-      const page = await api<BackupRunPage>(path);
-      if (pointID !== selectedIDRef.current) return;
-      setRunPage(current => current?.generation === page.generation && current.next_cursor === cursor ? appendBackupPage(current, page, run => run.operation_id) as BackupRunPage : current);
-      setRunError("");
-      setPageNotice("");
-    } catch (err) {
-      if (pointID !== selectedIDRef.current) return;
-      if ((err as { status?: number }).status === 409) {
-        await loadRuns();
-        setPageNotice("Test history changed. Showing the newest page; load more again to continue.");
-      } else setRunError(`Could not load more test history: ${String(err)}`);
-    } finally {
-      setLoadingMore("");
-    }
-  };
-
   useEffect(() => {
     if (pendingBackup.current["backup-now"]) return;
     setFilterVM(vmFilter);
@@ -269,7 +242,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setCatalogPage(null);
     setRepos(null);
     setPolicies(null);
-    setRunPage(null);
     setPointRuns(null);
     setError("");
     setCatalogError("");
@@ -278,6 +250,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setRunError("");
     setPageNotice("");
     setSelectedID("");
+    selectedIDRef.current = "";
+    runLoading.current = "";
     setBackupUncertain(false);
     setBackupOpen(flow === "backup-now");
     setPolicyOpen(flow === "create-policy");
@@ -297,13 +271,15 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     previousFilterKey.current = filterKey;
     setCatalogPage(null);
     setPageNotice("");
-    void loadCatalog();
+    // Each change is a relayed Core read, so typing settles before one is sent.
+    const timer = window.setTimeout(() => void loadCatalog(), 300);
+    return () => window.clearTimeout(timer);
   }, [poolID, filterKey]);
 
   useEffect(() => {
     if (!selectedID) return;
-    setRunPage(null);
     setPointRuns(null);
+    setRunError("");
     void loadRuns();
   }, [poolID, selectedID]);
 
@@ -321,7 +297,9 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   };
   const clearRequest = (key: string) => { delete requests.current[key]; };
 
-  const filtered = useMemo(() => (points || []).slice().sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
+  const filtered = useMemo(() => [...(points || [])]
+    .sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
+  const pointTotal = catalogPage?.total ?? filtered.length;
 
   const openRestore = (point: BackupRecoveryPoint, mode: RestoreMode = "new") => {
     if (working) return;
@@ -538,13 +516,13 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       <button type="button" className={tab === "policies" ? "sm primary" : "sm"} onClick={() => setTab("policies")}>Policies</button>
     </div>
     <BackupPolicies key={pool.id} active={tab === "policies"}
-      api={api} data={data} pool={pool} repos={repos || []} points={points} policies={policies} error={error || policyError}
+      api={api} data={data} pool={pool} repos={repos || []} policies={policies} error={error || policyError}
       busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
       onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
       requestID={requestID} clearRequest={clearRequest}
       openCreate={policyOpen} onOpenCreate={() => setPolicyOpen(true)} onCloseCreate={() => setPolicyOpen(false)}
     />
-    {tab === "points" ? <Section icon="backup" title="Recovery points" count={catalogPage?.total ?? filtered.length} actions={<>
+    {tab === "points" ? <Section icon="backup" title="Recovery points" count={pointTotal} actions={<>
       <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={() => { setBackupOpen(true); setBackupStep(1); }}>
         <Icon kind="backup" />Back up now
       </button>
@@ -598,7 +576,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           })}
         </tbody>
       </table></div> : null}
-      {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {catalogPage.total} recovery points.</p>}
+      {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {pointTotal} recovery points.</p>}
       {catalogPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreCatalog()}>{loadingMore === "catalog" ? "Loading…" : "Load more recovery points"}</button>}
     </Section> : null}
 
@@ -663,6 +641,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       {error && <p className="why" role="alert">{error}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
       {pageNotice && <p className="why" role="status">{pageNotice}</p>}
+      {retentionWarnings(runs).map(run => <p key={run.operation_id} className="why" role="status">Backup succeeded, but retention could not remove some older recovery points ({date(run.updated_at)}): {run.error}</p>)}
       {!restoreOriginal && <p className="why" role="status">Replace unavailable: the original VM is not in this pool. Use Restore as new.</p>}
       <section className="tile" aria-label="Recovery point">
         <dl className="details">
@@ -736,7 +715,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           </section>;
         })}
       </section>}
-      {runPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreRuns()}>{loadingMore === "runs" ? "Loading…" : "Load more test history"}</button>}
     </Panel>}
   </>;
 }

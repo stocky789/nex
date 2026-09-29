@@ -29,7 +29,12 @@ before relying on a policy.
    warning and correct access before relying on a scheduled run. Saving does not
    select another destination.
 4. **Timing and retention:** set IANA time zone, daily or weekly local time, and keep-latest.
-   Review the retention preview (protected points stay).
+   Retention applies to each VM separately and only to the recovery points this policy
+   created. Manual **Back up now** points and other policies' points are never pruned,
+   even in the same repository. Rules are a union: a point stays if any rule keeps it.
+   Keep-latest counts only points that are not protected, restoring or newer than the
+   age window, so protected, in-use and recent points stay in addition to the newest
+   keep-latest. There is no retention preview, because a new policy has created no points yet.
 5. **Review:** confirm coverage, schedule and retention, then **Save policy**.
 6. Use **Pause** / **Resume** on a row to stop or allow future dispatches without deleting
    the policy. **Run now** starts one identified run for a listed VM without changing the
@@ -61,19 +66,34 @@ through Core's authenticated paged API.
   the destination and its observation time before retrying. Core retains failed
   or missed run history rather than silently redirecting a job.
 - Backup authority capacity refusal: Core may refuse a new policy or run to
-  preserve a complete member replica. The legacy version 0 transfer has a 64 MiB
-  limit; the development candidate uses v2 signed pages for larger histories
-  but still requires live proof of each required member's exact current
-  replica. Check the retained run and member status before retrying. Keep the
-  master available when an exact complete replica cannot be verified. A
+  preserve a complete member replica. Large histories travel as signed pages,
+  but Core still requires live proof of each required member's exact current
+  replica. A run Core already admitted still records its outcome when a
+  member is offline; only new runs and metadata wait. Check the retained run
+  and member status before retrying. Keep the master available when an exact
+  complete replica cannot be verified. A
   disposable fixture passed promotion with directly seeded runs beyond 69 MB;
   bounded post-promotion backup and restore passed later for all four candidate
-  destinations. Broader faults and mixed-version recovery remain open.
+  destinations. Broader faults remain open.
 - A run that remains reserved or reports `needs_attention` needs host-side inspection
-  before an operator submits another run for the same VM. If a backup point was
-  published but retention could not finish, correct repository access and watch
-  the original run: Core retries settlement without capturing the VM again.
-  Check the run and retained points before starting another backup.
+  before an operator submits another run for the same VM.
+- Retention removes only points created by the same policy, and the catalog records
+  that policy on each point and in the point's stored manifest. A catalog rebuild
+  from the repository reads the policy back from the manifest, so rebuilt points
+  are still pruned by their policy; manual points have none and are never removed
+  automatically.
+- Retention keeps the newest points by capture time, and never removes the point
+  its backup just published, even when the capturing host's clock is behind; such
+  a point is removed by a later backup if it is not among the newest. If retention cannot remove an expired point,
+  the backup still succeeds: Core removes the other expired points, names the
+  ones it skipped in the run's error and tries them again on the VM's next backup.
+  Correct repository access or the damaged point. Backups shows the note as a
+  warning in that backup's recovery point panel.
+- A member VM's run that reports `needs_attention` stays linked to that member:
+  the pool master re-reads the member's outcome about every 30 seconds and settles
+  the run once the member resolves it, adding a published point to the catalog.
+  A run the member never started, including one whose VM moved to another host
+  before it began, settles `failed` and the next scheduled occurrence runs normally.
 - If **Change repository** reports a revision conflict, reload the policy,
   review its current settings and submit a new change. If the reply is
   uncertain, keep the panel open and use **Check task status**; any retry must
@@ -84,6 +104,17 @@ through Core's authenticated paged API.
   destination. Keep old credentials valid for the old points' restore window;
   Core refuses same-ID source or credential changes. An existing CIFS session
   may temporarily serve an old SMB3 restore after external revocation.
+- Backup authority limits: the pool master keeps every repository, policy,
+  run, recovery point, restore pin and verification receipt in its signed
+  authority, so a takeover host holds them all. Core enforces at most 256
+  repositories, 1,000 policies and 256 KiB per record. Run history, catalog
+  points, restore pins and verification receipts have no count limit: up to
+  64 MiB and 100,000 records of each travel in the small form, and beyond that
+  Core uses paged replication, which still works but sends more data on each
+  change. When the number of repositories or policies reaches 80% of its limit,
+  the master's host reports a degraded `pool-backup-authority-capacity` check
+  naming the limit and usage. The check clears by itself once repositories or
+  policies are removed and the next minute's measurement runs.
 
 ## Verification
 

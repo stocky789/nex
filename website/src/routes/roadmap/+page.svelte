@@ -173,6 +173,8 @@
         "Quiesced online and UEFI online backup remain refused until proven",
         "Enabled destination build needs a live browser walkthrough of setup, credentials, policy, restore and error flows",
         "The final Core-down missed-schedule wall-clock span and current-candidate checks remain open",
+        "Full three-host simultaneous join and schedule wall-clock span not fully proven",
+        "2026-09-29 review fixes have focused unit tests only; lab and forge CI evidence is outstanding",
         "Lab used package 0.4.12 plus binary overlay — not ISO install acceptance",
         "Forge CI on a published push not yet inspected (owner push residual)"
       ]

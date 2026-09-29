@@ -49,7 +49,6 @@ func stagePoolBackupAuthorityActivation(s *Store, auth *protocol.PoolBackupAutho
 	repos := poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{}}
 	for _, repo := range auth.Repositories {
 		repo.MountPath = ""
-		repo.SMBIdentity = nil
 		repo.Access = protocol.StorageAccess{}
 		repo.MemberAccess = nil
 		if backupCredentialKind(repo.Kind) {
@@ -167,7 +166,7 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 			if repo.Valid() != nil || repos.Repositories[repo.ID].ID != "" {
 				return "", nil, errors.New("replicated backup repository is invalid or duplicated")
 			}
-			repo.MountPath, repo.SMBIdentity, repo.Access, repo.MemberAccess = "", nil, protocol.StorageAccess{}, nil
+			repo.MountPath, repo.Access, repo.MemberAccess = "", protocol.StorageAccess{}, nil
 			if backupCredentialKind(repo.Kind) {
 				if _, err := localBackupCredential(s, repo); err != nil {
 					return "", nil, errors.New("promoted backup credential is unavailable")
@@ -297,11 +296,11 @@ func syncPoolBackupTree(root string) error {
 	})
 }
 
-var importPoolBackupCatalogForActivation = ImportPoolBackupCatalog
+var importPoolBackupCatalogForActivation = importPoolBackupCatalog
 
 // The signed catalog was empty, so scan every repository before reporting the
 // takeover complete. A partial import remains retryable from catalog-rebuild.
-func rebuildPoolBackupCatalogAfterAuthorityAdopt(s *Store) error {
+func rebuildPoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store) error {
 	if err := masterBackupPool(s, ""); err != nil {
 		return err
 	}
@@ -311,18 +310,18 @@ func rebuildPoolBackupCatalogAfterAuthorityAdopt(s *Store) error {
 	}
 	for _, repo := range repos.Repositories {
 		backend, err := openBackupRepositoryStorage(s, repo)
-		if err != nil || backend.Verify(context.Background()) != nil {
+		if err != nil || backend.Verify(ctx) != nil {
 			return errors.New("promoted backup repository is unavailable for catalog import")
 		}
-		if _, err := importPoolBackupCatalogForActivation(s, repo.ID); err != nil {
+		if _, err := importPoolBackupCatalogForActivation(ctx, s, repo.ID); err != nil {
 			return fmt.Errorf("promoted backup catalog import failed: %w", err)
 		}
 	}
 	return nil
 }
 
-func reconcilePoolBackupCatalogAfterAuthorityAdopt(s *Store, record *poolTransferRecord) error {
-	if err := rebuildPoolBackupCatalogAfterAuthorityAdopt(s); err != nil {
+func reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store, record *poolTransferRecord) error {
+	if err := rebuildPoolBackupCatalogAfterAuthorityAdopt(ctx, s); err != nil {
 		record.LastError = poolTransferError(err)
 		record.Status = "needs_attention"
 		_ = savePoolTransfer(s, record)

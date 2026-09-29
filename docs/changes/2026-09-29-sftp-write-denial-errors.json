@@ -11,7 +11,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "SFTP remains a disabled candidate, so no supported operator step changes.",
+    "reason": "SFTP is an advertised destination. The fix only makes a denied write report its real permission error instead of a false conflict; the existing SFTP troubleshooting already tells operators to check the account's rights, so no step changes.",
     "pages": []
   },
   "api": {

@@ -34,8 +34,8 @@ func newSharedPoolLab(t *testing.T) *sharedPoolLab {
 
 func (l *sharedPoolLab) membership() *protocol.PoolMembership {
 	return &protocol.PoolMembership{PoolID: l.pool, MasterHostID: l.master.HostID, Generation: 1, Members: []protocol.PoolMember{
-		{HostID: l.master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
-		{HostID: l.member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: l.master.HostID, Hostname: l.master.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: l.member.HostID, Hostname: l.member.HostID, CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()},
 	}}
 }
 
@@ -44,7 +44,7 @@ func (l *sharedPoolLab) membership() *protocol.PoolMembership {
 func (l *sharedPoolLab) report(observed time.Time) {
 	l.t.Helper()
 	l.seq++
-	caps := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.StorageRepositoryCapability}
+	caps := []string{protocol.ManagedVMCapability, protocol.StorageRepositoryCapability}
 	nics := []protocol.NIC{{Name: "nex0", Kind: "physical"}}
 	master := &protocol.ManagedState{
 		Membership: l.membership(),
@@ -115,4 +115,3 @@ func TestStaleMemberAccessWarnsWithoutRefusingPlacement(t *testing.T) {
 		}
 	}
 }
-

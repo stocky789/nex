@@ -28,7 +28,6 @@ var replaceCutoverCapacity = managedCapacity
 var replaceCutoverPrepareDirs = managedRepositorySubdir
 
 var ErrRestorePlacementUncertain = errors.New("restore placement requires observation before retry")
-var ErrRestoreManifestUnbound = errors.New("retained restore allocation lacks manifest binding")
 var ErrRestoreAllocationJournalUnavailable = errors.New("restore allocation journal is unavailable")
 
 // RestoreAsNewAllocating identifies an exact retained restore that can resume
@@ -48,9 +47,6 @@ func (e *ManagedEngine) RestoreAsNewAllocating(operationID string, spec protocol
 		if j.Command.Kind != "vm-create" || !j.BackupRestore || j.Command.VM == nil ||
 			!reflect.DeepEqual(*j.Command.VM, spec) || !slices.Equal(j.BackupFirmware, firmware) {
 			return false, errors.New("restore allocation intent differs from retained journal")
-		}
-		if j.Stage == "allocating" && j.Result.Status == "pending" && j.BackupManifestSHA256 == "" && len(j.BackupDisks) == 0 {
-			return false, ErrRestoreManifestUnbound
 		}
 		if j.BackupManifestSHA256 != manifestSHA || !slices.Equal(j.BackupDisks, artifacts) {
 			return false, errors.New("restore allocation point differs from retained journal")
@@ -73,122 +69,6 @@ func (e *ManagedEngine) RestoreAsNewAllocating(operationID string, spec protocol
 func validRestoreManifestSHA(digest string) bool {
 	decoded, err := hex.DecodeString(digest)
 	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == digest
-}
-
-// BindLegacyRestoreAsNewAllocating upgrades an older allocating journal only
-// when every local and placed artifact still proves the same immutable point.
-// It never copies, replaces, or defines a VM.
-func (e *ManagedEngine) BindLegacyRestoreAsNewAllocating(ctx context.Context, operationID string, spec protocol.VMCreateSpec, localDir, manifestSHA string, artifacts []protocol.BackupDiskArtifact, firmware []protocol.BackupFirmwareArtifact) error {
-	if e == nil || !protocol.ValidSnapshotOperationID(operationID) || !uuidPattern.MatchString(spec.ID) || !validRestoreManifestSHA(manifestSHA) ||
-		localDir != filepath.Join(filepath.Dir(e.stateDir), "backup-restore", operationID) || len(artifacts) != len(spec.Disks) {
-		return errors.New("legacy restore binding arguments are invalid")
-	}
-	if err := protocol.ValidateVMSpec(spec); err != nil {
-		return err
-	}
-	if err := ValidateBackupFirmwareForRestore(protocol.BackupManifest{CapturedSpec: &spec, Firmware: firmware}); err != nil {
-		return err
-	}
-	if !filepath.IsAbs(e.stateDir) || filepath.Clean(e.stateDir) == "/" {
-		return errors.New("managed state requires an absolute non-root directory")
-	}
-	real, err := filepath.EvalSymlinks(e.stateDir)
-	if err != nil || real != e.stateDir {
-		return errors.New("managed state must not use symlinks")
-	}
-	real, err = filepath.EvalSymlinks(localDir)
-	if err != nil || real != localDir {
-		return errors.New("legacy restore staging must not use symlinks")
-	}
-	lock, err := (&Engine{config: Config{StateDir: e.stateDir}}).lock(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock(lock)
-	js, err := e.journals()
-	if err != nil {
-		return err
-	}
-	var journal *managedJournal
-	for i := range js {
-		if js[i].Command.OperationID == operationID {
-			journal = &js[i]
-		}
-	}
-	if journal == nil || journal.Command.Kind != "vm-create" || !journal.BackupRestore || journal.Command.VM == nil ||
-		!reflect.DeepEqual(*journal.Command.VM, spec) || !slices.Equal(journal.BackupFirmware, firmware) ||
-		journal.Stage != "allocating" || journal.Result.Status != "pending" || journal.BackupManifestSHA256 != "" ||
-		len(journal.BackupDisks) != 0 || len(journal.Domain) != 0 || journal.BackupTPMManifestSHA256 != "" ||
-		len(journal.Disks) != len(artifacts) || len(journal.Targets) != len(artifacts) {
-		return errors.New("legacy restore allocation cannot be bound")
-	}
-	ids, err := managedVirsh(ctx, "list", "--all", "--uuid")
-	if err != nil {
-		return err
-	}
-	if slices.Contains(strings.Fields(string(ids)), spec.ID) {
-		return errors.New("legacy restore VM is already defined")
-	}
-	if _, err := os.Lstat(filepath.Join(backupTPMStateRoot, spec.ID)); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("legacy restore has unexpected TPM effects")
-	}
-	if _, err := os.Lstat(filepath.Join(e.stateDir, operationID+".xml")); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("legacy restore has an unobserved native definition file")
-	}
-	byTarget := make(map[string]protocol.BackupDiskArtifact, len(artifacts))
-	for _, artifact := range artifacts {
-		if artifact.Valid() != nil || artifact.Target == "" {
-			return errors.New("legacy restore disk descriptor is invalid")
-		}
-		if _, exists := byTarget[artifact.Target]; exists {
-			return errors.New("legacy restore disk target is repeated")
-		}
-		byTarget[artifact.Target] = artifact
-		if err := exactRestoreFile(filepath.Join(localDir, artifact.Filename), artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-	}
-	for i, target := range journal.Targets {
-		artifact, ok := byTarget[target]
-		if !ok {
-			return errors.New("legacy restore disk target differs")
-		}
-		if err := exactRestoreFile(journal.Disks[i], artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-	}
-	for _, artifact := range firmware {
-		if artifact.Valid() != nil {
-			return errors.New("legacy restore firmware descriptor is invalid")
-		}
-		if err := exactRestoreFile(filepath.Join(localDir, artifact.Filename), artifact.SHA256, artifact.Size); err != nil {
-			return err
-		}
-		if artifact.Kind == "nvram" {
-			if err := verifyRestoreNVRAM(ctx, restoreNVRAMPath(spec, operationID, false), artifact); err != nil {
-				return err
-			}
-		}
-	}
-	journal.BackupManifestSHA256 = manifestSHA
-	journal.BackupDisks = append([]protocol.BackupDiskArtifact(nil), artifacts...)
-	return e.save(*journal)
-}
-
-func exactRestoreFile(path, digest string, size int64) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("legacy restore artifact is missing or unsafe")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink != 1 {
-		return errors.New("legacy restore artifact has hardlink aliases")
-	}
-	sum, gotSize, err := fileSHA256(path)
-	if err != nil || sum != digest || gotSize != size {
-		return errors.New("legacy restore artifact differs from immutable point")
-	}
-	return nil
 }
 
 // ReconcileRestoredAsNew observes a retained registration after an uncertain

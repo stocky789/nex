@@ -318,6 +318,12 @@ type PoolBackupAuthority struct {
 const PoolBackupPageLimit = 256 << 10
 const PoolBackupBundleLimit = 64 << 20
 
+// Core refuses more repositories or policies than these.
+const (
+	PoolBackupMaxRepositories = 256
+	PoolBackupMaxDefinitions  = 1000
+)
+
 // PoolBackupManifest binds every byte of a paged authority to the signed replica.
 type PoolBackupManifest struct {
 	Version          int      `json:"version,omitempty"`
@@ -336,7 +342,7 @@ type PoolBackupManifest struct {
 
 func (m PoolBackupManifest) Valid() error {
 	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 ||
-		m.Repositories < 0 || m.Repositories > 256 || m.Definitions < 0 || m.Definitions > 1000 ||
+		m.Repositories < 0 || m.Repositories > PoolBackupMaxRepositories || m.Definitions < 0 || m.Definitions > PoolBackupMaxDefinitions ||
 		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
 	}
@@ -389,7 +395,7 @@ type BackupRunRef struct {
 }
 
 func (a PoolBackupAuthority) Valid() error {
-	if len(a.Repositories) > 256 || len(a.Definitions) > 1000 || len(a.Policies) > 1000 {
+	if len(a.Repositories) > PoolBackupMaxRepositories || len(a.Definitions) > PoolBackupMaxDefinitions || len(a.Policies) > PoolBackupMaxDefinitions {
 		return errors.New("backup authority exceeds bound")
 	}
 	seenRepo, seenDef, seenHist, seenCat := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}

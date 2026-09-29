@@ -38,19 +38,11 @@ func loadPoolBackupPins(s *Store) (poolBackupPinsState, error) {
 	if state.Pins == nil {
 		state.Pins = map[string]protocol.BackupRestorePin{}
 	}
-	// Older state keyed each pin by recovery point. Reindex the values so an
-	// unresolved restore does not exclude a different target using that point.
-	byOperation := make(map[string]protocol.BackupRestorePin, len(state.Pins))
 	for key, pin := range state.Pins {
-		if pin.Valid() != nil || key != pin.OperationID && key != pin.RecoveryPointID {
+		if pin.Valid() != nil || key != pin.OperationID {
 			return poolBackupPinsState{}, ErrBackupInvalid
 		}
-		if _, ok := byOperation[pin.OperationID]; ok {
-			return poolBackupPinsState{}, ErrBackupConflict
-		}
-		byOperation[pin.OperationID] = pin
 	}
-	state.Pins = byOperation
 	return state, nil
 }
 
@@ -116,6 +108,9 @@ func putBackupRestorePin(s *Store, pin protocol.BackupRestorePin) error {
 			return ErrBackupConflict
 		}
 		return nil
+	}
+	if poolBackupPruning[pin.RecoveryPointID] {
+		return ErrBackupConflict
 	}
 	state.Pins[pin.OperationID] = pin
 	return savePoolBackupPins(s, state)
@@ -216,7 +211,7 @@ func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequ
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	manifest, digest, err := backend.ReadPoint(ctx, req.RecoveryPointID)
+	manifest, digest, err := backend.StatPoint(ctx, req.RecoveryPointID)
 	if err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
@@ -227,6 +222,9 @@ func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequ
 	defer poolBackupAuthorityMu.Unlock()
 	if err := requirePoolAuthorityWritable(s); err != nil {
 		return protocol.BackupRecoveryPoint{}, err
+	}
+	if poolBackupPruning[req.RecoveryPointID] {
+		return protocol.BackupRecoveryPoint{}, ErrBackupConflict
 	}
 	catalog, err := loadPoolBackupCatalog(s)
 	if err != nil {

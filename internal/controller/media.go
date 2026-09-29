@@ -285,12 +285,6 @@ func (c *Controller) deleteMedia(w http.ResponseWriter, r *http.Request, user, c
 // published file, journals the tombstone and propagates it; the Controller only asks, and its
 // mirror row is dropped by the host's next report, not here.
 func (c *Controller) removeMedia(w http.ResponseWriter, r *http.Request, tx *sql.Tx, user, id, pool, host, raw string) {
-	// A Core that cannot remove imported media is answered before the body is read: the old
-	// library called this route without one, and "upgrade Nex Core" is the useful answer.
-	if !hostSupportsCapability(tx, host, protocol.PoolResourceRemovalCapability) {
-		fail(w, 409, "the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core")
-		return
-	}
 	var body struct {
 		RequestID string `json:"request_id"`
 	}

@@ -1,5 +1,5 @@
 {
-  "summary": "Retain host names in Core pool membership so a replacement Controller can display an offline member without inventing enrollment or linking to a missing Host panel. API impact: changed contract (additive optional peer join and membership hostname). Native adoption and browser row review passed; mixed-version checks remain open.",
+  "summary": "Retain host names in Core pool membership so a replacement Controller can display an offline member without inventing enrollment or linking to a missing Host panel. API impact: changed contract (additive optional peer join and membership hostname). Native adoption and browser row review passed. Later (2026-09-29, no-legacy decision) the older-member backfill and Controller name handshake were deleted and join requires a hostname.",
   "paths": [
     "internal/protocol/pool.go",
     "internal/agent/peer.go",
@@ -40,7 +40,7 @@
   },
   "api": {
     "impact": "changed contract",
-    "reason": "Core peer join and advertise accept optional validated hostname, Core membership reports and signed replicas carry it after a pinned live peer capability check, and peer replica GET reports membership_hostname_version. Controller acknowledges pool-membership-hostname-v1 in ReportResponse before Core includes names in strict Controller inventory; the acknowledgement resets on Controller replacement. Existing members and older clients remain name-free until compatible peers reconnect, and an older first join to a named pool is refused before admission. Exact issued join replay remains valid.",
+    "reason": "Core peer join requires a validated hostname; Core membership reports and signed replicas carry it, and Controller inventory always includes it. The earlier optional-name backfill (advertise hostname, membership_hostname_version, pool-membership-hostname-v1 acknowledgement) was deleted under the 2026-09-29 no-legacy decision. Exact issued join replay remains valid.",
     "pages": [
       "docs/API.md",
       "docs/api/openapi.json",
@@ -58,8 +58,8 @@
   },
   "state": {
     "owner": "core",
-    "record": "PoolMember.hostname in the pool master durable peer membership, included in its signed authority replica. A current Core backfills an older member name through authenticated peer advertisement only after every ready peer proves format support; a fresh Controller reads it from authenticated Core inventory or an enrolled member reported copy when the master is absent.",
-    "reason": "The host reports its name at pool creation or join; Controller stores no unique pool member name. Older records with no name remain identifiable by stable host ID."
+    "record": "PoolMember.hostname in the pool master durable peer membership, included in its signed authority replica. A fresh Controller reads it from authenticated Core inventory or an enrolled member reported copy when the master is absent.",
+    "reason": "The host reports its name at pool creation or join; Controller stores no unique pool member name."
   },
   "verification": {
     "method": "Focused Core join/replay, legacy backfill, old/offline peer and Controller preflight Go tests; replacement Controller projection Go test; UI rendering test; API contract test; generated reference, documentation and privacy gates. Independent read-only source review found two compatibility gaps and a replay-order defect; corrected paths were re-reviewed with no further material finding. In a new disposable pool, current-source installed Core saved both names in master membership and signed member replica; a fresh Controller with a new CA/database enrolled only the live master and showed the offline member by Core name with unknown connection and no Hosts row. A live headless browser pass showed the named offline member with Unknown connection and no Hosts link; loaded, empty, keyboard and confirmation states passed. API error/empty states were browser mocks. All fixture processes stopped.",
@@ -72,6 +72,6 @@
       "docs/BUG_LEDGER.md",
       "internal/agent/peer_test.go"
     ],
-    "limits": "An already offline legacy member cannot supply a name that Core never saved. Native upgraded-pool/mixed-version peer upgrade and forge CI remain open. Browser API error and empty states were mocked, not a real outage."
+    "limits": "Forge CI remains open. Browser API error and empty states were mocked, not a real outage."
   }
 }

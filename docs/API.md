@@ -138,8 +138,7 @@ are not usable by current Core. `POST /api/v1/agent/witness/register` accepts
 `PoolWitnessRegistrationRequest{pool_id, cluster_name, fencing_generation, csr_pem}` and returns
 `PoolWitnessRegistration{address, certificate_pem, ca_pem, ca_sha256}`; the Controller address is
 empty for the same reason. Registration also requires the reported membership to match the
-request's pool, master and fencing generation, plus the `pool-witness-v1` capability. The cluster
-capability is advertised in Core's normal v2 reports, but not its legacy v1 reports. Core sends a
+request's pool, master and fencing generation. Core sends a
 single `CERTIFICATE REQUEST` PEM block, including when native `certutil` generated a
 `NEW CERTIFICATE REQUEST` block or the request is retried from its staged file. The cluster
 name is `nexpool` followed by the first 128 bits of SHA-256 over `nex-pool-cluster\0` and the pool ID;
@@ -400,12 +399,14 @@ an already terminal command outcome is never rewritten.
 
 **Destination schema and current availability:** the
 `BackupRepository` DTO now recognizes `kind=smb3|s3|sftp` with one matching
-nonsecret `smb_source`, `s3_source` or `sftp_source`. Existing NFS
+nonsecret `smb_source`, `s3_source` or `sftp_source`. An `s3_source` may carry an optional `region` (lowercase letters, digits and `-`, at most 32; empty means `us-east-1`) that Core uses to sign requests. Existing NFS
 records retain their `source` and `identity` fields and decode unchanged; the
 legacy `source` field is omitted from non-NFS records. SMB3
 uses the existing typed share source and observed identity. S3 requires an HTTPS
 endpoint, bucket and optional prefix; SFTP requires a pinned SSH host-key
-fingerprint. Core owns
+fingerprint. Validation refuses control characters, a host with a `:port` other
+than an IP literal, a `.` directory or prefix, an S3 endpoint port outside
+1-65535, oversized source fields and a `credential_ref` on NFS. Core owns
 the opaque `credential_ref`; no credential material belongs in the DTO.
 The Core health worker can probe every registered kind and reports `health` with
 `observed_at`; a result older than two minutes is `unknown`. The
@@ -437,8 +438,14 @@ For a non-NFS registration, first call `POST /api/v1/storage/credentials` with
 `registration_request_id=backup-credential:<kind>:<registration request_id>`,
 the selected `repository_id`, pool master `host_id`, a separate stable credential
 `request_id`, and transient `credentials`. SMB3 and S3 use `username` and
-`secret`; SFTP uses `username` and `ssh_private_key`. The backup handoff refuses
-`domain` and `ssh_known_hosts`. Controller keeps secret bytes only in the
+`secret`; SFTP uses `username` and `ssh_private_key`. SMB3 also accepts an optional
+`domain` (a plain domain or workgroup name for domain accounts: no whitespace, control
+character or any of `/ \ = , ; ' " ` $ & | < > ( )`, at most 253 bytes). The backup handoff refuses
+`domain` for S3 and SFTP, `ssh_known_hosts`, and an SMB3 username containing `=`. It also
+requires `repository: {name,smb_source|s3_source|sftp_source}`, the destination
+the registration will submit: Controller refuses (`400`) a destination the
+registration would refuse before offering the secret, so no Core receipt is
+left behind. Controller keeps secret bytes only in the
 one-time offer; Core returns an opaque receipt. Then submit the repository
 registration with the same registration `request_id`, matching `credential_ref`
 and `credential_request_id`, and exactly one typed source. Controller binds the
@@ -505,10 +512,10 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | Method and route | Request and result |
 |---|---|
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
-| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires a matching Core receipt and destination capability; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt and destination capability; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
-| `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page when it advertises `backup-inventory-pages-v1`; older Core returns its complete reported array |
-| `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page when it advertises `backup-inventory-pages-v1`; older Core returns its complete reported array |
+| `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page |
+| `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page |
 | `GET /api/v1/pools/{id}/backup-policies` | Master's policies; `503` when `backup_policies_reported` is false |
 | `POST /api/v1/pools/{id}/backup-policies` | Create policy; omitted `schedule_id` defaults to the policy ID; queues `backup-policy-upsert`; `202` |
 | `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update policy with positive `expected_revision`; omitted `schedule_id` uses the master's reported schedule ID, or `503` if unavailable; missing/zero revision is `400`, stale revision fails the queued Core operation; queues `backup-policy-upsert`; `202` |
@@ -524,11 +531,8 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | `POST /api/v1/pools/{id}/backup-catalog/import` | `{request_id,repository_id}`; `202` `{operation}` |
 | `POST /api/v1/pools/{id}/backup-catalog/rebuild` | `{request_id,repository_id}`; `202` `{operation}` |
 
-**Paged backup inventory:** Core advertises `backup-inventory-pages-v1` in its
-authenticated report and Controller acknowledges with
-`backup_inventory_pages:true`. A capable Core keeps the full run history and
-catalog on the pool master and omits both bulk arrays from normal reports;
-their `*_reported` flags stay false. The administrator-only Controller GETs
+**Paged backup inventory:** Core keeps the full run history and catalog on
+the pool master and never reports them in bulk. The administrator-only Controller GETs
 above choose the fresh current master and relay read-only `GET /backup-runs`
 or `GET /backup-catalog` over that host's enrolled mutual-TLS reverse channel.
 The host must still be the local pool master. Controller validates each page's
@@ -536,12 +540,13 @@ pool scope, item validity, uniqueness, cursor and size, and keeps no
 authoritative copy. A fresh Controller recovers the pool assignment from the
 master's report, then reads history from Core on demand.
 
-A capable GET returns `{items,next_cursor?,generation,total,...}` with at most
+A GET returns `{items,next_cursor?,generation,total,...}` with at most
 64 items and 2 MiB of JSON, newest first with an ID tie-break. Start without
 `cursor` or `generation`; send both returned values for the next page. The
-64-character lowercase SHA-256 `generation` covers the full unfiltered
-collection. A change between pages returns `409`; restart from page one
-instead of combining generations. `total` reflects the active filters, while
+64-character lowercase SHA-256 `generation` covers which records the full
+unfiltered collection holds and their order, not their status: a record added
+or removed between pages returns `409`; restart from page one instead of
+combining generations. A settlement, protection change or test result does not. `total` reflects the active filters, while
 summary counts cover all retained records. Run pages accept
 `recovery_point_id` and include `attention_count` and `last_backup_run`.
 Catalog pages accept `vm_id`, `repository_id` and case-insensitive `search`
@@ -549,19 +554,13 @@ across VM name/ID, point ID and repository name/ID; they include
 `untested_count`, `last_restore_test` and `backup_days_14` (UTC dates).
 Invalid filters/cursors return `400`, an oversized single record `413`, an
 invalid Core page `502`, and an unavailable master/channel `503` or timeout
-`504`. A stale master also returns `409`; absence never means empty history.
-Older Core retains the legacy complete-array response when it reports that
-collection. Its false `*_reported` flag remains unavailable, not empty. A new
-Core connected to an older Controller receives no page acknowledgement,
-continues compact reports and marks its `backup-history-api` check unsupported;
-that Controller must be upgraded to browse retained history. Core keeps the
-records throughout and never sends a truncated reported array.
+`504`. A stale master, a host that is no longer master, and a Core whose catalog
+or repositories are unreadable also return `503`; only a changed generation on
+a later page returns `409`. An unknown pool returns `404`. Absence never means
+empty history.
 
-Core advertises `backup-v1` in its protocol-v2 report. Controller acknowledges it
-with `backup_support:{"capability":"backup-v1"}` in `ReportResponse`; Core withholds
-backup inventory fields until this acknowledgement. Controller returns `409` for a
-backup mutation targeting a host without `backup-v1` and leaves execution to Core.
-A later authenticated `succeeded` or `failed` backup Result for the same
+Core reports its backup repositories and policies in every managed inventory;
+there is no separate backup capability handshake. A later authenticated `succeeded` or `failed` backup Result for the same
 host and operation ID can settle an earlier Controller `needs_attention`
 operation row. Backup run and catalog inventory alone cannot settle that row, and a foreign
 host's Result is rejected. After Result acknowledgement, the executing Core
@@ -579,12 +578,12 @@ An authenticated GET for an absent exact operation returns `404`; the master
 leaves its reserved run for manual reconciliation and does not replay the POST.
 For repository inventory, the master uses pinned peer mTLS to call
 `POST /api/v1/pool/backup/access` with its current `BackupRepository` on each
-ready member. The member compares the pool, repository ID, kind, generation,
+ready member. The member compares the pool, repository ID, kind,
 source, identity and opaque credential reference with its local copy. If it has
 no copy yet, it prepares the requested destination transiently through Core
 adoption, then checks the same identity and probes native read, write and list
 access without saving a member registration. Its `200 PoolStorageAccess` names
-the repository, host, generation and observation time; failed probes return
+the repository, host and observation time; failed probes return
 `readable:false`, `writable:false` and a generic error. Invalid scope is `400`
 and a caller other than the current master is `401`. The master rejects a
 mismatched reply, stamps accepted observations with its own receipt time, and
@@ -594,7 +593,7 @@ without the route cannot be treated as accessible. These per-host access rows
 are process-local observations in master inventory, refreshed after restart;
 the repository registration remains the durable Core record.
 For NFS peer access, backup and restore dispatch, the master sends its
-observed `repository.identity` with the source and generation. The member
+observed `repository.identity` with the source. The member
 refuses a missing or different local NFS identity before claiming the owner
 marker or executing work; a matching mount path alone is insufficient. The
 same identity stays in signed authority for promotion. These peer messages
@@ -604,23 +603,25 @@ must be upgraded before NFS peer work or promotion is treated as safe.
 For a credential-bearing destination, the current master first sends the
 scoped private receipt and secret to an eligible member through
 `POST /api/v1/pool/backup/credential`; the member validates the current master,
-repository generation and receipt binding and saves its own private copy before
+repository and receipt binding and saves its own private copy before
 the job is dispatched. An exact peer retry is idempotent; a conflicting receipt
-or changed material is refused. Controller neither stores nor relays this peer
+or changed material is refused. A registration keeps its credential reference
+for life, so a different receipt for an existing repository ID is refused; a
+credential change registers a new repository ID and switches policies to it. Controller neither stores nor relays this peer
 secret.
 For SMB3, the master also calls authenticated
 `POST /api/v1/pool/backup/capability/smb3` with a source-only repository and
 `expected_identity` before dispatch. The ready member resolves its private
-receipt, prepares its SMB3 mount and returns `{generation,credential_ref,identity}`.
+receipt, prepares its SMB3 mount and returns `{credential_ref,identity}`.
 The master requires that exact proof against current writable authority.
 Malformed scope is `400`, an unauthenticated caller is `401`, and unavailable
 receipt, mount, identity or member is `409`; an older member without the route
 cannot run the work. SMB3 is advertised in the current development build.
 For S3, the master calls authenticated
 `POST /api/v1/pool/backup/capability/s3` with the source-only repository,
-including its endpoint, bucket, prefix, generation, opaque credential reference
+including its endpoint, bucket, prefix, opaque credential reference
 and observed remote fingerprint. The ready member resolves its private receipt
-and returns `{generation,credential_ref,fingerprint}` after checking access and
+and returns `{credential_ref,fingerprint}` after checking access and
 identity. The master requires exact agreement with its current writable
 repository. Malformed scope is `400`, an unauthenticated caller is `401`, and
 unavailable credentials or conflicting identity is `409`; an older or
@@ -629,7 +630,7 @@ outcome can be retried with the same request. S3 is advertised in the current de
 For SFTP, the master calls authenticated
 `POST /api/v1/pool/backup/capability/sftp` with the source-only repository.
 The ready member resolves its private receipt and checks the pinned SSH
-host-key fingerprint, returning `{generation,credential_ref,fingerprint}`.
+host-key fingerprint, returning `{credential_ref,fingerprint}`.
 The master requires exact agreement with its current writable repository.
 Malformed scope is `400`, an unauthenticated caller is `401`, and unavailable
 credential, access or identity is `409`; an older member without the route
@@ -639,7 +640,19 @@ projections from the master through `GET /api/v1/pool/backup/credentials` when
 `backup_credential_sync` in the join response requires it. The master
 addresses each projection to that member. Private receipt replacement and
 retirement are checked before local adoption, and a failed pull does not imply
-the member can use a credential-bearing destination.
+the member can use a credential-bearing destination. The member reads at most
+32 MiB (256 repositories, each within the 128 KiB single-credential bound).
+Joining another pool or being ejected erases the former pool's backup receipts.
+Backup credential receipts are encrypted at rest on every Core (AES-256-GCM under a random
+per-host key sealed by `systemd-creds` (`backup-credential-key/key.cred` in the Core state
+directory, loaded by the service unit as a credential, root-only) and apart from the receipts in `storage-cluster/secrets/backup/`; the pool, host and receipt
+reference are authenticated data). Only writing a receipt creates the key: a key that is
+missing while receipts remain is reported as such, never replaced. Core refuses a plaintext,
+tampered or other-key receipt and reports the `backup-credentials` check as failed while it
+keeps serving the others. The SMB3 mount password is sealed with `systemd-creds` into
+`backup-smb-credentials/<reference>` and loaded by the mount unit, so the share remounts
+after a reboot; retiring or abandoning a receipt deletes that file. There is no plaintext
+copy on disk, in logs, diagnostics or the replicated authority.
 Restore-as-new, replace and test-restore use
 `POST /api/v1/pool/backup/restore` with
 `{command,repository,catalog_point,smb_identity?}`. SMB3 work requires the
@@ -706,30 +719,43 @@ page's exact byte length and SHA-256 in the manifest, with a 64 MiB bundle,
 ordered `page_count`, total bytes, full SHA-256 root and counts of repositories,
 definitions, history, catalog, pins and metadata receipts. Its `page_sha256`
 and `page_bytes` are null. Version 2 permits authority growth past the version-0
-bundle and history bounds; a record still must fit one 256 KiB page.
+bundle and history bounds; a record still must fit one 256 KiB page. Version 2
+pages pack whole records and end where a record's content selects, so a
+changed or appended record resends only its own page.
 
-Both formats use authenticated `POST /api/v1/pool/replica/backup-page` with
-`{replica,index,data,reuse_sha256?}`; `data` is base64 JSON bytes. The current master sends
-nonempty pages of at most 256 KiB. A member verifies the signed replica,
-addressed target, generation and each version-0 page hash/length before staging.
-For version 2 it checks each staged page's nonempty size, then verifies the
-ordered full root and total bytes, valid frames, unique record identities and
-all declared counts before acknowledging the final replica. Version 2 can
-instead send `reuse_sha256` with null `data` to link an existing durable page
-blob; a missing or corrupt blob returns `404` and the master sends its bytes.
-Version 0 refuses reuse hints. Staged pages grant no authority. An index `-1`
-POST with null `data` returns `{next_index}`. Once every version-2 page exists,
-this probe checks the full root and clears corrupt staging before requesting
-the first page again. Exact retries resume transfer without granting authority.
+Both formats use authenticated `POST /api/v1/pool/replica/backup-page`, in
+push sessions. The master opens a session with `{replica,index:-1}`. The member
+verifies the signed replica, addressed target and generation once, keeps the
+manifest as a session that expires 10 minutes after its last accepted page (one session per member; a
+new open replaces it), and returns `{next_index}`. Every page request then
+carries only `{manifest_sha256,index,data|reuse_sha256}` and is accepted only
+when the session is open for that manifest root and master, and the stored
+replica has not moved past its generation; otherwise it returns `409` and the
+master reopens on its next push. Version 0 also checks each page's length and
+SHA-256 against the verified manifest (`400` on mismatch). Version 2 keeps only
+a full-stream root, so it checks each page's nonempty size and verifies the
+ordered full root, total bytes, valid frames, unique record identities and all
+declared counts before acknowledging the final replica. Version 2 can instead
+send `reuse_sha256` with null `data` to link an existing durable page blob; a
+missing or corrupt blob returns `404` and the master sends its bytes. Version 0
+refuses reuse hints. `data` is base64 JSON bytes of at most 256 KiB. Staged
+pages grant no authority. Once every version-2 page exists, the open request
+checks the full root; a content mismatch clears the staging and requests the
+first page again, while a read failure returns `500` and keeps it. Exact
+retries resume transfer without granting authority. The old per-page signed
+replica request is removed.
 
-Core advertises `pool-backup-authority-pages-v2` and reports
-`backup_page_version: 2` in `PoolReplicaStatus` and `PoolReplicaAck`. The master
-refuses version-2 transfer to a member reporting an older page version. Before
-admitting growth beyond version-0 bounds, it requires a fresh, error-free
-version-2 observation from each member whose replica acknowledgement is
-required. A mixed-version pool cannot silently truncate its backup history;
-older version-0 manifests remain readable for compatibility. Missing, corrupt
-or conflicting pages refuse the replica without granting authority.
+The master reports `pool-backup-authority-capacity` in its host checks:
+`degraded` when repositories (256), policies (1,000), run history, catalog
+points, restore pins or verification receipts (100,000 each) or authority bytes
+(64 MiB) reach 80% of the limit, otherwise `healthy`. Controller only displays
+it. Usage is measured once a minute from the durable stores.
+
+Before admitting growth beyond version-0 bounds, the master requires a fresh,
+error-free observation that each member whose replica acknowledgement is
+required holds the current generation and digest. Missing, corrupt or
+conflicting pages refuse the replica without granting authority. Every Core
+accepts both formats; there is no page-version capability.
 
 Source checks exercised version-2 history beyond 64 MiB. A disposable
 fence-verified promotion preserved 1,052 seeded runs and passed a bounded
@@ -737,18 +763,20 @@ post-promotion NFS backup and restore; the broader destination recovery
 matrix remains open.
 
 The master checks signed-authority capacity before accepting new backup
-metadata. Repository and policy mutations, run reservations and settlement,
-point protection, and verification results can refuse capacity on their
-existing Core API routes. A refused preflight does not create that metadata
-record. Inspect retained runs and member replica status before retrying.
+metadata. Writes that add metadata (repository and policy mutations, run
+reservations, point protection and new verification results) can refuse
+capacity on their existing Core API routes. Settling a reserved run or receipt
+is never refused for capacity or member replica state: its room was admitted
+with the reservation. A promoted master imports its catalog before it
+re-points members, so that import is not held for member confirmation. A
+refused preflight does not create that metadata record. Inspect retained runs and member replica status before retrying.
 
 Durable master state: `pool-backup-repositories.json`, `pool-backup-catalog/`,
 `pool-backup-runs/`, `pool-backup-policies.json`, `pool-backup-pins.json`, plus
 repository `.nex-protected` markers beside recovery-point payloads. Inventory reports
 `backup_repositories` and `backup_policies` with matching `*_reported` flags
-only after a complete master read. A capable Core serves `backup_catalog`
-and `backup_runs` through paged master reads; legacy reports retain those
-complete arrays and set their reported flags.
+only after a complete master read. Core serves the catalog and runs through
+paged master reads.
 The master run record carries `host_id` when an owner has been selected, so a
 member operation retains its target across restart and authority transfer.
 Controller reads those histories for display and adoption, never as catalog
@@ -866,15 +894,13 @@ Controller relay:
 | `GET /api/v1/pools/{id}/backup-policies` | Master's inventory; `503` when `backup_policies_reported` is false |
 | `POST /api/v1/pools/{id}/backup-policies` | Create; queues `backup-policy-upsert` on the master; `202` |
 | `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update with positive `expected_revision`; missing/zero is `400`, stale fails the queued Core operation; queues `backup-policy-upsert`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 
 `expected_revision` is a request-only compare-and-set value. Core increments its
 server-owned `revision` on a successful update and removes `expected_revision`
 before persisting or reporting the policy. Creates omit it, and pause/resume
-does not use it. An older Controller update without the value fails closed;
-reload the master's policy inventory and submit the new revision before
-retrying. Exact operation-ID replay still returns its original result.
-| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
-| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
+does not use it. Exact operation-ID replay still returns its original result.
 
 Scheduler defaults: store UTC occurrence plus IANA time zone/rule; nonexistent local time is
 missed; repeated local time runs once. After Core scheduler downtime, missed occurrences are
@@ -1204,9 +1230,7 @@ shared upgrade rule applies.
 ### Master-owned VM placement approval
 
 API impact: **changed authenticated Core-peer contract; existing client create/update contracts**.
-Before Controller queues any `vm-create` or `vm-update`, both the selected Core and its current
-pool master must report `pool-vm-placement-v1`; otherwise the client receives `409` and no command
-is queued. Controller keeps request syntax, administrator/CSRF authorization, UUID assignment and
+Controller keeps request syntax, administrator/CSRF authorization, UUID assignment and
 request-ID replay, but does not decide resource readiness, capacity, CPU compatibility, VM identity
 or edit eligibility from its mirrored inventory.
 
@@ -1619,13 +1643,8 @@ listener that the host-local procedure already uses. Nothing about membership is
 persisted or reconciled by the Controller; delete it and re-adopt the pool master and every
 member, name, peer origin and interrupted join comes back from the hosts.
 
-**Capability.** `pool-join-v1`, advertised in the protocol v2 capability list and absent from the
-legacy v1 list. Both the master and the joining host must advertise it; otherwise the Controller
-refuses with `409 adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts`
-and the host-local procedure below remains the documented alternative. A Controller that predates
-this work sends no `pool_requests` and ignores `pool_results`, so an upgraded Core loses nothing;
-an upgraded Controller sends the request only to a host that reports protocol v2 with the
-capability, so an older Core is never sent a field it cannot decode.
+**Protocol.** `pool_requests` are sent only to a host that reports protocol v2; the host-local
+procedure below remains the documented alternative.
 
 **Invitation broker (Controller → master, one report round trip).** `ReportResponse.pool_requests`
 carries `PoolRequest{request_id, pool_id, host_id, action:"invite", member_host_id, master_url}`
@@ -1811,35 +1830,19 @@ TestNextPoolMembershipKeepsJoinTimes`. Introduced in development product 0.4.8.
 
 ### Offline pool member names after Controller replacement (changed contract, 2026-09-29)
 
-API impact: **changed contract**, additive. A current Core offers its own hostname
-for `PoolMember.hostname` when it creates a pool or joins one; peer
-`POST /api/v1/pool/join` accepts the joining Core's optional `hostname` (at most
-200 UTF-8 bytes, nonblank when supplied, no CR/LF/NUL). The master validates and
-retains it in its durable membership and signed authority replica. Existing
-membership and older peer requests without this field remain valid for
-unnamed pools and exact issued-offer replays. An absent
-legacy name is unknown, never inferred from the pool name or a Controller row.
-An upgraded Core retries a missing name through authenticated peer
-`POST /api/v1/pool/advertise` and the master's own reconcile pass. Before any
-name write in a multi-host pool, the master reads each ready member's pinned
-`GET /api/v1/pool/replica` status and requires
-`membership_hostname_version:1`; otherwise it defers the write. It rechecks
-the member set and authority before committing. A named pool refuses an older
-join request without a hostname before admission. Older peers can continue
-in an unnamed legacy pool until upgraded, after which periodic reports fill
-the record. This prevents older peers from dropping the new field and
-rejecting the membership's signed section digest.
+API impact: **changed contract**. A Core records its own hostname in
+`PoolMember.hostname` when it creates a pool, and peer `POST /api/v1/pool/join`
+requires the joining Core's `hostname` (at most 200 UTF-8 bytes of printable
+characters, no leading or trailing space); a join without one is refused before
+admission. The master retains it in its durable membership and signed
+authority replica and reports it in managed inventory. A name is never
+inferred from the pool name or a Controller row.
 
 `GET /api/v1/pools/{id}/members` uses the enrolled host name when available,
 then the Core membership name, then the stable host ID. This lets a fresh
 Controller show an offline member without enrolling or authorizing that host;
 the Hosts API still lists only enrolled hosts, so the Members UI leaves such a
 row's name unlinked. Core-local pool membership exposes the durable field.
-Core advertises `pool-membership-hostname-v1` in its Controller report and
-waits for `pool_membership_hostname:true` in the authenticated response before
-including names in Controller inventory. The acknowledgement resets on
-Controller replacement. A newer Controller accepts legacy Core records; an
-older strict Controller continues to receive the prior name-free inventory.
 Safe retry, join replay, signed replication and Controller outage behavior are
 otherwise unchanged.
 
@@ -1851,12 +1854,6 @@ per-host drain flag that the **pool master** keeps inside the membership record 
 its own `pool-peer.json`. The Controller relays one command and projects what the master reports;
 it records no drain of its own, and a fresh Controller adopts the flag from
 `inventory.managed.membership` with nothing to re-enter.
-
-**Capability.** `pool-maintenance-v1`, advertised by the master in the protocol v2 capability list
-and absent from the legacy v1 list. Only the **master** needs it, because the refusal that makes
-the flag mean anything is the master's. Without it, `maintenance_supported` is false in the members
-projection and no control may be offered; submitting anyway is
-`409 maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master`.
 
 **What maintenance does, and what it deliberately does not.** While the flag is set the master
 refuses, from its own record: a new VM placement onto that host, `define` and `start` admission for
@@ -1967,7 +1964,7 @@ every placement, definition and start is refused by, and a member that was unrea
 from the next tick exactly as it does for every other authority write. The lag is reported per
 member in the projection's `replica` status and `connection`, not as a failed drain.
 
-**Members projection additions.** Pool level: `maintenance_supported`. Per member: `maintenance`
+**Members projection additions.** Per member: `maintenance`
 (`true`/`false`, and `null` — unknown, never assumed false — whenever `authoritative` is false),
 `maintenance_since`, `guests` (`{known,total,running,names}` from that host's own reported
 `inventory.vms`, with `known:false` and empty counts whenever the host is not `fresh`, because a
@@ -2112,17 +2109,15 @@ the master's current generation.
 Controller therefore derives no absolute generation — inventing one would be Controller-computed
 state — and the members projection carries none.
 
-**Members projection additions.** Pool level: `replica_supported` (the master advertises the
-capability). Per member: `replica`, which is `null` on the master's own row and otherwise
+**Members projection additions.** Per member: `replica`, which is `null` on the master's own row and otherwise
 `{generation, digest, verified, received_at, acknowledged_generation, acknowledged_at, error,
 state}`. The first four are the member's own report, the next two are what the master last observed
 it acknowledge, and `error` is the master's reason when it has one and otherwise the member's own.
 `state` is a first-match ladder over those two reports: `unknown` when the master or this member is
-not `fresh`; `unsupported` when either lacks the capability; `refused` when either reports an
+not `fresh`; `refused` when either reports an
 error; `awaiting` when both generations are `0`; `unverified` when the member holds a replica it
 has not proven against the pool CA; `behind` when the two generations disagree or another `fresh`
-member of this pool is acknowledged at a strictly higher generation; `current` otherwise. Freshness
-deliberately outranks capability, because a stale host's capability list is a memory too. `behind`
+member of this pool is acknowledged at a strictly higher generation; `current` otherwise. `behind`
 with `generation` above `acknowledged_generation` means the **master's observation** lags, not the
 member; both numbers are shown because the single word cannot say which side is stale. The peer
 comparison is the only evidence a lagging member is lagging, precisely because no absolute
@@ -2173,12 +2168,6 @@ An in-progress automatic promotion checks the setting again on resume and before
 If the candidate's membership or verified replica says Host fencing is off, it retains its durable
 stage and proof, reports a refusal and does not activate; it can resume only after a verified on
 record arrives and the normal fence proof still passes.
-
-**Capability.** `pool-authority-transfer-v1`, v2 list only. Required on the pool master, on the
-selected host and on every ready member, because a member that cannot re-point would keep following
-a host that is no longer the pool master. A peer that answers `404`/`405` on either peer route is
-reported as `pool peer <id> does not support pool-authority-transfer-v1; upgrade it before changing
-the pool master`. The ejected host is deliberately **not** gated: it may be unreachable.
 
 **Controller routes.** Administrator session, same HTTPS Origin and `X-CSRF-Token`, `{"error": …}`
 bodies, `202` on acceptance, `200` on an exact replay of the same `request_id` and payload, `409` on
@@ -2374,8 +2363,7 @@ same transfer stage; Core retries from that durable stage without activating a s
 master or rolling back the committed authority. Operators must restore repository
 access and check the transfer status before relying on the promoted catalog.
 
-**Members projection additions.** Pool level: `transfer_supported` (the master advertises the
-capability); `authority`, the master's own record mirrored verbatim, `null` when the master is not
+**Members projection additions.** Pool level: `authority`, the master's own record mirrored verbatim, `null` when the master is not
 fresh or reports none; `transfer`, the master's own report, `null` on the same terms, so a stale
 master's last transfer is never shown as present truth; `last_transfer`, the newest `pool-transfer`
 operation this Controller holds for the pool, with `reason` carrying Core's sentence for a
@@ -2451,8 +2439,7 @@ remain open. See the [current native-acceptance record](qa/2026-09-19-phase4-nat
 
 API impact: **new contract**, implemented. Three Controller routes, two Core command kinds, one
 brokered pool-request action, one extension of an existing peer route, six new protocol types and
-two new reported inventory fields. No new capability string: `pool-authority-transfer-v1` gates all
-of it. The Controller stores **nothing** pool-scoped here — no verdict, no fence proof, no
+two new reported inventory fields. No new capability string. The Controller stores **nothing** pool-scoped here — no verdict, no fence proof, no
 restriction, no stage, no candidate, no generation — so a Controller restarted or replaced
 mid-promotion knows nothing about it until the hosts report, and then re-projects it from their
 reports.
@@ -2757,8 +2744,8 @@ bodies. Every literal refusal with its status code is in the [generated referenc
   credential?: {secret}}`, with `username` and `credential` both present or both absent. The Detect
   step of Set BMC access: one brokered pool request (`action: "bmc-probe"`, `PoolRequest{member_host_id,
   endpoint, username?, credential_ref?}`) to the **master**, which probes HTTPS Redfish and IPMI
-  RMCP+ itself, from the host that would fence. Same gates as `fence-profile` (fresh master with
-  `pool-authority-transfer-v1`, host in its reported membership). The password goes over the same
+  RMCP+ itself, from the host that would fence. Same gates as `fence-profile` (fresh master, host
+  in its reported membership). The password goes over the same
   one-time credential handoff with a probe-only `bmc_probe` purpose, bound to the same stable
   `request_id` and target member. Core verifies that scope and removes both private
   credential copies after the probe, including a failed one; a delivered probe that never runs
@@ -2915,8 +2902,7 @@ never reported), projected from the `hosts` row this Controller already keeps an
 added, `null` when no fresh host of this pool reports one — the Controller records no candidate and
 shows the fresh host with the most recent report; and `last_promotion`, the newest `pool-promote`
 operation, in the same shape as `last_transfer`, with `retryable` always false because nothing about
-a promotion is retried unchanged. Per member: `transfer_supported`, that host's own advertised
-capability; `fence` = `{kind, endpoint, configured, credential_version}` from the **master's**
+a promotion is retried unchanged. Per member: `fence` = `{kind, endpoint, configured, credential_version}` from the **master's**
 membership, so `null` while the master is not fresh and never carrying `credential_ref` —
 `credential_version` is `PoolMember.fence_credential_version` mirrored verbatim, `0` when no
 material is recorded, and the number is the only signal that a rotation has actually been
@@ -2939,12 +2925,11 @@ own replica and restriction while the master is gone.
 | `status`, `error`, `maintenance`, `maintenance_since`, `access`, `failures`, `fence` | the master's membership or observations | **no** — unknown, `null` or empty |
 | `peer_origin`, `joined_at` | the master's durable membership record | yes (unchanged) |
 | `connection`, `guests`, `join`, `transfer` | the host's own report | yes (unchanged) |
-| `restricted`, `checks`, `transfer_supported` | the host's own report | **yes (new)** |
+| `restricted`, `checks` | the host's own report | **yes (new)** |
 | `replica.generation`, `digest`, `verified`, `received_at` and its own `error` | the member's own report | **yes (new)** |
 | `replica.acknowledged_generation`, `acknowledged_at` | the master's observation | no — `0`/empty |
 
-`replica.state` without a fresh master is limited to what the member alone proves — `unsupported`,
-`refused`, `unverified`, `awaiting`, otherwise `unknown`. **`current` and `behind` are never claimed
+`replica.state` without a fresh master is limited to what the member alone proves — `refused`, `unverified`, `awaiting`, otherwise `unknown`. **`current` and `behind` are never claimed
 without the master**: they compare against a number only the master reports. With a fresh master the
 S4/S5 ladder is unchanged. `authoritative: false` already tells a client the master-derived half is
 unknown, and every master-derived field is `null` or zero rather than a stale value.
@@ -3064,8 +3049,7 @@ is `host-fencing` and which names no member, because the setting is the pool's. 
 records it only on the master, only through `poolAuthorityWritable` — so a frozen or handed-over
 authority waits out the transfer rather than writing into a generation somebody else is about to hold
 — and treats it as a desired state: re-sending the state already recorded answers `succeeded`.
-It needs `pool-host-fencing-v1` on the master; without it the Controller offers no switch and refuses
-the request with 409 naming the upgrade. The Controller stores nothing: a fresh Controller recovers
+The Controller stores nothing: a fresh Controller recovers
 the setting, like the rest of the membership, from the master's reported inventory.
 
 **Turning it on arms nothing by itself.** The master reports its own prerequisite checklist with its
@@ -3225,8 +3209,7 @@ methods instead of interpreting them as a fence-device proof.
 
 API impact: **changed contract**, implemented. `PoolFenceSummary.cluster` (`PoolFenceCluster`),
 `PoolWatchdogArmed.armed_at`, `PoolMembership.witness` (`PoolWitnessRecord`), per-member sealed
-`PoolAuthorityReplica.witness_credentials` and the `pool-watchdog-cluster-v1` and
-`pool-witness-v1` capabilities. The nodelist remains **derived** from membership; for an eligible
+`PoolAuthorityReplica.witness_credentials`. The nodelist remains **derived** from membership; for an eligible
 two-host pool Core also durably records the qdevice witness and replicates each member's sealed
 credential. Controller stores no pool witness state. A fresh Controller obtains the membership and
 status from the master report.
@@ -3338,11 +3321,10 @@ so a freshness rule would refuse exactly the proofs the feature exists for. The 
 chosen is an honest refusal: a target that flaps while the pool has no master to re-confirm its
 arming cannot be proved excluded until the pool confirms it again.
 
-**Version compatibility.** A master without `pool-watchdog-cluster-v1` forms no cluster and reports
-no `cluster`, which a client shows as no cluster line rather than as a cluster that is off. A member
-too old to report `armed_at` leaves it zero, which is never treated as a re-arm; the proving host's
-rejoin check then refuses after a rejoin until the record changes for another reason, which is the
-safe direction.
+**No cluster reported.** A master that forms no cluster reports no `cluster`, which a client shows as
+no cluster line rather than as a cluster that is off. An `armed_at` of zero is never treated as a
+re-arm; the proving host's rejoin check then refuses after a rejoin until the record changes for
+another reason, which is the safe direction.
 
 **What is not proven.** **No physical watchdog device of any model has been read, armed or expired,
 and no physical host has been reset.** Every timing above was measured in nested QEMU guests with an
@@ -4250,7 +4232,12 @@ while Controller is unavailable.
 `POST /api/v1/storage/credentials` is administrator-session and CSRF protected. It accepts a
 credential request ID, target pool/host, at least one of a new registration request ID or
 existing repository ID, and `{username?,secret,domain?}`. Optional `domain` is the SMB workgroup or
-AD domain used with the account. Controller retains the bytes only for the 15-second
+AD domain used with the account. A backup destination handoff
+(`registration_request_id=backup-credential:<kind>:…`) instead follows the backup rules above:
+`username` is required, SMB3 and S3 require `secret`, SFTP requires `ssh_private_key` and
+refuses `secret`, `domain` is accepted only for SMB3 and validated as above, and `repository`
+carries the destination to validate.
+An unknown pool is `404`. Controller retains the bytes only for the 15-second
 bounded delivery window. The addressed authenticated Core redeems an opaque report offer,
 persists its secret locally, then acknowledges a durable receipt; only then does the endpoint
 return `201`. `503` means delivery is uncertain: retry the same request ID. Ordinary commands,
@@ -4274,7 +4261,9 @@ attached secret on Core; this pair remains for support of leftovers that never b
 repository. This also covers SMB3, S3 and SFTP backup handoffs whose registration never
 committed: the pool master reports only receipts with no repository or unresolved registration
 reference, and rechecks that condition during retirement. The retired backup receipt remains
-as a redacted replay tombstone; an SMB3 side credential file is removed. An in-flight
+as a redacted replay tombstone; an SMB3 side credential file is removed. Core reports the
+readable receipts even when one receipt file is damaged, and then also reports a failed
+`backup-credentials` host check. An in-flight
 registration is not eligible. The Controller UI does not expose unused-credential cleanup.
 
 The package also installs a QEMU prepare hook that invokes the internal
@@ -4337,8 +4326,6 @@ unreadable entry, and that host refuses every managed operation while it lasts. 
 never travels on the peer wire — a member infers a removal from a resource's absence from an
 authoritative master list, exactly as shared storage already does.
 
-*Capability.* Core advertises `pool-resource-removal-v1` when it accepts the three kinds.
-
 *Client routes* (administrator session, same HTTPS Origin, `X-CSRF-Token`; JSON rejects unknown
 fields and bodies over 1 MiB):
 
@@ -4367,7 +4354,6 @@ characters`; `401 administrator login required` / `session expired or invalid`;
 `403 CSRF token required`; `404 network is not registered on this pool's master` (unknown,
 another pool's, not yet succeeded, or an unreadable mirrored command); `409 pool master is
 unavailable`; `409 host must be fresh, active, in the selected pool, and support managed-vm-v1`;
-`409 the pool master does not support removing pool networks yet; upgrade Nex Core`;
 `409 only pool VLAN networks can be removed` (also the rename refusal for a non-VLAN network —
 one gate, one string); `409 network generation is no longer current; refresh and retry`;
 `409 request_id already used with another payload` / `request_id already used for another
@@ -4375,10 +4361,8 @@ operation`; `500 storage unavailable` / `network operation failed`. A `PATCH` wh
 `expected_generation` is absent or `0` never matches a live network's generation, so it is
 refused by the generation check (409) rather than by shape validation.
 
-*ISO status codes:* the discard branch is unchanged; for a succeeded import,
-`409 the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core` is answered
-**before the body is read**, so an older client's bodyless call gets a useful answer;
-`400 stable request_id required to remove an imported ISO`; `409 another media transfer is
+*ISO status codes:* the discard branch is unchanged; for a succeeded import, a missing body is
+`400 invalid JSON request`; `400 stable request_id required to remove an imported ISO`; `409 another media transfer is
 active; retry shortly`; `409 this import is still running; wait for its task to finish`;
 `409 host must be fresh, active, in the selected pool, and support managed-vm-v1`; `404 media not
 found`; `500 ISO removal request storage failed`.
@@ -5289,8 +5273,7 @@ transfer holds the staging lock. **404** for an unknown id.
 **Changed contract, 0.3.5 — removing an imported ISO.** The former 409 for a **succeeded** import
 is replaced by a relay: the same route now takes `{request_id}` and queues a `media-remove`
 command to the host that stores the file, which unlinks it, journals a tombstone and propagates
-it to members. An owning host without `pool-resource-removal-v1` is still refused, with
-`the host that stores this ISO does not support removing imported ISOs yet; upgrade Nex Core`. See
+it to members. See
 *Pool network and ISO removal, and network rename* above for the full contract.
 
 Retrying a failed download is `POST /api/v1/media/download` again under a **new** `request_id`;

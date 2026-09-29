@@ -16,7 +16,7 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 		ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: protocol.BackupRepoKindSMB3,
 		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},
 		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
-		CredentialRef: "old-receipt", Generation: 1, MountPath: t.TempDir(),
+		CredentialRef: "old-receipt", MountPath: t.TempDir(),
 	}
 	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{existing.ID: existing}}); err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 	previous := prepareBackupRepositorySMBNative
 	t.Cleanup(func() { prepareBackupRepositorySMBNative = previous })
 	prepareCalls := 0
-	prepareBackupRepositorySMBNative = func(context.Context, protocol.BackupRepository, string, protocol.StorageCredentials) (protocol.BackupRepository, error) {
+	prepareBackupRepositorySMBNative = func(context.Context, protocol.BackupRepository, protocol.StorageCredentials) (protocol.BackupRepository, error) {
 		prepareCalls++
 		return protocol.BackupRepository{}, nil
 	}
@@ -55,10 +55,10 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 	prepared.MountPath = t.TempDir()
 	prepared.SMBIdentity = &protocol.SMBStorageIdentity{Server: existing.SMBSource.Server, Share: existing.SMBSource.Share, MarkerID: strings.Repeat("b", 32)}
 	if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared); !errors.Is(err, ErrBackupConflict) {
-		t.Fatalf("changed SMB marker committed under existing generation: %v", err)
+		t.Fatalf("changed SMB marker committed under the existing repository: %v", err)
 	}
 	current, err := GetPoolBackupRepository(s, existing.ID)
-	if err != nil || current.CredentialRef != existing.CredentialRef || current.SMBIdentity.MarkerID != existing.SMBIdentity.MarkerID || current.Generation != existing.Generation {
+	if err != nil || current.CredentialRef != existing.CredentialRef || current.SMBIdentity.MarkerID != existing.SMBIdentity.MarkerID {
 		t.Fatalf("failed replacement changed durable repository: %+v, %v", current, err)
 	}
 }

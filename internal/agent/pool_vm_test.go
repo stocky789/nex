@@ -410,7 +410,7 @@ func TestLocalStorageStartUsesRecoveryAdmissionWhileEmergencyStopSkipsMaster(t *
 	// The same host must still be able to reduce power when the master is gone.
 	maintenanceMembership(t, s, "host-b",
 		maintenanceMember("host-a", false),
-		protocol.PoolMember{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready", PeerOrigin: "https://127.0.0.1:1"},
+		protocol.PoolMember{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready", PeerOrigin: "https://127.0.0.1:1"},
 	)
 	stop := start
 	stop.OperationID, stop.Power.Action = "stop-1", "force-stop"
@@ -1013,7 +1013,7 @@ func TestPoolVMFirstLocalToSharedUpdateSeedsOnlyExactMemberInventory(t *testing.
 
 func TestPoolVMLocalFirstLocalToSharedUpdateSeedsExactInventory(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1787,7 +1787,7 @@ func TestClusteredVMStopOnlyBypassesLostQuorumWithoutPermitOrOwnerChange(t *test
 func sharedMediaVMStore(t *testing.T) (*Store, *protocol.VMCreateSpec) {
 	t.Helper()
 	s := peerStore(t, "host-a", "pool-1")
-	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
+	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	storage := protocol.StorageRegistration{ID: "repo-1", PoolID: "pool-1", HostID: "host-a", Name: "shared", Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/exports", Directory: "guests"}}, Generation: 1}

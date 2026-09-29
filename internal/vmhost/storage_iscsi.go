@@ -337,11 +337,11 @@ func configureISCSICHAP(ctx context.Context, s protocol.StorageRegistration, v *
 		if err != nil || info.Mode().Perm() != 0600 {
 			return iscsiNodeChange{}, errors.New("iSCSI credential file is unavailable")
 		}
-		b, err := readSmall(credential, 1<<16)
+		body, err := openMountCredential(ctx, credential)
 		if err != nil {
 			return iscsiNodeChange{}, err
 		}
-		username, secret, err = iscsiCHAPFields(string(b))
+		username, secret, err = iscsiCHAPFields(body)
 		if err != nil {
 			return iscsiNodeChange{}, err
 		}

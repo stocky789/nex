@@ -27,7 +27,7 @@ the guest alone does not rewrite an existing VM's definition. No restart is forc
   [created through Controller](create-virtual-machine.md) whose creation task succeeded. The
   Controller appliance is not edited here; it is managed from its host's local page.
 - The VM's host and pool master freshly connected, running Core components that report
-  `vm-update-v1` and master-owned VM placement. Core validates the current storage, network,
+  `vm-update-v1`. Core validates the current storage, network,
   ISO, capacity and runtime state; a Controller mirror is not placement authority.
 
 ## Steps

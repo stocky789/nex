@@ -12,8 +12,6 @@ import (
 func newReplicaLab(t *testing.T) *joinLab {
 	t.Helper()
 	l := newJoinLab(t)
-	l.master.caps = append(l.master.caps, protocol.PoolAuthorityReplicaCapability)
-	l.member.caps = append(l.member.caps, protocol.PoolAuthorityReplicaCapability)
 	l.master.inv.Managed.Membership = l.joinedMembership(false, time.Time{})
 	l.member.inv.Managed.Membership = l.joinedMembership(false, time.Time{})
 	l.send(&l.master, nil)
@@ -59,9 +57,6 @@ func TestPoolMemberReplicaStates(t *testing.T) {
 	if got := l.replica(t, l.member.id); got.State != "awaiting" || got.Generation != 0 || got.AcknowledgedGeneration != 0 {
 		t.Fatalf("awaiting: %+v", got)
 	}
-	if !l.members(t).ReplicaSupported {
-		t.Fatal("master advertises pool-authority-replica-v2 but the pool says unsupported")
-	}
 
 	// Both sides agree at one generation, verified, no error.
 	l.setReplica(7, "", heldReplica(7, true, ""))
@@ -88,8 +83,8 @@ func TestPoolMemberReplicaStates(t *testing.T) {
 		t.Fatalf("unverified: %+v", got)
 	}
 
-	// A master-reported refusal wins over everything but freshness and capability.
-	l.setReplica(0, "pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica", heldReplica(7, true, ""))
+	// A master-reported refusal wins over everything but freshness.
+	l.setReplica(0, "pool member did not report its authority replica", heldReplica(7, true, ""))
 	if got := l.replica(t, l.member.id); got.State != "refused" || got.Error == "" {
 		t.Fatalf("master refusal: %+v", got)
 	}
@@ -140,28 +135,6 @@ func TestPoolMemberReplicaUnknownWhenEitherSideIsStale(t *testing.T) {
 	}
 }
 
-// TestPoolMemberReplicaUnsupportedOnEitherSide: the capability is required on both peers, and
-// a missing one is named, never silently degraded into "awaiting".
-func TestPoolMemberReplicaUnsupportedOnEitherSide(t *testing.T) {
-	for _, missing := range []string{"master", "member"} {
-		t.Run(missing, func(t *testing.T) {
-			l := newReplicaLab(t)
-			host := &l.member
-			if missing == "master" {
-				host = &l.master
-			}
-			host.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-			l.setReplica(7, "", heldReplica(7, true, ""))
-			if got := l.replica(t, l.member.id); got.State != "unsupported" {
-				t.Fatalf("missing capability on the %s: %+v", missing, got)
-			}
-			if view := l.members(t); missing == "master" && view.ReplicaSupported {
-				t.Fatalf("pool reports replica support without it on the master: %+v", view)
-			}
-		})
-	}
-}
-
 // TestPoolMemberReplicaCheckIsProjected: the member's own pool-authority-replica health check
 // is carried in the same per-member checks list as the three convergence checks.
 func TestPoolMemberReplicaCheckIsProjected(t *testing.T) {
@@ -199,23 +172,21 @@ func TestPoolMemberReplicaCheckIsProjected(t *testing.T) {
 // TestPoolMemberReplicaPeerLagIsBehind covers the one input the HTTP lab cannot produce with
 // two hosts: a peer of the same pool acknowledged at a higher generation.
 func TestPoolMemberReplicaPeerLagIsBehind(t *testing.T) {
-	caps := []string{protocol.PoolAuthorityReplicaCapability}
-	master := hostRow{id: "core-01", connection: "fresh", capabilities: caps}
-	host := hostRow{id: "core-02", connection: "fresh", capabilities: caps,
+	host := hostRow{id: "core-02", connection: "fresh",
 		inventory: protocol.Inventory{Managed: &protocol.ManagedState{Replica: heldReplica(5, true, "")}}}
 	member := protocol.PoolMember{HostID: "core-02", ReplicaGeneration: 5, ReplicaObservedAt: time.Now().UTC()}
-	if got := memberReplica(true, master, host, member, 5, 0); got.State != "current" {
+	if got := memberReplica(true, host, member, 5, 0); got.State != "current" {
 		t.Fatalf("highest generation in the pool: %+v", got)
 	}
-	if got := memberReplica(true, master, host, member, 6, 0); got.State != "behind" {
+	if got := memberReplica(true, host, member, 6, 0); got.State != "behind" {
 		t.Fatalf("a peer holds a newer replica: %+v", got)
 	}
 	// S5: the master now reports its own authority generation, so a member that agrees
 	// with the master's observation but lags the authority itself is behind.
-	if got := memberReplica(true, master, host, member, 5, 5); got.State != "current" {
+	if got := memberReplica(true, host, member, 5, 5); got.State != "current" {
 		t.Fatalf("at the master's reported authority generation: %+v", got)
 	}
-	if got := memberReplica(true, master, host, member, 5, 6); got.State != "behind" {
+	if got := memberReplica(true, host, member, 5, 6); got.State != "behind" {
 		t.Fatalf("below the master's reported authority generation: %+v", got)
 	}
 }

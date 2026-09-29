@@ -155,7 +155,7 @@ func TestUpdateVMRunningStateAndGates(t *testing.T) {
 	if r := l.update("edit-appliance", "0f3f7a86-1d0e-4e3c-a1a4-7c5d3f1e2b91", spec, 409); !strings.Contains(r["error"].(string), "appliance") {
 		t.Fatal(r)
 	}
-	l.caps = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability}
+	l.caps = []string{protocol.ManagedVMCapability}
 	l.reportState("shut off", state)
 	if r := l.update("edit-old-core", id, spec, 409); !strings.Contains(r["error"].(string), "does not support editing") {
 		t.Fatal(r)

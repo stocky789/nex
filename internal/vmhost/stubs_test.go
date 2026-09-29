@@ -38,5 +38,6 @@ func runWithStubbedHostTools(m *testing.M) (int, error) {
 	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
 		return 0, err
 	}
+	SetSystemdCredsRunner(FakeSystemdCreds)
 	return m.Run(), nil
 }

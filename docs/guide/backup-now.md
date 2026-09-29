@@ -23,7 +23,8 @@ catalogs the recovery point. Quiesced online capture and UEFI online remain refu
    choose Crash-consistent (Quiesced is shown but refused until supported). Step 2:
    review mode and included disks. Step 3: submit.
 3. Follow the task on **Tasks**. When it succeeds, the recovery point appears on
-   **Backups** for that VM and repository.
+   **Backups** for that VM and repository. A Back up now point is never removed by
+   a policy's retention; protect it or remove it yourself when it is no longer needed.
 
 ## Expected result
 
@@ -39,16 +40,21 @@ time when the catalog is available. Closing the browser does not cancel accepted
 - Quiesced refused: use Crash-consistent for running guests.
 - No repositories: register one under **Settings** → **Backup repositories**.
 - Backup authority capacity refusal: Core could not admit more history within
-  a member's verified replica state. The legacy version 0 transfer has a 64 MiB
-  limit; the development candidate uses v2 signed pages for larger histories
-  but requires live proof that each required member holds the exact current
-  replica. Inspect the retained Core run and member status before retrying;
-  keep the master available when an exact complete replica cannot be verified.
+  a member's verified replica state. Large histories travel as signed pages,
+  but Core requires live proof that each required member holds the exact current
+  replica. A run Core already admitted still records its outcome when a
+  member is offline; only new runs and metadata wait. Inspect the retained
+  Core run and member status before retrying; keep the master available when
+  an exact complete replica cannot be verified.
   A disposable fixture passed complete-history promotion with directly seeded
   runs beyond 69 MB and bounded post-promotion backup and restore on all four
   destinations. Check the current authority and member access before retrying.
 - Request refused or stuck: inspect the task and host operation before retrying. Reuse
   a request ID only for the identical request after the host reports a safe retry state.
+- Backup interrupted while publishing, for example by a Core restart: Core does not
+  capture the VM again. It settles a point that finished publishing, or removes the
+  partial point and fails the run with "backup publication was interrupted". Start
+  a new backup.
 
 ## Verification
 

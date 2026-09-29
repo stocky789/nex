@@ -115,6 +115,8 @@ type poolTransferRecord struct {
 	// Repointed are the hosts that have acknowledged the new authority, so a resumed
 	// re-point contacts only the ones that have not.
 	Repointed []string
+	// NewPoolID is the identity an ejected host takes for its own new pool.
+	NewPoolID string
 	Attempts  int
 	UpdatedAt time.Time
 }
@@ -437,9 +439,6 @@ func poolTransferRPC(ctx context.Context, s *Store, origin, hostID string, reque
 		return reply, errors.New("pool peer " + hostID + " is unreachable for this transfer step")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
-		return reply, errors.New("pool peer " + hostID + " does not support " + protocol.PoolAuthorityTransferCapability + "; upgrade it before changing the pool master")
-	}
 	if json.NewDecoder(io.LimitReader(response.Body, protocol.PoolTransferLimit)).Decode(&reply) != nil {
 		return reply, errors.New("pool peer " + hostID + " did not answer this transfer step")
 	}
@@ -488,9 +487,6 @@ func probePoolAuthorityQuery(ctx context.Context, s *Store, origin, hostID strin
 		return status, errors.New("pool peer " + hostID + " is unreachable")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
-		return status, errors.New("pool peer " + hostID + " does not support " + protocol.PoolAuthorityTransferCapability + "; upgrade it before changing the pool master")
-	}
 	if response.StatusCode != http.StatusOK {
 		return status, errors.New("pool peer " + hostID + " refused the authority probe")
 	}
@@ -618,7 +614,8 @@ func PoolTransferHandler(s *Store) http.Handler {
 		var reply protocol.PoolTransferReply
 		switch request.Action {
 		case "activate":
-			reply, err = activatePoolAuthority(s, caller, request)
+			// The catalog import may outlast the caller's request; it keeps its own bound.
+			reply, err = activatePoolAuthority(context.WithoutCancel(r.Context()), s, caller, request)
 		case "abort":
 			reply, err = abortPoolAuthorityTarget(s, request)
 		case "repoint":
@@ -669,7 +666,7 @@ func authenticatePoolTransferPeer(s *Store, r *http.Request, action string) (pro
 // activatePoolAuthority is the target's step 4. It is idempotent by operation ID: a host
 // that already adopted the authority answers the same way, so a retry after a lost reply
 // never activates twice and never activates a second generation.
-func activatePoolAuthority(s *Store, master protocol.PoolMember, request protocol.PoolTransferRequest) (protocol.PoolTransferReply, error) {
+func activatePoolAuthority(ctx context.Context, s *Store, master protocol.PoolMember, request protocol.PoolTransferRequest) (protocol.PoolTransferReply, error) {
 	var reply protocol.PoolTransferReply
 	notice := request.Notice
 	poolPeerMu.Lock()
@@ -732,7 +729,7 @@ func activatePoolAuthority(s *Store, master protocol.PoolMember, request protoco
 		OperationID: request.OperationID, Action: "promote", Role: "target", TargetHostID: s.State.HostID,
 		Stage: "activate", AuthorityGeneration: notice.AuthorityGeneration, Notice: &notice,
 	}
-	repoint, err := adoptPoolAuthorityFromReplica(s, replica.Replica, record)
+	repoint, err := adoptPoolAuthorityFromReplica(ctx, s, replica.Replica, record)
 	if err != nil {
 		return reply, err
 	}
@@ -747,7 +744,7 @@ func activatePoolAuthority(s *Store, master protocol.PoolMember, request protoco
 // master at generation+1, in one atomic write. The caller has already established this
 // host's right to do it: a signed hand-off from the outgoing master, or a verified fence
 // proof that the outgoing master is excluded.
-func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityReplica, record *poolTransferRecord) (*protocol.PoolAuthorityNotice, error) {
+func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protocol.PoolAuthorityReplica, record *poolTransferRecord) (*protocol.PoolAuthorityNotice, error) {
 	poolPeerMu.Lock()
 	state, err := loadPoolPeer(s)
 	poolPeerMu.Unlock()
@@ -894,7 +891,7 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 		return nil, errors.New("the pool master change could not be recorded durably")
 	}
 	if record.Stage == "catalog-rebuild" {
-		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record); err != nil {
+		if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record); err != nil {
 			return nil, err
 		}
 	}
@@ -1445,7 +1442,7 @@ func advancePoolTransferSource(ctx context.Context, s *Store, record *poolTransf
 
 func advancePoolTransferTarget(ctx context.Context, s *Store, record *poolTransferRecord, timeout time.Duration) error {
 	if record.Stage == "catalog-rebuild" {
-		return reconcilePoolBackupCatalogAfterAuthorityAdopt(s, record)
+		return reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx, s, record)
 	}
 	if record.Stage == "repoint" {
 		return repointPoolMembers(ctx, s, record, timeout)
@@ -2070,16 +2067,19 @@ func AdvancePoolAuthorityTransfer(ctx context.Context, s *Store, timeout time.Du
 // The transfer runs on a probe goroutine; reconcile its command receipt on Run's
 // journal-owning loop after the same durable operation reaches done.
 func reconcilePoolPromotionJournal(s *Store) {
-	record, err := loadPoolTransfer(s)
-	if err != nil || record == nil || record.Action != "promote" || record.Role != "candidate" || record.Stage != "done" {
-		return
+	for id, entry := range s.State.Journal {
+		if entry.Command == nil || entry.Command.Kind != "pool-promote" || entry.Status != "needs_attention" {
+			continue
+		}
+		// Only a waiting promotion receipt reads the transfer record under poolPeerMu.
+		record, err := loadPoolTransfer(s)
+		if err != nil || record == nil || record.OperationID != id || record.Action != "promote" ||
+			record.Role != "candidate" || record.Stage != "done" {
+			continue
+		}
+		entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", record.UpdatedAt, false
+		s.State.Journal[id] = entry
 	}
-	entry, ok := s.State.Journal[record.OperationID]
-	if !ok || entry.Command == nil || entry.Command.Kind != "pool-promote" || entry.Status != "needs_attention" {
-		return
-	}
-	entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", record.UpdatedAt, false
-	s.State.Journal[record.OperationID] = entry
 }
 
 // convergePoolAuthorityFrom asks the transfer's target where authority actually is. A host
@@ -2234,10 +2234,23 @@ func reinitializeOwnPool(ctx context.Context, s *Store, record *poolTransferReco
 	if hostname, err := osHostname(); err == nil && hostname != "" {
 		name = hostname
 	}
-	poolID := newUUID()
+	// Kept in the record, so a retry after a later step fails reuses the same identity.
+	if record.NewPoolID == "" {
+		record.NewPoolID = newUUID()
+		if err := savePoolTransfer(s, record); err != nil {
+			return persistenceError{err}
+		}
+	}
+	poolID := record.NewPoolID
 	s.State.PoolID, s.State.PoolName = poolID, name
 	if err := s.Save(); err != nil {
 		return persistenceError{err}
+	}
+	if err := eraseForeignBackupRepositories(ctx, s); err != nil {
+		return errors.New("the previous pool's backup repositories could not be detached")
+	}
+	if err := eraseForeignBackupCredentials(s); err != nil {
+		return errors.New("the previous pool's backup credentials could not be erased")
 	}
 	// A host that has never journalled anything has no scope to re-home.
 	if err := vmhost.RehomeLeavingPoolScope(filepath.Join(s.dir, "managed-vms"), poolID, s.State.HostID); err != nil && !errors.Is(err, os.ErrNotExist) {

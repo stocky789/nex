@@ -169,8 +169,8 @@ func (c *Controller) enqueueBackupPolicy(w http.ResponseWriter, pool, user, requ
 		return
 	}
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	if err = c.backupHost(tx, pool, master); err != nil {

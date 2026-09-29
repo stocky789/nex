@@ -1,0 +1,75 @@
+{
+  "summary": "Delete older-Core compatibility gates for pool features (pool-join-v1, pool-maintenance-v1, pool-authority-replica-v2, pool-authority-transfer-v1, pool-witness-v1, pool-host-fencing-v1, pool-watchdog-cluster-v1, pool-vm-placement-v1, pool-resource-removal-v1): their constants, advertisement, Controller 409 refusals, Core 404/405 'upgrade it' peer mappings, projection *_supported fields, the replica 'unsupported' state, the join-candidate capability row and the UI upgrade notes. Also delete the BUG-0707 blank-host policy Run now replay binding and the redundant startup catalog receipt reconcile, and restore the exported catalog rebuild used by nex-core-local. API impact: changed contract.",
+  "paths": [
+    "internal/protocol/pool.go",
+    "internal/protocol/managed.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/backup_schedule.go",
+    "internal/agent/backup_catalog_rebuild.go",
+    "internal/agent/backup.go",
+    "internal/agent/pool_witness_test.go",
+    "internal/agent/backup_run_now_test.go",
+    "cmd/nex-core-local/main.go",
+    "internal/controller/identity.go",
+    "internal/controller/pooljoin.go",
+    "internal/controller/poolmaintenance.go",
+    "internal/controller/pooltransfer.go",
+    "internal/controller/poolpromotion.go",
+    "internal/controller/witness.go",
+    "internal/controller/media.go",
+    "internal/controller/managed.go",
+    "web/src/pool-members.tsx",
+    "web/src/pool-authority.tsx",
+    "web/src/pool-promotion.tsx",
+    "web/src/managed.tsx",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/peer.html",
+    "docs/api/local.html",
+    "tests/test_api_contract.py",
+    "docs/guide/join-a-pool.md",
+    "docs/guide/host-maintenance-mode.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/guide/create-virtual-machine.md",
+    "docs/guide/edit-virtual-machine.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-pool-capability-gate-removal.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator prerequisites and troubleshooting entries that named the removed capabilities and upgrade refusals are gone; the host fencing and fencing-readiness 'not reported' text no longer tells the operator to upgrade.",
+    "pages": [
+      "docs/guide/join-a-pool.md",
+      "docs/guide/host-maintenance-mode.md",
+      "docs/guide/pool-authority-and-recovery.md",
+      "docs/guide/remove-pool-network-or-iso.md",
+      "docs/guide/create-virtual-machine.md",
+      "docs/guide/edit-virtual-machine.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Removed from GET /api/v1/pools/{id}/members: maintenance_supported, replica_supported, transfer_supported, host_fencing_supported, per-member transfer_supported and replica state 'unsupported'; removed the 'capability' join-candidate row. Removed the capability 409s on pool join, maintenance, master change/cancel/eject, promotion preflight/promote, fence profile, BMC probe/provisioning, host fencing, witness registration, VM create/update placement, network remove/rename and ISO remove (a bodyless succeeded-ISO DELETE is now 400 invalid JSON request). Core no longer maps a peer 404/405 to an 'upgrade it' message, and pool_requests go to every protocol v2 report. Not in production: no Controller/Core version compatibility is kept.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/peer-openapi.json", "docs/api/local-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Legacy compatibility removal under the 2026-09-29 no-production owner decision.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state is added or moved; only compatibility checks and projection fields derived from advertised capabilities are removed."
+  },
+  "verification": {
+    "method": "Controller, agent, protocol and vmhost Go tests (focused, then go test ./internal/... once), web tsc and npm test, tests.test_api_contract, generate_api.py --check.",
+    "evidence": ["tests/test_api_contract.py", "internal/controller/pooljoin_test.go", "web/src/pool-members.test.mjs"],
+    "limits": "No browser walkthrough or lab run; the integration harness edits (managed_vm_browser.py, website_controller_captures.py, ui-review.json) were only syntax-checked."
+  }
+}

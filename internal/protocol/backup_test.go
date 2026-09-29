@@ -92,6 +92,55 @@ func TestBackupRepositoryRejectsUnsafeRemoteSources(t *testing.T) {
 	if sftp.Valid() == nil {
 		t.Fatal("SFTP host key pin is required")
 	}
+	for name, mutate := range map[string]func(*BackupRepository){
+		"S3 port out of range": func(r *BackupRepository) { r.S3Source.Endpoint = "https://s3.example.test:99999" },
+		"S3 control character": func(r *BackupRepository) { r.S3Source.Bucket = "backups\r\nx" },
+		"S3 dot prefix":        func(r *BackupRepository) { r.S3Source.Prefix = "." },
+		"S3 oversized prefix":  func(r *BackupRepository) { r.S3Source.Prefix = strings.Repeat("p", 1025) },
+		"S3 bad fingerprint":   func(r *BackupRepository) { r.RemoteIdentity = &BackupRemoteIdentity{Fingerprint: "NOT-HEX"} },
+		"S3 oversized health":  func(r *BackupRepository) { r.Health.Error = strings.Repeat("e", 4097) },
+		"SMB host with port": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test:445", Share: "b"}
+		},
+		"SMB control in share": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test", Share: "b\x1b"}
+		},
+		"NFS with credential": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.Source = BackupRepoKindNFS, nil, NFSStorageSource{Server: "nfs.example.test", Export: "/b"}
+		},
+		"SFTP root control char": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SFTPSource = BackupRepoKindSFTP, nil, &BackupSFTPSource{Host: "sftp.example.test", Root: "/b\n", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+		},
+	} {
+		repo := base
+		repo.Kind, repo.CredentialRef = BackupRepoKindS3, "credential-1"
+		repo.S3Source = &BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups"}
+		if repo.Valid() != nil {
+			t.Fatalf("%s: base repository is invalid: %v", name, repo.Valid())
+		}
+		mutate(&repo)
+		if repo.Valid() == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	ipv6 := base
+	ipv6.Kind, ipv6.SFTPSource = BackupRepoKindSFTP, &BackupSFTPSource{Host: "fd00::1", Root: "/b", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+	if err := ipv6.Valid(); err != nil {
+		t.Fatalf("IPv6 host refused: %v", err)
+	}
+}
+
+func TestValidPoolHostnameRefusesSpoofingCharacters(t *testing.T) {
+	for _, name := range []string{"", " host", "host ", "host\tname", "host\x1bname", "host\u202ename", "host\u0085name", strings.Repeat("h", 201)} {
+		if ValidPoolHostname(name) {
+			t.Errorf("hostname %q was accepted", name)
+		}
+	}
+	for _, name := range []string{"host-a.example.test", "rack 2 host", "hôte"} {
+		if !ValidPoolHostname(name) {
+			t.Errorf("hostname %q was refused", name)
+		}
+	}
 }
 
 func TestBackupRunManifestDigestValidation(t *testing.T) {
@@ -172,5 +221,13 @@ func TestBackupManifestAcceptsOnlineConsistency(t *testing.T) {
 	}
 	if err := manifest.Valid(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestS3RegionIsValidated(t *testing.T) {
+	for region, want := range map[string]bool{"": true, "eu-west-2": true, "US East": false, "eu_west": false, strings.Repeat("a", 33): false} {
+		if got := validBackupS3(BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups", Region: region}); got != want {
+			t.Errorf("region %q valid=%v, want %v", region, got, want)
+		}
 	}
 }

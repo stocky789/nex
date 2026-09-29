@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"nex.local/nex/internal/protocol"
 )
@@ -42,6 +44,7 @@ type fakeS3 struct {
 	ignoreMultipartConditional bool
 	multipartStarts            int
 	denyManifestPut            bool
+	rejectArtifactPut          bool
 	loseManifestReply          bool
 	failManifestGetOnce        bool
 	failArtifactDeleteOnce     bool
@@ -56,11 +59,16 @@ type fakeS3 struct {
 	blockArtifactCompleteOnce  atomic.Bool
 	artifactPutEntered         chan struct{}
 	releaseArtifactPut         chan struct{}
+	onRequest                  func(*http.Request)
+	denyGet                    string
 	client                     *http.Client
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/backups/")
+	if f.onRequest != nil {
+		f.onRequest(r)
+	}
 	if r.Method == http.MethodPut && strings.HasSuffix(key, "/manifest.json") && f.blockManifestPutOnce.CompareAndSwap(true, false) {
 		close(f.manifestPutEntered)
 		<-f.releaseManifestPut
@@ -77,6 +85,17 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r.URL.Query().Has("uploads") && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = io.WriteString(w, "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated>")
+		for k := range f.uploads {
+			if strings.HasPrefix(k, r.URL.Query().Get("prefix")) {
+				_, _ = io.WriteString(w, "<Upload><Key>"+k+"</Key><UploadId>test-upload</UploadId></Upload>")
+			}
+		}
+		_, _ = io.WriteString(w, "</ListMultipartUploadsResult>")
+		return
+	}
 	if r.URL.Query().Has("uploads") && r.Method == http.MethodPost {
 		f.multipartStarts++
 		if f.uploads == nil {
@@ -144,7 +163,11 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
+		if key == f.denyGet {
+			s3TestError(w, http.StatusForbidden, "AccessDenied")
+			return
+		}
 		if strings.HasSuffix(key, "/manifest.json") && f.failManifestGetOnce {
 			f.failManifestGetOnce = false
 			s3TestError(w, http.StatusForbidden, "AccessDenied")
@@ -152,6 +175,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if body, ok := f.objects[key]; ok {
 			w.Header().Set("ETag", fakeS3ETag(body))
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 			_, _ = w.Write(body)
 		} else {
 			s3TestError(w, http.StatusNotFound, "NoSuchKey")
@@ -159,6 +183,14 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		if strings.HasSuffix(key, "/manifest.json") && f.denyManifestPut {
 			s3TestError(w, http.StatusForbidden, "AccessDenied")
+			return
+		}
+		if f.rejectArtifactPut && strings.HasSuffix(key, "/disk.qcow2") {
+			s3TestError(w, http.StatusRequestEntityTooLarge, "EntityTooLarge")
+			return
+		}
+		if old, ok := f.objects[key]; ok && r.Header.Get("If-Match") != "" && r.Header.Get("If-Match") != fakeS3ETag(old) {
+			s3TestError(w, http.StatusPreconditionFailed, "PreconditionFailed")
 			return
 		}
 		if _, ok := f.objects[key]; ok && r.Header.Get("If-None-Match") == "*" && !f.ignoreConditional {
@@ -233,7 +265,7 @@ func TestS3AbortFencesDelayedFinalManifest(t *testing.T) {
 	if err := <-finalResult; !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
 		t.Fatalf("delayed final PUT escaped tombstone: %v", err)
 	}
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("aborted point read: %v", err)
 	}
 	if names, err := b.Entries(ctx); err != nil || len(names) != 0 {
@@ -278,7 +310,7 @@ func TestS3PublishedFinalWinsAbortAfterAbsenceCheck(t *testing.T) {
 	if err := <-finalResult; err != nil {
 		t.Fatalf("published final lost key race: %v", err)
 	}
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); err != nil {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err != nil {
 		t.Fatalf("published final was blocked by abort: %v", err)
 	}
 	if names, err := b.Entries(ctx); err != nil || !slices.Contains(names, manifest.RecoveryPointID) {
@@ -356,7 +388,7 @@ func TestS3AbortFencesDelayedArtifactWrites(t *testing.T) {
 			if err := b.AbortIncomplete(ctx, manifest.RecoveryPointID); err != nil {
 				t.Fatalf("exact fenced retry: %v", err)
 			}
-			if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
+			if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("aborted point read: %v", err)
 			}
 		})
@@ -493,14 +525,14 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 		t.Fatal("prepared S3 identity rejected")
 	}
 	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
-	if err != nil || saved.Generation != 1 || saved.RemoteIdentity == nil || saved.MountPath != "" {
+	if err != nil || saved.RemoteIdentity == nil || saved.MountPath != "" {
 		t.Fatalf("save: %#v %v", saved, err)
 	}
 	backend, err := openBackupRepositoryStorage(s, saved)
 	if err != nil || backend.Verify(context.Background()) != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, _, err := backend.ReadPoint(context.Background(), "point-absent"); !os.IsNotExist(err) {
+	if _, _, err := backend.StatPoint(context.Background(), "point-absent"); !os.IsNotExist(err) {
 		t.Fatalf("missing point: %v", err)
 	}
 	if checked, err := TestPoolBackupRepositoryAccess(s, saved.ID); err != nil || checked.Access.Status != "ok" {
@@ -531,7 +563,7 @@ func testS3Manifest(payload []byte) protocol.BackupManifest {
 
 func catalogS3Point(t *testing.T, b *s3BackupStorage, manifest protocol.BackupManifest) {
 	t.Helper()
-	_, digest, err := b.ReadPoint(context.Background(), manifest.RecoveryPointID)
+	_, digest, err := b.StatPoint(context.Background(), manifest.RecoveryPointID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +617,7 @@ func TestS3BackupPublicationAndCorruption(t *testing.T) {
 	fake.mu.Lock()
 	fake.objects[b.pointKey(manifest.RecoveryPointID, "disk.qcow2")] = []byte("corrupt")
 	fake.mu.Unlock()
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); err == nil {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err == nil {
 		t.Fatal("corrupt artifact accepted")
 	}
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
@@ -639,7 +671,7 @@ func TestS3BackupIncompleteCollisionAndIdentity(t *testing.T) {
 	fake.mu.Lock()
 	fake.objects[b.pointKey(manifest.RecoveryPointID, "manifest.json")] = raw
 	fake.mu.Unlock()
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); err == nil {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err == nil {
 		t.Fatal("incomplete point accepted")
 	}
 	if _, err := b.Publish(ctx, manifest, nil); err == nil {
@@ -697,7 +729,7 @@ func TestS3AbortIncompletePublication(t *testing.T) {
 			id := manifest.RecoveryPointID
 			artifact := b.pointKey(id, "disk.qcow2")
 			if scenario == "lost-reply" {
-				if _, digest, err := b.ReadPoint(ctx, id); err != nil || digest == "" {
+				if _, digest, err := b.StatPoint(ctx, id); err != nil || digest == "" {
 					t.Fatalf("lost reply did not leave exact published point: %v", err)
 				}
 				if err := b.AbortIncomplete(ctx, id); err == nil {
@@ -911,7 +943,7 @@ func TestS3BackupDeleteResumesAfterLostManifestReply(t *testing.T) {
 	} else {
 		t.Logf("injected delete error: %v", err)
 	}
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); err == nil {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err == nil {
 		t.Fatal("deleting point remained restorable")
 	}
 	fake.mu.Lock()
@@ -999,7 +1031,503 @@ func TestS3MultipartFailureAbortsAndRetryPublishes(t *testing.T) {
 		fake.mu.Unlock()
 		t.Fatalf("multipart retry: %v size=%d pending=%d", err, size, pending)
 	}
-	if _, _, err := b.ReadPoint(ctx, manifest.RecoveryPointID); err != nil {
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Regression for BUG-0716: prune, protection, rebuild and publication must not
+// re-download artifacts that publication already verified before commit.
+func TestS3MetadataOperationsSkipArtifactDownloads(t *testing.T) {
+	b, fake := testS3Storage(t)
+	var downloads atomic.Int32
+	fake.onRequest = func(r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/disk.qcow2") {
+			downloads.Add(1)
+		}
+	}
+	ctx := context.Background()
+	payload := []byte("disk bytes")
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := downloads.Load(); got != 1 {
+		t.Fatalf("publication downloaded the artifact %d times", got)
+	}
+	if err := savePoolBackupCatalogEntry(b.s, protocol.BackupRecoveryPoint{ID: manifest.RecoveryPointID, RepositoryID: manifest.RepositoryID,
+		PoolID: manifest.PoolID, SourceVMID: manifest.SourceVMID, CapturedAt: manifest.CapturedAt,
+		Consistency: manifest.Consistency, ManifestSHA256: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if points, err := b.Scan(ctx); err != nil || len(points) != 1 || points[0].ManifestSHA256 != digest {
+		t.Fatalf("scan: %#v %v", points, err)
+	}
+	if err := b.SetProtected(ctx, manifest.RecoveryPointID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Delete(ctx, manifest.RecoveryPointID); err != nil {
+		t.Fatal(err)
+	}
+	if got := downloads.Load(); got != 1 {
+		t.Fatalf("metadata operations downloaded the artifact %d more times", got-1)
+	}
+}
+
+// Regression for BUG-0716: exact-content artifact reads during abort must not
+// hold poolPeerMu, which every pool membership read waits on.
+func TestS3AbortReadsArtifactsWithoutPoolPeerLock(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	payload := []byte("unpublished disk bytes")
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake.denyManifestPut = true
+	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
+		t.Fatal("publication failure not reported")
+	}
+	fake.denyManifestPut = false
+	var block atomic.Bool
+	entered, release := make(chan struct{}), make(chan struct{})
+	fake.onRequest = func(r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/disk.qcow2") && block.CompareAndSwap(true, false) {
+			close(entered)
+			<-release // a stalled remote mid-artifact read
+		}
+	}
+	block.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- b.AbortIncomplete(ctx, manifest.RecoveryPointID) }()
+	<-entered
+	member := make(chan struct{})
+	go func() { Membership(b.s); close(member) }()
+	select {
+	case <-member:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Membership blocked on poolPeerMu while abort read an artifact")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Regression for BUG-0716: a silent S3 service must fail a request, not hang it.
+func TestS3ClientTimesOutStalledResponse(t *testing.T) {
+	stalled := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-stalled }))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(stalled) })
+	oldTimeout, oldClient := s3BackupReadTimeout, newBackupS3Client
+	s3BackupReadTimeout = 200 * time.Millisecond
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		trusted := server.Client().Transport.(*http.Transport).TLSClientConfig
+		options.HTTPClient = options.HTTPClient.(*awshttp.BuildableClient).WithTransportOptions(func(t *http.Transport) { t.TLSClientConfig = trusted })
+		options.RetryMaxAttempts = 1
+		return s3.New(options)
+	}
+	t.Cleanup(func() { s3BackupReadTimeout, newBackupS3Client = oldTimeout, oldClient })
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Test", Kind: protocol.BackupRepoKindS3,
+		S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}, CredentialRef: "key-1"}
+	b, err := newS3BackupStorageWithCredential(seedBackupMaster(t), repo, protocol.StorageCredentials{Username: "k", Secret: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := b.Verify(context.Background()); err == nil || time.Since(started) > 5*time.Second {
+		t.Fatalf("stalled S3 response was not bounded: %v after %s", err, time.Since(started))
+	}
+}
+
+// Regression for BUG-0740: a response read waiting behind a slow but
+// progressing upload stays alive; a connection that stops moving fails.
+func TestS3ConnectionFailsOnlyWithoutProgress(t *testing.T) {
+	oldTimeout := s3BackupReadTimeout
+	s3BackupReadTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { s3BackupReadTimeout = oldTimeout })
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	conn := s3ProgressConn{local}
+	response := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		response <- err
+	}()
+	go io.Copy(io.Discard, remote)
+	for until := time.Now().Add(500 * time.Millisecond); time.Now().Before(until); time.Sleep(30 * time.Millisecond) {
+		if _, err := conn.Write([]byte("part")); err != nil {
+			t.Fatal("progressing upload failed:", err)
+		}
+		select {
+		case err := <-response:
+			t.Fatal("response read timed out during a progressing upload:", err)
+		default:
+		}
+	}
+	select {
+	case err := <-response:
+		if err == nil {
+			t.Fatal("silent connection returned data")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("silent connection was not bounded")
+	}
+}
+
+func publishS3TestPoint(t *testing.T, b *s3BackupStorage, payload []byte) protocol.BackupManifest {
+	t.Helper()
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Publish(context.Background(), manifest, map[string]string{"disk.qcow2": stage}); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// Regression for BUG-0720: a prune interrupted after it removed the point
+// must not block catalog rebuild, which cannot resume it without a catalog entry.
+func TestS3EntriesAcceptsPruneThatRemovedThePoint(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	manifest := publishS3TestPoint(t, b, []byte("disk"))
+	id := manifest.RecoveryPointID
+	fake.mu.Lock()
+	manifestRaw := fake.objects[b.pointKey(id, "manifest.json")]
+	fake.mu.Unlock()
+	sum := sha256.Sum256(manifestRaw)
+	record, _ := json.Marshal(s3BackupDeleteRecord{Repository: b.repo.ID, Pool: b.repo.PoolID, Point: id,
+		ManifestSHA: hex.EncodeToString(sum[:]), Manifest: manifestRaw, Keys: b.manifestKeys(manifest)})
+	fake.mu.Lock()
+	fake.objects[b.pointKey(id, s3BackupDeleteKey)] = record
+	delete(fake.objects, b.pointKey(id, "manifest.json"))
+	fake.mu.Unlock()
+	if _, err := b.Entries(ctx); err == nil {
+		t.Fatal("rebuild ignored a prune that still holds point objects")
+	}
+	fake.mu.Lock()
+	delete(fake.objects, b.pointKey(id, "disk.qcow2"))
+	fake.mu.Unlock()
+	if names, err := b.Entries(ctx); err != nil || len(names) != 0 {
+		t.Fatalf("finished prune blocked rebuild: %v %v", names, err)
+	}
+	if points, err := b.Scan(ctx); err != nil || len(points) != 0 {
+		t.Fatalf("finished prune blocked scan: %v %v", points, err)
+	}
+}
+
+// Regression for BUG-0720: abort and delete records are recognised by their own
+// raw digest, not by re-validating the captured manifest after an upgrade.
+func TestS3RecordsSurviveManifestValidationChange(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	if err := b.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	manifest := testS3Manifest([]byte("disk"))
+	manifest.SpecSHA256 = "digest-from-an-older-schema" // Valid() now rejects the bound manifest.
+	raw, _ := json.Marshal(manifest)
+	fake.mu.Lock()
+	fake.objects[b.pointKey(manifest.RecoveryPointID, "manifest.json")] = b.abortTombstone(manifest.RecoveryPointID, raw)
+	fake.mu.Unlock()
+	if names, err := b.Entries(ctx); err != nil || len(names) != 0 {
+		t.Fatalf("old abort tombstone blocked rebuild: %v %v", names, err)
+	}
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old abort tombstone read as a point: %v", err)
+	}
+}
+
+func testS3Registration(t *testing.T, prefix string) (*Store, *fakeS3, protocol.BackupRepository) {
+	t.Helper()
+	fake := &fakeS3{objects: map[string][]byte{}}
+	server := httptest.NewTLSServer(fake)
+	t.Cleanup(server.Close)
+	previous := newBackupS3Client
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		options.HTTPClient = server.Client()
+		return s3.New(options)
+	}
+	t.Cleanup(func() { newBackupS3Client = previous })
+	s := seedBackupMaster(t)
+	return s, fake, protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindS3,
+		S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: prefix}, CredentialRef: "key-1"}
+}
+
+var testS3Credential = protocol.StorageCredentials{Username: "test-key", Secret: "test-secret"}
+
+// Regression for BUG-0720: a registration refused by its probe releases the
+// prefix, so the corrected retry (with a new repository ID) can claim it.
+func TestS3RefusedRegistrationReleasesOwner(t *testing.T) {
+	s, fake, repo := testS3Registration(t, "pool-1")
+	ctx := context.Background()
+	fake.objects["pool-1/"] = nil // A console-created folder holds no data.
+	fake.ignoreConditionalDelete = true
+	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err == nil {
+		t.Fatal("service without conditional delete registered")
+	}
+	fake.mu.Lock()
+	_, owned := fake.objects["pool-1/"+s3BackupOwnerKey]
+	fake.objects["pool-1/.nex-probe-leftover"] = []byte("nex backup probe")
+	fake.ignoreConditionalDelete = false
+	fake.mu.Unlock()
+	if owned {
+		t.Fatal("refused registration kept its owner claim")
+	}
+	repo.ID = "repo-2"
+	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err != nil {
+		t.Fatalf("corrected registration refused: %v", err)
+	}
+}
+
+// Regression for BUG-0720: a new repository may not sit inside another one's
+// prefix, and "." may not alias the bucket root.
+func TestS3RegistrationRefusesNestedPrefix(t *testing.T) {
+	s, _, repo := testS3Registration(t, "pool-1")
+	ctx := context.Background()
+	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err != nil {
+		t.Fatal(err)
+	}
+	nested := repo
+	nested.ID, nested.S3Source = "repo-2", &protocol.BackupS3Source{Endpoint: repo.S3Source.Endpoint, Bucket: "backups", Prefix: "pool-1/child/deeper"}
+	if _, err := prepareS3BackupRepository(ctx, s, nested, testS3Credential); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("nested prefix registered: %v", err)
+	}
+	dot := repo
+	dot.ID, dot.S3Source = "repo-3", &protocol.BackupS3Source{Endpoint: repo.S3Source.Endpoint, Bucket: "backups", Prefix: "."}
+	if _, err := prepareS3BackupRepository(ctx, s, dot, testS3Credential); !errors.Is(err, ErrBackupInvalid) {
+		t.Fatalf("dot prefix registered: %v", err)
+	}
+}
+
+// Regression for BUG-0720: member dispatch prepares an adopted repository on
+// every request, so it must reuse the multipart proof instead of re-uploading.
+func TestS3AdoptionReusesMultipartProof(t *testing.T) {
+	s, fake, repo := testS3Registration(t, "pool-1")
+	ctx := context.Background()
+	prepared, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	registered := fake.multipartStarts
+	fake.mu.Unlock()
+	for range 2 {
+		if _, err := prepareS3BackupRepository(ctx, s, prepared, testS3Credential); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.multipartStarts != registered {
+		t.Fatalf("adoption repeated the multipart probe: %d -> %d", registered, fake.multipartStarts)
+	}
+}
+
+// Regression for BUG-0720: a probe cut off by its caller's deadline aborts its
+// multipart upload with a fresh context instead of leaking billed parts.
+func TestS3ProbeAbortsInterruptedMultipart(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake.onRequest = func(r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Query().Has("partNumber") {
+			cancel()
+		}
+	}
+	if err := b.Probe(ctx); err == nil {
+		t.Fatal("interrupted probe passed")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.uploads) != 0 {
+		t.Fatalf("interrupted probe leaked multipart uploads: %d", len(fake.uploads))
+	}
+}
+
+// Regression for BUG-0720: reconciliation aborts multipart uploads a crashed
+// publisher left under the point, and a foreign artifact is a conflict.
+func TestS3AbortIncompleteAbortsOrphanMultipart(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	payload := []byte("disk")
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake.denyManifestPut = true
+	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
+		t.Fatal("denied publication succeeded")
+	}
+	fake.mu.Lock()
+	fake.denyManifestPut = false
+	fake.uploads = map[string]map[int][]byte{b.pointKey(manifest.RecoveryPointID, "firmware.bin"): {1: []byte("part")}}
+	fake.mu.Unlock()
+	if err := b.AbortIncomplete(ctx, manifest.RecoveryPointID); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.uploads) != 0 {
+		t.Fatal("orphan multipart upload survived reconciliation")
+	}
+}
+
+// Regression for BUG-0720: a different object at an artifact key is a conflict,
+// found before the upload, and a failed marker read is not read as absence.
+func TestS3PublishReportsConflictsAndMarkerReadErrors(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	payload := []byte("disk")
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	artifact := b.pointKey(manifest.RecoveryPointID, "disk.qcow2")
+	var uploads atomic.Int32
+	fake.onRequest = func(r *http.Request) {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/disk.qcow2") {
+			uploads.Add(1)
+		}
+	}
+	if err := b.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.objects[artifact] = []byte("othr")
+	fake.mu.Unlock()
+	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("conflicting artifact: %v", err)
+	}
+	if uploads.Load() != 0 {
+		t.Fatal("conflicting artifact was re-uploaded")
+	}
+	fake.mu.Lock()
+	fake.denyGet = b.key(s3BackupIntentPrefix + manifest.RecoveryPointID)
+	fake.mu.Unlock()
+	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); err == nil || errors.Is(err, ErrBackupConflict) || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreadable intent was treated as settled: %v", err)
+	}
+}
+
+// A stalled unprotect must not delete a marker written after it read the old one.
+func TestS3StaleUnprotectKeepsNewerMarker(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	payload := []byte("disk for protection race")
+	manifest := testS3Manifest(payload)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetProtected(ctx, manifest.RecoveryPointID, true); err != nil {
+		t.Fatal(err)
+	}
+	key := b.pointKey(manifest.RecoveryPointID, ".nex-protected")
+	newer := newBackupProtectMarker(manifest.RecoveryPointID)
+	fake.onRequest = func(r *http.Request) {
+		if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/.nex-protected") {
+			fake.mu.Lock()
+			fake.objects[strings.TrimPrefix(r.URL.Path, "/backups/")] = newer
+			fake.mu.Unlock()
+		}
+	}
+	if err := b.SetProtected(ctx, manifest.RecoveryPointID, false); !errors.Is(err, ErrBackupConflict) {
+		t.Fatal("stale unprotect was not refused:", err)
+	}
+	fake.mu.Lock()
+	got := fake.objects[key]
+	fake.mu.Unlock()
+	if !bytes.Equal(got, newer) {
+		t.Fatalf("newer marker was lost: %q", got)
+	}
+	fake.onRequest = nil
+	if err := b.SetProtected(ctx, manifest.RecoveryPointID, false); err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := b.Protected(ctx, manifest.RecoveryPointID); err != nil || protected {
+		t.Fatal("unprotect did not remove the marker:", protected, err)
+	}
+}
+
+func TestS3PublishReportsProviderRefusal(t *testing.T) {
+	b, fake := testS3Storage(t)
+	payload := []byte("disk the provider refuses")
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake.rejectArtifactPut = true
+	_, err := b.Publish(context.Background(), testS3Manifest(payload), map[string]string{"disk.qcow2": stage})
+	if err == nil || !strings.Contains(err.Error(), "upload disk.qcow2 to S3") || !strings.Contains(err.Error(), "EntityTooLarge") {
+		t.Fatalf("provider refusal is not in the error: %v", err)
+	}
+}
+
+func TestS3ClientSignsWithConfiguredRegion(t *testing.T) {
+	previous := newBackupS3Client
+	t.Cleanup(func() { newBackupS3Client = previous })
+	var regions []string
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		regions = append(regions, options.Region)
+		return s3.New(options)
+	}
+	for _, region := range []string{"", "eu-west-2"} {
+		repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Test", Kind: protocol.BackupRepoKindS3, CredentialRef: "key-1",
+			S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups", Region: region}}
+		credential := protocol.StorageCredentials{Username: "key", Secret: "secret"}
+		if _, err := newS3BackupStorageWithCredential(seedBackupMaster(t), repo, credential); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(regions, []string{"us-east-1", "eu-west-2"}) {
+		t.Fatalf("signing regions %v", regions)
+	}
+}
+
+// Regression for BUG-0751: every backend reads the marker of a maximum-length point ID.
+func TestS3ProtectsMaximumLengthPointID(t *testing.T) {
+	b, _ := testS3Storage(t)
+	ctx := context.Background()
+	if err := b.Probe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := b.Identity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.repo.RemoteIdentity = &identity
+	payload := []byte("disk")
+	manifest := testS3Manifest(payload)
+	manifest.RecoveryPointID = strings.Repeat("a", 64)
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetProtected(ctx, manifest.RecoveryPointID, true); err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := b.Protected(ctx, manifest.RecoveryPointID); err != nil || !protected {
+		t.Fatalf("maximum-length marker unreadable: %t %v", protected, err)
 	}
 }

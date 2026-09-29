@@ -19,10 +19,44 @@ type Props = {
   onNotice: (text: string, operationID?: string) => void;
 };
 
-const blankRemote = { kind: "nfs" as BackupKind, share: "", endpoint: "", bucket: "", prefix: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "" };
+const blankRemote = { kind: "nfs" as BackupKind, share: "", endpoint: "", bucket: "", prefix: "", region: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "", domain: "" };
+
+const validHost = (value: string) => value !== "" && !/[\s/\\@]/.test(value);
+const validComponent = (value: string) => value !== "" && value !== "." && value !== ".." && !/[/\\]/.test(value);
+const validRelative = (path: string) => path.split("/").every(validComponent);
+
+// validSMBDomain mirrors Core: an optional plain domain or workgroup name.
+export const validSMBDomain = (value: string) => value.length <= 253 && !/[\s\p{Cc}/\\=,;'"`$&|<>()]/u.test(value);
+
+type DestinationFields = typeof blankRemote & { server: string; exportPath: string; directory: string };
+
+// backupSource builds the registration source, or null when Core's validator would refuse it,
+// so the credential is never delivered for a destination that cannot be registered.
+export function backupSource(f: DestinationFields) {
+  const server = f.server.trim(), directory = f.directory.trim();
+  if (f.kind === "nfs") {
+    const exportPath = f.exportPath.trim();
+    return server && exportPath && !/[/\\]/.test(server) && !directory.startsWith("/") && !directory.includes("..")
+      ? { source: { server, export: exportPath, ...(directory ? { directory } : {}) } } : null;
+  }
+  if (f.kind === "smb3") {
+    const share = f.share.trim();
+    return validHost(server) && validComponent(share) && (!directory || validRelative(directory))
+      ? { smb_source: { server, share, ...(directory ? { directory } : {}) } } : null;
+  }
+  if (f.kind === "s3") {
+    const endpoint = f.endpoint.trim(), bucket = f.bucket.trim(), prefix = f.prefix.trim(), region = f.region.trim();
+    return /^https:\/\/[^\s/?#@]+$/.test(endpoint) && validComponent(bucket) && (!prefix || validRelative(prefix)) && /^[a-z0-9-]{0,32}$/.test(region)
+      ? { s3_source: { endpoint, bucket, ...(prefix ? { prefix } : {}), ...(region ? { region } : {}) } } : null;
+  }
+  const root = f.root.trim(), hostKey = f.hostKey.trim(), port = Number(f.port);
+  return validHost(server) && (root === "/" || (root.startsWith("/") && validRelative(root.slice(1)))) &&
+    /^SHA256:[A-Za-z0-9+/]{43}$/.test(hostKey) && (!f.port || (Number.isInteger(port) && port >= 1 && port <= 65535))
+    ? { sftp_source: { host: server, root, host_key_sha256: hostKey, ...(f.port ? { port } : {}) } } : null;
+}
 
 function memberState(repo: BackupRepository, access: BackupMemberAccess): string {
-  if (access.repository_id !== repo.id || (repo.generation != null && access.generation !== repo.generation)) {
+  if (access.repository_id !== repo.id) {
     return "pending";
   }
   if (access.error) return access.error;
@@ -37,8 +71,7 @@ export function hostAccess(repo: BackupRepository, hosts: Host[], masterHostID: 
     }
     if (host.id === masterHostID) {
       const access = repo.access;
-      const observed = Date.parse(access?.observed_at || "");
-      if (!Number.isFinite(observed) || observed > Date.now() || Date.now() - observed > 2 * 60_000) {
+      if (repositoryHealth(repo) === "unknown") {
         return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: `Last report: ${date(access?.observed_at)}` };
       }
       if (access?.status === "failed" || (access?.status === "ok" && (!access.readable || !access.writable))) {
@@ -52,10 +85,6 @@ export function hostAccess(repo: BackupRepository, hosts: Host[], masterHostID: 
     const member = repo.member_access?.find(a => a.host_id === host.id);
     if (!member) {
       return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: "No access report" };
-    }
-    const observed = Date.parse(member.observed_at || "");
-    if (!Number.isFinite(observed) || observed > Date.now() || Date.now() - observed > 2 * 60_000) {
-      return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: `Last report: ${date(member.observed_at)}` };
     }
     const state = memberState(repo, member);
     if (state === "accessible") {
@@ -117,15 +146,10 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const master = hosts.find(h => h.id === masterHostID);
   const availableKinds = availableBackupKinds(master?.connection, master?.capabilities);
   const remoteAvailable = remote.kind === "nfs" || availableKinds.includes(remote.kind);
-  const destinationReady = {
-    nfs: Boolean(server.trim() && exportPath.trim()),
-    smb3: Boolean(server.trim() && remote.share.trim()),
-    s3: remote.endpoint.startsWith("https://") && Boolean(remote.bucket.trim()),
-    sftp: Boolean(server.trim() && remote.root.trim() && remote.hostKey.trim()),
-  }[remote.kind];
-  const credentialReady = remote.kind === "nfs" || Boolean(remote.username.trim() &&
+  const source = backupSource({ ...remote, server, exportPath, directory });
+  const credentialReady = remote.kind === "nfs" || Boolean(remote.username.trim() && !(remote.kind === "smb3" && (remote.username.includes("=") || !validSMBDomain(remote.domain.trim()))) &&
     (credentialReceipt.current || (remote.kind === "sftp" ? remote.sshKey.trim() : remote.secret)));
-  const canCreate = Boolean(name.trim() && destinationReady && credentialReady && remoteAvailable && !unavailable && !busy);
+  const canCreate = Boolean(name.trim() && source && credentialReady && remoteAvailable && !unavailable && !busy);
 
   const load = async () => {
     loadAbort.current?.abort();
@@ -189,7 +213,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!canCreate) return;
+    if (!canCreate || !source) return;
     setWorking(createKey);
     setError("");
     try {
@@ -197,18 +221,13 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
       const registrationID = requestID(createKey, "brepo");
       const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred");
       if (credentialID && !credentialReceipt.current) {
-        const credentials = remote.kind === "sftp" ? { username: remote.username.trim(), ssh_private_key: remote.sshKey } : { username: remote.username.trim(), secret: remote.secret };
+        const credentials = remote.kind === "sftp" ? { username: remote.username.trim(), ssh_private_key: remote.sshKey } : { username: remote.username.trim(), secret: remote.secret, ...(remote.kind === "smb3" && remote.domain.trim() ? { domain: remote.domain.trim() } : {}) };
         credentialReceipt.current = (await api<{ receipt: string }>("storage/credentials", "POST", {
           request_id: credentialID, registration_request_id: `backup-credential:${remote.kind}:${registrationID}`,
-          pool_id: poolID, host_id: masterHostID, repository_id: createID.current, credentials,
+          pool_id: poolID, host_id: masterHostID, repository_id: createID.current, credentials, repository: { name: name.trim(), ...source },
         })).receipt;
         setRemote(current => ({ ...current, secret: "", sshKey: "" }));
       }
-      let source;
-      if (remote.kind === "nfs") source = { source: { server: server.trim(), export: exportPath.trim(), ...(directory.trim() ? { directory: directory.trim() } : {}) } };
-      else if (remote.kind === "smb3") source = { smb_source: { server: server.trim(), share: remote.share.trim(), ...(directory.trim() ? { directory: directory.trim() } : {}) } };
-      else if (remote.kind === "s3") source = { s3_source: { endpoint: remote.endpoint.trim(), bucket: remote.bucket.trim(), ...(remote.prefix.trim() ? { prefix: remote.prefix.trim() } : {}) } };
-      else source = { sftp_source: { host: server.trim(), root: remote.root.trim(), host_key_sha256: remote.hostKey.trim(), ...(remote.port ? { port: Number(remote.port) } : {}) } };
       const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "POST", {
         request_id: registrationID,
         id: createID.current,
@@ -305,6 +324,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
           <label>HTTPS endpoint<input required type="url" value={remote.endpoint} disabled={fieldsDisabled} placeholder="https://objects.example.test" onChange={e => patchRemote({ endpoint: e.target.value })} /></label>
           <label>Bucket<input required value={remote.bucket} disabled={fieldsDisabled} onChange={e => patchRemote({ bucket: e.target.value })} /></label>
           <label>Prefix<input value={remote.prefix} disabled={fieldsDisabled} placeholder="Optional" onChange={e => patchRemote({ prefix: e.target.value })} /></label>
+          <label>Region<input value={remote.region} disabled={fieldsDisabled} placeholder="us-east-1" pattern="[a-z0-9\-]{0,32}" onChange={e => patchRemote({ region: e.target.value })} /></label>
         </> : <>
           <label>{remote.kind === "nfs" ? "NFS server" : remote.kind === "smb3" ? "SMB server" : "Server"}<input required value={server} disabled={fieldsDisabled} placeholder="backup.example.test" onChange={e => change(() => setServer(e.target.value))} /></label>
           {remote.kind === "nfs" && <label>Export path<input required value={exportPath} disabled={fieldsDisabled} placeholder="/exports/backups" pattern="/.*" onChange={e => change(() => setExportPath(e.target.value))} /></label>}
@@ -318,6 +338,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
         </>}
         {remote.kind !== "nfs" && <>
           <label>{remote.kind === "s3" ? "Access key ID" : "Username"}<input required value={remote.username} autoComplete="username" disabled={fieldsDisabled} onChange={e => patchRemote({ username: e.target.value })} /></label>
+          {remote.kind === "smb3" && <label>Domain<input value={remote.domain} autoComplete="off" disabled={fieldsDisabled} placeholder="Optional, for domain accounts" onChange={e => patchRemote({ domain: e.target.value })} /></label>}
           {remote.kind === "sftp" ? <label>SSH private key<textarea required={!credentialReceipt.current} value={remote.sshKey} autoComplete="off" spellCheck={false} disabled={fieldsDisabled} onChange={e => patchRemote({ sshKey: e.target.value })} /></label>
             : <label>{remote.kind === "s3" ? "Secret access key" : "Password"}<input required={!credentialReceipt.current} type="password" value={remote.secret} autoComplete="new-password" disabled={fieldsDisabled} onChange={e => patchRemote({ secret: e.target.value })} /></label>}
         </>}

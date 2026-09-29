@@ -211,10 +211,6 @@ func (c *Controller) agentWitnessRegister(w http.ResponseWriter, r *http.Request
 		fail(w, 409, "reported pool authority does not match witness registration")
 		return
 	}
-	if !hostSupportsCapability(tx, host, protocol.PoolWitnessCapability) {
-		fail(w, 409, "pool master does not support native witness registration")
-		return
-	}
 	conflict, err := witnessClusterNameConflict(tx, body.PoolID, body.ClusterName)
 	if err != nil {
 		fail(w, 500, "witness registration could not be confirmed")

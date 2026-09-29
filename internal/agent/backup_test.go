@@ -70,7 +70,7 @@ func TestBackupRepositoryCRUDAndInventoryFlags(t *testing.T) {
 		MountPath: mount,
 	}
 	saved, err := upsertTestBackupRepository(s, repo)
-	if err != nil || saved.Generation != 1 {
+	if err != nil || saved.ID != repo.ID {
 		t.Fatalf("upsert: %#v err=%v", saved, err)
 	}
 	listed, err := ListPoolBackupRepositories(s)
@@ -220,7 +220,7 @@ func TestRestoreAsNewControllerPathReservesMissingRunBeforeSettle(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	cmd := protocol.Command{

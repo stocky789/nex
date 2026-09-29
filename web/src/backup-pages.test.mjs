@@ -2,9 +2,7 @@
 import assert from "node:assert/strict";
 import { bundleTestModule } from "./test-helpers.mjs";
 
-const { appendBackupPage, backupPage, collectBackupPageItems, refreshBackupPage } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "backup-pages"));
-const legacy = [{ id: "old" }];
-assert.deepEqual(backupPage(legacy), { items: legacy, generation: "", total: 1 }, "older Core array remains a complete list");
+const { appendBackupPage, collectBackupPageItems, loadRecoveryPoints, refreshBackupPage } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "backup-pages"));
 
 const first = { items: [{ id: "new" }, { id: "middle" }], generation: "g1", total: 3, next_cursor: "cursor-1" };
 const second = { items: [{ id: "middle" }, { id: "old" }], generation: "g1", total: 3 };
@@ -21,3 +19,12 @@ const history = await collectBackupPageItems({ items: [{ id: "recent" }], next_c
 assert.deepEqual(requests, [{ cursor: "older", generation: "g1" }]);
 assert.deepEqual(history.map(item => item.id), ["recent", "older-active-test"], "selected point scans later run pages before deciding which test VMs remain active");
 await assert.rejects(collectBackupPageItems(first, async () => changed), /inventory changed/, "a generation change during the scan must restart or fail closed");
+
+const point = (id, vm, repo = "repo-1") => ({ id, source_vm_id: vm, repository_id: repo });
+const paths = [];
+const pagedAPI = async path => {
+  paths.push(path);
+  return path.includes("cursor=") ? { items: [point("a2", "vm-a")], generation: "g1", total: 2 } : { items: [point("a1", "vm-a")], generation: "g1", total: 2, next_cursor: "1" };
+};
+assert.deepEqual((await loadRecoveryPoints(pagedAPI, "pool 1", { vm_id: "vm-a" })).map(p => p.id), ["a1", "a2"], "a paged Core is read to the last page");
+assert.deepEqual(paths, ["pools/pool%201/backup-catalog?vm_id=vm-a", "pools/pool%201/backup-catalog?vm_id=vm-a&cursor=1&generation=g1"], "the VM filter is sent to Core on every page");

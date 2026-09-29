@@ -271,7 +271,12 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return runCommand(ctx, "", name, args...)
+	return runCommand(ctx, "", nil, name, args...)
+}
+
+// runInput is run with stdin, for commands that must read a secret without it touching disk.
+func runInput(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return runCommand(ctx, "", stdin, name, args...)
 }
 
 // runWithDir retains the normal bounded command behavior while anchoring a child's
@@ -281,16 +286,19 @@ func runWithDir(ctx context.Context, dir *os.File, name string, args ...string) 
 	if dir == nil {
 		return nil, errors.New("working directory is unavailable")
 	}
-	output, err := runCommand(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), dir.Fd()), name, args...)
+	output, err := runCommand(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), dir.Fd()), nil, name, args...)
 	runtime.KeepAlive(dir)
 	return output, err
 }
 
-func runCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+func runCommand(ctx context.Context, dir string, stdin []byte, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
 	var out, stderr cappedOutput

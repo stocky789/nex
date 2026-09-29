@@ -3,6 +3,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -124,5 +125,25 @@ func TestCredentialReceiptObservationReplacesOnlyReportingHost(t *testing.T) {
 	}
 	if got, ok := b.eligibleReceipts("pool-2", "host-2"); !ok || len(got) != 1 || got[0] != other {
 		t.Fatalf("other host receipt was changed %#v %v", got, ok)
+	}
+}
+
+func TestCredentialReceiptMirrorBoundIsPerHostAndKeepsLiveReceipts(t *testing.T) {
+	b := newCredentialBroker()
+	receipts := func(host string, n int, status string) []protocol.StorageCredentialReceipt {
+		out := make([]protocol.StorageCredentialReceipt, n)
+		for i := range out {
+			out[i] = protocol.StorageCredentialReceipt{Receipt: fmt.Sprintf("%s-%s-%d", host, status, i), RequestID: fmt.Sprintf("%s-%d", status, i), PoolID: "pool-1", HostID: host, Status: status}
+		}
+		return out
+	}
+	b.observeReceipts("host-1", receipts("host-1", 1024, "ready"))
+	live := protocol.StorageCredentialReceipt{Receipt: "live", RequestID: "live-request", PoolID: "pool-1", HostID: "host-2", Status: "ready"}
+	b.observeReceipts("host-2", append(receipts("host-2", 1100, "retired"), live))
+	if _, ok := b.receipt("host-2", "live-request", "pool-1", "", ""); !ok {
+		t.Fatal("tombstones or another host's receipts crowded out a live receipt")
+	}
+	if _, ok := b.receipt("host-1", "ready-1023", "pool-1", "", ""); !ok {
+		t.Fatal("another host's report evicted this host's receipts")
 	}
 }

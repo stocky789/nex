@@ -2,6 +2,7 @@
 // Hand types matching internal/protocol/backup.go JSON tags.
 // Controller paths: /api/v1/pools/{id}/backup-repositories|catalog|backup-restore
 // and POST /api/v1/vms/{id}/backup (request_id; create body is flat name/kind/source).
+import type { API } from "./types";
 
 export type BackupNFSSource = { server: string; export: string; directory?: string };
 export type BackupKind = "nfs" | "smb3" | "s3" | "sftp";
@@ -27,7 +28,6 @@ export type BackupStorageAccess = {
 export type BackupMemberAccess = {
   repository_id: string;
   host_id: string;
-  generation: number;
   identity: string;
   readable: boolean;
   writable: boolean;
@@ -44,9 +44,8 @@ export type BackupRepository = {
   kind: BackupKind;
   source: BackupNFSSource;
   smb_source?: { server: string; share: string; directory?: string };
-  s3_source?: { endpoint: string; bucket: string; prefix?: string };
+  s3_source?: { endpoint: string; bucket: string; prefix?: string; region?: string };
   sftp_source?: { host: string; port?: number; root: string; host_key_sha256: string };
-  generation?: number;
   mount_path?: string;
   access?: BackupStorageAccess;
   member_access?: BackupMemberAccess[];
@@ -56,9 +55,9 @@ export type BackupRepository = {
   updated_at?: string;
 };
 
-export function repositoryHealth(repo: BackupRepository, now = Date.now()): "online" | "offline" | "unknown" {
-  const observed = Date.parse(repo.health?.observed_at || "");
-  if (!Number.isFinite(observed) || observed > now || now - observed > 2 * 60_000) return "unknown";
+// Core judges freshness on its own clock and the Controller masks a stale master,
+// so the browser clock is never compared with observed_at.
+export function repositoryHealth(repo: BackupRepository): "online" | "offline" | "unknown" {
   return repo.health?.status === "online" || repo.health?.status === "offline" ? repo.health.status : "unknown";
 }
 
@@ -100,10 +99,6 @@ export type BackupRunPage = BackupPage<BackupRun> & {
   last_backup_run?: { status: string; updated_at: string };
 };
 
-export function backupPage<T>(response: T[] | BackupPage<T>): BackupPage<T> {
-  return Array.isArray(response) ? { items: response, generation: "", total: response.length } : response;
-}
-
 export function refreshBackupPage<T extends { items: unknown[]; generation: string; next_cursor?: string }>(current: T | null, next: T, sameScope: boolean): T {
   return sameScope && next.generation && current?.generation === next.generation && current.items.length > next.items.length
     ? { ...next, items: current.items, next_cursor: current.next_cursor } : next;
@@ -119,6 +114,16 @@ export async function collectBackupPageItems<T>(first: BackupPage<T>, requestPag
     cursor = page.next_cursor;
   }
   return items;
+}
+
+export type RecoveryPointFilter = { vm_id?: string; repository_id?: string; search?: string };
+
+// loadRecoveryPoints returns every recovery point matching filter, walking Core pages.
+export async function loadRecoveryPoints(api: API, poolID: string, filter: RecoveryPointFilter, signal?: AbortSignal): Promise<BackupRecoveryPoint[]> {
+  const base = `pools/${encodeURIComponent(poolID)}/backup-catalog?${new URLSearchParams(filter)}`;
+  const response = await api<BackupCatalogPage>(base, "GET", undefined, undefined, undefined, signal);
+  return collectBackupPageItems(response, (cursor, generation) =>
+    api<BackupCatalogPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
 }
 
 export function appendBackupPage<T>(current: BackupPage<T> | null, next: BackupPage<T>, key: (item: T) => string): BackupPage<T> {

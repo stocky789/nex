@@ -1,0 +1,35 @@
+{
+  "summary": "Mount NFS backup repositories nosuid,nodev,noexec, matching SMB3 backup mounts; VM storage NFS mounts are unchanged. API impact: none.",
+  "paths": [
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/storage_native.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "docs/guide/backup-repositories.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-nfs-backup-mount-options.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The NFS and SMB3 prerequisites now state the data-only mount options Core uses.",
+    "pages": ["docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Mount options are chosen by Core when it writes its own mount unit. No route, payload, permission or result change.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Hardens an existing destination in the current slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. The mount unit is regenerated from the master's repository registration, which a fresh Controller adopts as before."
+  },
+  "verification": {
+    "method": "TestNFSBackupMountIsDataOnlyAndVMStorageMountIsNot failed with the previous managed_backup.go through go test -overlay and passes now; go test -count=1 -run 'NFS|Remote|Mount|Backup|Storage' ./internal/vmhost/ passed.",
+    "evidence": ["internal/vmhost/storage_mounts_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "Unit fixture only; no real NFS mount, lab or forge CI run. A lab NFS backup unit written before this change must be detached once before Core prepares it again."
+  }
+}

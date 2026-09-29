@@ -150,12 +150,6 @@ func TestPromotionPreflightDeadlineAndRefusals(t *testing.T) {
 	if body := l.a.call("POST", l.preflightPath(), map[string]string{"host_id": l.member.id}, nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to answer a preflight") {
 		t.Fatalf("a quiet candidate was not refused: %s", body)
 	}
-	l.send(&l.member, nil)
-	l.member.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.member, nil)
-	if body := l.a.call("POST", l.preflightPath(), map[string]string{"host_id": l.member.id}, nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) || !strings.Contains(body, l.member.id) {
-		t.Fatalf("the capability refusal does not name the candidate: %s", body)
-	}
 }
 
 // TestPromoteRelaysOneCommandToTheCandidate is the whole relay: one durable command, sent to
@@ -253,13 +247,9 @@ func TestPromoteRefusalMatrix(t *testing.T) {
 	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "no-membership"}), nil, 409).Body.String(); !strings.Contains(body, "has not reported its pool membership") {
 		t.Fatalf("an unreported membership was not refused: %s", body)
 	}
-	// Capability, then freshness: both are about the candidate.
+	// Freshness is about the candidate.
 	l.member.inv.Managed.Membership = l.transferMembership(2, l.master.id)
-	l.member.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
 	l.send(&l.member, nil)
-	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "no-capability"}), nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) {
-		t.Fatalf("the capability gate did not fire: %s", body)
-	}
 	l.forget(&l.member)
 	if body := l.a.call("POST", l.promotePath(), base(map[string]any{"request_id": "quiet"}), nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to be promoted") {
 		t.Fatalf("a quiet candidate was not refused: %s", body)
@@ -500,16 +490,11 @@ func TestFenceProfileClearAndRefusals(t *testing.T) {
 	l.a.call("POST", "/api/v1/pools/no-such-pool/members/"+l.master.id+"/fence-profile", map[string]any{"request_id": "bad-4", "fence": nil}, nil, 404)
 	l.a.call("POST", l.fencePath("no-such-host"), map[string]any{"request_id": "bad-5", "fence": nil}, nil, 404)
 	// A host that is not a member of this pool has no fence profile here.
-	third := l.joinThird(t, protocol.PoolAuthorityTransferCapability)
+	third := l.joinThird(t)
 	l.master.inv.Managed.Membership = l.transferMembership(2, l.master.id)
 	l.send(&l.master, nil)
 	if body := l.a.call("POST", l.fencePath(third.id), map[string]any{"request_id": "bad-6", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, "no such member of this pool") {
 		t.Fatalf("a non-member was not refused: %s", body)
-	}
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
-	if body := l.a.call("POST", l.fencePath(l.master.id), map[string]any{"request_id": "bad-7", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, protocol.PoolAuthorityTransferCapability) {
-		t.Fatalf("the capability gate did not fire: %s", body)
 	}
 	l.forget(&l.master)
 	if body := l.a.call("POST", l.fencePath(l.master.id), map[string]any{"request_id": "bad-8", "fence": nil}, nil, 409).Body.String(); !strings.Contains(body, "must be fresh and active to record a fence profile") {
@@ -540,7 +525,7 @@ func TestPromotionProjectionShowsMemberOwnReportsWithAStaleMaster(t *testing.T) 
 	if strings.Contains(l.a.call("GET", "/api/v1/pools/"+l.master.pool+"/members", nil, nil, 200).Body.String(), labFenceReference) {
 		t.Fatalf("the projection exposed the credential reference")
 	}
-	if !fresh.TransferSupported || fresh.Restricted == nil || len(fresh.Restricted.Conflicts) != 1 {
+	if fresh.Restricted == nil || len(fresh.Restricted.Conflicts) != 1 {
 		t.Fatalf("member-own fields missing with a fresh master: %+v", fresh)
 	}
 	view := l.members(t)
@@ -558,9 +543,6 @@ func TestPromotionProjectionShowsMemberOwnReportsWithAStaleMaster(t *testing.T) 
 	stale := l.memberView(t, l.member.id)
 	if stale.Restricted == nil || stale.Restricted.Reason == "" || stale.Restricted.Conflicts[0] != "vm-7" {
 		t.Fatalf("a quiet master erased the member's own restriction: %+v", stale.Restricted)
-	}
-	if !stale.TransferSupported {
-		t.Fatalf("a quiet master erased the member's own capability: %+v", stale)
 	}
 	restricted := false
 	for _, check := range stale.Checks {
