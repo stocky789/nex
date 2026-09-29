@@ -95,7 +95,6 @@ export const placementWarningNotice = (warnings: string[]) => warnings.map(sente
 // resource down, records the removal durably and every member converges on its next pass. The
 // Controller only submits the request and shows what the hosts report, so nothing here deletes a
 // row by itself — the row goes when the master reports it gone.
-export const removalCapability = "pool-resource-removal-v1";
 
 // Core's generations are 1-based on the wire, with 0 meaning "written before generations existed".
 export const resourceGeneration = (value?: number) => (value || 0) > 0 ? value as number : 1;
@@ -123,11 +122,10 @@ export const renameChanged = (current: string, next: string) => validResourceNam
 // Why a removal or rename cannot be submitted right now; "" means it can. Order matters: state
 // the most fundamental reason, so an operator is not told to reconnect a host when the view they
 // are looking at is the stale part.
-export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean; capable: boolean }): string {
+export function lifecycleBlocker(o: { unavailable: boolean; inFlight: boolean; ready: boolean; hostFresh: boolean }): string {
   if (o.unavailable) return "Controller inventory may be out of date. Use Retry above to reload it before changing this pool resource.";
   if (!o.ready) return "Wait for Nex Core to confirm this resource before changing it.";
   if (!o.hostFresh) return "The pool master is not freshly connected. Reconnect it before changing this pool resource.";
-  if (!o.capable) return "This Nex Core cannot remove pool networks or ISOs yet; upgrade Nex Core.";
   if (o.inFlight) return "A request for this resource is already in flight. Wait for Nex Core to report its result.";
   return "";
 }
@@ -363,7 +361,6 @@ export function ManagedVMs({ account, poolID, poolName, masterHostID, tab, hosts
       unavailable, inFlight: inFlightScope === scope,
       ready: Boolean(resourceID) && resourceStatus === "succeeded",
       hostFresh: Boolean(host && readyHost(host)),
-      capable: Boolean(host?.capabilities?.includes(removalCapability)),
     });
   }
   function beginLifecycle(event: { currentTarget: HTMLButtonElement }, target: Lifecycle) {

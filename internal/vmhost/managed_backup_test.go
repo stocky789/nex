@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"archive/tar"
 	"context"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -75,16 +77,35 @@ func TestSMBBackupRegistrationUsesSealedMountAndPrivateCredential(t *testing.T) 
 
 func TestBackupFilesystemPublicationProbe(t *testing.T) {
 	root := t.TempDir()
+	stale, recent := filepath.Join(root, ".nex-backup-probe-crashed"), filepath.Join(root, ".nex-backup-probe-running")
+	for _, dir := range []string{stale, recent} {
+		if err := os.MkdirAll(filepath.Join(dir, "artifact"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
 	if err := probeBackupFilesystemPublication(root); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("publication probe left repository entries: %v, %v", entries, err)
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(recent) {
+		t.Fatalf("publication probe left stale or removed live entries: %v, %v", entries, err)
 	}
 	if err := probeBackupFilesystemPublication(filepath.Join(root, "absent")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing repository root must fail: %v", err)
 	}
+}
+
+// tempBackupSMBCredentialRoot keeps the sealed credential directory inside the test.
+func tempBackupSMBCredentialRoot(t *testing.T) string {
+	t.Helper()
+	previous := backupSMBCredentialRoot
+	backupSMBCredentialRoot = filepath.Join(t.TempDir(), "backup-smb-credentials")
+	t.Cleanup(func() { backupSMBCredentialRoot = previous })
+	return backupSMBCredentialRoot
 }
 
 func TestPrepareSMBBackupRefusesForeignOwnerBeforePublicationProbe(t *testing.T) {
@@ -129,11 +150,11 @@ func TestPrepareSMBBackupRefusesExistingForeignOwnerBeforeNativeMountWork(t *tes
 		nativeCalls++
 		return nil, errors.New("native mount work should not begin")
 	}
-	stateDir := t.TempDir()
-	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil || nativeCalls != 0 {
+	credentialRoot := tempBackupSMBCredentialRoot(t)
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil || nativeCalls != 0 {
 		t.Fatalf("foreign owner was touched before refusal: err=%v native calls=%d", err, nativeCalls)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(credentialRoot, repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("foreign owner caused credential materialization: %v", err)
 	}
 	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(root)
@@ -174,7 +195,8 @@ func TestPrepareSMBBackupRefusesForeignOwnerDiscoveredAfterMount(t *testing.T) {
 		}
 		return nil, errors.New("unexpected native command")
 	}
-	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, filepath.Join(base, "state"), protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil {
+	tempBackupSMBCredentialRoot(t)
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err == nil {
 		t.Fatal("foreign owner discovered after mount was accepted")
 	}
 	if probeCalls != 0 {
@@ -251,8 +273,9 @@ func TestVerifySMBBackupReadSkipsPublicationProbe(t *testing.T) {
 	}
 }
 
-func TestPrepareBackupRepositorySMBUsesPrivateCredentialFile(t *testing.T) {
-	root, stateDir := t.TempDir(), t.TempDir()
+func TestPrepareBackupRepositorySMBSealsCredentialFile(t *testing.T) {
+	root, credentialRoot := t.TempDir(), tempBackupSMBCredentialRoot(t)
+	var seen string
 	previousPrepare := prepareBackupSMB
 	t.Cleanup(func() { prepareBackupSMB = previousPrepare })
 	prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, _ string) (storageAccess, error) {
@@ -264,9 +287,10 @@ func TestPrepareBackupRepositorySMBUsesPrivateCredentialFile(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("credential mode: %v, %v", info, err)
 		}
-		if data, err := os.ReadFile(credential); err != nil || string(data) != "username=backup\npassword=private-example-secret\n" {
-			t.Fatalf("credential body: %q, %v", data, err)
+		if data, err := os.ReadFile(credential); err != nil || string(data) != "sealed:username=backup\npassword=private-example-secret\ndomain=EXAMPLE\n" {
+			t.Fatalf("sealed credential body: %q, %v", data, err)
 		}
+		seen = credential
 		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
 			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
 		}}}, nil
@@ -275,33 +299,72 @@ func TestPrepareBackupRepositorySMBUsesPrivateCredentialFile(t *testing.T) {
 		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
 		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1",
 	}
-	creds := protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}
+	creds := protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret", Domain: "EXAMPLE"}
 	for i := 0; i < 2; i++ {
-		prepared, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, creds)
+		prepared, err := PrepareBackupRepositorySMB(context.Background(), repo, creds)
 		if err != nil || prepared.MountPath != root || prepared.SMBIdentity == nil {
 			t.Fatalf("prepare %d: %+v, %v", i, prepared, err)
 		}
+		if seen != filepath.Join(credentialRoot, repo.CredentialRef) {
+			t.Fatalf("mount read %q, not the sealed credential file", seen)
+		}
 	}
-	creds.Secret = "different-private-secret"
-	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, creds); err == nil {
-		t.Fatal("same credential reference accepted different private material")
-	}
-	if err := RetireBackupRepositorySMBCredential(stateDir, "../receipt-1"); err == nil {
-		t.Fatal("credential cleanup accepted a path outside private state")
-	}
-	if err := RetireBackupRepositorySMBCredential(stateDir, repo.CredentialRef); err != nil {
+	if err := DetachBackupRepository(context.Background(), repo); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("old materialized credential remained: %v", err)
+	if _, err := os.Stat(seen); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sealed credential survived detach: %v", err)
 	}
-	if err := RetireBackupRepositorySMBCredential(stateDir, repo.CredentialRef); err != nil {
-		t.Fatalf("cleanup retry: %v", err)
+	for _, domain := range []string{"EX,AMPLE", "EX=AMPLE", "EX\nAMPLE", "EX AMPLE"} {
+		bad := creds
+		bad.Domain = domain
+		if _, err := PrepareBackupRepositorySMB(context.Background(), repo, bad); err == nil {
+			t.Fatalf("domain %q accepted", domain)
+		}
+	}
+}
+
+// Regression for BUG-0751: preparing a mount that already uses the sealed file must not seal again.
+func TestPrepareBackupRepositorySMBKeepsSealedFileOfMountedRepository(t *testing.T) {
+	root, credentialRoot := t.TempDir(), tempBackupSMBCredentialRoot(t)
+	previousUnits, previousPrepare := storageUnitRoot, prepareBackupSMB
+	storageUnitRoot = t.TempDir()
+	t.Cleanup(func() { storageUnitRoot, prepareBackupSMB = previousUnits, previousPrepare })
+	prepareBackupSMB = func(context.Context, protocol.StorageRegistration, string) (storageAccess, error) {
+		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
+			Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32),
+		}}}, nil
+	}
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1",
+	}
+	registration := backupStorageRegistration(repo)
+	_, unitPath := remoteUnitPath(registration)
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sealed := filepath.Join(credentialRoot, repo.CredentialRef)
+	unit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs", smbMountOptions("1000", "1000"), sealed)
+	if err := os.WriteFile(unitPath, unit, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(credentialRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sealed, []byte("already sealed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(sealed); err != nil || string(got) != "already sealed" {
+		t.Fatalf("prepare resealed the file: %q %v", got, err)
 	}
 }
 
 func TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMaterial(t *testing.T) {
-	stateDir := t.TempDir()
+	credentialRoot := tempBackupSMBCredentialRoot(t)
 	previousUnits := storageUnitRoot
 	storageUnitRoot = t.TempDir()
 	t.Cleanup(func() { storageUnitRoot = previousUnits })
@@ -316,17 +379,17 @@ func TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMateria
 		t.Fatal(err)
 	}
 	oldUnit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs",
-		smbMountOptions(filepath.Join(stateDir, "backup-smb-credentials", "old-receipt"), "1000", "1000"))
+		smbMountOptions("1000", "1000"), filepath.Join(credentialRoot, "old-receipt"))
 	if err := os.WriteFile(unitPath, oldUnit, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, stateDir, protocol.StorageCredentials{Username: "backup", Secret: "new-secret"}); err == nil {
+	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "new-secret"}); err == nil {
 		t.Fatal("mounted repository accepted credential rotation without a dependency-safe remount")
 	}
 	if data, err := os.ReadFile(unitPath); err != nil || string(data) != string(oldUnit) {
 		t.Fatalf("failed rotation changed the mount unit: %q, %v", data, err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "backup-smb-credentials", repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(credentialRoot, repo.CredentialRef)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed rotation materialized new credentials: %v", err)
 	}
 }
@@ -1366,122 +1429,6 @@ func TestReconcileRestoredAsNewObservesRetainedIntentOnly(t *testing.T) {
 	}
 }
 
-func TestBindLegacyRestoreAllocationRequiresCompleteExistingArtifacts(t *testing.T) {
-	e := NewManaged(filepath.Join(t.TempDir(), "managed-vms"))
-	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	vm := managedTestVM()
-	vm.Boot.Firmware, vm.MediaID, vm.NICs = "bios", "", nil
-	op := "legacy-restore-1"
-	localDir := filepath.Join(filepath.Dir(e.stateDir), "backup-restore", op)
-	if err := os.MkdirAll(localDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	placed := filepath.Join(t.TempDir(), "disk-0.qcow2")
-	payload := []byte("original restored disk")
-	sum := sha256.Sum256(payload)
-	artifact := protocol.BackupDiskArtifact{Target: "vda", Filename: "vda.qcow2", Format: "qcow2", Size: int64(len(payload)), SHA256: hex.EncodeToString(sum[:])}
-	if err := os.WriteFile(placed, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	journal := managedJournal{Command: protocol.Command{OperationID: op, Kind: "vm-create", VM: &vm},
-		Stage: "allocating", Result: protocol.Result{OperationID: op, Status: "pending"},
-		BackupRestore: true, Disks: []string{placed}, Targets: []string{"vda"}}
-	if err := e.save(journal); err != nil {
-		t.Fatal(err)
-	}
-	fakeCommand(t, "virsh", `case "$3" in list) exit 0;; *) exit 1;; esac`)
-	manifestSHA := strings.Repeat("a", 64)
-	if _, err := e.RestoreAsNewAllocating(op, vm, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil); !errors.Is(err, ErrRestoreManifestUnbound) {
-		t.Fatalf("legacy journal must require binding: %v", err)
-	}
-	bind := func() error {
-		return e.BindLegacyRestoreAsNewAllocating(context.Background(), op, vm, localDir, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil)
-	}
-	if err := bind(); err == nil {
-		t.Fatal("missing local artifact was accepted")
-	}
-	if err := os.WriteFile(filepath.Join(localDir, artifact.Filename), payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(placed, []byte("replaced disk"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := bind(); err == nil {
-		t.Fatal("changed placed disk was accepted")
-	}
-	if err := os.WriteFile(placed, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := bind(); err != nil {
-		t.Fatalf("exact legacy artifacts should bind: %v", err)
-	}
-	if allocating, err := e.RestoreAsNewAllocating(op, vm, manifestSHA, []protocol.BackupDiskArtifact{artifact}, nil); err != nil || !allocating {
-		t.Fatalf("bound allocation should resume: allocating=%v err=%v", allocating, err)
-	}
-	if _, err := e.RestoreAsNewAllocating(op, vm, strings.Repeat("c", 64), []protocol.BackupDiskArtifact{artifact}, nil); err == nil {
-		t.Fatal("changed recovery point was accepted after binding")
-	}
-}
-
-func TestReadLegacyAllocatingRestoreWithReservedEmptyDiskChain(t *testing.T) {
-	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
-	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	vm := managedTestVM()
-	j := managedJournal{Command: protocol.Command{OperationID: "legacy-chain-1", Kind: "vm-create", VM: &vm},
-		Result: protocol.Result{OperationID: "legacy-chain-1", Status: "pending"}, Stage: "allocating", BackupRestore: true,
-		Disks: []string{"/some/disk-0.qcow2"}, Targets: []string{"vda"}, DiskChains: [][]string{nil}}
-	check := func(accepted bool) {
-		t.Helper()
-		if err := e.save(j); err != nil {
-			t.Fatal(err)
-		}
-		got, err := e.readJournal("legacy-chain-1.json")
-		if accepted && (err != nil || len(got.DiskChains) != 0) {
-			t.Fatalf("exact legacy allocation should normalize empty chains: %+v %v", got.DiskChains, err)
-		}
-		if !accepted && err == nil {
-			t.Fatal("malformed non-allocation disk chain was accepted")
-		}
-	}
-	check(true)
-	j.BackupRestore = false
-	check(false)
-	j.BackupRestore = true
-	j.Stage = "defined"
-	check(false)
-	j.Stage, j.Result.Status = "allocating", "succeeded"
-	check(false)
-	j.Result.Status = "pending"
-	j.BackupManifestSHA256 = strings.Repeat("a", 64)
-	check(false)
-	j.BackupManifestSHA256 = ""
-	j.BackupDisks = []protocol.BackupDiskArtifact{{Target: "vda"}}
-	check(false)
-	j.BackupDisks = nil
-	j.Domain = []byte("<domain/>")
-	check(false)
-	j.Domain = nil
-	j.BackupTPMManifestSHA256 = strings.Repeat("a", 64)
-	check(false)
-	j.BackupTPMManifestSHA256 = ""
-	j.Targets = nil
-	check(false)
-	j.Targets = []string{"vda"}
-	j.Disks = append(j.Disks, "/some/disk-1.qcow2")
-	j.DiskChains = append(j.DiskChains, nil)
-	j.Targets = append(j.Targets, "vdb")
-	check(false)
-	j.Disks, j.DiskChains, j.Targets = j.Disks[:1], j.DiskChains[:1], j.Targets[:1]
-	j.DiskChains = [][]string{{}}
-	check(false)
-	j.DiskChains = [][]string{{"/different/disk-0.qcow2"}}
-	check(false)
-}
-
 func TestRestoreAsNewTargetAbsentRequiresNoNativeEffects(t *testing.T) {
 	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
 	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
@@ -1739,5 +1686,158 @@ func TestVerifyFailedTestRestoreKeepsOriginWhenDiskIsDamaged(t *testing.T) {
 	}
 	if err := e.VerifyTestRestoredVM(context.Background(), "test-damaged-1", vm, false); err == nil {
 		t.Fatal("failed verification accepted a reused UUID")
+	}
+}
+
+func TestPrepareBackupSMBChecksMarkerBeforeClaimAndDropsNewUnitOnFailure(t *testing.T) {
+	oldRun, oldMount, oldUnit, oldAccess, oldProbe := nativeRun, storageMountRoot, storageUnitRoot, smbPathAccess, probeBackupPublication
+	t.Cleanup(func() {
+		nativeRun, storageMountRoot, storageUnitRoot, smbPathAccess, probeBackupPublication = oldRun, oldMount, oldUnit, oldAccess, oldProbe
+	})
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	credentials := filepath.Join(root, "credentials")
+	if err := os.MkdirAll(credentials, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentials, "receipt-1"), []byte("username=backup\npassword=example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), storageCredentialRootKey{}, credentials)
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, CredentialRef: "receipt-1"}
+	path := remoteMountPath(backupStorageRegistration(repo))
+	_, unitPath := remoteUnitPath(backupStorageRegistration(repo))
+	// QEMU runs as this test's account, so everything after the publication probe succeeds.
+	uid, gid := strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getgid())
+	var unit string
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "id" && args[0] == "-u":
+			return []byte(uid + "\n"), nil
+		case name == "id":
+			return []byte(gid + "\n"), nil
+		case name == "findmnt":
+			return []byte("//smb.example.test/backups cifs rw,vers=3.1.1,seal,cache=strict,uid=" + uid + ",gid=" + gid + ",file_mode=0600,dir_mode=0700 " + path + "\n"), nil
+		case name == "systemctl" && args[0] == "enable":
+			raw, _ := os.ReadFile(unitPath)
+			unit = string(raw)
+		}
+		return nil, nil
+	}
+	smbPathAccess = func(path, _ string) (storageAccess, error) { return storageAccess{Path: path}, nil }
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := smbMarker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo.SMBIdentity = &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)}
+	if _, err := PrepareBackupRepository(ctx, repo); err == nil {
+		t.Fatal("a share with another marker was accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(path, backupOwnerMarkerName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owner was claimed on a share with another marker: %v", err)
+	}
+	if !strings.Contains(unit, "nosuid,nodev,noexec") {
+		t.Fatalf("backup mount is not restricted to data: %s", unit)
+	}
+
+	repo.SMBIdentity.MarkerID = marker
+	probeBackupPublication = func(string) error { return errors.New("rename is unsupported") }
+	if _, err := PrepareBackupRepository(ctx, repo); err == nil {
+		t.Fatal("repository that failed its publication probe was accepted")
+	}
+	if _, err := os.Lstat(unitPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed first registration left its mount unit: %v", err)
+	}
+}
+
+// A stalled unprotect that read an older marker must not remove a newer one.
+func TestStaleBackupUnprotectKeepsNewerMarker(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	newer, err := os.ReadFile(marker)
+	if err != nil || bytes.Equal(stale, newer) {
+		t.Fatalf("protect did not write a unique marker: %v", err)
+	}
+	if err := removeBackupProtectMarkerIfUnchanged(marker, stale); err == nil {
+		t.Fatal("stale unprotect was not refused")
+	}
+	if got, err := os.ReadFile(marker); err != nil || !bytes.Equal(got, newer) || !ReadBackupProtectMarker(dir) {
+		t.Fatalf("newer marker was lost: %q %v", got, err)
+	}
+	if err := WriteBackupProtectMarker(dir, false); err != nil || ReadBackupProtectMarker(dir) {
+		t.Fatal("unprotect did not remove the marker:", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("unprotect left files: %v", entries)
+	}
+}
+
+// Regression for BUG-0751: a marker that cannot be judged is put back, never deleted.
+func TestBackupUnprotectKeepsUnreadableMarker(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := os.Mkdir(marker, 0700); err != nil { // reading a directory fails
+		t.Fatal(err)
+	}
+	if err := removeBackupProtectMarkerIfUnchanged(marker, []byte("old")); err == nil {
+		t.Fatal("unreadable marker was treated as unchanged")
+	}
+	if info, err := os.Lstat(marker); err != nil || !info.IsDir() {
+		t.Fatalf("marker was lost: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("leftover files: %v", entries)
+	}
+}
+
+// A crash between rename-aside and restore leaves the only copy of a marker as .rm-*.
+// Scan puts it back; unprotect removes a leftover only when it matches the current marker.
+func TestBackupProtectMarkerSweepSettlesLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, backupProtectMarkerName)
+	if err := WriteBackupProtectMarker(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.ReadFile(marker)
+	if err := os.Rename(marker, marker+".rm-a"); err != nil {
+		t.Fatal(err)
+	}
+	if ReadBackupProtectMarker(dir) {
+		t.Fatal("test setup: point should look unprotected")
+	}
+	if err := sweepBackupProtectMarkers(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || !bytes.Equal(got, want) || !ReadBackupProtectMarker(dir) {
+		t.Fatalf("marker not restored: %v", err)
+	}
+	// Identical leftover beside the marker is removed; a different one is kept.
+	if err := os.WriteFile(marker+".rm-b", want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker+".rm-c", []byte("other"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBackupProtectMarker(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := filepath.Glob(marker + "*")
+	if len(left) != 1 || left[0] != marker+".rm-c" {
+		t.Fatalf("leftovers after unprotect: %v", left)
 	}
 }

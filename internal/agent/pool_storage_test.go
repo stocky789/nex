@@ -523,8 +523,8 @@ func TestCrossCoreLockProbeRejectsUnexpectedModeEchoAndReleasesLease(t *testing.
 
 func TestPoolStorageMutationFenceRejectsReservation(t *testing.T) {
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 2, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
-		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
+		{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
 	}}
 	state := poolStorageState{Storage: map[string]protocol.StorageRegistration{}, Access: map[string]map[string]protocol.PoolStorageAccess{}, Reservations: map[string]map[string]string{}, Mutations: map[string]string{}}
 	state.Reservations["repo-1"] = map[string]string{"member-1": "vm-1"}
@@ -571,7 +571,7 @@ func TestPoolReservationKeepsLiveOperationWhenLaterOperationFails(t *testing.T) 
 	if state.Reservations["repo-1"]["member-1"] != "vm-live" {
 		t.Fatalf("live reservation lost: %#v", state.Reservations)
 	}
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := beginPoolStorageMutationState(&state, membership, "master-1", "repo-1", "detach"); err == nil {
 		t.Fatal("mutation ignored surviving live reservation")
 	}
@@ -579,7 +579,7 @@ func TestPoolReservationKeepsLiveOperationWhenLaterOperationFails(t *testing.T) 
 
 func TestPoolMasterDoesNotReconcileItsOwnStorage(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -950,7 +950,7 @@ func TestPoolStorageReconcileDoesNotStartLaterRepositoryAfterShutdown(t *testing
 
 func TestMemberReconcileCheckReportsFailureThenFreshRecovery(t *testing.T) {
 	s := peerStore(t, "member-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1214,7 +1214,7 @@ func TestReportProjectsCoreMembershipForControllerAdoption(t *testing.T) {
 	s := testStore(t)
 	s.State = identity
 	s.State.PoolID = "pool-1"
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: identity.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: identity.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: identity.HostID, Generation: 1, Members: []protocol.PoolMember{{HostID: identity.HostID, Hostname: identity.HostID, CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready", ObservedAt: time.Now().UTC()}}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1229,7 @@ func TestReportProjectsCoreMembershipForControllerAdoption(t *testing.T) {
 
 func TestPoolStorageMutationFenceRetainsUncertainOutcome(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(s, poolPeerState{CAKeyPEM: "master-key", Membership: membership}); err != nil {
 		t.Fatal(err)
 	}

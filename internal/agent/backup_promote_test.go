@@ -36,7 +36,7 @@ func TestPromotedCatalogImportFailureRemainsRetryable(t *testing.T) {
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
 		Source:    protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
 		Identity:  &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"},
-		MountPath: mount, Generation: 1}
+		MountPath: mount}
 	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestPromotedCatalogImportFailureRemainsRetryable(t *testing.T) {
 	before := peerState(t, s).Membership.Generation
 	previousImport := importPoolBackupCatalogForActivation
 	t.Cleanup(func() { importPoolBackupCatalogForActivation = previousImport })
-	importPoolBackupCatalogForActivation = func(*Store, string) ([]protocol.BackupRecoveryPoint, error) {
+	importPoolBackupCatalogForActivation = func(context.Context, *Store, string) ([]protocol.BackupRecoveryPoint, error) {
 		return nil, errors.New("repository temporarily unavailable")
 	}
 	if err := advancePoolPromotion(context.Background(), s, record, time.Second); err == nil {
@@ -59,7 +59,7 @@ func TestPromotedCatalogImportFailureRemainsRetryable(t *testing.T) {
 	point := protocol.BackupRecoveryPoint{ID: "point-retry", RepositoryID: repo.ID, PoolID: "pool-1", SourceVMID: "vm-1",
 		CapturedAt: time.Now().UTC(), Consistency: protocol.BackupCaptureStopped,
 		ManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-	importPoolBackupCatalogForActivation = func(store *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
+	importPoolBackupCatalogForActivation = func(_ context.Context, store *Store, repositoryID string) ([]protocol.BackupRecoveryPoint, error) {
 		if repositoryID != repo.ID {
 			t.Fatalf("wrong repository: %s", repositoryID)
 		}
@@ -344,8 +344,7 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 		Repositories: []protocol.BackupRepository{{
 			ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
 			Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
-			Identity:   &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"},
-			Generation: 1,
+			Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"},
 		}},
 		Definitions: []protocol.BackupPolicy{testPolicy()},
 	}
@@ -362,7 +361,7 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 	if err := savePoolPeer(s, peer); err != nil {
 		t.Fatal(err)
 	}
-	rebuildPoolBackupCatalogAfterAuthorityAdopt(s)
+	rebuildPoolBackupCatalogAfterAuthorityAdopt(context.Background(), s)
 	catalog, err := loadPoolBackupCatalog(s)
 	if err != nil || len(catalog) != 1 || catalog[0].ID != "point-rebuild" {
 		t.Fatalf("catalog after NFS rebuild: %#v err=%v", catalog, err)

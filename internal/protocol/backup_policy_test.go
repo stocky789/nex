@@ -154,3 +154,24 @@ func TestBackupRunAcceptsScheduledMissedStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Retention rules are a union: a point survives if any rule keeps it, and
+// age-protected points do not count toward keep_latest.
+func TestRetentionRulesAreAUnion(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	point := func(id string, age time.Duration, protected bool) BackupRecoveryPoint {
+		return BackupRecoveryPoint{ID: id, SourceVMID: "vm-1", CapturedAt: now.Add(-age), Protected: protected}
+	}
+	points := []BackupRecoveryPoint{
+		point("fresh", time.Hour, false), point("newest-old", 48*time.Hour, false),
+		point("older", 72*time.Hour, false), point("marked", 96*time.Hour, true), point("oldest", 120*time.Hour, false),
+	}
+	_, prune := RetentionEligiblePrune(points, "vm-1", BackupRetention{KeepLatest: 1, ProtectNewerThan: 24 * time.Hour}, now, nil)
+	var ids []string
+	for _, p := range prune {
+		ids = append(ids, p.ID)
+	}
+	if strings.Join(ids, ",") != "older,oldest" {
+		t.Fatalf("pruned %v; want the two unprotected points beyond keep_latest, which skips the age-protected one", ids)
+	}
+}

@@ -18,7 +18,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 			t.Run(kind+"/"+change, func(t *testing.T) {
 				s := seedBackupMaster(t)
 				existing := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: kind,
-					CredentialRef: "old-receipt", Generation: 1, RemoteIdentity: &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}}
+					CredentialRef: "old-receipt", RemoteIdentity: &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}}
 				if kind == protocol.BackupRepoKindS3 {
 					existing.S3Source = &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups", Prefix: "old"}
 				} else {
@@ -47,7 +47,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 					t.Fatalf("same-ID replacement committed: %v", err)
 				}
 				saved, err := GetPoolBackupRepository(s, existing.ID)
-				if err != nil || !reflect.DeepEqual(saved.S3Source, existing.S3Source) || !reflect.DeepEqual(saved.SFTPSource, existing.SFTPSource) || saved.CredentialRef != existing.CredentialRef || saved.Generation != 1 {
+				if err != nil || !reflect.DeepEqual(saved.S3Source, existing.S3Source) || !reflect.DeepEqual(saved.SFTPSource, existing.SFTPSource) || saved.CredentialRef != existing.CredentialRef {
 					t.Fatalf("durable destination changed: %+v, %v", saved, err)
 				}
 				if retained, err := getCatalogPoint(s, existing.ID, point.ID); err != nil || retained.ID != point.ID {
@@ -68,7 +68,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 			existing := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary",
 				Kind: protocol.BackupRepoKindNFS, Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"},
 				Identity:  &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/backups", FilesystemID: "fs-1"},
-				MountPath: t.TempDir(), Generation: 1}
+				MountPath: t.TempDir()}
 			if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{existing.ID: existing}}); err != nil {
 				t.Fatal(err)
 			}
@@ -109,7 +109,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				t.Fatalf("same-ID replacement committed: %v", err)
 			}
 			saved, err := GetPoolBackupRepository(s, existing.ID)
-			if err != nil || !reflect.DeepEqual(saved.Source, existing.Source) || !reflect.DeepEqual(saved.Identity, existing.Identity) || saved.Generation != existing.Generation {
+			if err != nil || !reflect.DeepEqual(saved.Source, existing.Source) || !reflect.DeepEqual(saved.Identity, existing.Identity) {
 				t.Fatalf("durable destination changed: %+v, %v", saved, err)
 			}
 			if retained, err := getCatalogPoint(s, existing.ID, point.ID); err != nil || retained.ID != point.ID {

@@ -147,7 +147,7 @@ func TestPendingBackupMetadataReceiptBlocksCredentialRetirement(t *testing.T) {
 	}
 }
 
-func TestBackupCredentialRetirementWaitsForPreparationAndRemovesSMBMaterial(t *testing.T) {
+func TestBackupCredentialRetirementWaitsForPreparation(t *testing.T) {
 	s := seedBackupMaster(t)
 	handoff := protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{
 		RequestID: "credential-1", RegistrationRequestID: "backup-credential:smb3:register-1",
@@ -155,13 +155,6 @@ func TestBackupCredentialRetirementWaitsForPreparationAndRemovesSMBMaterial(t *t
 	}, Credentials: protocol.StorageCredentials{Username: "example-user", Secret: "private-example-secret"}}
 	receipt, err := saveBackupCredential(s, handoff)
 	if err != nil {
-		t.Fatal(err)
-	}
-	secondary := filepath.Join(s.dir, "backup-smb-credentials", receipt.Receipt)
-	if err := os.MkdirAll(filepath.Dir(secondary), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(secondary, []byte(handoff.Credentials.Secret), 0600); err != nil {
 		t.Fatal(err)
 	}
 	finish := beginBackupCredentialPreparation(s, receipt.Receipt)
@@ -172,14 +165,12 @@ func TestBackupCredentialRetirementWaitsForPreparationAndRemovesSMBMaterial(t *t
 	if handled, err := RetireUnusedBackupCredential(s, receipt.Receipt, s.State.PoolID, s.State.HostID); !handled || err == nil {
 		t.Fatalf("in-flight retirement accepted: %t, %v", handled, err)
 	}
-	if _, err := os.Stat(secondary); err != nil {
-		t.Fatalf("in-flight SMB material removed: %v", err)
-	}
 	finish()
 	if handled, err := RetireUnusedBackupCredential(s, receipt.Receipt, s.State.PoolID, s.State.HostID); !handled || err != nil {
 		t.Fatalf("SMB retirement: %t, %v", handled, err)
 	}
-	if _, err := os.Stat(secondary); !os.IsNotExist(err) {
-		t.Fatalf("SMB material persisted: %v", err)
+	if _, err := ResolveBackupCredentialForAdoption(s, protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Kind: protocol.BackupRepoKindSMB3, CredentialRef: receipt.Receipt,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, Name: "Backup"}); err == nil {
+		t.Fatal("retired receipt kept its material")
 	}
 }

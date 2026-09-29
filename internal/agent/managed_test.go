@@ -543,7 +543,7 @@ func TestFormerMasterKeepsControllerOwnedBackupResult(t *testing.T) {
 	if err := savePoolBackupRun(s, protocol.BackupRun{OperationID: cmd.OperationID, Kind: cmd.Kind, PoolID: "pool-1", VMID: "vm-1", HostID: s.State.HostID, RepositoryID: "repo-1", RecoveryPointID: cmd.OperationID, IntentSHA256: strings.Repeat("a", 64), Stage: "published", Status: "succeeded", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := markLegacyPeerBackupJournal(s); err != nil {
+	if err := markDemotedMasterBackupJournal(s); err != nil {
 		t.Fatal(err)
 	}
 	if s.State.Journal[cmd.OperationID].PeerDispatched {

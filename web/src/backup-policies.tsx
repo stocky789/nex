@@ -2,7 +2,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import type { API, Data, Operation, Pool } from "./types";
 import { Panel, Section, Badge, date } from "./ui";
-import { availableBackupKinds, backupOpID, repositoryHealth, stableBody, type BackupRepository, type BackupRecoveryPoint } from "./backup-types";
+import { availableBackupKinds, backupOpID, repositoryHealth, stableBody, type BackupRepository } from "./backup-types";
 
 export type BackupPolicy = {
   id: string;
@@ -30,7 +30,6 @@ type Props = {
   data: Data;
   pool: Pool;
   repos: BackupRepository[];
-  points: BackupRecoveryPoint[] | null;
   policies: BackupPolicy[] | null;
   busy: boolean;
   unavailable: boolean;
@@ -50,20 +49,6 @@ type Props = {
 type Step = 1 | 2 | 3;
 
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-export function retentionPreview(points: BackupRecoveryPoint[] | null, vmIDs: string[], keepLatest: number) {
-  if (!points) return null;
-  let keep = 0, prune = 0;
-  for (const vm of vmIDs) {
-    const forVM = points.filter(p => p.source_vm_id === vm).slice().sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""));
-    let eligible = 0;
-    forVM.forEach(p => {
-      if (p.protected || eligible++ < keepLatest) keep++;
-      else prune++;
-    });
-  }
-  return { keep, prune };
-}
 
 export function repositoryChangeBody(policy: BackupPolicy, repositoryID: string, requestID: string) {
   return {
@@ -89,7 +74,7 @@ export function requestRepositoryChange(api: API, poolID: string, policyID: stri
 }
 
 export function BackupPolicies({
-  active, api, data, pool, repos, points, policies, busy, unavailable, working, setWorking, error,
+  active, api, data, pool, repos, policies, busy, unavailable, working, setWorking, error,
   onNotice, onError, reload, requestID, clearRequest, openCreate, onOpenCreate, onCloseCreate,
 }: Props) {
   const [step, setStep] = useState<Step>(1);
@@ -113,7 +98,6 @@ export function BackupPolicies({
   const pendingPause = useRef<Record<string, { paused: boolean }>>({});
   const pendingSwitch = useRef<Record<string, ReturnType<typeof repositoryChangeBody>>>({});
   const poolVMs = useMemo(() => data.vms.filter(v => v.pool_id === pool.id && !v.protected), [data.vms, pool.id]);
-  const preview = retentionPreview(points, vms, keepLatest);
   const selectedRepository = repos.find(r => r.id === repo);
   const selectedHealth = selectedRepository ? repositoryHealth(selectedRepository) : "unknown";
   const master = data.hosts.find(h => h.id === pool.master_host_id);
@@ -424,7 +408,7 @@ export function BackupPolicies({
             <label>Minute<input type="number" min={0} max={59} value={minute} disabled={uncertain} onChange={e => change(() => setMinute(Number(e.target.value)))} /></label>
             <label>Keep latest<input type="number" min={1} max={365} value={keepLatest} disabled={uncertain} onChange={e => change(() => setKeepLatest(Number(e.target.value)))} /></label>
           </div>
-          <p className="muted">{preview ? `Current catalog estimate: keep ${preview.keep}, eligible to prune ${preview.prune}. The next backup and active restores can change this.` : "Retention preview unavailable until the recovery catalog loads."}</p>
+          <p className="muted">Each backup keeps this policy's newest {keepLatest} recovery points per VM and removes its older ones. Only points this policy created are ever removed; manual backups and other policies' points are never pruned. Recovery points are also kept if they are protected, restoring, or newer than the age window; those do not count toward the {keepLatest}.</p>
           {frequency === "weekly" && !weekdays.length ? <p className="why" role="alert">Select at least one weekday.</p> : null}
         </> : null}
         {step === 3 ? <>

@@ -40,10 +40,10 @@ recover-original action.
 - Catalog or manifest mismatch: Core refuses a recovery point whose payload
   differs from the master's catalog digest before replace effects. Inspect
   the repository and catalog; do not edit the manifest or retry against a
-  changed point. An older member Core cannot accept the catalog-bound restore
-  request; retain the same operation for reconciliation after upgrading it.
+  changed point.
 - Pre-cutover failure: originals remain the live definition; inspect the failed operation
-  before submitting another request.
+  before submitting another request. A repository read failure before Core records
+  the retained originals fails the run and releases the recovery point.
 - Cutover `needs_attention`: inspect the current VM definition and retained originals;
   do not submit another replace until the cutover outcome is reconciled.
 - Controller absent: use host-local routes in [Recover without Controller](recover-without-controller.md).

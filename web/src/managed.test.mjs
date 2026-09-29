@@ -373,7 +373,7 @@ console.log("managed.test.mjs: ok");
   const {
     networkRemovable, mediaRemovable, confirmMatches, validResourceName, renameChanged,
     lifecycleBlocker, networkRemoveBody, networkRenameBody, stableRequestID, heldRequestID, resourceGeneration,
-    networkMemberState, removalCapability,
+    networkMemberState,
   } = await import(moduleURL);
 
   // Only a pool VLAN network is Nex's to rename or remove.
@@ -406,12 +406,11 @@ console.log("managed.test.mjs: ok");
   assert.equal(renameChanged("guests", "guests-2"), true);
   assert.equal(renameChanged("guests", ""), false);
 
-  const ok = { unavailable: false, inFlight: false, ready: true, hostFresh: true, capable: true };
+  const ok = { unavailable: false, inFlight: false, ready: true, hostFresh: true };
   assert.equal(lifecycleBlocker(ok), "");
   assert.match(lifecycleBlocker({ ...ok, unavailable: true }), /out of date/);
   assert.match(lifecycleBlocker({ ...ok, ready: false }), /Wait for Nex Core to confirm/);
   assert.match(lifecycleBlocker({ ...ok, hostFresh: false }), /pool master is not freshly connected/);
-  assert.match(lifecycleBlocker({ ...ok, capable: false }), /upgrade Nex Core/);
   assert.match(lifecycleBlocker({ ...ok, inFlight: true }), /already in flight/);
 
   // 0 is the pre-generation wire value for 1, so a network registered before generations existed
@@ -466,14 +465,14 @@ console.log("managed.test.mjs: ok");
 
   // Rendered rows: a pool VLAN network offers both actions, a host network offers neither, and a
   // stale Controller inventory disables them with the reason in the title.
-  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", removalCapability], inventory: null };
+  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1"], inventory: null };
   const vlan = { id: "net-1", pool_id: "pool-1", host_id: "host-1", name: "guests", operation_id: "op-n1", status: "succeeded", kind: "vlan", source: "nex-guests", uplink: "eno1", vlan: 100, generation: 2, member_access: [{ network_id: "net-1", host_id: "host-1", generation: 1, uplink_present: true }] };
   const hostNetwork = { ...vlan, id: "net-2", name: "br0", kind: "bridge", source: "br0", vlan: undefined, member_access: undefined };
   const netProps = { ...props, tab: "Networking", masterHostID: "host-1", hosts: [master] };
   const vlanRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan] }));
   assert.match(vlanRow, />Rename</);
   assert.match(vlanRow, />Remove</);
-  assert.doesNotMatch(vlanRow, /<button type="button" title="[^"]*" disabled=""[^>]*>Rename</, "a confirmed network on a fresh capable master is actionable");
+  assert.doesNotMatch(vlanRow, /<button type="button" title="[^"]*" disabled=""[^>]*>Rename</, "a confirmed network on a fresh master is actionable");
   // The member line still renders, and says converging while the member is behind the rename.
   assert.match(vlanRow, /core-a: Converging/);
   // One light per pool host: a member the master has not reported, or a host that is not
@@ -495,8 +494,6 @@ console.log("managed.test.mjs: ok");
   assert.match(hostRow, /Managed on core-a/);
   const staleRow = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], unavailable: true }));
   assert.match(staleRow, /Controller inventory may be out of date\. Use Retry above to reload it before changing this pool resource\.[^>]*disabled=""/);
-  const oldCore = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [vlan], hosts: [{ ...master, capabilities: ["managed-vm-v1"] }] }));
-  assert.match(oldCore, /cannot remove pool networks or ISOs yet; upgrade Nex Core\.[^>]*disabled=""/);
   const queued = renderToStaticMarkup(createElement(ManagedVMs, { ...netProps, networks: [{ ...vlan, id: "", status: "queued" }] }));
   assert.match(queued, /Wait for Nex Core to confirm this resource[^>]*disabled=""/);
 

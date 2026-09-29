@@ -29,10 +29,10 @@ func TestSMBBackupRegistrationRequiresOperationBoundCredentialAndExactSource(t *
 	previous := prepareBackupRepositorySMBNative
 	t.Cleanup(func() { prepareBackupRepositorySMBNative = previous })
 	called := 0
-	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, stateDir string, creds protocol.StorageCredentials) (protocol.BackupRepository, error) {
+	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, creds protocol.StorageCredentials) (protocol.BackupRepository, error) {
 		called++
-		if got.ID != repo.ID || stateDir != s.dir || creds != handoff.Credentials {
-			t.Fatalf("incorrect SMB prepare scope: %+v %q %+v", got, stateDir, creds)
+		if got.ID != repo.ID || creds != handoff.Credentials {
+			t.Fatalf("incorrect SMB prepare scope: %+v %+v", got, creds)
 		}
 		got.MountPath = t.TempDir()
 		got.SMBIdentity = &protocol.SMBStorageIdentity{Server: repo.SMBSource.Server, Share: repo.SMBSource.Share, MarkerID: strings.Repeat("a", 32)}
@@ -56,7 +56,7 @@ func TestSMBBackupRegistrationRequiresOperationBoundCredentialAndExactSource(t *
 		t.Fatal("changed prepared SMB identity was accepted")
 	}
 	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
-	if err != nil || saved.Generation == 0 {
+	if err != nil {
 		t.Fatalf("durable SMB registration: %+v, %v", saved, err)
 	}
 	if creds, err := ResolveBackupCredential(s, saved); err != nil || creds != handoff.Credentials {
@@ -67,8 +67,12 @@ func TestSMBBackupRegistrationRequiresOperationBoundCredentialAndExactSource(t *
 	}
 	stale := saved
 	stale.CredentialRef = "stale-ref"
-	if _, err := openBackupRepositoryStorage(s, stale); err == nil {
-		t.Fatal("old SMB credential reference was accepted")
+	backend, err := openBackupRepositoryStorage(s, stale)
+	if err != nil {
+		t.Fatalf("reads through the mounted SMB repository needed its credential: %v", err)
+	}
+	if err := backend.Verify(context.Background()); err == nil {
+		t.Fatal("old SMB credential reference was accepted for writes")
 	}
 }
 
@@ -83,5 +87,43 @@ func TestSMBPeerBackupRefusesMemberWithoutDestinationCapability(t *testing.T) {
 	got := acceptBackupRequestUnrecorded(context.Background(), s, BackupRequest{Command: &cmd, PeerRepository: &repo})
 	if !errors.Is(got.Err, ErrBackupInvalid) {
 		t.Fatalf("unproven member accepted SMB backup dispatch: %v", got.Err)
+	}
+}
+
+func TestAdoptedSMBRepositoryVerifiesReplicatedMarker(t *testing.T) {
+	s := seedBackupMaster(t)
+	receipt, err := saveBackupCredential(s, protocol.StorageCredentialHandoff{
+		Offer: protocol.StorageCredentialOffer{RequestID: "credential-smb",
+			RegistrationRequestID: "backup-credential:smb3:register-smb",
+			PoolID:                s.State.PoolID, HostID: s.State.HostID, RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+		Credentials: protocol.StorageCredentials{Username: "example-user", Secret: "example-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)}
+	replicated := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}, SMBIdentity: pool,
+		CredentialRef: receipt.Receipt, MountPath: "/old"}
+	previous := prepareBackupRepositorySMBNative
+	t.Cleanup(func() { prepareBackupRepositorySMBNative = previous })
+	var expected *protocol.SMBStorageIdentity
+	prepareBackupRepositorySMBNative = func(_ context.Context, r protocol.BackupRepository, _ protocol.StorageCredentials) (protocol.BackupRepository, error) {
+		expected = r.SMBIdentity
+		if r.SMBIdentity == nil || r.SMBIdentity.MarkerID != pool.MarkerID {
+			return protocol.BackupRepository{}, errors.New("SMB repository marker does not match registration")
+		}
+		r.MountPath = t.TempDir()
+		return r, nil
+	}
+	if _, _, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{replicated}}, 5); err != nil {
+		t.Fatalf("promotion refused the replicated share: %v", err)
+	}
+	if !samePeerSMBIdentity(expected, pool) {
+		t.Fatalf("promotion prepared the share without the pool marker: %+v", expected)
+	}
+	unexpected := portablePeerRepository(replicated)
+	if _, err := prepareBackupRepositoryForAdoption(context.Background(), s, unexpected); !errors.Is(err, ErrBackupInvalid) {
+		t.Fatalf("adoption without the pool marker could create a new one: %v", err)
 	}
 }

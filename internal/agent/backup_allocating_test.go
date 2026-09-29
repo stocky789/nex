@@ -25,7 +25,7 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPublishedPoint(t, mount, "repo-1", s.State.PoolID, "point-1")
-	if _, err := ImportPoolBackupCatalog(s, "repo-1"); err != nil {
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
 	cmd := protocol.Command{OperationID: "restore-allocating", Kind: protocol.BackupKindRestoreNew,
@@ -72,14 +72,13 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.State.Journal[cmd.OperationID] = JournalEntry{Command: &cmd, Status: "needs_attention"}
-	previousStage, previousBind := restoreAsNewAllocating, bindLegacyRestoreAsNewAllocating
+	previousStage := restoreAsNewAllocating
 	previousRegister, previousObserve := registerBackupRestoredAsNew, reconcileRestoredAsNew
 	t.Cleanup(func() {
-		restoreAsNewAllocating, bindLegacyRestoreAsNewAllocating = previousStage, previousBind
+		restoreAsNewAllocating = previousStage
 		registerBackupRestoredAsNew, reconcileRestoredAsNew = previousRegister, previousObserve
 	})
 	var stageChecks, registrations, observations int
-	legacy, legacyBound := false, false
 	restoreAsNewAllocating = func(_ *vmhost.ManagedEngine, operationID string, gotSpec protocol.VMCreateSpec, manifestSHA string, disks []protocol.BackupDiskArtifact, _ []protocol.BackupFirmwareArtifact) (bool, error) {
 		stageChecks++
 		if operationID != cmd.OperationID || gotSpec.ID != spec.ID || len(disks) != 1 {
@@ -88,21 +87,7 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 		if manifestSHA != originalManifestSHA || disks[0] != manifest.Disks[0] {
 			return false, ErrBackupConflict
 		}
-		if legacy && !legacyBound {
-			return false, vmhost.ErrRestoreManifestUnbound
-		}
 		return true, nil
-	}
-	bindLegacyRestoreAsNewAllocating = func(_ *vmhost.ManagedEngine, _ context.Context, operationID string, _ protocol.VMCreateSpec, localDir, manifestSHA string, _ []protocol.BackupDiskArtifact, _ []protocol.BackupFirmwareArtifact) error {
-		if operationID != cmd.OperationID || manifestSHA != originalManifestSHA {
-			t.Fatal("legacy binding changed the retained intent")
-		}
-		localDisk, err := os.ReadFile(filepath.Join(localDir, manifest.Disks[0].Filename))
-		if err != nil || string(localDisk) != string(originalDisk) {
-			t.Fatalf("legacy binding ran after local copy changed: %v", err)
-		}
-		legacyBound = true
-		return nil
 	}
 	registerBackupRestoredAsNew = func(_ context.Context, _ *vmhost.ManagedEngine, operationID string, gotSpec protocol.VMCreateSpec, localDir, manifestSHA string, artifacts []protocol.BackupDiskArtifact, _ ...protocol.BackupFirmwareArtifact) error {
 		registrations++
@@ -131,6 +116,15 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 	if got, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, changed); err != nil || got.Status != "needs_attention" || stageChecks != 0 {
 		t.Fatalf("changed intent retried native placement: %+v %v", got, err)
 	}
+	// A pending run is uncertain only while its exact command journal says so.
+	for _, entry := range []JournalEntry{{Command: &cmd, Status: "pending"}, {Command: &changed, Status: "needs_attention"}} {
+		s.State.Journal[cmd.OperationID] = entry
+		if got, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, cmd); err != nil ||
+			got.Error != "restore run has no retained uncertain state" || stageChecks != 0 {
+			t.Fatalf("pending run resumed without its exact uncertain journal %+v: %+v %v", entry, got, err)
+		}
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Command: &cmd, Status: "needs_attention"}
 	if got, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, cmd); err != nil || got.Status != "needs_attention" ||
 		got.Error != "native retry still unavailable" || registrations != 1 || observations != 0 {
 		t.Fatalf("failed exact resume did not stay uncertain: %+v %v; registrations=%d observations=%d", got, err, registrations, observations)
@@ -167,8 +161,7 @@ func TestAllocatingRestoreResumesOnlyExactRetainedOperation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pointDir, "manifest.json"), originalManifest, 0600); err != nil {
 		t.Fatal(err)
 	}
-	legacy = true
-	if got, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, cmd); err != nil || got.Status != "succeeded" || registrations != 2 || observations != 1 || !legacyBound {
+	if got, err := reconcileRestoreAsNewAttention(context.Background(), s.dir, s.State, cmd); err != nil || got.Status != "succeeded" || registrations != 2 || observations != 1 {
 		t.Fatalf("exact resume did not settle: %+v %v; registrations=%d observations=%d", got, err, registrations, observations)
 	}
 	if run, err := loadPoolBackupRun(s, cmd.OperationID); err != nil || run.Status != "succeeded" || run.Stage != "registered" {

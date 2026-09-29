@@ -1,0 +1,49 @@
+{
+  "summary": "Member backup dispatch converges: needs-attention member runs are re-observed, never-started runs settle failed, verification stats points, rehome stays on the Store goroutine, and destination/hostname validation is tightened. API impact: changed contract.",
+  "paths": [
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/run.go",
+    "internal/agent/peer.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_peer_reconcile_test.go",
+    "internal/agent/run_backup_verify_test.go",
+    "internal/agent/backup_schedule_test.go",
+    "internal/agent/backup_run_now_test.go",
+    "internal/agent/backup_peer_credentials_test.go",
+    "internal/agent/run_backup_destination_test.go",
+    "internal/agent/pool_member_hostname_test.go",
+    "internal/agent/pool_join_test.go",
+    "internal/protocol/backup.go",
+    "internal/protocol/pool.go",
+    "internal/protocol/backup_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/backup-policies.md",
+    "docs/guide/backup-repositories.md",
+    "docs/changes/2026-09-29-member-dispatch-convergence.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now see member runs settle after a member reconciles, never-started runs settle failed, a clearer member access message and stricter destination validation.",
+    "pages": ["docs/guide/backup-policies.md", "docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "BackupRepository validation refuses control characters, host:port names, dot prefixes, out-of-range S3 ports, oversized fields, malformed remote fingerprints and an NFS credential_ref; a pool join must report a valid hostname. Peer routes and payloads are unchanged; the master treats a member 404 as definite absence.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes review findings in the current destination acceptance slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. The master's pool run records and Core journals already hold the state; retry spacing is in-memory and rebuilt after restart."
+  },
+  "verification": {
+    "method": "Focused Go regressions in internal/agent and internal/protocol, each shown failing with its fix reverted through go test -overlay and passing after; the new agent tests also passed with -race. Broader focused agent, controller and localcore runs passed.",
+    "evidence": ["docs/BUG_LEDGER.md", "internal/agent/backup_peer_reconcile_test.go", "internal/agent/run_backup_verify_test.go", "internal/protocol/backup_test.go"],
+    "limits": "No lab, two-Core or forge CI run. Restores inherited by an emergency promotion without a local journal are not re-observed. The member-side journal/run crash window (run failed, journal needs_attention) needs the member reconciler fix in backup.go."
+  }
+}

@@ -10,18 +10,21 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
@@ -35,7 +38,7 @@ const s3BackupIntentPrefix = ".nex-intent-"
 const s3BackupAbortPrefix = ".nex-abort-"
 const s3MultipartProofMaxAge = time.Hour
 
-// Process-local proof expires; restart or credential/repository generation change rechecks it.
+// Process-local proof expires; restart or a credential change rechecks it.
 var s3MultipartProof sync.Map
 
 type s3BackupDeleteRecord struct {
@@ -81,6 +84,30 @@ type s3BackupOwner struct {
 
 var newBackupS3Client = func(options s3.Options) *s3.Client { return s3.New(options) }
 
+// s3BackupReadTimeout is how long a connection may go without sending or
+// receiving anything before it fails, so a stalled service cannot hold an
+// operation forever while a slow upload keeps going.
+var s3BackupReadTimeout = 2 * time.Minute
+
+// s3ProgressConn renews the deadline on every read and write. The response is
+// read only after the whole request body is sent, so the reader waiting for it
+// stays alive for as long as the upload makes progress.
+type s3ProgressConn struct{ net.Conn }
+
+func (c s3ProgressConn) Read(p []byte) (int, error) {
+	if err := c.SetDeadline(time.Now().Add(s3BackupReadTimeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
+}
+
+func (c s3ProgressConn) Write(p []byte) (int, error) {
+	if err := c.SetDeadline(time.Now().Add(s3BackupReadTimeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
+}
+
 func newS3BackupRepositoryStorage(s *Store, repo protocol.BackupRepository) (backupRepositoryStorage, error) {
 	credential, err := ResolveBackupCredential(s, repo)
 	if err != nil {
@@ -93,11 +120,26 @@ func newS3BackupStorageWithCredential(s *Store, repo protocol.BackupRepository, 
 	if s == nil || repo.Kind != protocol.BackupRepoKindS3 || repo.S3Source == nil || repo.Valid() != nil || repo.CredentialRef == "" {
 		return nil, ErrBackupInvalid
 	}
-	if credential.Username == "" || credential.Secret == "" {
+	// A "." prefix names the bucket root through a dot segment that services may normalise away.
+	if credential.Username == "" || credential.Secret == "" || repo.S3Source.Prefix == "." {
 		return nil, ErrBackupInvalid
 	}
+	region := repo.S3Source.Region
+	if region == "" {
+		region = "us-east-1"
+	}
 	client := newBackupS3Client(s3.Options{
-		Region: "us-east-1", BaseEndpoint: aws.String(repo.S3Source.Endpoint), UsePathStyle: true,
+		Region: region, BaseEndpoint: aws.String(repo.S3Source.Endpoint), UsePathStyle: true,
+		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+			dial := t.DialContext
+			t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := dial(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return s3ProgressConn{conn}, nil
+			}
+		}),
 		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
 			return aws.Credentials{AccessKeyID: credential.Username, SecretAccessKey: credential.Secret}, nil
 		}),
@@ -114,19 +156,30 @@ func prepareS3BackupRepository(ctx context.Context, s *Store, repo protocol.Back
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	identity, err := b.Identity(ctx)
+	claimed, err := b.verifyOwner(ctx)
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
+	identity := b.remoteIdentity()
 	if repo.RemoteIdentity != nil && *repo.RemoteIdentity != identity {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
+	registering := repo.RemoteIdentity == nil
 	repo.RemoteIdentity = &identity
 	b.repo = repo
-	// Registration and authority adoption must prove the current service profile
-	// before the repository can enter Core's durable inventory.
-	s3MultipartProof.Delete(b.multipartProofKey())
+	// Registration must prove the current service profile before the repository
+	// enters Core's durable inventory. Adoption reuses a fresh proof: member
+	// dispatch prepares on every request and cannot repeat the multipart transfer.
+	if registering {
+		s3MultipartProof.Delete(b.multipartProofKey())
+	}
 	if err := b.Probe(ctx); err != nil {
+		if claimed {
+			// The retry carries a new repository ID, so a kept claim would refuse it.
+			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = errors.Join(err, b.deleteExactMarker(cleanup, b.key(s3BackupOwnerKey), b.ownerBytes()))
+		}
 		return protocol.BackupRepository{}, err
 	}
 	return repo, nil
@@ -145,11 +198,15 @@ func (b *s3BackupStorage) ownerBytes() []byte {
 
 // Identity binds the Core record to this exact TLS endpoint, bucket, prefix and owner.
 func (b *s3BackupStorage) Identity(ctx context.Context) (protocol.BackupRemoteIdentity, error) {
-	if err := b.verifyOwner(ctx); err != nil {
+	if _, err := b.verifyOwner(ctx); err != nil {
 		return protocol.BackupRemoteIdentity{}, err
 	}
+	return b.remoteIdentity(), nil
+}
+
+func (b *s3BackupStorage) remoteIdentity() protocol.BackupRemoteIdentity {
 	sum := sha256.Sum256(b.ownerBytes())
-	return protocol.BackupRemoteIdentity{Fingerprint: hex.EncodeToString(sum[:])}, nil
+	return protocol.BackupRemoteIdentity{Fingerprint: hex.EncodeToString(sum[:])}
 }
 
 func (b *s3BackupStorage) Verify(ctx context.Context) error {
@@ -163,34 +220,51 @@ func (b *s3BackupStorage) Verify(ctx context.Context) error {
 	return nil
 }
 
-func (b *s3BackupStorage) verifyOwner(ctx context.Context) error {
+// verifyOwner checks the owner object, claiming an empty prefix on first
+// registration. claimed reports that this call made the claim.
+func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err error) {
 	key := b.key(s3BackupOwnerKey)
 	raw, err := b.read(ctx, key, 4096)
 	if isS3Code(err, "NoSuchKey", "NotFound") && b.repo.RemoteIdentity == nil {
 		if err := requirePoolAuthorityWritable(b.s); err != nil {
-			return err
+			return false, err
+		}
+		// An owner above this prefix means the new root sits inside another repository.
+		parents := strings.Split(b.repo.S3Source.Prefix, "/")
+		for i := range parents {
+			_, ownerErr := b.read(ctx, strings.Join(append(parents[:i:i], s3BackupOwnerKey), "/"), 4096)
+			if ownerErr == nil {
+				return false, ErrBackupConflict
+			}
+			if !isS3Code(ownerErr, "NoSuchKey", "NotFound") {
+				return false, ownerErr
+			}
 		}
 		keys, listErr := b.list(ctx, b.root)
 		if listErr != nil {
-			return listErr
+			return false, listErr
 		}
-		if len(keys) != 0 {
-			return ErrBackupConflict
+		for _, found := range keys {
+			// A probe from a refused registration may outlive its released claim.
+			if !strings.HasPrefix(found, b.key(".nex-probe-")) {
+				return false, ErrBackupConflict
+			}
 		}
 		_, putErr := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
 			Key: aws.String(key), Body: bytes.NewReader(b.ownerBytes()), IfNoneMatch: aws.String("*")})
 		if putErr != nil && !isS3Code(putErr, "PreconditionFailed", "ConditionalRequestConflict") {
-			return putErr
+			return false, putErr
 		}
 		raw, err = b.read(ctx, key, 4096)
+		claimed = true
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !bytes.Equal(raw, b.ownerBytes()) {
-		return ErrBackupConflict
+		return false, ErrBackupConflict
 	}
-	return nil
+	return claimed, nil
 }
 
 func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
@@ -211,10 +285,6 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 	}
 	key := b.key(".nex-probe-" + hex.EncodeToString(nonce))
 	payload := []byte("nex backup probe")
-	if _, err := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
-		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*")}); err != nil {
-		return err
-	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -232,8 +302,12 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 			}
 		}
 	}()
+	// Probe writes carry the same checksum header as publication writes.
+	if err := b.putExactMarker(ctx, key, payload); err != nil {
+		return err
+	}
 	if _, err := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
-		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*")}); !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(payload))}); !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
 		return errors.New("S3 conditional create is not proven")
 	}
 	raw, err := b.read(ctx, key, 128)
@@ -266,8 +340,7 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 }
 
 func (b *s3BackupStorage) multipartProofKey() string {
-	material := string(b.ownerBytes()) + "\x00" + b.repo.CredentialRef + "\x00" +
-		strconv.FormatUint(b.repo.Generation, 10) + "\x00" + b.s.State.HostID
+	material := string(b.ownerBytes()) + "\x00" + b.repo.CredentialRef + "\x00" + b.s.State.HostID
 	sum := sha256.Sum256([]byte(material))
 	return hex.EncodeToString(sum[:])
 }
@@ -316,14 +389,16 @@ func (b *s3BackupStorage) probeMultipart(ctx context.Context, key string) (probe
 	input := &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
 		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*")}
 	if _, err := uploader.Upload(ctx, input); err != nil {
-		return err
+		return errors.Join(err, b.abortFailedMultipart(err, key))
 	}
 	payload[0] = 1
 	input.Body = bytes.NewReader(payload)
-	if _, err := uploader.Upload(ctx, input); !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
-		return errors.New("S3 conditional multipart completion is not proven")
-	} else if abortErr := b.abortFailedMultipart(err, key); abortErr != nil {
+	_, err := uploader.Upload(ctx, input)
+	if abortErr := b.abortFailedMultipart(err, key); abortErr != nil {
 		return abortErr
+	}
+	if !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+		return errors.New("S3 conditional multipart completion is not proven")
 	}
 	payload[0] = 0
 	raw, err := b.read(ctx, key, int64(len(payload)))
@@ -356,7 +431,7 @@ func (b *s3BackupStorage) read(ctx context.Context, key string, limit int64) ([]
 	return raw, nil
 }
 
-func (b *s3BackupStorage) ReadPoint(ctx context.Context, pointID string) (protocol.BackupManifest, string, error) {
+func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protocol.BackupManifest, string, error) {
 	if !protocol.ValidSnapshotOperationID(pointID) {
 		return protocol.BackupManifest{}, "", ErrBackupInvalid
 	}
@@ -380,7 +455,11 @@ func (b *s3BackupStorage) ReadPoint(ctx context.Context, pointID string) (protoc
 			if listErr != nil {
 				return protocol.BackupManifest{}, "", listErr
 			}
-			if len(keys) == 0 || b.hasIncompleteMarker(ctx, pointID) {
+			incomplete, markerErr := b.hasIncompleteMarker(ctx, pointID)
+			if markerErr != nil {
+				return protocol.BackupManifest{}, "", markerErr
+			}
+			if len(keys) == 0 || incomplete {
 				return protocol.BackupManifest{}, "", os.ErrNotExist
 			}
 			return protocol.BackupManifest{}, "", ErrBackupConflict
@@ -399,12 +478,12 @@ func (b *s3BackupStorage) ReadPoint(ctx context.Context, pointID string) (protoc
 		return protocol.BackupManifest{}, "", ErrBackupConflict
 	}
 	for _, disk := range manifest.Disks {
-		if err := b.verifyArtifact(ctx, pointID, disk.Filename, disk.Size, disk.SHA256); err != nil {
+		if err := b.statArtifact(ctx, pointID, disk.Filename, disk.Size); err != nil {
 			return protocol.BackupManifest{}, "", err
 		}
 	}
 	for _, fw := range manifest.Firmware {
-		if err := b.verifyArtifact(ctx, pointID, fw.Filename, fw.Size, fw.SHA256); err != nil {
+		if err := b.statArtifact(ctx, pointID, fw.Filename, fw.Size); err != nil {
 			return protocol.BackupManifest{}, "", err
 		}
 	}
@@ -432,13 +511,34 @@ func (b *s3BackupStorage) parseAbortTombstone(id string, raw []byte) (s3BackupAb
 	if hex.EncodeToString(sum[:]) != tombstone.ManifestSHA {
 		return s3BackupAbortTombstone{}, false
 	}
-	var manifest protocol.BackupManifest
-	if len(tombstone.Manifest) > 1<<20 || json.Unmarshal(tombstone.Manifest, &manifest) != nil || manifest.Valid() != nil ||
-		manifest.RecoveryPointID != id || manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
+	if _, ok := b.recordedManifest(id, tombstone.Manifest); !ok {
 		return s3BackupAbortTombstone{}, false
 	}
 	canonical, _ := json.Marshal(tombstone)
 	return tombstone, bytes.Equal(raw, canonical)
+}
+
+// recordedManifest decodes the manifest bound by an intent, abort tombstone or
+// delete record. Those records are trusted by their own raw digest, so this
+// skips manifest.Valid: it re-hashes the captured spec, and an upgraded spec
+// schema would otherwise make every old record unrecognisable.
+func (b *s3BackupStorage) recordedManifest(id string, raw []byte) (protocol.BackupManifest, bool) {
+	var manifest protocol.BackupManifest
+	if len(raw) > 1<<20 || json.Unmarshal(raw, &manifest) != nil || manifest.RecoveryPointID != id ||
+		manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
+		return protocol.BackupManifest{}, false
+	}
+	for _, disk := range manifest.Disks {
+		if disk.Valid() != nil {
+			return protocol.BackupManifest{}, false
+		}
+	}
+	for _, fw := range manifest.Firmware {
+		if fw.Valid() != nil {
+			return protocol.BackupManifest{}, false
+		}
+	}
+	return manifest, true
 }
 
 func (b *s3BackupStorage) artifactTombstone(id, name string, artifact protocol.BackupDiskArtifact) []byte {
@@ -447,13 +547,17 @@ func (b *s3BackupStorage) artifactTombstone(id, name string, artifact protocol.B
 	return raw
 }
 
-func (b *s3BackupStorage) hasIncompleteMarker(ctx context.Context, id string) bool {
+func (b *s3BackupStorage) hasIncompleteMarker(ctx context.Context, id string) (bool, error) {
 	for _, prefix := range []string{s3BackupIntentPrefix, s3BackupAbortPrefix} {
-		if _, err := b.read(ctx, b.key(prefix+id), 1<<20); err == nil {
-			return true
+		_, err := b.read(ctx, b.key(prefix+id), 1<<20)
+		if err == nil {
+			return true, nil
+		}
+		if !isS3Code(err, "NoSuchKey", "NotFound") {
+			return false, err
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (b *s3BackupStorage) verifyArtifact(ctx context.Context, pointID, name string, size int64, digest string) error {
@@ -468,6 +572,17 @@ func (b *s3BackupStorage) verifyArtifact(ctx context.Context, pointID, name stri
 		return err
 	}
 	if n != size || hex.EncodeToString(h.Sum(nil)) != digest {
+		return ErrBackupConflict
+	}
+	return nil
+}
+
+func (b *s3BackupStorage) statArtifact(ctx context.Context, pointID, name string, size int64) error {
+	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, name))})
+	if err != nil {
+		return err
+	}
+	if out.ContentLength == nil || *out.ContentLength != size {
 		return ErrBackupConflict
 	}
 	return nil
@@ -495,7 +610,7 @@ func (b *s3BackupStorage) Publish(ctx context.Context, manifest protocol.BackupM
 		if !bytes.Equal(old, raw) {
 			return "", ErrBackupConflict
 		}
-		_, digest, err := b.ReadPoint(ctx, manifest.RecoveryPointID)
+		_, digest, err := b.StatPoint(ctx, manifest.RecoveryPointID)
 		return digest, err
 	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
 		return "", err
@@ -556,7 +671,8 @@ func (b *s3BackupStorage) Publish(ctx context.Context, manifest protocol.BackupM
 	if err != nil || !bytes.Equal(old, raw) {
 		return "", ErrBackupConflict
 	}
-	_, digest, err := b.ReadPoint(ctx, manifest.RecoveryPointID)
+	// putArtifact verified every artifact before the manifest could commit.
+	_, digest, err := b.StatPoint(ctx, manifest.RecoveryPointID)
 	if err == nil {
 		// A lost cleanup reply leaves only this harmless exact intent. The
 		// published manifest remains authoritative on an exact retry.
@@ -658,105 +774,40 @@ func (b *s3BackupStorage) AbortIncomplete(ctx context.Context, id string) error 
 	if err := b.Probe(ctx); err != nil {
 		return err
 	}
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
-	state, err := loadPoolPeer(b.s)
-	if err != nil {
+	raw, intentPresent, err := b.claimAbort(ctx, id)
+	if err != nil || raw == nil {
 		return err
 	}
-	if err := poolAuthorityWritable(state); err != nil {
-		return err
-	}
-	if _, err := getCatalogPoint(b.s, b.repo.ID, id); err == nil {
-		return ErrBackupConflict
-	} else if !errors.Is(err, ErrBackupNotFound) {
-		return err
-	}
-	pins, err := ActiveBackupRestorePins(b.s)
-	if err != nil {
-		return err
-	}
-	if pins[id] {
-		return ErrBackupConflict
-	}
-	if protected, err := b.Protected(ctx, id); err != nil || protected {
+	// A publisher that crashed mid-transfer leaves billed parts no other path lists.
+	uploads := s3.NewListMultipartUploadsPaginator(b.client, &s3.ListMultipartUploadsInput{
+		Bucket: aws.String(b.repo.S3Source.Bucket), Prefix: aws.String(b.pointKey(id, ""))})
+	for uploads.HasMorePages() {
+		page, err := uploads.NextPage(ctx)
 		if err != nil {
 			return err
 		}
-		return ErrBackupConflict
-	}
-	if _, deleting, err := b.readDeleteRecord(ctx, id); err != nil {
-		return err
-	} else if deleting {
-		return ErrBackupConflict
-	}
-	manifestKey := b.pointKey(id, "manifest.json")
-	remoteManifest, manifestErr := b.read(ctx, manifestKey, 2<<20)
-	if manifestErr != nil && !isS3Code(manifestErr, "NoSuchKey", "NotFound") {
-		return manifestErr
-	}
-	intentKey, abortKey := b.key(s3BackupIntentPrefix+id), b.key(s3BackupAbortPrefix+id)
-	intent, intentErr := b.read(ctx, intentKey, 1<<20)
-	if intentErr != nil && !isS3Code(intentErr, "NoSuchKey", "NotFound") {
-		return intentErr
-	}
-	abort, abortErr := b.read(ctx, abortKey, 1<<20)
-	if abortErr != nil && !isS3Code(abortErr, "NoSuchKey", "NotFound") {
-		return abortErr
-	}
-	keys, err := b.list(ctx, b.pointKey(id, ""))
-	if err != nil {
-		return err
-	}
-	if intentErr != nil && abortErr != nil {
-		if len(keys) == 0 && manifestErr != nil {
-			return nil
+		for _, upload := range page.Uploads {
+			_, err := b.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket: aws.String(b.repo.S3Source.Bucket), Key: upload.Key, UploadId: upload.UploadId})
+			if err != nil && !isS3Code(err, "NoSuchUpload") {
+				return err
+			}
 		}
-		if tombstone, ok := b.parseAbortTombstone(id, remoteManifest); ok {
-			intent = tombstone.Manifest
-		} else {
-			return ErrBackupConflict
-		}
-	}
-	raw := intent
-	if intentErr != nil && abortErr == nil {
-		raw = abort
-	} else if abortErr == nil && !bytes.Equal(intent, abort) {
-		return ErrBackupConflict
 	}
 	var manifest protocol.BackupManifest
-	if json.Unmarshal(raw, &manifest) != nil || manifest.Valid() != nil || manifest.RecoveryPointID != id ||
-		manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
-		return ErrBackupConflict
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return err
 	}
-	tombstoneRaw := b.abortTombstone(id, raw)
-	if manifestErr == nil && !bytes.Equal(remoteManifest, tombstoneRaw) {
-		return ErrBackupConflict
-	}
+	manifestKey := b.pointKey(id, "manifest.json")
+	intentKey, abortKey := b.key(s3BackupIntentPrefix+id), b.key(s3BackupAbortPrefix+id)
+	// The committed tombstone fences publication, so the exact-content artifact
+	// reads below run without holding the authority transition lock.
 	artifacts := make(map[string]protocol.BackupDiskArtifact)
 	for _, disk := range manifest.Disks {
 		artifacts[b.pointKey(id, disk.Filename)] = disk
 	}
 	for _, fw := range manifest.Firmware {
 		artifacts[b.pointKey(id, fw.Filename)] = protocol.BackupDiskArtifact{Size: fw.Size, SHA256: fw.SHA256}
-	}
-	for _, key := range keys {
-		if key == manifestKey && bytes.Equal(remoteManifest, tombstoneRaw) {
-			continue
-		}
-		if _, ok := artifacts[key]; !ok {
-			return ErrBackupConflict
-		}
-	}
-	// The permanent same-key tombstone serializes against every delayed final
-	// PutObject(If-None-Match:*). Do not remove any artifact before proving it won.
-	if err := b.putExactMarker(ctx, manifestKey, tombstoneRaw); err != nil {
-		return err
-	}
-	if abortErr != nil {
-		if err := b.putExactMarker(ctx, abortKey, raw); err != nil {
-			return err
-		}
 	}
 	artifactKeys := make([]string, 0, len(artifacts))
 	for key := range artifacts {
@@ -788,12 +839,110 @@ func (b *s3BackupStorage) AbortIncomplete(ctx context.Context, id string) error 
 	} else if !slices.Equal(remaining, expectedKeys) {
 		return ErrBackupConflict
 	}
-	if intentErr == nil {
+	if intentPresent {
 		if err := b.deleteExactMarker(ctx, intentKey, raw); err != nil {
 			return err
 		}
 	}
 	return b.deleteExactMarker(ctx, abortKey, raw)
+}
+
+// claimAbort commits the abort tombstone and marker under the authority lock.
+// It returns the bound manifest, or nil when nothing remains to abort.
+func (b *s3BackupStorage) claimAbort(ctx context.Context, id string) ([]byte, bool, error) {
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(b.s)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := poolAuthorityWritable(state); err != nil {
+		return nil, false, err
+	}
+	if _, err := getCatalogPoint(b.s, b.repo.ID, id); err == nil {
+		return nil, false, ErrBackupConflict
+	} else if !errors.Is(err, ErrBackupNotFound) {
+		return nil, false, err
+	}
+	pins, err := ActiveBackupRestorePins(b.s)
+	if err != nil {
+		return nil, false, err
+	}
+	if pins[id] {
+		return nil, false, ErrBackupConflict
+	}
+	if protected, err := b.Protected(ctx, id); err != nil || protected {
+		if err != nil {
+			return nil, false, err
+		}
+		return nil, false, ErrBackupConflict
+	}
+	if _, deleting, err := b.readDeleteRecord(ctx, id); err != nil {
+		return nil, false, err
+	} else if deleting {
+		return nil, false, ErrBackupConflict
+	}
+	manifestKey := b.pointKey(id, "manifest.json")
+	remoteManifest, manifestErr := b.read(ctx, manifestKey, 2<<20)
+	if manifestErr != nil && !isS3Code(manifestErr, "NoSuchKey", "NotFound") {
+		return nil, false, manifestErr
+	}
+	intentKey, abortKey := b.key(s3BackupIntentPrefix+id), b.key(s3BackupAbortPrefix+id)
+	intent, intentErr := b.read(ctx, intentKey, 1<<20)
+	if intentErr != nil && !isS3Code(intentErr, "NoSuchKey", "NotFound") {
+		return nil, false, intentErr
+	}
+	abort, abortErr := b.read(ctx, abortKey, 1<<20)
+	if abortErr != nil && !isS3Code(abortErr, "NoSuchKey", "NotFound") {
+		return nil, false, abortErr
+	}
+	keys, err := b.list(ctx, b.pointKey(id, ""))
+	if err != nil {
+		return nil, false, err
+	}
+	if intentErr != nil && abortErr != nil {
+		if len(keys) == 0 && manifestErr != nil {
+			return nil, false, nil
+		}
+		if tombstone, ok := b.parseAbortTombstone(id, remoteManifest); ok {
+			intent = tombstone.Manifest
+		} else {
+			return nil, false, ErrBackupConflict
+		}
+	}
+	raw := intent
+	if intentErr != nil && abortErr == nil {
+		raw = abort
+	} else if abortErr == nil && !bytes.Equal(intent, abort) {
+		return nil, false, ErrBackupConflict
+	}
+	manifest, ok := b.recordedManifest(id, raw)
+	if !ok {
+		return nil, false, ErrBackupConflict
+	}
+	tombstoneRaw := b.abortTombstone(id, raw)
+	if manifestErr == nil && !bytes.Equal(remoteManifest, tombstoneRaw) {
+		return nil, false, ErrBackupConflict
+	}
+	for _, key := range keys {
+		if key == manifestKey && bytes.Equal(remoteManifest, tombstoneRaw) {
+			continue
+		}
+		if key == manifestKey || !slices.Contains(b.manifestKeys(manifest), key) {
+			return nil, false, ErrBackupConflict
+		}
+	}
+	// The permanent same-key tombstone serializes against every delayed final
+	// PutObject(If-None-Match:*). Do not remove any artifact before proving it won.
+	if err := b.putExactMarker(ctx, manifestKey, tombstoneRaw); err != nil {
+		return nil, false, err
+	}
+	if abortErr != nil {
+		if err := b.putExactMarker(ctx, abortKey, raw); err != nil {
+			return nil, false, err
+		}
+	}
+	return raw, intentErr == nil, nil
 }
 
 func sha256Base64(raw []byte) string {
@@ -822,17 +971,30 @@ func (b *s3BackupStorage) putArtifact(ctx context.Context, pointID, name, path s
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
+	// A retry settles on an exact earlier upload, and any other object at the
+	// key conflicts, before transferring the artifact again.
+	if err := b.statArtifact(ctx, pointID, name, size); err == nil {
+		return b.verifyArtifact(ctx, pointID, name, size, digest)
+	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+		return err
+	}
 	key := b.pointKey(pointID, name)
 	uploader := manager.NewUploader(b.client)
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
 		Body: f, ContentLength: aws.Int64(size), IfNoneMatch: aws.String("*")})
 	if err != nil {
+		// The provider's refusal (for example an object over its size limit) is the run's failure reason.
+		err = fmt.Errorf("upload %s to S3: %w", name, err)
 		if abortErr := b.abortFailedMultipart(err, key); abortErr != nil {
 			return errors.Join(err, abortErr)
 		}
 		if verifyErr := b.verifyArtifact(ctx, pointID, name, size, digest); verifyErr != nil {
+			if errors.Is(verifyErr, ErrBackupConflict) {
+				return ErrBackupConflict
+			}
 			return err
 		}
+		return nil
 	}
 	return b.verifyArtifact(ctx, pointID, name, size, digest)
 }
@@ -853,7 +1015,8 @@ func (b *s3BackupStorage) abortFailedMultipart(uploadErr error, key string) erro
 }
 
 func (b *s3BackupStorage) CopyArtifacts(ctx context.Context, pointID, localDir string, manifest protocol.BackupManifest) error {
-	stored, _, err := b.ReadPoint(ctx, pointID)
+	// copyArtifact verifies each digest while copying.
+	stored, _, err := b.StatPoint(ctx, pointID)
 	if err != nil {
 		return err
 	}
@@ -944,7 +1107,8 @@ func (b *s3BackupStorage) list(ctx context.Context, prefix string) ([]string, er
 			return nil, err
 		}
 		for _, obj := range page.Contents {
-			if obj.Key != nil {
+			// Consoles create an empty "folder/" object; it holds no data.
+			if obj.Key != nil && !(*obj.Key == prefix && strings.HasSuffix(prefix, "/") && aws.ToInt64(obj.Size) == 0) {
 				keys = append(keys, *obj.Key)
 			}
 		}
@@ -967,7 +1131,17 @@ func (b *s3BackupStorage) Entries(ctx context.Context) ([]string, error) {
 			return nil, ErrBackupConflict // An incomplete abort must settle before rebuild.
 		}
 		if id, ok := strings.CutSuffix(rest, "/"+s3BackupDeleteKey); ok && protocol.ValidSnapshotOperationID(id) {
-			return nil, ErrBackupConflict // An interrupted prune must settle before rebuild.
+			if _, _, err := b.readDeleteRecord(ctx, id); err != nil {
+				return nil, err
+			}
+			// A prune interrupted after removing every point object has finished
+			// in effect; only an incomplete one must settle before rebuild.
+			if slices.ContainsFunc(keys, func(other string) bool {
+				return other != key && strings.HasPrefix(other, b.pointKey(id, ""))
+			}) {
+				return nil, ErrBackupConflict
+			}
+			continue
 		}
 		if !strings.HasSuffix(rest, "/manifest.json") {
 			continue
@@ -999,7 +1173,7 @@ func (b *s3BackupStorage) Scan(ctx context.Context) ([]protocol.BackupRecoveryPo
 	}
 	points := make([]protocol.BackupRecoveryPoint, 0, len(names))
 	for _, id := range names {
-		manifest, digest, err := b.ReadPoint(ctx, id)
+		manifest, digest, err := b.StatPoint(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -1008,10 +1182,30 @@ func (b *s3BackupStorage) Scan(ctx context.Context) ([]protocol.BackupRecoveryPo
 			return nil, err
 		}
 		points = append(points, protocol.BackupRecoveryPoint{ID: id, RepositoryID: b.repo.ID, PoolID: b.repo.PoolID,
-			SourceVMID: manifest.SourceVMID, SourceVMName: manifest.SourceVMName, CapturedAt: manifest.CapturedAt,
+			SourceVMID: manifest.SourceVMID, SourceVMName: manifest.SourceVMName, PolicyID: manifest.PolicyID, CapturedAt: manifest.CapturedAt,
 			Consistency: manifest.Consistency, ManifestSHA256: digest, Protected: protected})
 	}
 	return points, nil
+}
+
+// readProtectMarker returns the marker's bytes and ETag, or nil when the point is unprotected.
+func (b *s3BackupStorage) readProtectMarker(ctx context.Context, pointID string) ([]byte, *string, error) {
+	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, ".nex-protected"))})
+	if isS3Code(err, "NoSuchKey", "NotFound") {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	defer out.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(out.Body, 129))
+	if err != nil {
+		return nil, nil, err
+	}
+	if !bytes.HasPrefix(raw, []byte("protected\n"+pointID+"\n")) || len(raw) > 128 {
+		return nil, nil, ErrBackupConflict
+	}
+	return raw, out.ETag, nil
 }
 
 func (b *s3BackupStorage) Protected(ctx context.Context, pointID string) (bool, error) {
@@ -1021,21 +1215,14 @@ func (b *s3BackupStorage) Protected(ctx context.Context, pointID string) (bool, 
 	if err := b.Verify(ctx); err != nil {
 		return false, err
 	}
-	raw, err := b.read(ctx, b.pointKey(pointID, ".nex-protected"), 128)
-	if isS3Code(err, "NoSuchKey", "NotFound") {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if string(raw) != pointID {
-		return false, ErrBackupConflict
-	}
-	return true, nil
+	raw, _, err := b.readProtectMarker(ctx, pointID)
+	return raw != nil, err
 }
 
+// SetProtected replaces or removes only the marker it read, so a stalled request
+// cannot undo a newer protect or unprotect.
 func (b *s3BackupStorage) SetProtected(ctx context.Context, pointID string, protected bool) error {
-	if _, _, err := b.ReadPoint(ctx, pointID); err != nil {
+	if _, _, err := b.StatPoint(ctx, pointID); err != nil {
 		return err
 	}
 	poolPeerMu.Lock()
@@ -1047,31 +1234,29 @@ func (b *s3BackupStorage) SetProtected(ctx context.Context, pointID string, prot
 	if err := poolAuthorityWritable(state); err != nil {
 		return err
 	}
-	key := b.pointKey(pointID, ".nex-protected")
-	if protected {
-		_, err = b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
-			Body: strings.NewReader(pointID), IfNoneMatch: aws.String("*")})
-		if err != nil && !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
-			return err
-		}
-		ok, err := b.Protected(ctx, pointID)
-		if err != nil || !ok {
-			return ErrBackupConflict
-		}
-		return nil
-	}
-	if ok, err := b.Protected(ctx, pointID); err != nil || !ok {
-		return err
-	}
-	_, err = b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)})
+	current, etag, err := b.readProtectMarker(ctx, pointID)
 	if err != nil {
 		return err
 	}
-	ok, err := b.Protected(ctx, pointID)
-	if err != nil || ok {
+	key := aws.String(b.pointKey(pointID, ".nex-protected"))
+	if !protected {
+		if current == nil {
+			return nil
+		}
+		_, err = b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: key, IfMatch: etag})
+	} else {
+		put := &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: key, Body: bytes.NewReader(newBackupProtectMarker(pointID))}
+		if current == nil {
+			put.IfNoneMatch = aws.String("*")
+		} else {
+			put.IfMatch = etag
+		}
+		_, err = b.client.PutObject(ctx, put)
+	}
+	if isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
 		return ErrBackupConflict
 	}
-	return nil
+	return err
 }
 
 func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
@@ -1108,7 +1293,7 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 		}
 	}
 	if !exists {
-		manifest, digest, readErr := b.ReadPoint(ctx, pointID)
+		manifest, digest, readErr := b.StatPoint(ctx, pointID)
 		if errors.Is(readErr, os.ErrNotExist) {
 			remaining, listErr := b.list(ctx, b.pointKey(pointID, ""))
 			if listErr != nil {
@@ -1177,9 +1362,6 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 			return ErrBackupConflict
 		}
 	}
-	if !allowed[b.pointKey(pointID, "manifest.json")] {
-		return ErrBackupConflict
-	}
 	// The durable deletion record permits exact retries after any lost reply.
 	manifestKey := b.pointKey(pointID, "manifest.json")
 	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(manifestKey)}); err != nil {
@@ -1244,10 +1426,8 @@ func (b *s3BackupStorage) readDeleteRecord(ctx context.Context, pointID string) 
 	if hex.EncodeToString(sum[:]) != record.ManifestSHA {
 		return s3BackupDeleteRecord{}, false, ErrBackupConflict
 	}
-	var manifest protocol.BackupManifest
-	if json.Unmarshal(record.Manifest, &manifest) != nil || manifest.Valid() != nil ||
-		manifest.RecoveryPointID != pointID || manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID ||
-		!slices.Equal(record.Keys, b.manifestKeys(manifest)) {
+	manifest, ok := b.recordedManifest(pointID, record.Manifest)
+	if !ok || !slices.Equal(record.Keys, b.manifestKeys(manifest)) {
 		return s3BackupDeleteRecord{}, false, ErrBackupConflict
 	}
 	for i, key := range record.Keys {

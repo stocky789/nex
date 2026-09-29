@@ -1,0 +1,41 @@
+{
+  "summary": "Keep full-content repository reads out of the pool authority lock, bound S3 and SFTP network stalls, and use a manifest-and-size read for prune, protection, catalog rebuild and published-backup settlement. API impact: none.",
+  "paths": [
+    "internal/agent/backup_repository_storage.go",
+    "internal/agent/backup_repository_storage_test.go",
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/backup_protect.go",
+    "internal/vmhost/backup_catalog_scan.go",
+    "docs/guide/catalog-rebuild.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-backup-repository-io-bounds.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Catalog rebuild now checks artifact presence and size instead of digests; restore and test restore still hash every artifact.",
+    "pages": ["docs/guide/catalog-rebuild.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Internal Core repository I/O only; no route, payload, permission or result change between Controller and Core.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects the current destination safety and liveness gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Core's repository manifests, markers and catalog are unchanged; a fresh Controller adopts the master's authenticated inventory as before."
+  },
+  "verification": {
+    "method": "Focused tests failed red against the prior sources through go test -overlay (artifact downloaded twice on S3 publication; Membership blocked for more than 2 s during S3 abort; SFTP stalled server hung past a 2-minute test deadline; SFTP and filesystem rebuild refused a same-size content change; S3 client had no bounded HTTP client) and pass after the fix. Focused agent backup/repository tests, vmhost backup tests and focused -race on the new tests passed.",
+    "evidence": ["internal/agent/backup_repository_s3_test.go", "internal/agent/backup_repository_sftp_test.go", "internal/agent/backup_repository_storage_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "Fake S3 and in-process SFTP/SSH fixtures only; no real provider, lab or large-repository timing run. A mid-transfer stall where the SSH server still answers keepalives is bounded only by the caller context. Forge CI remains open."
+  }
+}

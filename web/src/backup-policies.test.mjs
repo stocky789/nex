@@ -5,17 +5,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { bundleTestModule } from "./test-helpers.mjs";
 
-const { BackupPolicies, retentionPreview, repositoryChangeBody, requestRepositoryChange } = await import(bundleTestModule(new URL("./backup-policies.tsx", import.meta.url), "backup-policies"));
+const { BackupPolicies, repositoryChangeBody, requestRepositoryChange } = await import(bundleTestModule(new URL("./backup-policies.tsx", import.meta.url), "backup-policies"));
 const { stableBody } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "backup-types"));
-const points = [
-  { id: "new", source_vm_id: "vm-a", captured_at: "2026-09-03T00:00:00Z", protected: true },
-  { id: "middle", source_vm_id: "vm-a", captured_at: "2026-09-02T00:00:00Z" },
-  { id: "old", source_vm_id: "vm-a", captured_at: "2026-09-01T00:00:00Z" },
-];
-
-assert.deepEqual(retentionPreview(points, ["vm-a"], 1), { keep: 2, prune: 1 });
-assert.equal(retentionPreview(null, ["vm-a"], 1), null);
-
 const pending = {};
 const first = stableBody(pending, "pause-policy-a", { paused: true });
 assert.equal(stableBody(pending, "pause-policy-a", { paused: false }), first, "a refreshed status must not change an exact retry");
@@ -29,7 +20,7 @@ assert.match(policySource, /if \(!active\) return null;/, "the inactive policy p
 assert.match(policySource, /if \(uncertain\) return;\s*clearRequest\("policy-create"\)/, "an uncertain policy body stays frozen");
 assert.match(policySource, /request_id: requestID\(key, "bpol"\)/, "an exact create retry keeps its request ID");
 
-const props = { api: async () => ({}), data: { vms: [], hosts: [] }, pool: { id: "pool-1" }, repos: [], points: null, policies: [], busy: false, unavailable: false, working: "", setWorking() {}, onNotice() {}, onError() {}, error: "", reload: async () => {}, requestID: () => "held-id", clearRequest() {}, openCreate: true, onOpenCreate() {}, onCloseCreate() {} };
+const props = { api: async () => ({}), data: { vms: [], hosts: [] }, pool: { id: "pool-1" }, repos: [], policies: [], busy: false, unavailable: false, working: "", setWorking() {}, onNotice() {}, onError() {}, error: "", reload: async () => {}, requestID: () => "held-id", clearRequest() {}, openCreate: true, onOpenCreate() {}, onCloseCreate() {} };
 assert.equal(renderToStaticMarkup(createElement(BackupPolicies, { ...props, active: false })), "", "off-tab policy form leaves no hidden focusable controls or panel");
 assert.match(renderToStaticMarkup(createElement(BackupPolicies, { ...props, active: true })), /Create policy/, "returning to Policies renders the preserved form");
 const offlineRepo = { id: "repo-1", name: "Primary", health: { status: "offline", observed_at: new Date().toISOString() } };

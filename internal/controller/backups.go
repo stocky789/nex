@@ -4,6 +4,7 @@ package controller
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -56,10 +57,10 @@ func (c *Controller) listBackupRepositories(w http.ResponseWriter, r *http.Reque
 		}
 		out := append([]protocol.BackupRepository{}, m.BackupRepositories...)
 		for i := range out {
-			age := time.Since(out[i].Health.ObservedAt)
-			if !masterFresh || out[i].Health.ObservedAt.IsZero() || age < 0 || age > 2*time.Minute {
-				out[i].Health.Status = "unknown"
-				out[i].Health.Error = ""
+			// Core ages health on its own clock; the Controller only masks a stale master.
+			health := &out[i].Health
+			if !masterFresh || health.Status == "" {
+				health.Status, health.Error = "unknown", ""
 			}
 		}
 		return true, out
@@ -67,50 +68,32 @@ func (c *Controller) listBackupRepositories(w http.ResponseWriter, r *http.Reque
 }
 
 func (c *Controller) listBackupCatalog(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	if c.relayBackupInventoryPage(w, r, true) {
-		return
-	}
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup catalog", func(m *protocol.ManagedState) (bool, any) {
-		if !m.BackupCatalogReported {
-			return false, nil
-		}
-		out := append([]protocol.BackupRecoveryPoint{}, m.BackupCatalog...)
-		return true, out
-	})
+	c.relayBackupInventoryPage(w, r, true)
 }
 
 func (c *Controller) listBackupRuns(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	if c.relayBackupInventoryPage(w, r, false) {
-		return
-	}
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup runs", func(m *protocol.ManagedState) (bool, any) {
-		if !m.BackupRunsReported {
-			return false, nil
-		}
-		out := append([]protocol.BackupRun{}, m.BackupRuns...)
-		return true, out
-	})
+	c.relayBackupInventoryPage(w, r, false)
 }
 
 var backupPageGenerationValid = regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString
 
 // relayBackupInventoryPage reads Core-owned history over the enrolled host's
-// outbound channel. An older Core keeps its legacy mirrored-array contract.
-func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Request, catalog bool) bool {
+// outbound channel.
+func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Request, catalog bool) {
 	pool := r.PathValue("id")
 	var master string
 	var revoked bool
-	if !nameValid(pool) || c.db.QueryRow("SELECT h.id,h.revoked FROM pools p JOIN hosts h ON h.id=p.master_host_id WHERE p.id=?", pool).Scan(&master, &revoked) != nil {
-		fail(w, 503, "pool master is unavailable")
-		return true
+	if !nameValid(pool) {
+		fail(w, 404, "pool not found")
+		return
 	}
-	fresh, capable := c.hostAgent(master, protocol.BackupInventoryPagesCapability, revoked)
-	if !capable {
-		return false
+	if err := c.db.QueryRow("SELECT p.master_host_id,coalesce(h.revoked,1) FROM pools p LEFT JOIN hosts h ON h.id=p.master_host_id WHERE p.id=?", pool).Scan(&master, &revoked); err != nil || master == "" {
+		failPoolMaster(w, err)
+		return
 	}
-	if !fresh {
-		fail(w, 409, "pool master is not freshly connected")
-		return true
+	if fresh, _ := c.hostAgent(master, "", revoked); !fresh {
+		fail(w, 503, "pool master is not freshly connected")
+		return
 	}
 	query := r.URL.Query()
 	allowed := []string{"cursor", "generation"}
@@ -128,38 +111,46 @@ func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Req
 		}
 		if !slices.Contains(allowed, key) || len(values) != 1 || len(values[0]) > limit {
 			fail(w, 400, "invalid backup page filter")
-			return true
+			return
 		}
 	}
 	if cursor := query.Get("cursor"); query.Has("cursor") {
 		if n, err := strconv.Atoi(cursor); err != nil || n < 0 || !backupPageGenerationValid(query.Get("generation")) {
 			fail(w, 400, "invalid backup page cursor")
-			return true
+			return
 		}
 	} else if query.Has("generation") {
 		fail(w, 400, "invalid backup page cursor")
-		return true
+		return
 	}
 	status, body, _, ok := c.askAgent(w, r, master, path, url.Values(query), "backup history page")
 	if !ok {
-		return true
+		return
 	}
-	if status == 409 {
+	switch {
+	case status == 409 && query.Has("generation"):
 		fail(w, 409, "backup history changed; restart from first page")
-		return true
-	}
-	if status == 413 {
+		return
+	case status == 409:
+		fail(w, 503, "pool master is not serving backup history; retry after the master change settles")
+		return
+	case status == 413:
 		fail(w, 413, "a backup history record exceeds the page limit")
-		return true
+		return
+	case status == 400:
+		fail(w, 400, "invalid backup page cursor or filter")
+		return
+	case status == 503:
+		fail(w, 503, "backup history is unavailable from the pool master")
+		return
 	}
 	if status != 200 || len(body) > backupRelayPageBytes || !validBackupRelayPage(body, pool, catalog, query.Get("cursor")) {
 		fail(w, 502, "pool master returned an invalid backup history page")
-		return true
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(body)
-	return true
 }
 
 const backupRelayPageBytes = 2 << 20
@@ -207,6 +198,15 @@ func validBackupRelayPage(body []byte, pool string, catalog bool, cursor string)
 	return true
 }
 
+// failPoolMaster answers a failed pool-master lookup: an unknown pool is 404.
+func failPoolMaster(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		fail(w, 404, "pool not found")
+		return
+	}
+	fail(w, 503, "pool master is unavailable")
+}
+
 func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState) (bool, any)) {
 	c.listPoolBackupInventoryWithFreshness(w, pool, label, func(m *protocol.ManagedState, _ bool) (bool, any) { return pick(m) })
 }
@@ -223,8 +223,8 @@ func (c *Controller) listPoolBackupInventoryWithFreshness(w http.ResponseWriter,
 	}
 	defer tx.Rollback()
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	inv, err := hostInventory(tx, master)
@@ -255,6 +255,11 @@ func (c *Controller) createBackupRepository(w http.ResponseWriter, r *http.Reque
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	repoID := body.ID
+	if repoID == "" && body.Kind != protocol.BackupRepoKindNFS {
+		// The credential receipt is already bound to the caller's repository ID.
+		fail(w, 400, "id is required for a destination with a credential")
+		return
+	}
 	if repoID == "" {
 		repoID = random()
 	}
@@ -324,8 +329,8 @@ func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, 
 		return
 	}
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	if kind == "backup-repository-register" {

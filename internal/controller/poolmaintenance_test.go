@@ -14,8 +14,8 @@ import (
 // hosts, and the drain flag the master alone owns.
 func (l *joinLab) joinedMembership(drained bool, since time.Time) *protocol.PoolMembership {
 	return &protocol.PoolMembership{PoolID: l.master.pool, MasterHostID: l.master.id, Generation: 2, Members: []protocol.PoolMember{
-		{HostID: l.master.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC()},
-		{HostID: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), Maintenance: drained, MaintenanceSince: since},
+		{HostID: l.master.id, Hostname: l.master.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC()},
+		{HostID: l.member.id, Hostname: l.member.id, CertificateSHA256: labCertificateHash, Generation: 2, Status: "ready", ObservedAt: time.Now().UTC(), Maintenance: drained, MaintenanceSince: since},
 	}}
 }
 
@@ -23,8 +23,6 @@ func (l *joinLab) joinedMembership(drained bool, since time.Time) *protocol.Pool
 func newDrainLab(t *testing.T) *joinLab {
 	t.Helper()
 	l := newJoinLab(t)
-	l.master.caps = append(l.master.caps, protocol.PoolMaintenanceCapability, protocol.PoolVMPlacementCapability)
-	l.member.caps = append(l.member.caps, protocol.PoolMaintenanceCapability, protocol.PoolVMPlacementCapability)
 	l.master.inv.Managed.Membership = l.joinedMembership(false, time.Time{})
 	l.member.inv.Managed.Membership = l.joinedMembership(false, time.Time{})
 	l.member.inv.VMs = []protocol.VM{{ID: "vm-1", Name: "build", State: "running"}, {ID: "vm-2", Name: "db", State: "shut off"}}
@@ -139,15 +137,6 @@ func TestPoolMaintenanceRefusalMatrix(t *testing.T) {
 	l.send(&l.master, nil)
 	// 409: the generation the operator saw is not the one the master reports.
 	l.a.call("POST", l.maintenancePath(), map[string]any{"request_id": "stale-version", "enabled": true, "expected_version": 1}, nil, 409)
-	// 409: the master no longer advertises the capability.
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
-	w := l.a.call("POST", l.maintenancePath(), body("no-capability"), nil, 409)
-	if !strings.Contains(w.Body.String(), protocol.PoolMaintenanceCapability) {
-		t.Fatalf("capability refusal does not name the capability: %s", w.Body.String())
-	}
-	l.master.caps = append(l.master.caps, protocol.PoolMaintenanceCapability)
-	l.send(&l.master, nil)
 	// 409: the master is not reporting, so nothing can be recorded.
 	l.forget(&l.master)
 	l.a.call("POST", l.maintenancePath(), body("stale-master"), nil, 409)
@@ -157,9 +146,6 @@ func TestPoolMaintenanceRefusalMatrix(t *testing.T) {
 // unknown, an unreported host has an unknown guest list, and a Core conflict is marked.
 func TestPoolMaintenanceProjection(t *testing.T) {
 	l := newDrainLab(t)
-	if !l.members(t).MaintenanceSupported {
-		t.Fatal("the master advertises pool-maintenance-v1 but the projection says otherwise")
-	}
 	view := l.memberView(t, l.member.id)
 	if view.Maintenance == nil || *view.Maintenance {
 		t.Fatalf("expected a reported, undrained member: %+v", view.Maintenance)

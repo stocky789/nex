@@ -4998,7 +4998,7 @@
           },
           "hostname": {
             "type": "string",
-            "description": "Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL."
+            "description": "Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. At most 200 UTF-8 bytes of printable characters."
           },
           "certificate_sha256": {
             "type": "string"
@@ -5012,7 +5012,8 @@
           },
           "observed_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "When the master admitted this member, or created the pool for its founding host. Nothing rewrites it afterwards; the Controller reports it as joined_at."
           },
           "error": {
             "type": "string"
@@ -5048,7 +5049,7 @@
           "replica_error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\"."
+            "description": "The master's bounded reason for the last failed push to this member: \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member acknowledged the replica without the Corosync key\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\", \"pool member did not report backup authority page progress\", \"pool member reported invalid backup authority page progress\", \"pool member refused backup authority page reuse\", \"pool member refused a backup authority page\", or a refusal to report/stage a signed backup authority page."
           },
           "replica_observed_at": {
             "type": "string",
@@ -5122,6 +5123,16 @@
               }
             ],
             "description": "That host's own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof."
+          },
+          "sanlock_host_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pool-master-assigned stable sanlock host ID. Zero or absent means this legacy member cannot participate in a storage lease."
+          },
+          "sanlock_host_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Last native sanlock generation this host itself observed while its configured lease ID was live; not a proof by itself."
           }
         },
         "required": [
@@ -6170,10 +6181,6 @@
               }
             ]
           },
-          "generation": {
-            "type": "integer",
-            "minimum": 0
-          },
           "mount_path": {
             "type": "string"
           },
@@ -6318,6 +6325,10 @@
           },
           "protected": {
             "type": "boolean"
+          },
+          "policy_id": {
+            "type": "string",
+            "description": "Policy that created the point; retention prunes only that policy's points. Empty for manual backups."
           },
           "last_test_result": {
             "type": "string",
@@ -6674,6 +6685,10 @@
               "crash",
               "quiesced"
             ]
+          },
+          "policy_id": {
+            "type": "string",
+            "description": "Creating policy, set by the scheduler; empty for manual backups."
           }
         },
         "required": [
@@ -7235,6 +7250,10 @@
           },
           "prefix": {
             "type": "string"
+          },
+          "region": {
+            "type": "string",
+            "description": "Signing region; empty means us-east-1."
           }
         },
         "required": [

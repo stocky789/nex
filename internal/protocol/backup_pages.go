@@ -3,10 +3,6 @@ package protocol
 
 import "time"
 
-// BackupInventoryPagesCapability means Core serves bounded, read-only backup
-// history pages over its enrolled Controller channel.
-const BackupInventoryPagesCapability = "backup-inventory-pages-v1"
-
 type BackupRunPage struct {
 	Items          []BackupRun       `json:"items"`
 	NextCursor     string            `json:"next_cursor,omitempty"`

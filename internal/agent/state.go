@@ -54,9 +54,7 @@ type State struct {
 	// StorageProtocolReady is set only after this Core has received a positive,
 	// authenticated Controller v2 preflight. It prevents a package upgrade from
 	// sending new storage fields to a strict v1 Controller.
-	StorageProtocolReady      bool `json:"storage_protocol_ready,omitempty"`
-	BackupProtocolReady       bool `json:"backup_protocol_ready,omitempty"`
-	BackupInventoryPagesReady bool `json:"backup_inventory_pages_ready,omitempty"`
+	StorageProtocolReady bool `json:"storage_protocol_ready,omitempty"`
 	// ZFSProvisionProtocolReady is the narrower Controller acknowledgement for
 	// ZFS-only inventory and commands. It resets on Controller replacement.
 	ZFSProvisionProtocolReady bool `json:"zfs_provision_protocol_ready,omitempty"`
@@ -73,7 +71,6 @@ type State struct {
 	// Controller-connection-scoped acknowledgement for the additive member
 	// session-monitor report fields. It never represents native readiness.
 	StorageClusterSessionMonitorProtocolReady bool `json:"storage_cluster_session_monitor_protocol_ready,omitempty"`
-	PoolMembershipHostnameReady               bool `json:"pool_membership_hostname_ready,omitempty"`
 	// ISODownloadProgressReady is scoped to the current Controller connection.
 	ISODownloadProgressReady bool `json:"iso_download_progress_ready,omitempty"`
 	DetectedOSReady          bool `json:"detected_os_ready,omitempty"`

@@ -24,12 +24,12 @@ const {
 const master = { host_id: "host-a", name: "core-a", role: "master", connection: "stale" };
 const member = {
   host_id: "host-b", name: "core-b", role: "member", connection: "fresh",
-  transfer_supported: true, replica: { generation: 9, verified: true, state: "unverified" },
+  replica: { generation: 9, verified: true, state: "unverified" },
 };
 // The situation this slice exists for: the pool master is gone and the member reports itself.
 const report = {
   pool_id: "pool-1", pool_name: "lab-pool", master_host_id: "host-a", master_connection: "stale",
-  authoritative: false, transfer_supported: true, promotion: null, last_promotion: null,
+  authoritative: false, promotion: null, last_promotion: null,
   members: [master, member],
 };
 const liveReport = { ...report, master_connection: "fresh", authoritative: true, members: [{ ...master, connection: "fresh" }, member] };
@@ -72,8 +72,6 @@ assert.equal(promotionBlock(report, master), "This host is already the pool mast
 // A pool master that is reporting is not promoted over; that is a planned master change.
 assert.match(promotionBlock(liveReport, member), /^The pool master core-a is reporting\. Use “Make pool master” for a planned master change; promoting is for a pool master that is gone\.$/);
 assert.equal(promotionBlock(report, { ...member, connection: "stale" }), "The promotion candidate must be fresh and active to be promoted.");
-assert.equal(promotionBlock(report, { ...member, transfer_supported: false }), "A fence-verified promotion needs pool-authority-transfer-v1 on the promotion candidate; upgrade core-b.");
-assert.equal(promotionBlock(report, { ...member, transfer_supported: undefined }), "", "an absent capability field is an older projection, not a no");
 assert.equal(promotionBlock(report, { ...member, replica: null }), "This host does not report a copy of the pool records it has verified, so it cannot be promoted.");
 assert.equal(promotionBlock(report, { ...member, replica: { generation: 9, verified: false, state: "unverified" } }), "This host does not report a copy of the pool records it has verified, so it cannot be promoted.");
 assert.equal(promotionBlock({ ...report, promotion: { host_id: "host-b", status: "pending", stage: "fence" } }, member), "A promotion is already running on this pool.");
@@ -81,7 +79,6 @@ assert.equal(promotionBlock({ ...report, promotion: { host_id: "host-b", status:
 // A fence device lives in the membership record the master owns, so it needs a live master.
 assert.equal(fenceProfileBlock(liveReport, master), "");
 assert.match(fenceProfileBlock(report, master), /^The pool master is stale, so a fence device cannot be recorded now\. The pool master keeps this record, so it has to be recorded while the master is reporting\.$/);
-assert.equal(fenceProfileBlock({ ...liveReport, transfer_supported: false }, master), "Recording a fence device needs pool-authority-transfer-v1 on the pool master; upgrade core-a.");
 
 // The fence line: master-derived, so unknown without a fresh master, never a stale value.
 assert.equal(fenceText(member, false), "Fence device: unknown — the pool master keeps this record and is not reporting.");

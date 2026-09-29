@@ -16,7 +16,7 @@ import (
 func (l *joinLab) transferMembership(generation uint64, master string, extra ...joinHost) *protocol.PoolMembership {
 	out := &protocol.PoolMembership{PoolID: l.master.pool, MasterHostID: master, Generation: generation}
 	for _, h := range append([]joinHost{l.master, l.member}, extra...) {
-		out.Members = append(out.Members, protocol.PoolMember{HostID: h.id, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
+		out.Members = append(out.Members, protocol.PoolMember{HostID: h.id, Hostname: h.id, CertificateSHA256: labCertificateHash, Generation: generation, Status: "ready", ObservedAt: time.Now().UTC(), PeerOrigin: "https://192.0.2.12:9444"})
 	}
 	return out
 }
@@ -25,14 +25,11 @@ func labAuthority(generation uint64) *protocol.PoolAuthorityRecord {
 	return &protocol.PoolAuthorityRecord{Generation: generation, Digest: "9f2c", ObservedAt: time.Now().UTC()}
 }
 
-// newTransferLab is a joined two-host pool whose hosts both support the transfer, with the
-// master reporting its own authority generation.
+// newTransferLab is a joined two-host pool with the master reporting its own authority
+// generation.
 func newTransferLab(t *testing.T) *joinLab {
 	t.Helper()
 	l := newJoinLab(t)
-	for _, h := range []*joinHost{&l.master, &l.member} {
-		h.caps = append(h.caps, protocol.PoolAuthorityTransferCapability, protocol.PoolAuthorityReplicaCapability)
-	}
 	membership := l.transferMembership(2, l.master.id)
 	l.master.inv.Managed.Membership, l.member.inv.Managed.Membership = membership, membership
 	l.master.inv.Managed.Authority = labAuthority(9)
@@ -44,16 +41,15 @@ func newTransferLab(t *testing.T) *joinLab {
 	return l
 }
 
-// joinThird enrolls a third host into the lab pool, which is what the capability gate is
-// about: a member that cannot re-point would keep following the old master.
-func (l *joinLab) joinThird(t *testing.T, caps ...string) joinHost {
+// joinThird enrolls a third host into the lab pool.
+func (l *joinLab) joinThird(t *testing.T) joinHost {
 	t.Helper()
 	var site string
 	if err := l.a.c.db.QueryRow("SELECT site_id FROM pools WHERE id=?", l.master.pool).Scan(&site); err != nil {
 		t.Fatal(err)
 	}
 	enrolled := l.a.enroll(l.a.token(site, ""), csr(t))
-	third := joinHost{id: enrolled.HostID, cert: certificate(t, enrolled.CertificatePEM), pool: l.a.poolOf(enrolled.HostID), caps: append([]string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}, caps...)}
+	third := joinHost{id: enrolled.HostID, cert: certificate(t, enrolled.CertificatePEM), pool: l.a.poolOf(enrolled.HostID), caps: []string{protocol.ManagedVMCapability}}
 	third.inv = protocol.Inventory{Hostname: "core", AgentVersion: "0.3.5", NICs: labNICs("nex0"), Managed: &protocol.ManagedState{}}
 	membership := l.transferMembership(3, l.master.id, third)
 	l.master.inv.Managed.Membership, l.member.inv.Managed.Membership = membership, membership
@@ -211,7 +207,7 @@ func TestPoolTransferRefusalMatrix(t *testing.T) {
 	l.a.call("POST", l.masterPath(), change("already-master", l.master.id, name), nil, 409)
 	l.a.call("DELETE", "/api/v1/pools/"+l.master.pool+"/members/"+l.master.id, map[string]any{"request_id": "eject-master", "confirmation": "core"}, nil, 409)
 	// 409: a host the master's membership does not name.
-	outsider := l.joinThird(t, protocol.PoolAuthorityTransferCapability)
+	outsider := l.joinThird(t)
 	l.master.inv.Managed.Membership = l.transferMembership(4, l.master.id)
 	l.send(&l.master, nil)
 	w = l.a.call("POST", l.masterPath(), change("not-a-member", outsider.id, name), nil, 409)
@@ -242,39 +238,12 @@ func TestPoolTransferRefusalMatrix(t *testing.T) {
 	l.send(&l.master, nil)
 }
 
-// TestPoolTransferCapabilityGate: the master, the target and every ready member must be
-// able to re-point, so a third member without the capability blocks both operations.
-func TestPoolTransferCapabilityGate(t *testing.T) {
-	l := newTransferLab(t)
-	name := l.poolName(t)
-	third := l.joinThird(t)
-	body := map[string]any{"request_id": "third-missing", "host_id": l.member.id, "confirmation": name}
-	w := l.a.call("POST", l.masterPath(), body, nil, 409)
-	if !strings.Contains(w.Body.String(), protocol.PoolAuthorityTransferCapability) || !strings.Contains(w.Body.String(), third.id) {
-		t.Fatalf("the refusal does not name the capability and the host to upgrade: %s", w.Body.String())
-	}
-	w = l.a.call("DELETE", l.ejectPath(), map[string]any{"request_id": "third-missing-eject", "confirmation": "core"}, nil, 409)
-	if !strings.Contains(w.Body.String(), third.id) {
-		t.Fatalf("eject was not gated on the third member: %s", w.Body.String())
-	}
-	// A member that is not reporting is not gated on: its capability list is a memory.
-	l.forget(&third)
-	l.a.call("POST", l.masterPath(), map[string]any{"request_id": "third-quiet", "host_id": l.member.id, "confirmation": name}, nil, 202)
-	// The master itself missing the capability is refused whatever the members report.
-	l.master.caps = []string{protocol.ManagedVMCapability, protocol.PoolJoinCapability}
-	l.send(&l.master, nil)
-	w = l.a.call("POST", l.masterPath(), map[string]any{"request_id": "master-missing", "host_id": l.member.id, "confirmation": name}, nil, 409)
-	if !strings.Contains(w.Body.String(), l.master.id) {
-		t.Fatalf("the refusal does not name the master: %s", w.Body.String())
-	}
-}
-
 // TestPoolTransferProjection covers what the operator sees: the master's authority and
 // transfer, each participant's own view, and nothing at all from a host that is quiet.
 func TestPoolTransferProjection(t *testing.T) {
 	l := newTransferLab(t)
 	view := l.members(t)
-	if !view.TransferSupported || view.Authority == nil || view.Authority.Generation != 9 || view.Transfer != nil || view.LastTransfer != nil {
+	if view.Authority == nil || view.Authority.Generation != 9 || view.Transfer != nil || view.LastTransfer != nil {
 		t.Fatalf("unexpected idle projection: %+v", view)
 	}
 	l.master.inv.Managed.Transfer = &protocol.PoolTransferStatus{OperationID: "op-1", Action: "promote", Role: "source", TargetHostID: l.member.id, Stage: "replicate", Status: "pending", Frozen: true, AuthorityGeneration: 9, ObservedAt: time.Now().UTC()}

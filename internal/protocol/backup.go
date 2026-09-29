@@ -7,10 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -60,7 +63,6 @@ type BackupRepository struct {
 	CredentialRef        string                            `json:"credential_ref,omitempty"`
 	Health               BackupRepositoryHealth            `json:"health,omitempty"`
 	LastHealthTransition *BackupRepositoryHealthTransition `json:"last_health_transition,omitempty"`
-	Generation           uint64                            `json:"generation,omitempty"`
 	MountPath            string                            `json:"mount_path,omitempty"`
 	Access               StorageAccess                     `json:"access,omitempty"`
 	// MemberAccess is master-reported per-host observed write/restore access.
@@ -73,6 +75,8 @@ type BackupS3Source struct {
 	Endpoint string `json:"endpoint"`
 	Bucket   string `json:"bucket"`
 	Prefix   string `json:"prefix,omitempty"`
+	// Region signs requests; empty means us-east-1.
+	Region string `json:"region,omitempty"`
 }
 
 type BackupSFTPSource struct {
@@ -107,18 +111,22 @@ func (r BackupRepository) Valid() error {
 	if r.CredentialRef != "" && !ValidSnapshotOperationID(r.CredentialRef) {
 		return errors.New("backup repository credential reference is invalid")
 	}
-	if r.Health.Status != "" && r.Health.Status != "online" && r.Health.Status != "offline" && r.Health.Status != "unknown" {
+	if r.Health.Status != "" && r.Health.Status != "online" && r.Health.Status != "offline" && r.Health.Status != "unknown" || len(r.Health.Error) > 4096 {
 		return errors.New("backup repository health is invalid")
 	}
 	if (r.Health.Status == "online" || r.Health.Status == "offline") && r.Health.ObservedAt.IsZero() {
 		return errors.New("backup repository health observation time is missing")
 	}
-	if r.LastHealthTransition != nil && (r.LastHealthTransition.Status != "offline" && r.LastHealthTransition.Status != "recovered" || r.LastHealthTransition.At.IsZero()) {
+	if r.LastHealthTransition != nil && (r.LastHealthTransition.Status != "offline" && r.LastHealthTransition.Status != "recovered" ||
+		r.LastHealthTransition.At.IsZero() || len(r.LastHealthTransition.Error) > 4096) {
 		return errors.New("backup repository health transition is invalid")
+	}
+	if r.RemoteIdentity != nil && !lowerSHA256(r.RemoteIdentity.Fingerprint) {
+		return errors.New("backup repository remote identity is invalid")
 	}
 	switch r.Kind {
 	case BackupRepoKindNFS:
-		if r.SMBSource != nil || r.S3Source != nil || r.SFTPSource != nil || r.SMBIdentity != nil || r.RemoteIdentity != nil || !validBackupNFS(r.Source) {
+		if r.SMBSource != nil || r.S3Source != nil || r.SFTPSource != nil || r.SMBIdentity != nil || r.RemoteIdentity != nil || r.CredentialRef != "" || !validBackupNFS(r.Source) {
 			return errors.New("backup repository NFS source is invalid")
 		}
 	case BackupRepoKindSMB3:
@@ -152,28 +160,58 @@ func validBackupNFS(source NFSStorageSource) bool {
 			strings.ContainsRune(source.Directory, '\x00'))))
 }
 
+// validBackupText bounds a destination field and refuses control characters,
+// which would otherwise reach mount options, request lines and operator views.
+func validBackupText(value string, max int) bool {
+	return len(value) <= max && utf8.ValidString(value) && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+// validBackupHost accepts a bare DNS name or IP address; a port has its own field.
 func validBackupHost(host string) bool {
-	return host != "" && strings.TrimSpace(host) == host && !strings.ContainsAny(host, "/\\\x00@ ")
+	return host != "" && validBackupText(host, 253) && !strings.ContainsAny(host, "/\\@ ") &&
+		(!strings.Contains(host, ":") || net.ParseIP(host) != nil)
 }
 
 func validBackupComponent(value string) bool {
-	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00")
+	return value != "" && value != "." && value != ".." && validBackupText(value, 255) && !strings.ContainsAny(value, "/\\")
 }
 
 func validBackupRelative(path string) bool {
-	return path == "" || !filepath.IsAbs(path) && filepath.Clean(path) == path && path != ".." &&
-		!strings.HasPrefix(path, "../") && !strings.ContainsAny(path, "\\\x00")
+	return path == "" || !filepath.IsAbs(path) && filepath.Clean(path) == path && path != "." && path != ".." &&
+		!strings.HasPrefix(path, "../") && validBackupText(path, 1024) && !strings.Contains(path, "\\")
 }
 
 func validBackupRoot(path string) bool {
-	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && validBackupText(path, 1024)
 }
 
 func validBackupS3(source BackupS3Source) bool {
 	endpoint, err := url.Parse(source.Endpoint)
-	return err == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil &&
-		endpoint.Path == "" && endpoint.RawQuery == "" && endpoint.Fragment == "" &&
-		validBackupComponent(source.Bucket) && validBackupRelative(source.Prefix)
+	if err != nil || !validBackupText(source.Endpoint, 1024) || endpoint.Scheme != "https" || endpoint.User != nil ||
+		endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || !validBackupHost(endpoint.Hostname()) {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	return validBackupComponent(source.Bucket) && validBackupRelative(source.Prefix) && validBackupS3Region(source.Region)
+}
+
+func validBackupS3Region(region string) bool {
+	if region == "" {
+		return true
+	}
+	if len(region) > 32 {
+		return false
+	}
+	for _, c := range region {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validBackupHostKey(fingerprint string) bool {
@@ -211,6 +249,7 @@ type BackupManifest struct {
 	PoolID             string                   `json:"pool_id"`
 	SourceVMID         string                   `json:"source_vm_id"`
 	SourceVMName       string                   `json:"source_vm_name,omitempty"`
+	PolicyID           string                   `json:"policy_id,omitempty"` // creating policy; empty for manual backups
 	CapturedAt         time.Time                `json:"captured_at"`
 	Consistency        string                   `json:"consistency"`
 	SpecSHA256         string                   `json:"spec_sha256"`
@@ -243,7 +282,7 @@ func (m BackupManifest) Valid() error {
 		!ValidSnapshotOperationID(m.RepositoryID) || m.PoolID == "" || m.SourceVMID == "" ||
 		m.CapturedAt.IsZero() || !ValidBackupConsistency(m.Consistency) ||
 		!lowerSHA256(m.SpecSHA256) || !lowerSHA256(m.DiskIdentitySHA256) ||
-		len(m.Disks) == 0 || len(m.Disks) > 32 {
+		len(m.Disks) == 0 || len(m.Disks) > 32 || (m.PolicyID != "" && !ValidSnapshotOperationID(m.PolicyID)) {
 		return errors.New("backup manifest identity is invalid")
 	}
 	if !m.Complete || m.Success != 1 {
@@ -301,6 +340,7 @@ type BackupRecoveryPoint struct {
 	Consistency    string    `json:"consistency"`
 	ManifestSHA256 string    `json:"manifest_sha256"`
 	Protected      bool      `json:"protected,omitempty"`
+	PolicyID       string    `json:"policy_id,omitempty"` // creating policy; empty for manual backups
 	LastTestResult string    `json:"last_test_result,omitempty"`
 	LastTestedAt   time.Time `json:"last_tested_at,omitempty"`
 	LastTestVMID   string    `json:"last_test_vm_id,omitempty"`
@@ -328,10 +368,12 @@ func (p BackupRecoveryPoint) Valid() error {
 type BackupNowRequest struct {
 	RepositoryID string `json:"repository_id"`
 	Consistency  string `json:"consistency,omitempty"`
+	// PolicyID is set by the scheduler; manual backups have none.
+	PolicyID string `json:"policy_id,omitempty"`
 }
 
 func (r BackupNowRequest) Valid() error {
-	if !ValidSnapshotOperationID(r.RepositoryID) {
+	if !ValidSnapshotOperationID(r.RepositoryID) || r.PolicyID != "" && !ValidSnapshotOperationID(r.PolicyID) {
 		return errors.New("backup-now repository is invalid")
 	}
 	switch r.Consistency {

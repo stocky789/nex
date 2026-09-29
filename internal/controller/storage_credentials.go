@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,16 @@ type storageCredentialRequest struct {
 	HostID                string                      `json:"host_id"`
 	RepositoryID          string                      `json:"repository_id,omitempty"`
 	Credentials           protocol.StorageCredentials `json:"credentials"`
+	// Repository is the backup destination the credential is for. The Controller validates
+	// its shape before delivering the secret so a registration it would refuse leaves no receipt.
+	Repository *backupCredentialRepository `json:"repository,omitempty"`
+}
+
+type backupCredentialRepository struct {
+	Name       string                     `json:"name"`
+	SMBSource  *protocol.SMBStorageSource `json:"smb_source,omitempty"`
+	S3Source   *protocol.BackupS3Source   `json:"s3_source,omitempty"`
+	SFTPSource *protocol.BackupSFTPSource `json:"sftp_source,omitempty"`
 }
 
 type credentialBrokerEntry struct {
@@ -70,14 +81,19 @@ func (b *credentialBroker) observeReceipts(host string, receipts []protocol.Stor
 			delete(b.receipts, key)
 		}
 	}
+	// The bound is per host, and retired tombstones go last so they never crowd out a live receipt.
+	receipts = slices.Clone(receipts)
+	sort.SliceStable(receipts, func(i, j int) bool { return receipts[i].Status != "retired" && receipts[j].Status == "retired" })
+	kept := 0
 	for _, receipt := range receipts {
 		if receipt.HostID != host || receipt.RequestID == "" || receipt.Receipt == "" {
 			continue
 		}
-		if len(b.receipts) >= 1024 {
+		if kept == 1024 {
 			break
 		}
 		b.receipts[receiptKey(host, receipt.RequestID)] = receipt
+		kept++
 	}
 }
 
@@ -250,13 +266,20 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 		parts := strings.Split(v.RegistrationRequestID, ":")
 		if len(parts) != 3 || !protocol.ValidSnapshotOperationID(parts[2]) || !protocol.ValidSnapshotOperationID(v.RequestID) || !protocol.ValidSnapshotOperationID(v.RepositoryID) ||
 			(parts[1] != protocol.BackupRepoKindSMB3 && parts[1] != protocol.BackupRepoKindS3 && parts[1] != protocol.BackupRepoKindSFTP) ||
-			v.Credentials.Username == "" || v.Credentials.Domain != "" || v.Credentials.SSHKnownHosts != "" ||
+			v.Credentials.Username == "" || v.Credentials.SSHKnownHosts != "" || !protocol.ValidSMBDomain(v.Credentials.Domain) ||
+			(parts[1] != protocol.BackupRepoKindSMB3 && v.Credentials.Domain != "") ||
+			(parts[1] == protocol.BackupRepoKindSMB3 && strings.Contains(v.Credentials.Username, "=")) ||
 			(parts[1] == protocol.BackupRepoKindSFTP && (v.Credentials.SSHPrivateKey == "" || v.Credentials.Secret != "")) ||
 			(parts[1] != protocol.BackupRepoKindSFTP && (v.Credentials.Secret == "" || v.Credentials.SSHPrivateKey != "")) {
 			fail(w, 400, "valid scoped backup credential required")
 			return
 		}
-	} else if len(v.Credentials.Secret) == 0 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" {
+		if v.Repository == nil || (protocol.BackupRepository{ID: v.RepositoryID, PoolID: v.PoolID, Name: strings.TrimSpace(v.Repository.Name), Kind: parts[1],
+			SMBSource: v.Repository.SMBSource, S3Source: v.Repository.S3Source, SFTPSource: v.Repository.SFTPSource}).Valid() != nil {
+			fail(w, 400, "valid backup repository destination required before credential delivery")
+			return
+		}
+	} else if v.Repository != nil || len(v.Credentials.Secret) == 0 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" {
 		fail(w, 400, "valid request, pool, host and bounded credential required")
 		return
 	}
@@ -268,7 +291,11 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 	defer tx.Rollback()
 	if backup {
 		var master string
-		if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", v.PoolID).Scan(&master); err == nil && master != v.HostID {
+		if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", v.PoolID).Scan(&master); err != nil {
+			failPoolMaster(w, err)
+			return
+		}
+		if master != v.HostID {
 			err = errors.New("backup credential must be delivered to the pool master")
 		}
 		if err == nil {

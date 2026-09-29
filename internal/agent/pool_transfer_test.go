@@ -33,6 +33,8 @@ type transferLab struct {
 	origin        map[string]string
 	fail          map[string]*atomic.Value
 	pageDataBytes atomic.Int64
+	// intercept, when set to a func(hostID string, r *http.Request), runs before each peer request.
+	intercept atomic.Value
 	// off are the hosts this lab has powered off. A fenced host is not executing, so it
 	// neither writes authority nor starts a guest, and the invariant counters below must
 	// not count its on-disk state as a running writer.
@@ -149,6 +151,9 @@ func (l *transferLab) serve(host *Store) {
 				l.pageDataBytes.Add(int64(len(upload.Data)))
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		if hook, ok := l.intercept.Load().(func(string, *http.Request)); ok {
+			hook(host.State.HostID, r)
 		}
 		path, _ := drop.Load().(string)
 		onlyMethod := ""
@@ -728,7 +733,7 @@ func TestPoolTransferAbortRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	caller, _ := poolMemberByID(peerState(t, target).Membership, "master-1")
-	if _, err := activatePoolAuthority(target, caller, protocol.PoolTransferRequest{OperationID: "op-abort-2", Action: "activate", Notice: notice}); err == nil {
+	if _, err := activatePoolAuthority(context.Background(), target, caller, protocol.PoolTransferRequest{OperationID: "op-abort-2", Action: "activate", Notice: notice}); err == nil {
 		t.Fatal("an aborted activation was performed later")
 	}
 	lab.requireSingleMaster("at the end", "master-1")
@@ -1319,7 +1324,7 @@ func TestAdoptPoolAuthorityRollsBackVMsWhenPeerSaveFails(t *testing.T) {
 		return errors.New("test injected save failure")
 	}
 	t.Cleanup(func() { poolTransferFailSavePeerAfterVMAdopt = nil })
-	if _, err := adoptPoolAuthorityFromReplica(target, replica.Replica, record); err == nil {
+	if _, err := adoptPoolAuthorityFromReplica(context.Background(), target, replica.Replica, record); err == nil {
 		t.Fatal("activation should fail when the peer-state write fails")
 	}
 	after := poolVMRecords(t, target)

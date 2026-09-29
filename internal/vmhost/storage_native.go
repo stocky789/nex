@@ -87,7 +87,7 @@ func storagePrepare(ctx context.Context, s protocol.StorageRegistration) (storag
 	case protocol.StorageKindLocal:
 		return prepareLocal(s)
 	case protocol.StorageKindNFS:
-		return prepareNFS(ctx, s)
+		return prepareNFS(ctx, s, "")
 	case protocol.StorageKindZFS:
 		return prepareZFS(ctx, s)
 	case protocol.StorageKindSMB:

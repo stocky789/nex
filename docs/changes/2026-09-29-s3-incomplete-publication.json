@@ -16,7 +16,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "S3 remains a disabled candidate; no supported operator workflow changes.",
+    "reason": "S3-compatible is an advertised destination. Reconciling an ambiguous publication is internal to Core; backup-now.md already describes the interrupted-publication outcome and the S3 troubleshooting covers provider conditional operations.",
     "pages": []
   },
   "api": {

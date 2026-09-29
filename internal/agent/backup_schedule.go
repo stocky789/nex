@@ -241,7 +241,7 @@ func prepareScheduledBackupRun(s *Store, run protocol.BackupRun) (protocol.Backu
 	cmd := protocol.Command{
 		OperationID: run.OperationID, Kind: "backup-now",
 		VM:     &vm,
-		Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode},
+		Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode, PolicyID: run.PolicyID},
 	}
 	run.HostID = vm.HostID
 	intent, err := backupIntentSHA256(cmd)
@@ -282,19 +282,8 @@ func ReservePolicyRunNow(s *Store, policyID, vmID, operationID string) (protocol
 		}
 		if existing.Status == "pending" {
 			prepared, cmd, err := prepareScheduledBackupRun(s, existing)
-			if err != nil || prepared.IntentSHA256 != existing.IntentSHA256 ||
-				(existing.HostID != "" && existing.HostID != prepared.HostID) {
+			if err != nil || prepared.IntentSHA256 != existing.IntentSHA256 || existing.HostID != prepared.HostID {
 				return existing, ErrBackupConflict
-			}
-			if existing.HostID == "" {
-				entry, ok := s.State.Journal[operationID]
-				if !ok || entry.Status != "pending" || entry.Command == nil || entry.Command.Kind != protocol.BackupKindPolicyRunNow {
-					return existing, ErrBackupConflict
-				}
-				existing.HostID = prepared.HostID
-				if err := saveScheduledBackupRun(s, existing); err != nil {
-					return existing, err
-				}
 			}
 			if err := queuePolicyRunNowBackup(s, cmd, policyID, vmID); err != nil {
 				return existing, err

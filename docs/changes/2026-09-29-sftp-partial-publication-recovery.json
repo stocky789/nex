@@ -16,7 +16,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "SFTP remains a disabled candidate, so no supported operator instruction changes.",
+    "reason": "SFTP is an advertised destination. Core reconciles and cleans an interrupted upload itself; backup-now.md already describes the interrupted-publication outcome, so no step changes.",
     "pages": []
   },
   "api": {

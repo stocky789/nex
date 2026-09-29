@@ -5221,7 +5221,7 @@
     },
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL.&quot;
+      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. At most 200 UTF-8 bytes of printable characters.&quot;
     },
     &quot;certificate_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -5235,7 +5235,8 @@
     },
     &quot;observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;format&quot;: &quot;date-time&quot;
+      &quot;format&quot;: &quot;date-time&quot;,
+      &quot;description&quot;: &quot;When the master admitted this member, or created the pool for its founding host. Nothing rewrites it afterwards; the Controller reports it as joined_at.&quot;
     },
     &quot;error&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -5271,7 +5272,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member did not report backup authority page progress\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, \&quot;pool member refused a backup authority page\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -5345,6 +5346,16 @@
         }
       ],
       &quot;description&quot;: &quot;That host&#x27;s own report that it has armed its watchdog, recorded durably by the master. Null means the host never said, which is never a watchdog exclusion proof.&quot;
+    },
+    &quot;sanlock_host_id&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Pool-master-assigned stable sanlock host ID. Zero or absent means this legacy member cannot participate in a storage lease.&quot;
+    },
+    &quot;sanlock_host_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Last native sanlock generation this host itself observed while its configured lease ID was live; not a proof by itself.&quot;
     }
   },
   &quot;required&quot;: [
@@ -6393,10 +6404,6 @@
         }
       ]
     },
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
-    },
     &quot;mount_path&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -6541,6 +6548,10 @@
     },
     &quot;protected&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Policy that created the point; retention prunes only that policy&#x27;s points. Empty for manual backups.&quot;
     },
     &quot;last_test_result&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -6897,6 +6908,10 @@
         &quot;crash&quot;,
         &quot;quiesced&quot;
       ]
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Creating policy, set by the scheduler; empty for manual backups.&quot;
     }
   },
   &quot;required&quot;: [
@@ -7458,6 +7473,10 @@
     },
     &quot;prefix&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;region&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Signing region; empty means us-east-1.&quot;
     }
   },
   &quot;required&quot;: [

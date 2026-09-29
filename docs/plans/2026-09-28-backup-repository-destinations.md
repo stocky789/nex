@@ -273,13 +273,13 @@ CSRF, Core-local authentication and pinned peer identity remain the boundaries;
 test invalid source, wrong pool, denied role, duplicate request ID, changed
 payload on replay and old-version refusal.
 The added authenticated Core peer repository-access POST checks exact member
-destination/generation/identity or transiently prepares a missing local record
+destination/identity or transiently prepares a missing local record
 before probing, and a missing exact peer backup operation GET
 now returns 404 for safe reconciliation. Existing Controller/Core report and
 client API shapes are unchanged by those two peer fixes.
 
 **Durable state owner: Core.** The pool master keeps repository ID, name, kind,
-nonsecret source, credential reference, generation and last health transition in
+nonsecret source, credential reference and last health transition in
 `pool-backup-repositories.json`, replicated in signed pool backup authority. The
 repository holds completed backup payloads and manifests. Existing master-owned
 policies, runs, catalog, pins and receipts retain their records. A fresh
@@ -479,6 +479,110 @@ failures and supported-server limits per backend in `docs/qa/`; label service
 smoke, fault injection and native product results separately. Re-run the
 current Phase 6 interrupted-restore and authority-transfer gates on the changed
 candidate before acceptance; older NFS evidence cannot certify it.
+
+## 2026-09-30 decision: SMB mount credentials sealed with systemd-creds
+
+Backup SMB3 and VM-storage SMB share one path. Core seals the `mount.cifs` credentials with
+`systemd-creds encrypt` (TPM2 when the host has one, otherwise the host key created by
+`systemd-creds setup` in the agent unit) into a private file addressed by receipt or credential
+reference. The generated mount unit carries `LoadCredentialEncrypted=nex-smb:<file>` and mounts
+with `credentials=%d/nex-smb`, so systemd decrypts at mount time, boot included, and no plaintext
+credential file exists at rest. Core's own agent receipt store keeps its AES-256-GCM sealing
+(BUG-0747): Core must read the secret to hand it to member Cores and re-prepare mounts, and the
+host-key threat model equals systemd-creds' host key. Sealed files are host-bound, so a rebuilt
+host needs the credential redelivered. Calls pass `--no-ask-password`; test binaries refuse the
+real tool. **Needs real-host boot verification** (TPM2 and host-key hosts, reboot remount).
+
+## 2026-09-29 review and fix pass
+
+**Reviewed:** a second independent source review of the destination candidate
+covered the SFTP, S3 and NFS/SMB3 backends, member dispatch, backup flow
+(publication, retention, restore, catalog rebuild, history pages), backup
+authority replication and promotion, credentials and the Controller relay/UI.
+
+**Fixed:** BUG-0716 to BUG-0736 in the [bug ledger](../BUG_LEDGER.md), with
+change records dated 2026-09-29 under [`docs/changes/`](../changes/). In short:
+repository I/O no longer reads whole points under the pool lock, and S3/SFTP
+stalls are bounded; prune, protect and rebuild check sizes only; SFTP and S3
+recover partial markers, interrupted prunes and refused registrations; SMB3
+keeps its share identity through promotion and NFS/SMB3 mounts are
+`nosuid,nodev,noexec`; member runs that never started or need attention
+settle; retention keeps the point it settles and skips (and names) points it
+cannot delete; restores that fail before any effect settle failed; interrupted
+publication is reconciled rather than captured again; v2 authority replicates,
+settles and promotes at scale; joining or ejecting a host erases the former
+pool's backup credentials; Controller relays page errors correctly. A later
+cleanup removed the old-version handshakes and fallbacks (backup-v1, page
+support, hostname backfill, mirrored catalog/run arrays).
+
+**Owner decisions made:**
+
+- No legacy or mixed-version compatibility (recorded in the
+  [recovery plan](2026-09-25-recovery-snapshots-backups-restores.md#outcome-and-scope)).
+  A lab NFS or SMB3 backup mount unit written before BUG-0721/BUG-0724 must be
+  detached once before Core prepares it again.
+- `executeBackupNow` gets no fixed deadline; the S3 read timeout and SFTP
+  keepalive bound transport stalls instead.
+- 2026-09-30: the backup repository `generation` field is removed. It never
+  advanced: Core refuses same-ID source or credential changes, so rotation
+  registers a new repository ID and switches Core-owned policies to it. Members
+  now refuse a different receipt for an existing repository ID, and the
+  member-side retirement list for same-ID rotation is gone; the master still
+  retires receipts of abandoned registration attempts.
+- 2026-09-30: backup credentials are always encrypted at rest on every Core:
+  receipts under `storage-cluster/secrets/backup` are AES-256-GCM ciphertext
+  under a random per-host key file (0600), with pool, host and receipt reference
+  as authenticated data; plaintext receipts are refused, with no migration. The
+  SMB3 mount password exists only in a root-only tmpfs file while the mount is
+  made, then is removed. SMB3 supports domain accounts: an optional, validated
+  `domain` travels with the credential handoff (SMB3 only) into the mount
+  credential file. A mount unit written before this change points at a removed
+  credential file and must be detached once. Open: after a reboot Core does not
+  remount the SMB3 repository (the password is gone); it is remade only when
+  Core prepares the repository again.
+
+**Evidence:** most fixes have focused Go or web tests shown failing against
+the prior source and passing now; the few without a dedicated test say so in
+their ledger entry or record. **None of these fixes has lab, native-server or
+forge CI evidence yet**; earlier native results in the
+[QA report](../qa/2026-09-28-backup-repository-destinations.md) predate them.
+
+**Open owner decisions:**
+
+1. Retention scope is VM plus repository, not policy: any policy's
+   `keep_latest` prunes manual Back up now points and other policies' points in
+   the same repository.
+2. `keep_latest` does not count age-protected points, so `protect_newer_than`
+   plus `keep_latest` can keep many more points than `keep_latest`.
+3. Whether the Backups UI shows a succeeded run's retention note (Core records
+   the skipped points in the run error).
+4. S3 signs only for region `us-east-1` with path-style addressing; add a
+   region field or keep it.
+5. S3 5 TiB object pre-check: AWS-only limit; other providers accept larger
+   objects.
+6. A delayed protect/unprotect write cannot be fenced without a per-write nonce
+   in the `.nex-protected` marker format (all backends).
+7. (Resolved 2026-09-30: SMB3 domain accounts are supported.)
+8. (Resolved 2026-09-30: backup credentials are encrypted at rest.)
+9. Upper bounds for v2 manifest/authority sizes (total bytes, history and
+   catalog counts).
+10. Backup authority protocol: keep the inline small-authority replica beside
+    v2 pages, and whether each page POST should stop carrying the full signed
+    replica (protocol redesign).
+
+**Remaining deferred work:** an ejected host keeps the former pool's
+repository records and any active SMB3 backup mount; an SMB3 mount unit can be
+orphaned when the repository record write fails after preparation;
+`RetireUnusedBackupCredential` takes the backup lock on the Run loop; retired
+credential tombstones grow without bound; SMB3 `.write-*` temp files are not
+swept at start; restores inherited by an emergency promotion are not
+re-observed; probe loops read the live Store off the Run loop; the remaining
+older-Core pool capability gates, `ReadPoint`, the unbound restore allocation
+shim and `markLegacyPeerBackupJournal` await legacy cleanup.
+
+API impact of this section: **none** (it records decisions; each fix's record
+states its own impact). Guide impact: **none** here; the fix records name
+their guide pages.
 
 ## Delivery and acceptance
 

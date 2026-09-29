@@ -12,7 +12,7 @@ func TestMemberPeerPublicationAttentionReconcilesWithoutController(t *testing.T)
 	lab := newTransferLab(t, 1)
 	member := lab.host("member-1")
 	cmd := protocol.Command{OperationID: "member-publication", Kind: protocol.BackupKindBackupNow,
-		VM: poolVMTestSpec("vm-1", member.State.HostID),
+		VM:     poolVMTestSpec("vm-1", member.State.HostID),
 		Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1"}}
 	intent, err := backupIntentSHA256(cmd)
 	if err != nil {

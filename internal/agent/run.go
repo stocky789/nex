@@ -33,10 +33,6 @@ var backupDestinationCapabilities = []string{
 	"backup-destination-sftp-v1",
 }
 
-func backupDestinationSupported(kind string) bool {
-	return kind == protocol.BackupRepoKindNFS || slices.Contains(backupDestinationCapabilities, "backup-destination-"+kind+"-v1")
-}
-
 var peerBackupRequests sync.Map // *Store -> chan BackupRequest
 
 type preparedBackupRequest struct {
@@ -55,9 +51,8 @@ type completedBackupVerification struct {
 }
 
 type completedBackupCatalog struct {
-	command   protocol.Command
-	journalID string
-	response  BackupResponse
+	command  protocol.Command
+	response BackupResponse
 }
 
 type completedBackupCleanup struct {
@@ -86,6 +81,7 @@ func backupNeedsPreparation(request BackupRequest) bool {
 
 func prepareBackupRequestRepository(ctx context.Context, s *Store, request BackupRequest, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
 	if request.PeerRepository != nil {
+		repo.SMBIdentity = request.PeerSMBIdentity
 		return prepareBackupRepositoryForAdoption(ctx, s, repo)
 	}
 	return prepareBackupRepositoryForRegistration(ctx, s, repo, request.Command.OperationID)
@@ -167,12 +163,11 @@ var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterRe
 var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
 
 func resetReportExtensions(s *Store) error {
-	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.PoolMembershipHostnameReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
+	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
 		return nil
 	}
 	s.State.StorageClusterProtocolReady = false
 	s.State.StorageClusterSessionMonitorProtocolReady = false
-	s.State.PoolMembershipHostnameReady = false
 	s.State.ISODownloadProgressReady = false
 	s.State.DetectedOSReady = false
 	return s.Save()
@@ -194,20 +189,6 @@ func managedExtensionsForController(managed *protocol.ManagedState, isoReady, os
 	if !osReady {
 		copy.DetectedOS = nil
 	}
-	return &copy
-}
-
-func membershipNamesForController(managed *protocol.ManagedState, ready bool) *protocol.ManagedState {
-	if ready || managed == nil || managed.Membership == nil {
-		return managed
-	}
-	copy := *managed
-	membership := *managed.Membership
-	membership.Members = append([]protocol.PoolMember(nil), membership.Members...)
-	for i := range membership.Members {
-		membership.Members[i].Hostname = ""
-	}
-	copy.Membership = &membership
 	return &copy
 }
 
@@ -419,7 +400,7 @@ func report(ctx context.Context, s *Store, m *Monitor, cfg RunConfig) error {
 }
 
 func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.StorageMonitor, cfg RunConfig) error {
-	if err := markLegacyPeerBackupJournal(s); err != nil {
+	if err := markDemotedMasterBackupJournal(s); err != nil {
 		return err
 	}
 	inv := m.Snapshot()
@@ -482,14 +463,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			managed.BackupPolicies = policies
 			managed.BackupPoliciesReported = true
 		}
-		if s.State.BackupProtocolReady {
-			check := protocol.Check{Name: "backup-history-api", Status: "healthy", ObservedAt: time.Now().UTC()}
-			if !s.State.BackupInventoryPagesReady {
-				check.Status = "unsupported"
-				check.Error = "Nex Controller does not support paged backup history; upgrade Nex Controller"
-			}
-			checks = append(checks, check)
-		}
+		checks = append(checks, PoolBackupAuthorityCapacityCheck(s)...)
 	}
 	// This host's own part of a master change or an eject, from every participant, so the
 	// Controller assembles one honest picture instead of keeping a job of its own.
@@ -524,11 +498,15 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		credentialsReadable = false
 		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: "storage credential state is unavailable", ObservedAt: time.Now().UTC()})
 	}
-	if receipts, err := BackupCredentialReceipts(s); err != nil {
+	receipts, err := BackupCredentialReceipts(s)
+	managed.CredentialReceipts = append(managed.CredentialReceipts, receipts...)
+	if err != nil {
 		credentialsReadable = false
-		checks = append(checks, protocol.Check{Name: "backup-credentials", Status: "failed", Error: "backup credential state is unavailable", ObservedAt: time.Now().UTC()})
-	} else {
-		managed.CredentialReceipts = append(managed.CredentialReceipts, receipts...)
+		detail := "backup credential state is unavailable"
+		if errors.Is(err, errBackupCredentialDamaged) {
+			detail = err.Error()
+		}
+		checks = append(checks, protocol.Check{Name: "backup-credentials", Status: "failed", Error: detail, ObservedAt: time.Now().UTC()})
 	}
 	managed.Appliances = vmhost.Deployments(ApplianceJournalDir)
 	confirmCtx, cancelConfirm := context.WithTimeout(ctx, cfg.ProbeTimeout)
@@ -570,11 +548,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.PoolMembershipHostnameCapability, protocol.PoolBackupPagedAuthorityCapability, protocol.PoolBackupLargeAuthorityCapability, protocol.BackupInventoryPagesCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability, protocol.PoolWitnessCapability, protocol.BackupCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.ManagementNetworkCapability, protocol.HostHardwareCapability}
 	capabilities = append(capabilities, backupDestinationCapabilities...)
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
-		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
+		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
 		// A strict v1 decoder must not see v2 managed storage/receipt fields.
 		legacy := *inv
 		legacy.Managed = nil
@@ -610,16 +588,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			}
 		}
 	}
-	if !s.State.BackupProtocolReady && inv.Managed != nil {
-		copy := *inv
-		managedCopy := *inv.Managed
-		managedCopy.BackupRepositories, managedCopy.BackupCatalog = nil, nil
-		managedCopy.BackupRuns, managedCopy.BackupPolicies = nil, nil
-		managedCopy.BackupRepositoriesReported, managedCopy.BackupCatalogReported = false, false
-		managedCopy.BackupRunsReported, managedCopy.BackupPoliciesReported = false, false
-		copy.Managed = &managedCopy
-		inv = &copy
-	}
 	if s.State.StorageClusterProtocolReady {
 		capabilities = append(capabilities, protocol.StorageClusterCapability)
 	}
@@ -627,11 +595,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// Offer the additive extension during every v2 preflight. An older
 		// Controller ignores it and acknowledges the base capability instead.
 		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
-	}
-	if inv.Managed != nil {
-		copy := *inv
-		copy.Managed = membershipNamesForController(inv.Managed, version == protocol.Version && s.State.PoolMembershipHostnameReady)
-		inv = &copy
 	}
 	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
@@ -685,13 +648,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
 	ready := response.ISODownloadProgress != nil && *response.ISODownloadProgress
 	osReady := response.DetectedOS != nil && *response.DetectedOS
-	hostnameReady := version == protocol.Version && response.PoolMembershipHostname != nil && *response.PoolMembershipHostname
-	if s.State.PoolMembershipHostnameReady != hostnameReady {
-		s.State.PoolMembershipHostnameReady = hostnameReady
-		if err = s.Save(); err != nil {
-			return persistenceError{fmt.Errorf("persist pool membership hostname preflight: %w", err)}
-		}
-	}
 	if s.State.ISODownloadProgressReady != ready || s.State.DetectedOSReady != osReady {
 		s.State.ISODownloadProgressReady = ready
 		s.State.DetectedOSReady = osReady
@@ -711,19 +667,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		}
 		if err = s.Save(); err != nil {
 			return persistenceError{fmt.Errorf("persist storage protocol preflight: %w", err)}
-		}
-	}
-	if response.BackupSupport != nil && response.BackupSupport.Capability == protocol.BackupCapability && !s.State.BackupProtocolReady {
-		s.State.BackupProtocolReady = true
-		if err = s.Save(); err != nil {
-			return persistenceError{fmt.Errorf("persist backup protocol preflight: %w", err)}
-		}
-	}
-	pageReady := response.BackupInventoryPages != nil && *response.BackupInventoryPages
-	if s.State.BackupInventoryPagesReady != pageReady {
-		s.State.BackupInventoryPagesReady = pageReady
-		if err = s.Save(); err != nil {
-			return persistenceError{fmt.Errorf("persist backup history protocol preflight: %w", err)}
 		}
 	}
 	if response.StorageClusters != nil && (response.StorageClusters.Capability == protocol.StorageClusterCapability || response.StorageClusters.Capability == protocol.StorageClusterSessionMonitorCapability) {
@@ -832,11 +775,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	return nil
 }
 
-// Older members recorded authenticated peer backup commands as ordinary local
-// commands. Their master owns the Controller operation, while the member keeps
-// its journal for exact peer replay. Mark only runs retained on a current member;
-// a former master keeps its own Controller results through a planned handoff.
-func markLegacyPeerBackupJournal(s *Store) error {
+// A master demoted without a planned handoff keeps backup commands it accepted
+// from the Controller. The new master now owns those runs, so mark them as peer
+// work: the member reconciler can then settle them and the new master observes
+// the result. A planned handoff source keeps its own Controller results.
+func markDemotedMasterBackupJournal(s *Store) error {
 	peer, err := loadPoolPeer(s)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -1069,20 +1012,6 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if err := resetReportExtensions(s); err != nil {
 		return err
 	}
-	// A restarted connection must receive the Controller's backup-v1 acknowledgement
-	// before its first backup inventory envelope is sent.
-	if s.State.BackupProtocolReady {
-		s.State.BackupProtocolReady = false
-		if err := s.Save(); err != nil {
-			return err
-		}
-	}
-	if s.State.BackupInventoryPagesReady {
-		s.State.BackupInventoryPagesReady = false
-		if err := s.Save(); err != nil {
-			return err
-		}
-	}
 	// Pending read-only refreshes reconcile against a new sample after restart.
 	// Retain monotonic time in memory; serialized timestamps are history only.
 	for id, e := range s.State.Journal {
@@ -1105,7 +1034,6 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			}
 		}
 	}
-	reconcileCatalogReceipts()
 	// This is the only automatic stale-reservation cleanup. It runs before the
 	// worker can reserve an operation, so it cannot erase the reserve→journal
 	// admission window. Periodic reconciliation deliberately never performs it.
@@ -1146,7 +1074,6 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			// A retained peer advertisement is Core recovery work; retry it with
 			// the cluster worker, never from a Controller request.
 			_ = RetryPoolPeerOrigin(work, s)
-			_ = ReportPoolHostname(work, s)
 			// Which machine this host is, recorded on the master beside where it listens.
 			_ = ReportPoolSystemUUID(work, s)
 			// And the native generation of its live host lease, pinned to the authority
@@ -1269,6 +1196,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	// ponytail: one whole-point retry at a time; use per-repository workers if recovery throughput matters.
 	publishedBackupActive := false
 	publishedBackupNext := map[string]time.Time{}
+	peerBackupNext := peerBackoff{}
 	directPeerReconcileActive := false
 	peerBackupActive := false
 	runWork.Add(1)
@@ -1278,23 +1206,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		defer ticker.Stop()
 		healthTicker := time.NewTicker(backupHealthInterval)
 		defer healthTicker.Stop()
-		scheduleBackupHealth := func() {
-			now := time.Now()
-			if !now.Before(nextBackupHealth) && backupHealthRunning.CompareAndSwap(false, true) {
-				nextBackupHealth = now.Add(backupHealthInterval)
-				runWork.Add(1)
-				go func() {
-					defer runWork.Done()
-					defer backupHealthRunning.Store(false)
-					if err := probePoolBackupRepositories(probeCtx, s, cfg.ProbeTimeout); err != nil && probeCtx.Err() == nil {
-						log.Printf("backup repository health probe could not complete: %v", err)
-					}
-				}()
-			}
-		}
 		tickStorage := func() {
 			now := time.Now()
-			scheduleBackupHealth()
 			if !now.Before(nextProbeSecretSweep) {
 				if err := retireExpiredProbeSecrets(s, now); err != nil {
 					log.Printf("management controller probe credential cleanup failed")
@@ -1382,7 +1295,10 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				m.Tick(probeCtx)
 				tickStorage()
 			case <-healthTicker.C:
-				scheduleBackupHealth()
+				select {
+				case backupTicks <- time.Now().UTC():
+				default:
+				}
 			}
 		}
 	}()
@@ -1426,12 +1342,22 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}
 		return nil
 	}
+	var rehomeNext time.Time
 	resumePoolJoin := func() {
 		if !poolReconcileRunning.CompareAndSwap(false, true) {
 			return
 		}
 		join, done := context.WithTimeout(ctx, 2*time.Minute)
+		before := s.State.PoolID
 		changed := ResumePoolJoin(join, s)
+		// A host-local join that failed after admission leaves only the rehome marker.
+		// It rewrites this Core's pool identity, so it runs here and never on a worker;
+		// its credential pull may wait on the master, so it is retried once a minute.
+		if now := time.Now(); !now.Before(rehomeNext) {
+			rehomeNext = now.Add(time.Minute)
+			_ = ResumePoolRehome(join, s)
+			changed = changed || s.State.PoolID != before
+		}
 		// An ejected host re-initializes as the master of its own new pool here, on the
 		// goroutine that owns the Store and under the same convergence guard, because it
 		// rewrites this Core's pool identity exactly as a completed join does.
@@ -1469,9 +1395,6 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}
 		if repo.Valid() != nil {
 			return ErrBackupInvalid
-		}
-		if !backupDestinationSupported(repo.Kind) {
-			return fmt.Errorf("%w: %s backup destination is not supported by this Core", ErrBackupConflict, repo.Kind)
 		}
 		select {
 		case backupPrepSlots <- struct{}{}:
@@ -1576,7 +1499,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}()
 		return nil
 	}
-	startBackupCatalog := func(request BackupRequest, journalID string) BackupResponse {
+	startBackupCatalog := func(request BackupRequest) BackupResponse {
 		if request.Command == nil || request.Command.CatalogImport == nil ||
 			(request.Command.Kind != "backup-catalog-import" && request.Command.Kind != "backup-catalog-rebuild") {
 			return BackupResponse{Err: ErrBackupInvalid}
@@ -1604,7 +1527,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			defer cancel()
 			response := acceptBackupRequestUnrecorded(work, worker, BackupRequest{Command: &cmd})
 			select {
-			case catalogDone <- completedBackupCatalog{command: cmd, journalID: journalID, response: response}:
+			case catalogDone <- completedBackupCatalog{command: cmd, response: response}:
 			case <-probeCtx.Done():
 			}
 		}()
@@ -1616,7 +1539,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	for {
 		joined := false
 		if active == "" {
-			if id := nextManagedCommand(s.State.Journal, activeSnapshot, preparingBackupRepo); id != "" {
+			if id := nextManagedCommand(s.State.Journal, activeSnapshot, peerBackupNext.skipping(preparingBackupRepo, time.Now())); id != "" {
 				// applyResponse already persisted the full command and admission order.
 				if cmd := dispatchCommand(s.State.Journal[id], s.State.Journal); snapshotCommand(cmd.Kind) {
 					activeSnapshot = id
@@ -1664,6 +1587,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 								}
 								continue
 							}
+							peerBackupNext.observed(id, workErr.Error(), time.Now())
 							log.Printf("member backup dispatch will retry: %v", workErr)
 						} else {
 							runWork.Add(1)
@@ -1790,7 +1714,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 						}
 					}
 					if cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" {
-						response := startBackupCatalog(BackupRequest{Command: &cmd}, id)
+						response := startBackupCatalog(BackupRequest{Command: &cmd})
 						if response.Result != nil && response.Result.Status == "pending" {
 							preparingBackupRepo[id] = true
 							continue
@@ -1925,7 +1849,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				}
 			}
 			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
-				request.Reply <- startBackupCatalog(request, "")
+				request.Reply <- startBackupCatalog(request)
 				break
 			}
 			response := acceptBackupRequest(ctx, s, request)
@@ -1976,7 +1900,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				}
 			}
 			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
-				request.Reply <- startBackupCatalog(request, "")
+				request.Reply <- startBackupCatalog(request)
 				break
 			}
 			response := acceptBackupRequest(ctx, s, request)
@@ -1988,17 +1912,18 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		case completion := <-catalogDone:
 			delete(activeBackupCatalog, completion.command.OperationID)
 			receipt, loadErr := loadPoolBackupMetadataReceipt(s, completion.command.OperationID)
-			if loadErr != nil {
-				return loadErr
+			response := BackupResponse{Err: loadErr}
+			if loadErr == nil {
+				response = settleBackupMetadataResponse(s, completion.command, receipt, completion.response)
 			}
-			response := settleBackupMetadataResponse(s, completion.command, receipt, completion.response)
 			var persistErr persistenceError
 			if errors.As(response.Err, &persistErr) {
 				return persistErr
 			}
-			if completion.journalID != "" {
-				delete(preparingBackupRepo, completion.journalID)
-				result := protocol.Result{OperationID: completion.journalID, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
+			// A Controller command that joined a catalog run started elsewhere waits on it too.
+			if journalID := completion.command.OperationID; preparingBackupRepo[journalID] {
+				delete(preparingBackupRepo, journalID)
+				result := protocol.Result{OperationID: journalID, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
 				if response.Result != nil {
 					result = *response.Result
 				} else if response.Err != nil {
@@ -2140,6 +2065,21 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		case id := <-deferredBackupRetry:
 			delete(preparingBackupRepo, id)
 		case now := <-backupTicks:
+			if !now.Before(nextBackupHealth) && backupHealthRunning.CompareAndSwap(false, true) {
+				nextBackupHealth = now.Add(backupHealthInterval)
+				worker := &Store{dir: s.dir, State: copyState(s.State)}
+				runWork.Add(1)
+				go func() {
+					defer runWork.Done()
+					defer backupHealthRunning.Store(false)
+					if err := probePoolBackupRepositories(probeCtx, worker, cfg.ProbeTimeout); err != nil && probeCtx.Err() == nil {
+						log.Printf("backup repository health probe could not complete: %v", err)
+					}
+					if err := refreshPoolBackupAuthorityUsage(worker); err != nil && probeCtx.Err() == nil {
+						log.Printf("backup authority usage could not be measured: %v", err)
+					}
+				}()
+			}
 			reconcileCatalogReceipts()
 			if err := rehydratePendingTestCleanup(s); err != nil && ctx.Err() == nil {
 				log.Printf("pending test cleanup could not be recovered: %v", err)
@@ -2254,23 +2194,36 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			}
 			if !directPeerReconcileActive && activeSnapshot == "" {
 				for _, entry := range s.State.Journal {
-					if entry.Status != "needs_attention" || entry.Command == nil || !backupCommand(entry.Command.Kind) {
+					if entry.Status != "needs_attention" || entry.Command == nil || !backupCommand(entry.Command.Kind) ||
+						peerBackupNext.waiting(entry.Command.OperationID, now) {
 						continue
 					}
 					run, runErr := loadPoolBackupRun(s, entry.Command.OperationID)
 					if runErr != nil || run.HostID == "" || run.HostID == s.State.HostID {
 						continue
 					}
+					if run.Status == "succeeded" || run.Status == "failed" {
+						// The pool record already settled, possibly by a master that took over.
+						err = completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
+							OperationID: run.OperationID, Status: run.Status, Error: run.Error, ObservedAt: time.Now().UTC(),
+						}, background: true}, cfg.history)
+						if err != nil {
+							return err
+						}
+						break
+					}
 					work, workErr := peerBackupWorkForCommand(s, *entry.Command, run)
 					if workErr != nil {
+						peerBackupNext.observed(run.OperationID, workErr.Error(), now)
 						continue
 					}
+					work.observe = true
 					directPeerReconcileActive = true
 					activeSnapshot = run.OperationID
 					runWork.Add(1)
 					go func() {
 						defer runWork.Done()
-						completion := waitPeerBackupReconciled(probeCtx, work)
+						completion := callPeerBackup(probeCtx, work)
 						select {
 						case directPeerDone <- directPeerBackupCompletion{peer: completion}:
 						case <-probeCtx.Done():
@@ -2280,15 +2233,14 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				}
 			}
 			if !peerBackupActive {
-				work, ready, err := nextPendingPeerBackup(s)
-				if err != nil && ctx.Err() == nil {
-					log.Printf("member backup dispatch could not be prepared: %v", err)
-				} else if ready {
+				if work, ready := nextPendingPeerBackup(s, peerBackupNext, now); ready {
 					peerBackupActive = true
 					runWork.Add(1)
 					go func() {
 						defer runWork.Done()
 						completion := callPeerBackup(probeCtx, work)
+						// Settlement and its retention run here, off the Run loop.
+						settlePeerBackupCompletion(probeCtx, s, completion)
 						select {
 						case peerBackupDone <- completion:
 						case <-probeCtx.Done():
@@ -2298,35 +2250,24 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			}
 		case completion := <-peerBackupDone:
 			peerBackupActive = false
-			if completion.err != nil {
-				var permanent permanentPeerBackupError
-				if errors.As(completion.err, &permanent) {
-					run := completion.run
-					run.Status, run.Stage, run.Error = "needs_attention", "peer_verification", completion.err.Error()
-					if settleErr := SettlePoolBackupRun(s, run, nil); settleErr != nil {
-						log.Printf("member backup occurrence remains pending: %v", settleErr)
-					}
-				}
-				log.Printf("member backup occurrence remains pending: %v", completion.err)
-				break
-			}
-			status := completion.reply.Result.Status
-			if status != "succeeded" && status != "failed" && status != "needs_attention" {
-				break
-			}
-			run := completion.run
-			run.Status, run.Error = status, completion.reply.Result.Error
-			if completion.reply.Run != nil {
-				run.Stage = completion.reply.Run.Stage
-			} else {
-				run.Stage = status
-			}
-			if err := SettlePoolBackupRun(s, run, completion.reply.Point); err != nil {
-				log.Printf("member backup occurrence remains pending: %v", err)
+			peerBackupNext.observed(completion.run.OperationID, peerBackupAnswer(completion), time.Now())
+			if status := completion.reply.Result.Status; completion.err == nil && (status == "succeeded" || status == "failed") {
+				delete(peerBackupNext, completion.run.OperationID)
 			}
 		case done := <-directPeerDone:
 			directPeerReconcileActive = false
 			peer := done.peer
+			peerBackupNext.observed(peer.run.OperationID, peerBackupAnswer(peer), time.Now())
+			if peerBackupNotStarted(peer.err) {
+				peer.reply = poolBackupPeerResponse{Result: protocol.Result{OperationID: peer.run.OperationID, Status: "failed", Error: peer.err.Error(), ObservedAt: time.Now().UTC()}}
+				peer.err = nil
+			}
+			// An observation that is still unsettled leaves the entry needing attention.
+			if status := peer.reply.Result.Status; peer.err == nil && status != "succeeded" && status != "failed" &&
+				s.State.Journal[peer.run.OperationID].Status == "needs_attention" {
+				activeSnapshot = ""
+				break
+			}
 			if peer.err != nil {
 				var permanent permanentPeerBackupError
 				if !errors.As(peer.err, &permanent) {
@@ -2352,9 +2293,17 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				run.Stage = run.Status
 			}
 			if peer.err == nil {
-				if settleErr := SettlePoolBackupRun(s, run, peer.reply.Point); settleErr != nil {
+				retention, settleErr := commitPoolBackupRun(context.Background(), s, run, peer.reply.Point)
+				if settleErr != nil {
 					result.Status, result.Error = "needs_attention", settleErr.Error()
-				} else if clearPeerRestorePinAfterSettlement(run.Kind, result.Status) {
+				} else if retention != nil {
+					runWork.Add(1)
+					go func() {
+						defer runWork.Done()
+						applyBackupRetention(probeCtx, s, run, *retention)
+					}()
+				}
+				if settleErr == nil && clearPeerRestorePinAfterSettlement(run.Kind, result.Status) {
 					if clearErr := clearBackupRestorePin(s, run.RecoveryPointID, run.OperationID); clearErr != nil {
 						result.Status, result.Error = "needs_attention", clearErr.Error()
 					}
@@ -2363,6 +2312,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			err = completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history)
 			if err != nil {
 				return err
+			}
+			if s.State.Journal[peer.run.OperationID].Status != "needs_attention" {
+				delete(peerBackupNext, peer.run.OperationID)
 			}
 			activeSnapshot = ""
 		case done := <-restoreReconcileDone:
@@ -2379,6 +2331,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				if err != nil {
 					return err
 				}
+			}
+			if s.State.Journal[done.result.OperationID].Status != "needs_attention" {
+				delete(publishedBackupNext, done.result.OperationID)
 			}
 		case <-ticker.C:
 		}

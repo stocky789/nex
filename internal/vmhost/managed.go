@@ -876,19 +876,6 @@ func (e *ManagedEngine) readJournal(name string) (managedJournal, error) {
 			return j, err
 		}
 	}
-	if j.BackupRestore && j.Command.Kind == "vm-create" && j.Command.VM != nil && j.Stage == "allocating" && j.Result.Status == "pending" &&
-		j.BackupManifestSHA256 == "" && len(j.BackupDisks) == 0 && len(j.Domain) == 0 && j.BackupTPMManifestSHA256 == "" &&
-		len(j.Disks) > 0 && len(j.Disks) == len(j.Command.VM.Disks) && len(j.Targets) == len(j.Disks) && len(j.DiskChains) == len(j.Disks) {
-		unallocated := true
-		for _, chain := range j.DiskChains {
-			if chain != nil {
-				unallocated = false
-			}
-		}
-		if unallocated {
-			j.DiskChains = nil // Older restore journals reserved heads before disk copying.
-		}
-	}
 	if j.Command.Kind != "snapshot-create" && j.Command.Kind != "snapshot-revert" && j.Command.Kind != "snapshot-delete" {
 		if _, err := managedDiskChains(j); err != nil {
 			return j, err

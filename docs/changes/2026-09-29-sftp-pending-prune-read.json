@@ -15,7 +15,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "SFTP remains a disabled candidate and no supported operator step changed.",
+    "reason": "SFTP is an advertised destination. Refusing reads of a point whose deletion is pending matches the existing catalog-rebuild guidance on unresolved delete intents, so no step changes.",
     "pages": []
   },
   "api": {

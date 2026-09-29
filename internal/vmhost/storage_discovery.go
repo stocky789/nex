@@ -152,7 +152,8 @@ func discoverNFS(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]pro
 }
 
 func discoverSMB(ctx context.Context, r protocol.StorageDiscoveryRequest) ([]protocol.StorageDiscoveryCandidate, error) {
-	f, err := os.CreateTemp("", "nex-smb-discovery-")
+	// The password file lives on RAM-backed tmpfs, so it never reaches a disk.
+	f, err := os.CreateTemp("/dev/shm", "nex-smb-discovery-")
 	if err != nil {
 		return nil, err
 	}

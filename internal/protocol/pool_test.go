@@ -12,7 +12,7 @@ import (
 )
 
 func TestPoolCommandRejectsStaleOrUnboundMember(t *testing.T) {
-	m := PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 2, Members: []PoolMember{{HostID: "master-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: 2, Status: "ready"}, {HostID: "member-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: 2, Status: "ready"}}}
+	m := PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 2, Members: []PoolMember{{HostID: "master-1", Hostname: "master-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: 2, Status: "ready"}, {HostID: "member-1", Hostname: "member-1", CertificateSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Generation: 2, Status: "ready"}}}
 	if err := (PoolCommand{RequestID: "join-1", Action: "member-join", Membership: m, ExpectedVersion: 2}).Valid(); err != nil {
 		t.Fatalf("valid pool command: %v", err)
 	}
@@ -159,8 +159,8 @@ func TestPoolStorageLeaseRequiresStableDistinctHostIDsAndExactNFSIdentity(t *tes
 	membership := PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 4,
 		StorageLease: lease,
 		Members: []PoolMember{
-			{HostID: "master-1", SanlockHostID: 1, CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready"},
-			{HostID: "member-1", SanlockHostID: 2, CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready"},
+			{HostID: "master-1", Hostname: "master-1", SanlockHostID: 1, CertificateSHA256: strings.Repeat("a", 64), Generation: 4, Status: "ready"},
+			{HostID: "member-1", Hostname: "member-1", SanlockHostID: 2, CertificateSHA256: strings.Repeat("b", 64), Generation: 4, Status: "ready"},
 		},
 	}
 	if err := membership.Valid(); err != nil {

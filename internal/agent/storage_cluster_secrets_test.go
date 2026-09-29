@@ -22,7 +22,7 @@ func clusterSecretStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	s.State.PoolID, s.State.HostID = "pool-1", "host-1"
-	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
+	if err := savePoolPeer(s, poolPeerState{Membership: protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-1", Hostname: "host-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -95,7 +95,7 @@ func TestClusterCredentialHandoffUsesScopedSecretReceipt(t *testing.T) {
 func TestClusterCredentialResolutionProjectsRecipientLocalRefs(t *testing.T) {
 	master := clusterSecretStore(t)
 	defer master.Close()
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "host-2", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}, {HostID: "host-3", CertificateSHA256: strings.Repeat("c", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-1", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-1", Hostname: "host-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}, {HostID: "host-2", Hostname: "host-2", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"}, {HostID: "host-3", Hostname: "host-3", CertificateSHA256: strings.Repeat("c", 64), Generation: 1, Status: "ready"}}}
 	if err := savePoolPeer(master, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
 	}

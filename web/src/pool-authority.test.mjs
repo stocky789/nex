@@ -24,7 +24,7 @@ const master = { host_id: "host-a", name: "core-a", role: "master", status: "rea
 const member = { host_id: "host-b", name: "core-b", role: "member", status: "ready", connection: "fresh", peer_origin: "https://192.0.2.12:9444" };
 const report = {
   pool_id: "pool-1", pool_name: "lab-pool", master_host_id: "host-a", master_connection: "fresh",
-  generation: 7, authoritative: true, transfer_supported: true, authority: { generation: 9, digest: "9f2c", observed_at: "2026-09-19T10:04:11Z" },
+  generation: 7, authoritative: true, authority: { generation: 9, digest: "9f2c", observed_at: "2026-09-19T10:04:11Z" },
   transfer: null, last_transfer: null, master_conflict: [], members: [master, member],
 };
 const transfer = (extra = {}) => ({
@@ -45,20 +45,6 @@ assert.equal(ejectBlock(report, master), "The pool master cannot be ejected; cha
 const staleReport = { ...report, master_connection: "stale", authoritative: false };
 assert.match(masterChangeBlock(staleReport, member), /^The pool master is stale, so this membership is not current/);
 assert.match(ejectBlock(staleReport, member), /^The pool master is stale, so this membership is not current/);
-// Capability missing on the master, named.
-const old = { ...report, transfer_supported: false };
-assert.equal(masterChangeBlock(old, member), "Changing the pool master needs pool-authority-transfer-v1 on the pool master, the selected host and every ready member; upgrade core-a.");
-assert.equal(ejectBlock(old, member), "Ejecting a member needs pool-authority-transfer-v1 on the pool master and every ready member; upgrade core-a.");
-// An absent field is not a "no": an older projection keeps the actions offered.
-assert.equal(masterChangeBlock({ ...report, transfer_supported: undefined }, member), "");
-// S6 closed S5's first contract gap: the selected host's own advertised capability is in the
-// projection, so a master change whose target could not perform one is not offered, and the
-// host that must be upgraded is named. An eject needs nothing of the ejected host.
-assert.equal(masterChangeBlock(report, { ...member, transfer_supported: false }),
-  "Changing the pool master needs pool-authority-transfer-v1 on core-b; upgrade it before making it the pool master.");
-assert.equal(masterChangeBlock(report, { ...member, transfer_supported: true }), "");
-assert.equal(masterChangeBlock(report, { ...member, transfer_supported: undefined }), "", "an older projection is not a no");
-assert.equal(ejectBlock(report, { ...member, transfer_supported: false }), "");
 // No peer address, or a membership that is not ready: only Core's own sentence.
 assert.equal(masterChangeBlock(report, { ...member, peer_origin: "" }), "Only a ready member with a peer endpoint can become the pool master.");
 assert.equal(masterChangeBlock(report, { ...member, status: "pending" }), "Only a ready member with a peer endpoint can become the pool master.");
@@ -120,9 +106,9 @@ assert.match(unknown, /the state of any master change or eject is <strong>unknow
 assert.doesNotMatch(unknown, /copying the pool records/, "a last-known stage is never shown as present truth");
 
 // needs_attention and failed are the host's own words, shown verbatim.
-const attention = strip({ report: { ...report, transfer: transfer({ status: "needs_attention", stage: "repoint", error: "pool peer host-c does not support pool-authority-transfer-v1; upgrade it before changing the pool master" }) } });
+const attention = strip({ report: { ...report, transfer: transfer({ status: "needs_attention", stage: "repoint", error: "pool peer host-c did not answer this transfer step" }) } });
 assert.match(attention, /status <strong>needs attention<\/strong>/);
-assert.match(attention, /task-error">pool peer host-c does not support pool-authority-transfer-v1; upgrade it before changing the pool master/);
+assert.match(attention, /task-error">pool peer host-c did not answer this transfer step/);
 const failed = strip({ report: { ...report, transfer: transfer({ status: "failed", stage: "aborted", error: "this pool master change was aborted on this host" }) } });
 assert.match(failed, /stage <strong>cancelled<\/strong>/);
 assert.match(failed, /this pool master change was aborted on this host/);

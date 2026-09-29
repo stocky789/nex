@@ -48,22 +48,13 @@ func TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp(t *testing.T) {
 		beforeHashes[file.Name()] = sha256.Sum256(data)
 	}
 	pushReplicas(t, master)
-	auth, err := PoolBackupAuthorityRefs(master)
-	if err != nil {
+	// Settlement is never gated on member replicas; a frozen authority is the
+	// admission refusal that leaves the published point unsettled.
+	transfer := &poolTransferRecord{OperationID: "freeze-settlement", Action: "promote", Role: "source",
+		Stage: "freeze", Status: "pending", TargetHostID: member.State.HostID, Frozen: true}
+	if err := savePoolTransfer(master, transfer); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	previousLimit := poolBackupBundleLimit
-	poolBackupBundleLimit = manifest.TotalBytes
-	t.Cleanup(func() { poolBackupBundleLimit = previousLimit })
-	poolReplicaMu.Lock()
-	status := poolReplicaObservations[master.dir][member.State.HostID]
-	status.BackupPageVersion = 1
-	poolReplicaObservations[master.dir][member.State.HostID] = status
-	poolReplicaMu.Unlock()
 	result, err := executeBackupNow(context.Background(), master, cmd, time.Now().UTC())
 	if err != nil || result.Status != "needs_attention" {
 		t.Fatalf("settlement refusal: %+v, %v", result, err)
@@ -77,10 +68,10 @@ func TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp(t *testing.T) {
 	if points, err := loadPoolBackupCatalog(master); err != nil || len(points) != 0 {
 		t.Fatalf("catalog before retry: %+v, %v", points, err)
 	}
-	status.BackupPageVersion = 2
-	poolReplicaMu.Lock()
-	poolReplicaObservations[master.dir][member.State.HostID] = status
-	poolReplicaMu.Unlock()
+	transfer.Stage, transfer.Status, transfer.Frozen = "aborted", "failed", false
+	if err := savePoolTransfer(master, transfer); err != nil {
+		t.Fatal(err)
+	}
 	hidden := filepath.Join(t.TempDir(), cmd.OperationID)
 	if err := os.Rename(pointDir, hidden); err != nil {
 		t.Fatal(err)
@@ -91,16 +82,25 @@ func TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp(t *testing.T) {
 		return errors.New("repository refuses writes")
 	}
 	verifyBackupRepositoryRead = previousWrite
-	missing := acceptBackupRequest(context.Background(), master, BackupRequest{Command: &cmd})
-	if missing.Err != nil || missing.Result == nil || missing.Result.Status != "needs_attention" {
-		t.Fatalf("missing point replay must not recapture: %+v", missing)
+	// An exact request answers from the journal; the background reconciler,
+	// not the request, does the repository work.
+	if replay := acceptBackupRequest(context.Background(), master, BackupRequest{Command: &cmd}); replay.Err != nil ||
+		replay.Result == nil || replay.Result.Status != "needs_attention" {
+		t.Fatalf("exact request while unsettled: %+v", replay)
+	}
+	journaled := *master.State.Journal[cmd.OperationID].Command
+	if missing := reconcilePublishedBackupNow(context.Background(), master, journaled, time.Now().UTC()); missing.Status != "needs_attention" {
+		t.Fatalf("missing point reconcile must not recapture: %+v", missing)
 	}
 	if err := os.Rename(hidden, pointDir); err != nil {
 		t.Fatal(err)
 	}
-	retry := acceptBackupRequest(context.Background(), master, BackupRequest{Command: &cmd})
-	if retry.Err != nil || retry.Result == nil || retry.Result.Status != "succeeded" {
-		t.Fatalf("exact retry did not settle: %+v", retry)
+	retry := reconcilePublishedBackupNow(context.Background(), master, journaled, time.Now().UTC())
+	if retry.Status != "succeeded" {
+		t.Fatalf("reconcile did not settle: %+v", retry)
+	}
+	if err := completeBackgroundManagedCommand(master, managedCompletion{result: retry, background: true}, nil); err != nil {
+		t.Fatal(err)
 	}
 	if run, err := loadPoolBackupRun(master, cmd.OperationID); err != nil || run.Status != "succeeded" {
 		t.Fatalf("run after retry: %+v, %v", run, err)

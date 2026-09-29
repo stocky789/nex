@@ -108,6 +108,12 @@ The old Controller's database, export, CA and job configuration are not prerequi
 [three-host campaign below](#mandatory-three-host-continuity-and-adoption-campaign) is a blocking
 acceptance gate, including loss of the host carrying both Controller and the master role.
 
+**No legacy compatibility, project owner, 2026-09-29:** Nex is not in production. Recovery work
+implements current behaviour directly and keeps no compatibility path for older Cores,
+Controllers or members, mixed-version pools, old on-disk formats or existing lab deployments.
+Remove such shims when touching them. A lab unit or record written by an older build is
+recreated, not migrated.
+
 | Included | Completion requirement |
 |---|---|
 | Phase 5 | Create/list/name/describe/revert/delete disk snapshots; complete disk/configuration/firmware coverage; stopped guests first; validated running capture; durable consolidation and recovery; usable UI and guide |

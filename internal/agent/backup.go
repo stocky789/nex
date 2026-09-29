@@ -35,19 +35,16 @@ type peerSMBCapabilityRequest struct {
 }
 
 type peerSMBCapabilityResponse struct {
-	Generation    uint64                      `json:"generation"`
 	CredentialRef string                      `json:"credential_ref"`
 	Identity      protocol.SMBStorageIdentity `json:"identity"`
 }
 
 type peerSFTPCapabilityResponse struct {
-	Generation    uint64 `json:"generation"`
 	CredentialRef string `json:"credential_ref"`
 	Fingerprint   string `json:"fingerprint"`
 }
 
 type peerS3CapabilityResponse struct {
-	Generation    uint64 `json:"generation"`
 	CredentialRef string `json:"credential_ref"`
 	Fingerprint   string `json:"fingerprint"`
 }
@@ -76,7 +73,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 			var repo protocol.BackupRepository
 			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&repo) != nil || repo.Valid() != nil || repo.PoolID != s.State.PoolID || repo.Generation == 0 {
+			if decoder.Decode(&repo) != nil || repo.Valid() != nil || repo.PoolID != s.State.PoolID {
 				http.Error(w, "invalid repository access probe", http.StatusBadRequest)
 				return
 			}
@@ -103,8 +100,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(peerSMBCapabilityResponse{Generation: prepared.Generation,
-				CredentialRef: prepared.CredentialRef, Identity: *prepared.SMBIdentity})
+			_ = json.NewEncoder(w).Encode(peerSMBCapabilityResponse{CredentialRef: prepared.CredentialRef, Identity: *prepared.SMBIdentity})
 			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/capability/sftp":
 			var repo protocol.BackupRepository
@@ -120,8 +116,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(peerSFTPCapabilityResponse{Generation: prepared.Generation,
-				CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
+			_ = json.NewEncoder(w).Encode(peerSFTPCapabilityResponse{CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
 			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/capability/s3":
 			var repo protocol.BackupRepository
@@ -137,8 +132,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(peerS3CapabilityResponse{Generation: prepared.Generation,
-				CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
+			_ = json.NewEncoder(w).Encode(peerS3CapabilityResponse{CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
 			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/verify-test":
 			var plan testRestoreVerificationPlan
@@ -263,7 +257,6 @@ var registerBackupRestoredAsNew = func(ctx context.Context, engine *vmhost.Manag
 }
 
 var restoreAsNewAllocating = (*vmhost.ManagedEngine).RestoreAsNewAllocating
-var bindLegacyRestoreAsNewAllocating = (*vmhost.ManagedEngine).BindLegacyRestoreAsNewAllocating
 var reconcileRestoredAsNew = (*vmhost.ManagedEngine).ReconcileRestoredAsNew
 
 func backupCommand(kind string) bool {
@@ -765,7 +758,9 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			if request.PreparedRepository != nil {
 				prepared = *request.PreparedRepository
 			} else {
-				prepared, err = prepareBackupRepositoryForAdoption(ctx, s, repo)
+				adopt := repo
+				adopt.SMBIdentity = request.PeerSMBIdentity
+				prepared, err = prepareBackupRepositoryForAdoption(ctx, s, adopt)
 				if err != nil {
 					return BackupResponse{Err: err}
 				}
@@ -785,29 +780,12 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			if repo.Kind == protocol.BackupRepoKindNFS && !reflect.DeepEqual(prepared.Identity, repo.Identity) {
 				return BackupResponse{Err: ErrBackupConflict}
 			}
-			state, err := loadPoolBackupRepositories(s)
+			// The master's access probe writes this file from another goroutine.
+			poolBackupAuthorityMu.Lock()
+			err = adoptPeerBackupRepository(s, request, repo, prepared)
+			poolBackupAuthorityMu.Unlock()
 			if err != nil {
 				return BackupResponse{Err: err}
-			}
-			oldRepo, hadOldRepo := state.Repositories[repo.ID]
-			if hadOldRepo && (oldRepo.Generation > repo.Generation || repo.Kind == protocol.BackupRepoKindNFS && oldRepo.Generation == repo.Generation &&
-				(oldRepo.Kind != repo.Kind || !reflect.DeepEqual(oldRepo.Source, repo.Source) || !reflect.DeepEqual(oldRepo.Identity, repo.Identity)) || repo.Kind == protocol.BackupRepoKindS3 && oldRepo.Generation == repo.Generation &&
-				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.S3Source, repo.S3Source) ||
-					!reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity)) || repo.Kind == protocol.BackupRepoKindSFTP && oldRepo.Generation == repo.Generation &&
-				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.SFTPSource, repo.SFTPSource) ||
-					!reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity)) || repo.Kind == protocol.BackupRepoKindSMB3 && oldRepo.Generation == repo.Generation &&
-				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.SMBSource, repo.SMBSource) ||
-					!samePeerSMBIdentity(request.PeerSMBIdentity, oldRepo.SMBIdentity))) {
-				return BackupResponse{Err: ErrBackupConflict}
-			}
-			state.Repositories[repo.ID] = prepared
-			if err := savePoolBackupRepositories(s, state); err != nil {
-				return BackupResponse{Err: err}
-			}
-			if hadOldRepo && backupCredentialKind(oldRepo.Kind) && oldRepo.CredentialRef != prepared.CredentialRef {
-				if err := RetireBackupCredential(s, oldRepo, prepared); err != nil {
-					return BackupResponse{Err: ErrBackupUnavailable}
-				}
 			}
 			if restoreBackupCommand(cmd.Kind) {
 				if pointErr := savePeerRestoreCatalogPoint(s, *request.PeerCatalogPoint); pointErr != nil {
@@ -942,7 +920,7 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			err      error
 		)
 		if cmd.Kind == "backup-catalog-rebuild" {
-			imported, err = rebuildPoolBackupCatalogFromRepository(ctx, s, cmd.CatalogImport.RepositoryID)
+			imported, err = RebuildPoolBackupCatalogFromRepository(ctx, s, cmd.CatalogImport.RepositoryID)
 		} else {
 			imported, err = importPoolBackupCatalog(ctx, s, cmd.CatalogImport.RepositoryID)
 		}
@@ -1015,16 +993,6 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 	if old, ok := s.State.Journal[cmd.OperationID]; ok {
 		if old.Command == nil || old.Command.Kind != cmd.Kind || !sameBackupRequest(old.Command, cmd) {
 			return BackupResponse{Err: ErrBackupConflict}
-		}
-		if old.Status == "needs_attention" && cmd.Kind == protocol.BackupKindBackupNow &&
-			cmd.VM != nil && cmd.VM.HostID == s.State.HostID && request.PeerRepository == nil {
-			result := reconcilePublishedBackupNow(ctx, s, *old.Command, time.Now().UTC())
-			if result.Status == "succeeded" {
-				if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, nil); err != nil {
-					return BackupResponse{Err: err}
-				}
-				return BackupResponse{Result: &result}
-			}
 		}
 		if request.PeerRepository != nil && !old.PeerDispatched {
 			old.PeerDispatched = true
@@ -1347,7 +1315,7 @@ func ensureBackupRunReserved(store *Store, cmd protocol.Command) error {
 }
 
 func settlePublishedBackupNow(ctx context.Context, store *Store, backend backupRepositoryStorage, repo protocol.BackupRepository, cmd protocol.Command, observed time.Time) *protocol.Result {
-	persisted, digest, readErr := backend.ReadPoint(ctx, cmd.OperationID)
+	persisted, digest, readErr := backend.StatPoint(ctx, cmd.OperationID)
 	if errors.Is(readErr, os.ErrNotExist) {
 		return nil
 	}
@@ -1382,36 +1350,54 @@ func settlePublishedBackupNow(ctx context.Context, store *Store, backend backupR
 
 func reconcilePublishedBackupNow(ctx context.Context, store *Store, cmd protocol.Command, observed time.Time) protocol.Result {
 	result := protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", ObservedAt: observed}
+	run, runErr := loadPoolBackupRun(store, cmd.OperationID)
 	repo, err := GetPoolBackupRepository(store, cmd.Backup.RepositoryID)
+	var backend backupRepositoryStorage
 	if err == nil {
-		var backend backupRepositoryStorage
 		backend, err = openBackupRepositoryStorage(store, repo)
-		if err == nil {
-			// ReadPoint verifies the source; a published point can settle after writes fail.
-			settled := settlePublishedBackupNow(ctx, store, backend, repo, cmd, observed)
-			if settled != nil && settled.Status == "succeeded" {
-				return *settled
-			}
-			if aborter, ok := backend.(interface {
-				AbortIncomplete(context.Context, string) error
-			}); ok {
-				run, runErr := loadPoolBackupRun(store, cmd.OperationID)
-				if runErr == nil && run.Stage == "publication" && run.Status == "needs_attention" {
-					if err := aborter.AbortIncomplete(ctx, cmd.OperationID); err != nil {
-						result.Error = err.Error()
-						return result
-					}
-					return failBackupRun(store, cmd, observed, run.Error)
-				}
-			}
-			if settled != nil {
-				return *settled
-			}
-			result.Error = "published recovery point is absent"
+	}
+	// A settled operation no longer needs the capture work left by an interrupted attempt.
+	done := func(settled protocol.Result) protocol.Result {
+		if backend != nil && (settled.Status == "succeeded" || settled.Status == "failed") {
+			_ = os.RemoveAll(backend.CaptureWorkDir(cmd.OperationID, protocol.BackupConsistencyRunning(cmd.Backup.EffectiveConsistency())))
+		}
+		return settled
+	}
+	if runErr == nil && (run.Status == "succeeded" || run.Status == "failed") {
+		// The run settled but the journal missed the outcome, for example across a restart.
+		result.Status = run.Status
+		if run.Status == "failed" {
+			result.Error = run.Error
+		}
+		return done(result)
+	}
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	// Publication verifies artifacts before committing the manifest, so a
+	// published point can settle from its manifest after writes fail.
+	settled := settlePublishedBackupNow(ctx, store, backend, repo, cmd, observed)
+	if settled != nil && settled.Status == "succeeded" {
+		return done(*settled)
+	}
+	if aborter, ok := backend.(interface {
+		AbortIncomplete(context.Context, string) error
+	}); ok && runErr == nil && run.Stage == "publication" && (run.Status == "pending" || run.Status == "needs_attention") {
+		if err := aborter.AbortIncomplete(ctx, cmd.OperationID); err != nil {
+			result.Error = err.Error()
 			return result
 		}
+		message := run.Error
+		if message == "" {
+			message = "backup publication was interrupted before it finished"
+		}
+		return done(failBackupRun(store, cmd, observed, message))
 	}
-	result.Error = err.Error()
+	if settled != nil {
+		return *settled
+	}
+	result.Error = "published recovery point is absent"
 	return result
 }
 
@@ -1427,7 +1413,7 @@ func publishedLocalBackupNeedsReconcile(s *Store, entry JournalEntry) bool {
 	}
 	cmd := *entry.Command
 	run, err := loadPoolBackupRun(s, cmd.OperationID)
-	if err != nil || run.Status != "pending" && run.Status != "needs_attention" && run.Status != "succeeded" ||
+	if err != nil || run.Status != "pending" && run.Status != "needs_attention" && run.Status != "succeeded" && run.Status != "failed" ||
 		run.Kind != protocol.BackupKindBackupNow && run.Kind != protocol.BackupKindScheduled && run.Kind != protocol.BackupKindPolicyRunNow ||
 		run.RecoveryPointID != cmd.OperationID || run.RepositoryID != cmd.Backup.RepositoryID || run.VMID != cmd.VM.ID ||
 		run.HostID != "" && run.HostID != s.State.HostID {
@@ -1442,7 +1428,7 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid backup-now command", ObservedAt: observed}, nil
 	}
 	if err := ensureBackupRunReserved(store, cmd); err != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
+		return unreservedBackupResult(store, cmd, observed, err), nil
 	}
 	consistency := cmd.Backup.EffectiveConsistency()
 	repo, err := GetPoolBackupRepository(store, cmd.Backup.RepositoryID)
@@ -1456,8 +1442,23 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 	if err := backend.Verify(ctx); err != nil {
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
+	// The work root is per operation, so this also removes what an attempt
+	// interrupted by a restart left behind, unless an online backup job of
+	// that attempt may still be writing there.
+	workRoot := backend.CaptureWorkDir(cmd.OperationID, protocol.BackupConsistencyRunning(consistency))
+	cleanupWork := !protocol.BackupConsistencyRunning(consistency) || vmhost.OnlineBackupJobInactive(ctx, cmd.VM.ID) == nil
+	defer func() {
+		if cleanupWork {
+			_ = os.RemoveAll(workRoot)
+		}
+	}()
 	if result := settlePublishedBackupNow(ctx, store, backend, repo, cmd, observed); result != nil {
 		return *result, nil
+	}
+	if run, err := loadPoolBackupRun(store, cmd.OperationID); err == nil && run.Stage == "publication" {
+		// An earlier attempt began publishing: finish or abort it rather than
+		// spending a full capture on a point that can no longer publish.
+		return reconcilePublishedBackupNow(ctx, store, cmd, observed), nil
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	vm, err := engine.VMDefinition(cmd.VM.ID)
@@ -1480,7 +1481,6 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
 
-	workRoot := backend.CaptureWorkDir(cmd.OperationID, protocol.BackupConsistencyRunning(consistency))
 	var workErr error
 	if protocol.BackupConsistencyRunning(consistency) {
 		workErr = vmhost.PrepareOnlineBackupWorkDir(ctx, workRoot)
@@ -1490,12 +1490,6 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 	if workErr != nil {
 		return failBackupRun(store, cmd, observed, workErr.Error()), nil
 	}
-	cleanupWork := true
-	defer func() {
-		if cleanupWork {
-			_ = os.RemoveAll(workRoot)
-		}
-	}()
 
 	stageFiles := map[string]string{}
 	artifacts := make([]protocol.BackupDiskArtifact, 0, len(disks))
@@ -1554,6 +1548,11 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 	if err != nil {
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
+	// Catalog rebuild recovers the creating policy, and so retention scope, from the manifest.
+	manifest.PolicyID = cmd.Backup.PolicyID
+	if err := saveBackupPublicationRun(store, cmd, observed, "pending", ""); err != nil {
+		return failBackupRun(store, cmd, observed, err.Error()), nil
+	}
 	manifestSHA, err := backend.Publish(ctx, manifest, stageFiles)
 	if err != nil {
 		if _, ok := backend.(filesystemBackupStorage); ok && !errors.Is(err, vmhost.ErrBackupPublishUncertain) {
@@ -1561,14 +1560,14 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		}
 		switch backend.(type) {
 		case filesystemBackupStorage, sftpBackupStorage, *s3BackupStorage:
-			if saveErr := attentionBackupPublication(store, cmd, observed, err.Error()); saveErr != nil {
+			if saveErr := saveBackupPublicationRun(store, cmd, observed, "needs_attention", err.Error()); saveErr != nil {
 				return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: saveErr.Error(), ObservedAt: observed}, nil
 			}
 			return reconcilePublishedBackupNow(ctx, store, cmd, observed), nil
 		}
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
-	persisted, persistedSHA, err := backend.ReadPoint(ctx, cmd.OperationID)
+	persisted, persistedSHA, err := backend.StatPoint(ctx, cmd.OperationID)
 	if err != nil || persistedSHA != manifestSHA || persisted.RepositoryID != repo.ID || persisted.PoolID != store.State.PoolID {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: "published backup manifest cannot be reconciled", ObservedAt: observed}, nil
 	}
@@ -1593,7 +1592,7 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid restore-as-new command", ObservedAt: observed}, nil
 	}
 	if err := ensureBackupRunReserved(store, cmd); err != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
+		return unreservedBackupResult(store, cmd, observed, err), nil
 	}
 	repo, err := GetPoolBackupRepository(store, cmd.Restore.RepositoryID)
 	if err != nil {
@@ -1617,7 +1616,10 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 	if manifest.CapturedSpec == nil {
 		return failRestoreRun(store, cmd, observed, "recovery point lacks a captured VM specification; re-backup before restore-as-new"), nil
 	}
-	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
+	localDir, err := createRestoreStaging(store, cmd.OperationID)
+	if err != nil {
+		return failRestoreRun(store, cmd, observed, err.Error()), nil
+	}
 	if err := backend.CopyArtifacts(ctx, cmd.Restore.RecoveryPointID, localDir, manifest); err != nil {
 		return failRestoreRun(store, cmd, observed, err.Error()), nil
 	}
@@ -1647,6 +1649,7 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
 	}
 	_ = clearBackupRestorePin(store, cmd.Restore.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
 }
 
@@ -1662,12 +1665,14 @@ func failBackupRun(store *Store, cmd protocol.Command, observed time.Time, messa
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
 }
 
-func attentionBackupPublication(store *Store, cmd protocol.Command, observed time.Time, message string) error {
+// saveBackupPublicationRun records that publication started (pending) or
+// ended uncertain (needs_attention), so a retry never captures again.
+func saveBackupPublicationRun(store *Store, cmd protocol.Command, observed time.Time, status, message string) error {
 	intent, _ := backupIntentSHA256(cmd)
 	return SettlePoolBackupRun(store, protocol.BackupRun{
 		OperationID: cmd.OperationID, Kind: protocol.BackupKindBackupNow, PoolID: store.State.PoolID,
 		VMID: cmd.VM.ID, RepositoryID: cmd.Backup.RepositoryID, RecoveryPointID: cmd.OperationID,
-		IntentSHA256: intent, Stage: "publication", Status: "needs_attention", Error: message, CreatedAt: observed, UpdatedAt: observed,
+		IntentSHA256: intent, Stage: "publication", Status: status, Error: message, CreatedAt: observed, UpdatedAt: observed,
 	}, nil)
 }
 
@@ -1681,25 +1686,62 @@ func failRestoreRun(store *Store, cmd protocol.Command, observed time.Time, mess
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
 	}
 	_ = clearBackupRestorePin(store, cmd.Restore.RecoveryPointID, cmd.OperationID)
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
 }
 
-// A missing exact native journal and missing master owner record prove a local
-// placement refusal happened before disk allocation or definition. Member
-// placement cannot use this local proof because its owner record is remote.
+// unreservedBackupResult reports a run that could not be reserved. Without a
+// durable run nothing has happened yet, so the operation fails outright.
+func unreservedBackupResult(store *Store, cmd protocol.Command, observed time.Time, err error) protocol.Result {
+	result := protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
+	if _, loadErr := loadPoolBackupRun(store, cmd.OperationID); errors.Is(loadErr, os.ErrNotExist) {
+		result.Status = "failed"
+	}
+	return result
+}
+
+func restoreStagingDir(store *Store, operationID string) string {
+	return filepath.Join(store.dir, "backup-restore", operationID)
+}
+
+// createRestoreStaging makes the staging directory durable before any placement
+// request, so its absence later proves the restore was never placed.
+func createRestoreStaging(store *Store, operationID string) (string, error) {
+	dir := restoreStagingDir(store, operationID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	for _, parent := range []string{filepath.Dir(dir), store.dir} {
+		if err := syncPoolBackupDirectory(parent); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// removeRestoreStaging drops the local artifact copies once a restore settles;
+// placement copies them into VM storage, so nothing refers to them afterwards.
+func removeRestoreStaging(store *Store, operationID string) {
+	_ = os.RemoveAll(restoreStagingDir(store, operationID))
+}
+
+// A restore without an exact native journal has not allocated on this host.
+// The master's owner record then proves whether it was placed. A member's
+// placement is recorded on the master, but it is requested only after the
+// staging directory is durable, so a missing staging directory proves none.
 func restorePlacementHasNoEffects(store *Store, operationID, vmID string) bool {
-	membership, err := Membership(store)
-	if err != nil || membership.MasterHostID != store.State.HostID {
+	if _, err := os.Lstat(filepath.Join(store.dir, "managed-vms", operationID+".json")); !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
-	pool, err := loadPoolVMs(store)
-	if err != nil {
-		return false
+	if membership, err := Membership(store); err == nil && membership.MasterHostID == store.State.HostID {
+		pool, err := loadPoolVMs(store)
+		if err != nil {
+			return false
+		}
+		_, exists := pool.VMs[vmID]
+		return !exists
 	}
-	if _, exists := pool.VMs[vmID]; exists {
-		return false
-	}
-	_, err = os.Lstat(filepath.Join(store.dir, "managed-vms", operationID+".json"))
+	_, err := os.Lstat(restoreStagingDir(store, operationID))
 	return errors.Is(err, os.ErrNotExist)
 }
 
@@ -1766,6 +1808,16 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 		result.Error = "restore run intent differs from its command"
 		return result, nil
 	}
+	if restorePlacementHasNoEffects(store, cmd.OperationID, req.NewVMID) {
+		message := run.Error
+		if message == "" {
+			message = "restore stopped before placement"
+		}
+		if cmd.Kind == protocol.BackupKindTestRestore {
+			return failTestRestoreRun(store, cmd, observed, message), nil
+		}
+		return failRestoreRun(store, cmd, observed, message), nil
+	}
 	repo, err := GetPoolBackupRepository(store, req.RepositoryID)
 	if err != nil {
 		result.Error = err.Error()
@@ -1792,14 +1844,6 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 	}
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
 	allocating, err := restoreAsNewAllocating(engine, cmd.OperationID, spec, manifestSHA, manifest.Disks, manifest.Firmware)
-	if errors.Is(err, vmhost.ErrRestoreManifestUnbound) {
-		localDir := filepath.Join(dir, "backup-restore", cmd.OperationID)
-		if bindErr := bindLegacyRestoreAsNewAllocating(engine, ctx, cmd.OperationID, spec, localDir, manifestSHA, manifest.Disks, manifest.Firmware); bindErr != nil {
-			result.Error = bindErr.Error()
-			return result, nil
-		}
-		allocating, err = restoreAsNewAllocating(engine, cmd.OperationID, spec, manifestSHA, manifest.Disks, manifest.Firmware)
-	}
 	if err != nil {
 		if !errors.Is(err, vmhost.ErrRestoreAllocationJournalUnavailable) || result.Error == "" {
 			result.Error = err.Error()
@@ -1807,7 +1851,7 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 		return result, nil
 	}
 	if allocating {
-		localDir := filepath.Join(dir, "backup-restore", cmd.OperationID)
+		localDir := restoreStagingDir(store, cmd.OperationID)
 		if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 			result.Error = err.Error()
 			return result, nil
@@ -1857,6 +1901,7 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 	if cmd.Kind != protocol.BackupKindTestRestore {
 		_ = clearBackupRestorePin(store, req.RecoveryPointID, cmd.OperationID)
 	}
+	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
 }
 
@@ -1872,4 +1917,24 @@ func backupFileDigest(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), size, nil
+}
+
+// adoptPeerBackupRepository saves the master's registration on this member.
+// A registration keeps its source and credential reference for life, so a
+// different one under the same ID is a conflict. Caller holds poolBackupAuthorityMu.
+func adoptPeerBackupRepository(s *Store, request BackupRequest, repo, prepared protocol.BackupRepository) error {
+	state, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return err
+	}
+	oldRepo, hadOldRepo := state.Repositories[repo.ID]
+	if hadOldRepo && (oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef ||
+		!reflect.DeepEqual(oldRepo.Source, repo.Source) || !reflect.DeepEqual(oldRepo.Identity, repo.Identity) ||
+		!reflect.DeepEqual(oldRepo.SMBSource, repo.SMBSource) || !reflect.DeepEqual(oldRepo.S3Source, repo.S3Source) ||
+		!reflect.DeepEqual(oldRepo.SFTPSource, repo.SFTPSource) || !reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity) ||
+		repo.Kind == protocol.BackupRepoKindSMB3 && !samePeerSMBIdentity(request.PeerSMBIdentity, oldRepo.SMBIdentity)) {
+		return ErrBackupConflict
+	}
+	state.Repositories[repo.ID] = prepared
+	return savePoolBackupRepositories(s, state)
 }

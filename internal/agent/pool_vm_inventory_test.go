@@ -85,7 +85,7 @@ func TestPoolVMInventoryAcceptsRealHealthyManagedObservations(t *testing.T) {
 	if err != nil || inv.Storage[storage.ID] != storage.Identity {
 		t.Fatalf("healthy local inventory = %#v, %v", inv, err)
 	}
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{"host-a": inv}}
 	if err = seedPoolVMOwners(s, membership, &state, "host-a"); err != nil {
 		t.Fatalf("healthy master inventory was rejected: %v", err)
@@ -377,7 +377,7 @@ func TestPoolVMInventoryKeepsPausedLocalDefinitionWithoutBlockingPool(t *testing
 	}
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "host-a")
 	vm.Disks[0].StorageID = storage.ID
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 1, Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"}}}
 	state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{"host-a": {HostID: "host-a", Generation: 1, VMs: []protocol.VMCreateSpec{*vm}, Observed: map[string]string{vm.ID: "paused"}}}}
 	if err = seedPoolVMOwners(s, membership, &state, "host-a"); err != nil {
 		t.Fatalf("paused local definition blocked pool inventory: %v", err)
@@ -414,8 +414,8 @@ func TestPoolVMInventoryDoesNotReplayForeignCachedRuntimeObservation(t *testing.
 	s := peerStore(t, "master-1", "pool-1")
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", "owner-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 1, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
-		{HostID: "owner-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready"},
+		{HostID: "owner-1", Hostname: "owner-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 1, Status: "ready"},
 	}}
 	state := poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "pool-1", VMID: vm.ID, HostID: "owner-1", State: "running", Epoch: 3, Spec: *vm}}, Inventory: map[string]poolVMInventory{
 		"master-1": {HostID: "master-1", Generation: 1, Observed: map[string]string{}},
@@ -438,8 +438,8 @@ func TestPoolVMInventoryDoesNotReplayForeignCachedRuntimeObservation(t *testing.
 func TestPoolVMInventoryRequiresEveryReadyMemberAtCurrentGeneration(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 7, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
-		{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
+		{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready"},
 	}}
 	state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
 		"host-a": {HostID: "host-a", Generation: 7},
@@ -452,8 +452,8 @@ func TestPoolVMInventoryRequiresEveryReadyMemberAtCurrentGeneration(t *testing.T
 func TestPoolVMInventoryRetainsFirstSnapshotWithoutOwnerAdmission(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 7, Members: []protocol.PoolMember{
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
-		{HostID: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
+		{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready"},
 	}}
 	if err := recordPoolVMInventory(s, membership, poolVMInventory{HostID: "host-a", Generation: 7}); err == nil {
 		t.Fatal("partial inventory was treated as complete")
@@ -469,7 +469,7 @@ func TestPoolVMInventoryRetainsFirstSnapshotWithoutOwnerAdmission(t *testing.T) 
 
 func TestPoolVMInventoryRejectsStaleGeneration(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
-	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 7, Members: []protocol.PoolMember{{HostID: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"}}}
+	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-a", Generation: 7, Members: []protocol.PoolMember{{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"}}}
 	if err := recordPoolVMInventory(s, membership, poolVMInventory{HostID: "host-a", Generation: 6}); err == nil {
 		t.Fatal("stale VM inventory was accepted")
 	}
@@ -477,8 +477,8 @@ func TestPoolVMInventoryRejectsStaleGeneration(t *testing.T) {
 
 func TestPoolReplicaRejoinRequiresCapturedSameGenerationAuthority(t *testing.T) {
 	captured := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 7, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
-		{HostID: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready", ReplicaAckExcluded: true},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 7, Status: "ready"},
+		{HostID: "member-1", Hostname: "member-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 7, Status: "ready", ReplicaAckExcluded: true},
 	}}
 	state := poolVMState{Inventory: map[string]poolVMInventory{"member-1": {HostID: "member-1", Generation: 7}}}
 	peer := poolPeerState{Membership: captured, AuthorityDigest: strings.Repeat("c", 64)}
@@ -500,15 +500,15 @@ func TestPoolReplicaRejoinRequiresCapturedSameGenerationAuthority(t *testing.T) 
 func TestPoolVMInventoryRefreshesOnlyNewerPinnedMembership(t *testing.T) {
 	s := peerStore(t, "host-a", "pool-1")
 	current := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "host-master", Generation: 2, Members: []protocol.PoolMember{
-		{HostID: "host-master", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
-		{HostID: "host-a", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
+		{HostID: "host-master", Hostname: "host-master", CertificateSHA256: strings.Repeat("a", 64), Generation: 2, Status: "ready"},
+		{HostID: "host-a", Hostname: "host-a", CertificateSHA256: strings.Repeat("b", 64), Generation: 2, Status: "ready"},
 	}}
 	if err := savePoolPeer(s, poolPeerState{Membership: current}); err != nil {
 		t.Fatal(err)
 	}
 	fresh := current
 	fresh.Generation = 3
-	fresh.Members = append(fresh.Members, protocol.PoolMember{HostID: "host-b", CertificateSHA256: strings.Repeat("c", 64), Generation: 3, Status: "ready"})
+	fresh.Members = append(fresh.Members, protocol.PoolMember{HostID: "host-b", Hostname: "host-b", CertificateSHA256: strings.Repeat("c", 64), Generation: 3, Status: "ready"})
 	for i := range fresh.Members {
 		fresh.Members[i].Generation = 3
 	}
@@ -633,8 +633,8 @@ func TestPoolEjectRefusesStaleTargetInventoryEvenWithoutAnOwnerRecord(t *testing
 func TestPoolVMInventoryDropsSnapshotsOfNonMembers(t *testing.T) {
 	s := peerStore(t, "master-1", "pool-1")
 	membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 12, Members: []protocol.PoolMember{
-		{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
-		{HostID: "gone-1", CertificateSHA256: strings.Repeat("c", 64), Generation: 12, Status: "ejected"},
+		{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
+		{HostID: "gone-1", Hostname: "gone-1", CertificateSHA256: strings.Repeat("c", 64), Generation: 12, Status: "ejected"},
 	}}
 	if err := savePoolPeer(s, poolPeerState{Membership: membership}); err != nil {
 		t.Fatal(err)
@@ -720,8 +720,8 @@ func TestPoolVMInventoryStillRefusesAnIncompletePictureAndNamesTheHost(t *testin
 	for _, status := range []string{"ready", "pending", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			membership := protocol.PoolMembership{PoolID: "pool-1", MasterHostID: "master-1", Generation: 12, Members: []protocol.PoolMember{
-				{HostID: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
-				{HostID: "silent-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 12, Status: status},
+				{HostID: "master-1", Hostname: "master-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 12, Status: "ready"},
+				{HostID: "silent-1", Hostname: "silent-1", CertificateSHA256: strings.Repeat("b", 64), Generation: 12, Status: status},
 			}}
 			state := poolVMState{VMs: map[string]poolVMRecord{}, Inventory: map[string]poolVMInventory{
 				"master-1": {HostID: "master-1", Generation: 12},

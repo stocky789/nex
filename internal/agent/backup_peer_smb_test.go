@@ -25,10 +25,10 @@ func testPeerSMBRepository(t *testing.T, master *Store) protocol.BackupRepositor
 	return protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Primary", Kind: protocol.BackupRepoKindSMB3,
 		SMBSource:     &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups", Directory: "pool-1"},
 		SMBIdentity:   &protocol.SMBStorageIdentity{Server: "smb.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)},
-		CredentialRef: receipt.Receipt, Generation: 1, MountPath: t.TempDir()}
+		CredentialRef: receipt.Receipt, MountPath: t.TempDir()}
 }
 
-func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentityAndGeneration(t *testing.T) {
+func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := testPeerSMBRepository(t, master)
@@ -42,9 +42,9 @@ func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentityAndGeneration(t *tes
 	}
 	previous := prepareBackupRepositorySMBNative
 	t.Cleanup(func() { prepareBackupRepositorySMBNative = previous })
-	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, stateDir string, credentials protocol.StorageCredentials) (protocol.BackupRepository, error) {
-		if got.ID != repo.ID || stateDir != member.dir || credentials.Username != "backup" || credentials.Secret != "private-example-secret" {
-			t.Fatalf("wrong member prepare scope: %+v %q %+v", got, stateDir, credentials)
+	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, credentials protocol.StorageCredentials) (protocol.BackupRepository, error) {
+		if got.ID != repo.ID || credentials.Username != "backup" || credentials.Secret != "private-example-secret" {
+			t.Fatalf("wrong member prepare scope: %+v %+v", got, credentials)
 		}
 		got.MountPath = t.TempDir()
 		got.SMBIdentity = repo.SMBIdentity
@@ -58,14 +58,6 @@ func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentityAndGeneration(t *tes
 	wrongIdentity.MarkerID = strings.Repeat("b", 32)
 	if _, err := preparePeerSMBRepository(context.Background(), member, portable, &wrongIdentity); !errors.Is(err, ErrBackupConflict) {
 		t.Fatalf("wrong share marker accepted: %v", err)
-	}
-	stale := portable
-	stale.Generation = 2
-	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: stale}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := preparePeerSMBRepository(context.Background(), member, portable, repo.SMBIdentity); !errors.Is(err, ErrBackupConflict) {
-		t.Fatalf("old generation accepted: %v", err)
 	}
 }
 
@@ -126,10 +118,10 @@ func TestPeerSMBPreflightAuthenticatedLostReplyRetry(t *testing.T) {
 	previous := prepareBackupRepositorySMBNative
 	t.Cleanup(func() { prepareBackupRepositorySMBNative = previous })
 	prepareCalls := 0
-	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, stateDir string, credentials protocol.StorageCredentials) (protocol.BackupRepository, error) {
+	prepareBackupRepositorySMBNative = func(_ context.Context, got protocol.BackupRepository, credentials protocol.StorageCredentials) (protocol.BackupRepository, error) {
 		prepareCalls++
-		if got.Generation != repo.Generation || stateDir != member.dir || credentials.Secret != "private-example-secret" {
-			t.Fatalf("wrong SMB preflight scope: %+v %q %+v", got, stateDir, credentials)
+		if got.ID != repo.ID || credentials.Secret != "private-example-secret" {
+			t.Fatalf("wrong SMB preflight scope: %+v %+v", got, credentials)
 		}
 		got.MountPath = t.TempDir()
 		got.SMBIdentity = repo.SMBIdentity

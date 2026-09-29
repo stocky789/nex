@@ -34,9 +34,14 @@ type backupRepositoryOwner struct {
 	Pool       string `json:"pool"`
 }
 
+// prepareBackupSMB claims and probes the repository inside SMB preparation, so a failed first
+// registration removes its new mount unit. Backup repositories hold only data files.
 var prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, repositoryID string) (storageAccess, error) {
-	return prepareSMBWithAdmission(ctx, registration, func(root string) error {
-		return claimBackupRepositoryOwnerExact(root, repositoryID, registration.PoolID)
+	return prepareSMBWithAdmission(ctx, registration, ",nosuid,nodev,noexec", func(root string) error {
+		if err := claimBackupRepositoryOwnerExact(root, repositoryID, registration.PoolID); err != nil {
+			return err
+		}
+		return probeBackupPublication(root)
 	})
 }
 var inspectBackupSMB = inspectSMB
@@ -72,7 +77,7 @@ func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	var err error
 	switch repo.Kind {
 	case protocol.BackupRepoKindNFS:
-		access, err = prepareNFS(ctx, registration)
+		access, err = prepareNFS(ctx, registration, ",nosuid,nodev,noexec")
 	case protocol.BackupRepoKindSMB3:
 		if repo.CredentialRef == "" {
 			return protocol.BackupRepository{}, errors.New("backup repository SMB credentials are unavailable")
@@ -103,12 +108,22 @@ func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	if err := claimBackupRepositoryOwnerExact(repo.MountPath, repo.ID, repo.PoolID); err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	if repo.Kind == protocol.BackupRepoKindSMB3 {
-		if err := probeBackupPublication(repo.MountPath); err != nil {
-			return protocol.BackupRepository{}, err
-		}
-	}
 	return repo, nil
+}
+
+// DetachBackupRepository stops and removes the mount of a filesystem backup
+// repository. The repository's data on the share is left untouched.
+func DetachBackupRepository(ctx context.Context, repo protocol.BackupRepository) error {
+	if repo.Kind != protocol.BackupRepoKindNFS && repo.Kind != protocol.BackupRepoKindSMB3 {
+		return nil
+	}
+	if err := detachRemote(ctx, backupStorageRegistration(repo)); err != nil {
+		return err
+	}
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		return RemoveBackupSMBCredential(repo.CredentialRef)
+	}
+	return nil
 }
 
 func checkExistingBackupRepositoryOwner(root, repositoryID, poolID string) error {

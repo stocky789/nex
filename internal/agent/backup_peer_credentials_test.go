@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,11 +30,11 @@ func peerTestBackupCredential(t *testing.T, s *Store, requestID, operationID, se
 	return receipt.Receipt
 }
 
-func TestPeerBackupCredentialScopeRotationAndPromotion(t *testing.T) {
+func TestPeerBackupCredentialScopeAndPromotion(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}, Generation: 1}
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}}
 	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-1", "register-1", "private-example-secret")
 	projection, err := exportPeerBackupCredential(master, repo, member.State.HostID)
 	if err != nil {
@@ -71,37 +72,25 @@ func TestPeerBackupCredentialScopeRotationAndPromotion(t *testing.T) {
 		t.Fatal("promotion accepted missing private receipt")
 	}
 
-	rotated := repo
-	rotated.Generation++
-	rotated.CredentialRef = peerTestBackupCredential(t, master, "credential-2", "register-2", "rotated-example-secret")
-	newProjection, err := exportPeerBackupCredential(master, rotated, member.State.HostID)
+	// A registration keeps its credential for life; rotation registers a new repository ID.
+	changed := repo
+	changed.CredentialRef = peerTestBackupCredential(t, master, "credential-2", "register-2", "changed-example-secret")
+	changedProjection, err := exportPeerBackupCredential(master, changed, member.State.HostID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := importPeerBackupCredential(member, newProjection); err != nil {
-		t.Fatal(err)
+	if err := importPeerBackupCredential(member, changedProjection); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("same-ID credential change: %v", err)
 	}
-	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: rotated}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := RetireBackupCredential(member, repo, rotated); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveBackupCredential(member, repo); err == nil {
-		t.Fatal("old generation resolved after rotation")
-	}
-	if got, err := ResolveBackupCredential(member, rotated); err != nil || got.Secret != "rotated-example-secret" {
-		t.Fatalf("rotated credential: %v", err)
-	}
-	if err := importPeerBackupCredential(member, projection); !errors.Is(err, ErrBackupConflict) {
-		t.Fatalf("old projection replay: %v", err)
+	if got, err := ResolveBackupCredential(member, repo); err != nil || got.Secret != "private-example-secret" {
+		t.Fatalf("refused change disturbed the registered credential: %v", err)
 	}
 }
 
 func TestJoiningMemberReceivesExistingBackupCredential(t *testing.T) {
 	master := seedBackupMaster(t)
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}, Generation: 1}
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}}
 	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-join", "register-join", "join-example-secret")
 	if err := savePoolBackupRepositories(master, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
 		t.Fatal(err)
@@ -118,7 +107,7 @@ func TestPeerBackupCredentialAmbiguousDeliveryRetries(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}, Generation: 1}
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}}
 	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-delivery", "register-delivery", "delivery-example-secret")
 	membership, err := Membership(master)
 	if err != nil {
@@ -166,7 +155,7 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	}
 	lab.drop(offline.State.HostID, "!"+poolBackupPeerPath+"/credential")
 	saved, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared)
-	if err != nil || saved.Generation != 1 {
+	if err != nil {
 		t.Fatalf("offline member blocked master registration: %+v, %v", saved, err)
 	}
 	if _, err := localBackupCredential(offline, saved); err == nil {
@@ -178,7 +167,7 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	if _, _, err := stagePoolBackupAuthorityActivation(offline, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{saved}}, 3); err == nil || err.Error() != "promoted backup credential is unavailable" {
 		t.Fatalf("unprepared member was promotable: %v", err)
 	}
-	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared); err != nil || replay.Generation != 1 {
+	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared); err != nil || replay.CredentialRef != saved.CredentialRef || !replay.CreatedAt.Equal(saved.CreatedAt) {
 		t.Fatalf("exact registration retry changed identity: %+v, %v", replay, err)
 	}
 	lab.drop(offline.State.HostID, "")
@@ -198,7 +187,7 @@ func TestPeerBackupCredentialExportNeedsWritableAuthority(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}, Generation: 1}
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}}
 	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-authority", "register-authority", "authority-example-secret")
 	if _, err := exportPeerBackupCredential(master, repo, member.State.HostID); err != nil {
 		t.Fatal(err)
@@ -213,65 +202,39 @@ func TestPeerBackupCredentialExportNeedsWritableAuthority(t *testing.T) {
 	}
 }
 
-func TestIdleMemberBackupCredentialRotation(t *testing.T) {
-	lab := newTransferLab(t, 1)
-	master, member := lab.host("master-1"), lab.host("member-1")
-	old := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
-		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}, Generation: 1}
-	old.CredentialRef = peerTestBackupCredential(t, master, "credential-old", "register-old", "old-example-secret")
-	if err := savePoolBackupRepositories(master, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{old.ID: old}}); err != nil {
+// An abandoned registration attempt leaves an older receipt for the same repository ID;
+// the committed registration retires it, but never a newer pending handoff.
+func TestSupersededBackupCredentialRetirement(t *testing.T) {
+	s := seedBackupMaster(t)
+	var removed []string
+	previous := removeBackupSMBCredentialNative
+	t.Cleanup(func() { removeBackupSMBCredentialNative = previous })
+	removeBackupSMBCredentialNative = func(reference string) error { removed = append(removed, reference); return nil }
+	abandoned := poolChangeCredential(t, s, "credential-old", protocol.BackupRepoKindSMB3, "repo-1", "old-example-secret")
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Backup", Kind: protocol.BackupRepoKindSMB3,
+		SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}}
+	repo.CredentialRef = poolChangeCredential(t, s, "credential-new", protocol.BackupRepoKindSMB3, "repo-1", "new-example-secret")
+	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
 		t.Fatal(err)
 	}
-	projection, err := exportPeerBackupCredential(master, old, member.State.HostID)
-	if err != nil {
+	future := repo
+	future.CredentialRef = poolChangeCredential(t, s, "credential-future", protocol.BackupRepoKindSMB3, "repo-1", "future-example-secret")
+	if err := retireSupersededBackupCredentials(s, repo); err != nil {
 		t.Fatal(err)
 	}
-	if err := importPeerBackupCredential(member, projection); err != nil {
-		t.Fatal(err)
+	old := repo
+	old.CredentialRef = abandoned
+	if _, err := ResolveBackupCredentialForAdoption(s, old); err == nil {
+		t.Fatal("abandoned receipt kept its material")
 	}
-	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{old.ID: old}}); err != nil {
-		t.Fatal(err)
+	if !slices.Equal(removed, []string{abandoned}) {
+		t.Fatalf("sealed mount credentials removed: %v, want only the abandoned one", removed)
 	}
-	rotated := old
-	rotated.Generation++
-	rotated.CredentialRef = peerTestBackupCredential(t, master, "credential-new", "register-new", "new-example-secret")
-	if err := savePoolBackupRepositories(master, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{rotated.ID: rotated}}); err != nil {
-		t.Fatal(err)
+	if got, err := ResolveBackupCredentialForAdoption(s, repo); err != nil || got.Secret != "new-example-secret" {
+		t.Fatalf("registered receipt: %v", err)
 	}
-	if err := retireSupersededBackupCredentials(master, rotated); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveBackupCredentialForAdoption(master, old); err == nil {
-		t.Fatal("master retained prior material")
-	}
-	future := rotated
-	future.CredentialRef = peerTestBackupCredential(t, master, "credential-future", "register-future", "future-example-secret")
-	if err := retireSupersededBackupCredentials(master, rotated); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveBackupCredentialForRegistration(master, future, "register-future"); err != nil {
+	if _, err := ResolveBackupCredentialForRegistration(s, future, "register-credential-future"); err != nil {
 		t.Fatalf("pending handoff was retired before registration: %v", err)
-	}
-	membership, err := Membership(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lab.drop(member.State.HostID, "!"+poolBackupPeerPath+"/credential")
-	if err := projectBackupCredentialToMembers(context.Background(), master, membership, rotated); err == nil {
-		t.Fatal("failed retirement delivery acknowledged")
-	}
-	if _, err := ResolveBackupCredentialForAdoption(member, old); err != nil {
-		t.Fatalf("old member receipt changed without delivery: %v", err)
-	}
-	lab.drop(member.State.HostID, "")
-	if err := projectBackupCredentialToMembers(context.Background(), master, membership, rotated); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveBackupCredentialForAdoption(member, old); err == nil {
-		t.Fatal("idle member retained prior material")
-	}
-	if got, err := ResolveBackupCredentialForAdoption(member, rotated); err != nil || got.Secret != "new-example-secret" {
-		t.Fatalf("new member receipt missing: %v", err)
 	}
 }
 
@@ -283,7 +246,7 @@ func TestJoinBackupCredentialSyncRetryAndLegacyNFS(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			master := seedBackupMaster(t)
-			repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup", Generation: 1}
+			repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup"}
 			if withSecret {
 				repo.Kind = protocol.BackupRepoKindS3
 				repo.S3Source = &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}
@@ -334,7 +297,12 @@ func TestJoinBackupCredentialSyncRetryAndLegacyNFS(t *testing.T) {
 					t.Fatalf("missing durable sync retry: pending=%+v gets=%d err=%v", pending, gets.Load(), err)
 				}
 				blocked.Store(false)
-				if err := RetryPoolPeerOrigin(context.Background(), member); err != nil {
+				// The cluster worker must never rehome: it does not own the Store.
+				if err := RetryPoolPeerOrigin(context.Background(), member); err != nil || peerState(t, member).PendingRehome == nil {
+					t.Fatalf("cluster worker resumed the pending rehome: err=%v", err)
+				}
+				// The Run loop's pool-join resumption finishes it on the owning goroutine.
+				if err := ResumePoolRehome(context.Background(), member); err != nil {
 					t.Fatal(err)
 				}
 				if peerState(t, member).PendingRehome != nil {

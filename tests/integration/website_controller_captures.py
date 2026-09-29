@@ -36,7 +36,7 @@ HOSTNAME = 'nex-core-01'
 # assert_public_text keeps passing; the ISO is a 64 KiB fixture with a valid descriptor.
 # A current Nex Core advertises every managed capability; omitting any renders the demo
 # host as outdated ("upgrade Nex Core") and disables the power controls in the capture.
-CAPABILITIES = ['managed-vm-v1', 'pool-vm-placement-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
+CAPABILITIES = ['managed-vm-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
                 'host-console-v1', 'vm-media-v1', 'storage-repositories-v1']
 STORAGE_NAME, STORAGE_PATH = 'Local NVMe storage', '/var/lib/nex/storage'
 NETWORK_NAME, ISO_NAME = 'Guest network', 'debian-13-netinst.iso'

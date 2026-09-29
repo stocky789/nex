@@ -118,7 +118,7 @@ func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandof
 // offers use their purpose-bound marker; ordinary storage retains the existing
 // receipt path unchanged.
 func saveCredentialHandoff(s *Store, handoff protocol.StorageCredentialHandoff) (protocol.StorageCredentialReceipt, error) {
-	if strings.HasPrefix(handoff.Offer.RegistrationRequestID, "backup-credential") {
+	if strings.HasPrefix(handoff.Offer.RegistrationRequestID, "backup-credential:") {
 		return saveBackupCredential(s, handoff)
 	}
 	if cluster, ok := clusterCredentialReceipt(s, handoff); ok {

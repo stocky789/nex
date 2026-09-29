@@ -141,8 +141,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;The one pool command addressed to the joining host rather than the master: its target is pool.member_host_id. Created by POST /api/v1/pools/{id}/members after the master answered the brokered invite. The joining Core runs the whole peer exchange itself, as a durable staged join persisted in its own Core state: precheck, csr, joined, rehomed, advertised, ready. Each stage is individually idempotent, so a crash, reboot or Controller outage resumes at the stage still to perform; the agent re-attempts it from its own loop with no Controller involvement, and reports progress as inventory.managed.join. The invitation and pool CA in the payload are single-use and short-lived; the Controller scrubs them from the stored command as soon as the operation leaves queued and unconditionally 15 minutes after issue. Core refuses the join outright when the host is not enrolled, holds managed VMs or non-local storage, is not the master of its own single-host pool, or is already a member; a host that is admitted but has not finished the remaining stages reports needs_attention and stays a member, never a silent success or a false failure. Ten failed attempts before any membership change end the operation failed rather than retrying an expired invitation forever.&quot;,
-  &quot;capability&quot;: &quot;pool-join-v1 on both the master and the joining Core. The Controller refuses the request rather than degrading to a partial exchange when either side is missing it.&quot;
+  &quot;semantics&quot;: &quot;The one pool command addressed to the joining host rather than the master: its target is pool.member_host_id. Created by POST /api/v1/pools/{id}/members after the master answered the brokered invite. The joining Core runs the whole peer exchange itself, as a durable staged join persisted in its own Core state: precheck, csr, joined, rehomed, advertised, ready. Each stage is individually idempotent, so a crash, reboot or Controller outage resumes at the stage still to perform; the agent re-attempts it from its own loop with no Controller involvement, and reports progress as inventory.managed.join. The invitation and pool CA in the payload are single-use and short-lived; the Controller scrubs them from the stored command as soon as the operation leaves queued and unconditionally 15 minutes after issue. Core refuses the join outright when the host is not enrolled, holds managed VMs or non-local storage, is not the master of its own single-host pool, or is already a member; a host that is admitted but has not finished the remaining stages reports needs_attention and stays a member, never a silent success or a false failure. Ten failed attempts before any membership change end the operation failed rather than retrying an expired invitation forever.&quot;
 }</pre></section>
 <section><h2>pool-storage-reconcile</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -261,7 +260,6 @@
 }</pre></section>
 <section><h2>network-remove</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
-  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
   },
@@ -272,7 +270,6 @@
 }</pre></section>
 <section><h2>network-update</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
-  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
   },
@@ -294,7 +291,6 @@
 }</pre></section>
 <section><h2>media-remove</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
-  &quot;capability&quot;: &quot;pool-resource-removal-v1&quot;,
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/ResourceLifecycleRequest&quot;
   },
@@ -366,8 +362,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Addressed to the pool master, never to the host being drained: the master owns the membership record the flag lives in, and entering or leaving maintenance never contacts the drained host. Only membership.master_host_id, member_host_id, enabled and the optional expected_version are on the wire. The master sets PoolMember.Maintenance and MaintenanceSince in its own pool-peer.json and deliberately does not bump the membership generation, so draining a host cannot invalidate an in-flight placement, a published inventory or a peer generation check. enabled is a desired state, so re-sending it succeeds and leaves maintenance_since unmoved, which is what makes an exact retry after a lost reply safe. Core refusals are definite failed results: \&quot;only the pool master records maintenance mode\&quot;, \&quot;no such member of this pool\&quot;, \&quot;an ejected host has no maintenance state\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;pool membership changed since this request was composed; review the pool and try again\&quot;, \&quot;maintenance command carries no maintenance request\&quot; and the PoolCommand.Valid() texts. A durable save that may not have landed is reported needs_attention with \&quot;maintenance mode could not be recorded durably\&quot;; the next inventory report states the truth and the exact retry is safe. While the flag is set the master refuses new placement, define and start admission for that host with \&quot;the selected VM host is in maintenance mode; take it out of maintenance before placing or starting VMs on it\&quot;, and skips it in autostart-by-placement. It never blocks stop, shutdown or force-stop, never stops a running guest, never blocks local recovery and never blocks the member&#x27;s own convergence.&quot;,
-  &quot;capability&quot;: &quot;pool-maintenance-v1 on the pool master. The Controller offers no maintenance control without it.&quot;
+  &quot;semantics&quot;: &quot;Addressed to the pool master, never to the host being drained: the master owns the membership record the flag lives in, and entering or leaving maintenance never contacts the drained host. Only membership.master_host_id, member_host_id, enabled and the optional expected_version are on the wire. The master sets PoolMember.Maintenance and MaintenanceSince in its own pool-peer.json and deliberately does not bump the membership generation, so draining a host cannot invalidate an in-flight placement, a published inventory or a peer generation check. enabled is a desired state, so re-sending it succeeds and leaves maintenance_since unmoved, which is what makes an exact retry after a lost reply safe. Core refusals are definite failed results: \&quot;only the pool master records maintenance mode\&quot;, \&quot;no such member of this pool\&quot;, \&quot;an ejected host has no maintenance state\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;pool membership changed since this request was composed; review the pool and try again\&quot;, \&quot;maintenance command carries no maintenance request\&quot; and the PoolCommand.Valid() texts. A durable save that may not have landed is reported needs_attention with \&quot;maintenance mode could not be recorded durably\&quot;; the next inventory report states the truth and the exact retry is safe. While the flag is set the master refuses new placement, define and start admission for that host with \&quot;the selected VM host is in maintenance mode; take it out of maintenance before placing or starting VMs on it\&quot;, and skips it in autostart-by-placement. It never blocks stop, shutdown or force-stop, never stops a running guest, never blocks local recovery and never blocks the member&#x27;s own convergence.&quot;
 }</pre></section>
 <section><h2>management-network</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -388,8 +383,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Addressed to the pool&#x27;s current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \&quot;durable and still running \u2014 the hosts finish it\&quot;. Core refusals include \&quot;only the pool master starts a master change or an eject\&quot;, \&quot;no such member of this pool\&quot;, \&quot;only a ready member with a peer endpoint can become the pool master\&quot;, \&quot;another pool authority transfer is already in progress on this pool\&quot;, \&quot;pool authority is frozen for a master change; retry when it completes\&quot;, \&quot;pool authority was handed to another host; this host is no longer the pool master\&quot;, \&quot;host &lt;id&gt; still owns pool VM records (&lt;ids&gt;); move or delete them before ejecting it\&quot;, \&quot;host &lt;id&gt; still holds a pool-shared storage reservation on &lt;repo&gt;; let it finish before ejecting it\&quot;, \&quot;no pool authority transfer is in progress on this pool\&quot;, \&quot;the pool authority transfer in progress has another target\&quot; and \&quot;the target has already activated this pool authority; the master change can only go forward\&quot;, \&quot;host &lt;id&gt; is already removed from this pool&#x27;s membership; the eject can only go forward\&quot; and \&quot;this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\&quot;. A cancelled eject records \&quot;the pool member eject was cancelled by an operator\&quot;; a cancelled master change records \&quot;the pool master change was cancelled by an operator\&quot;. A cancel is accepted only before the transfer&#x27;s first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen. Before a planned master change or eject records its first freeze, Core refuses unresolved backup journal work, pending backup runs and pending metadata receipts with \&quot;backup operation is unresolved; finish or reconcile it before changing pool authority\&quot;; the check and first durable freeze hold the same backup authority lock. Fenced promotion may inherit pending backup authority and reports those runs/receipts needs_attention, retaining restore pins instead of queuing their native work on the new master.&quot;,
-  &quot;capability&quot;: &quot;pool-authority-transfer-v1 on the pool master, on the selected host and on every ready member. The Controller offers no master change or eject without it on the master, because a member that cannot re-point would keep following a host that is no longer the pool master.&quot;
+  &quot;semantics&quot;: &quot;Addressed to the pool&#x27;s current master, never to the subject host: the master owns the authority being moved, and it drives every step itself. action is master-change, eject or transfer-cancel; only membership.master_host_id, member_host_id, the action and the optional expected_version are on the wire. The master records a durable Transfer record in its own pool-peer.json before anything else happens and advances it on every tick, so the operation survives a Controller that is restarted, replaced or disconnected, and a power cycle of either host. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \&quot;durable and still running \u2014 the hosts finish it\&quot;. Core refusals include \&quot;only the pool master starts a master change or an eject\&quot;, \&quot;no such member of this pool\&quot;, \&quot;only a ready member with a peer endpoint can become the pool master\&quot;, \&quot;another pool authority transfer is already in progress on this pool\&quot;, \&quot;pool authority is frozen for a master change; retry when it completes\&quot;, \&quot;pool authority was handed to another host; this host is no longer the pool master\&quot;, \&quot;host &lt;id&gt; still owns pool VM records (&lt;ids&gt;); move or delete them before ejecting it\&quot;, \&quot;host &lt;id&gt; still holds a pool-shared storage reservation on &lt;repo&gt;; let it finish before ejecting it\&quot;, \&quot;no pool authority transfer is in progress on this pool\&quot;, \&quot;the pool authority transfer in progress has another target\&quot; and \&quot;the target has already activated this pool authority; the master change can only go forward\&quot;, \&quot;host &lt;id&gt; is already removed from this pool&#x27;s membership; the eject can only go forward\&quot; and \&quot;this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\&quot;. A cancelled eject records \&quot;the pool member eject was cancelled by an operator\&quot;; a cancelled master change records \&quot;the pool master change was cancelled by an operator\&quot;. A cancel is accepted only before the transfer&#x27;s first irreversible durable step, and Core reports that answer itself as PoolTransferStatus.cancellable rather than leaving a caller to judge by stage name: a master change stays cancellable through freeze, replicate and activate, including the hand-off window, where it succeeds only if the target proves under its own lock that it never activated; an eject stays cancellable through freeze and remove, and is refused once the membership without that member has been written; a promotion is never cancellable, because it has powered a host off. The reported flag is computed from the same predicate the cancel is gated on, so the two cannot drift. While the transfer holds the freeze every pool authority write on the master is refused rather than queued; running guests keep running, stop is never refused and storage reservation releases are never frozen. Before a planned master change or eject records its first freeze, Core refuses unresolved backup journal work, pending backup runs and pending metadata receipts with \&quot;backup operation is unresolved; finish or reconcile it before changing pool authority\&quot;; the check and first durable freeze hold the same backup authority lock. Fenced promotion may inherit pending backup authority and reports those runs/receipts needs_attention, retaining restore pins instead of queuing their native work on the new master.&quot;
 }</pre></section>
 <section><h2>pool-promote</h2><pre>{
   &quot;summary&quot;: &quot;Promote a surviving member to pool master after fencing the old one&quot;,
@@ -397,7 +391,6 @@
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/PoolCommand&quot;
   },
-  &quot;capability&quot;: &quot;pool-authority-transfer-v1 on the promotion candidate. S6 adds no new capability string.&quot;,
   &quot;semantics&quot;: &quot;One durable, resumable machine keyed by operation_id, driven entirely on the candidate. Payload: PoolCommand{request_id, action: promote, member_host_id (the candidate), fence_confirmed: true, fence_host_ids}. fence_host_ids is the exact set of hosts the operator agreed to power off, as the verdict&#x27;s fence_host_ids named them \u2014 the old pool master, and every other host that blocks the promotion and can be excluded by a fence. Core refuses without it (\&quot;this promotion will power off other hosts; confirm the hosts this pool reports before it can run\&quot;) and compares it again at run time against the set it computes itself, so a pool that changed since the preflight stops the promotion rather than quietly fencing something new: \&quot;this promotion must power off &lt;ids&gt;, which is not what was confirmed; confirm the hosts this pool reports and try again\&quot; and \&quot;this promotion no longer needs to power off any host; review the pool and try again\&quot;. A host is never powered off without having been named to the operator first. No membership travels: the candidate reads the signed replica it already holds. It moves nothing until Core has proved replica integrity, replica supremacy, accepted ownership and a fence proof Core itself produced \u2014 an independently observed power-off of the recorded fence target, digest-bound to this pool, this excluded host, this operation and this generation, and at most 15 minutes old. A returned fence agent status, a timeout, a missed heartbeat or an operator assurance cannot construct one. The whole verdict is re-proved immediately before activation, so a member that returned between the fence and the activation stops it; activation adopts VM ownership first, then makes this host master at generation + 1 in one atomic write, and an interrupted promotion resumes at the stage that did not complete. Terminal results: succeeded; failed, which is a decision and means nothing moved; and needs_attention, which is not an error but \&quot;durable and still running\&quot;. Core&#x27;s own refusals arrive on the operation and are surfaced verbatim in last_promotion: \&quot;the pool master &lt;id&gt; is reachable and holds this pool&#x27;s authority; change the pool master with a planned master change instead of promoting\&quot;, \&quot;the pool master &lt;id&gt; has no recorded fence profile; record one before promoting\&quot;, \&quot;the pool master &lt;id&gt; has not been fenced for this promotion; Core fences it and observes the power-off when the promotion is confirmed\&quot;, \&quot;this promotion has no fence proof for the old pool master\&quot;, \&quot;this fence proof excludes another host\&quot;, \&quot;this fence proof belongs to another promotion\&quot;, \&quot;this fence proof is not bound to this promotion\&quot;, \&quot;this fence proof is older than 15m0s; fence the old pool master again\&quot;, \&quot;the old pool master was not excluded: &lt;native reason&gt;\&quot;, \&quot;pool host &lt;ids&gt; holds a newer pool authority than this host; promote it instead\&quot;, \&quot;pool VM &lt;ids&gt; is recorded differently by the host that owns it; resolve that before promoting\&quot;, \&quot;this host holds no pool authority replica; it cannot be promoted\&quot;, \&quot;this host&#x27;s pool authority replica was never verified\&quot;, \&quot;this host holds no fence credential for &lt;host&gt;; it cannot fence it, so it cannot be promoted over it\&quot;, \&quot;the replicated fence credential is not addressed to this host\&quot;, \&quot;the replicated fence credential is unreadable\&quot;, \&quot;this host already holds different material under that fence credential reference\&quot;, \&quot;this host is already the master of its pool\&quot;, \&quot;promoting this host powers the old pool master off; confirm that before the promotion can run\&quot; and \&quot;a pool promotion is performed by the candidate itself\&quot;. A cancel is never accepted: \&quot;this pool promotion has powered the old pool master off; it cannot be cancelled and can only go forward\&quot;. This command is the manual promotion path. A separate Core-owned automatic path is limited to eligible two-host pools with Host fencing enabled and a recorded usable BMC profile; no automatic watchdog, storage lease or Nex Witness path exists. There is no election; no force, override, \&quot;declare host lost\&quot; or timeout-based path exists or may be added.&quot;
 }</pre></section>
 <section><h2>pool-fence-profile</h2><pre>{
@@ -406,7 +399,6 @@
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/PoolCommand&quot;
   },
-  &quot;capability&quot;: &quot;pool-authority-transfer-v1 on the pool master.&quot;,
   &quot;semantics&quot;: &quot;Payload: PoolCommand{request_id, action: fence-profile, membership.master_host_id, member_host_id, fence}. A null fence clears the profile. The profile is written into the master&#x27;s durable membership and replicated with it, so a promoted master inherits it and a fresh Controller re-adopts it from the master&#x27;s reported inventory. No credential material travels on this command: credential_ref names a file the existing one-time encrypted fence-credential handoff has already delivered to the master, and Core refuses to record a profile whose material it does not hold \u2014 \&quot;this host holds no fence credential for &lt;host&gt;; deliver it to this host before recording the profile\&quot; and \&quot;this host&#x27;s fence credential material for &lt;host&gt; is larger than this pool replicates; shorten it before recording the profile\&quot;. Core also refuses at record time any profile it could not verify, in the shape \&quot;this fence profile cannot be verified by this host: &lt;reason&gt;\&quot;, releasing the delivered credential when it does: \&quot;this host does not report a unique hardware identity, so a management controller cannot be confirmed to be its own\&quot;, \&quot;this management controller did not answer, so the machine behind it could not be identified\&quot;, \&quot;this management controller rejected the recorded account, so the machine behind it could not be identified\&quot;, \&quot;the management controller at this address reports a different machine than the host it is recorded for; nothing was powered off\&quot;, \&quot;a management controller fence device needs the account Nex Core signs in with\&quot;, \&quot;virsh fencing needs an immutable domain UUID target\&quot; and \&quot;SCSI persistent-reservation fencing is unsupported\&quot;. Before any power-off Nex Core asks the management controller which machine it manages \u2014 IPMI Get System GUID, in either documented byte order, or the Redfish ComputerSystem.UUID \u2014 and compares it with the target host&#x27;s own SMBIOS system UUID in the master&#x27;s membership record. A mismatch, a missing recorded UUID and an unreadable controller each refuse the fence and power nothing off. Other refusals: \&quot;only the pool master records a fence profile\&quot;, \&quot;no such member of this pool\&quot;, \&quot;an ejected host has no fence profile\&quot;. Recording a usable profile for the master itself is what opts a pool into fence-verified promotion, and therefore into the boot rule of a restarted master; clearing it is durable and is only released once every ready member has acknowledged a replica built without it.&quot;
 }</pre></section>
 <section><h2>pool-bmc-provisioning</h2><pre>{
@@ -415,7 +407,6 @@
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/PoolCommand&quot;
   },
-  &quot;capability&quot;: &quot;pool-authority-transfer-v1 on the pool master.&quot;,
   &quot;semantics&quot;: &quot;Payload: PoolCommand{request_id, action: bmc-provisioning, membership.master_host_id, member_host_id}. It says one thing \u2014 this host may configure its own management controller again \u2014 and re-sending it is a success, because it is a desired state and not a transition. The master clears PoolMember.bmc_provisioning_disabled and the host&#x27;s last management-controller report, and the host creates the account on its own next pass. The opposite direction is not a command: clearing a Core-provisioned fence profile sets the flag, removes the account and stops provisioning, in the one path that clears a profile. Refusals: \&quot;this command carries no management controller request\&quot;, \&quot;only the pool master records whether a host configures its own management controller\&quot;, \&quot;pool membership is unavailable\&quot;, \&quot;no such member of this pool\&quot;, and the authority-write refusals a fence profile takes while a master change is in flight.&quot;
 }</pre></section>
 <section><h2>pool-host-fencing</h2><pre>{
@@ -424,7 +415,6 @@
   &quot;payload&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/PoolCommand&quot;
   },
-  &quot;capability&quot;: &quot;pool-host-fencing-v1 on the pool master.&quot;,
   &quot;semantics&quot;: &quot;Payload: PoolCommand{request_id, action: host-fencing, membership.master_host_id, enabled}. It names no member, because the setting is the pool&#x27;s. The master records PoolMembership.host_fencing_disabled as the negative of enabled and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state and not a transition, so re-sending the state already recorded answers succeeded. Turning it on arms nothing by itself: Nex Core arms a host&#x27;s watchdog only where every prerequisite in PoolFenceSummary.prerequisites holds, and the quorum line is unknown until this pool runs a quorum service. Refusals: \&quot;this command carries no host fencing request\&quot;, \&quot;only the pool master records whether host fencing is on\&quot;, \&quot;pool membership is unavailable\&quot;, and the authority-write refusals a fence profile takes while a master change is in flight.&quot;
 }</pre></section>
 <section><h2>host-system-disk-replace</h2><pre>{
@@ -1137,12 +1127,12 @@
   }
 }</pre></details></section>
 <section id="addPoolMember"><h2>POST <code>/api/v1/pools/{id}/members</code></h2>
-<p>Add an enrolled host to this pool</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. Both hosts must advertise pool-join-v1. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master&#x27;s and is relayed verbatim. master_url is an optional override that the web UI never sends: the master&#x27;s own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://&lt;its default-route source address&gt;:9444), as the master&#x27;s own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.</p>
+<p>Add an enrolled host to this pool</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master&#x27;s and is relayed verbatim. master_url is an optional override that the web UI never sends: the master&#x27;s own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://&lt;its default-route source address&gt;:9444), as the master&#x27;s own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;addPoolMember&quot;,
   &quot;summary&quot;: &quot;Add an enrolled host to this pool&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. Both hosts must advertise pool-join-v1. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master&#x27;s and is relayed verbatim. master_url is an optional override that the web UI never sends: the master&#x27;s own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://&lt;its default-route source address&gt;:9444), as the master&#x27;s own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use join invitation over one report round trip (pool_requests/pool_results, 45-second deadline), then hands that invitation to the joining host as one durable pool-join command. The joining Core performs the whole peer exchange with the master itself and reports progress as inventory.managed.join; a Controller that is lost after the command changes nothing about the outcome. The Controller validates only what it can see (pool and host exist, both fresh and not revoked, the joining host is the master of its own single-host pool with no managed VMs and no non-local storage, peer_origin is a bare https origin); every refusal that matters is still the master&#x27;s and is relayed verbatim. master_url is an optional override that the web UI never sends: the master&#x27;s own reported peer_origin wins when it has one; otherwise Core records the supplied master_url, or when none is supplied the origin it works out itself (https://&lt;its default-route source address&gt;:9444), as the master&#x27;s own peer_origin the first time it issues an invitation. The joining host is handed the master_url from the invitation. Persist request_id before sending: an identical retry returns the original operation with 200 and never starts a second join, while the same request_id with any changed field (master_url included) conflicts. The invitation and pool CA are never returned, listed, logged or audited; the stored command is scrubbed of them as soon as the operation leaves queued and unconditionally 15 minutes after issue. Joining is not one-way: a member can be ejected with DELETE /api/v1/pools/{id}/members/{host_id}, the pool master can be changed with POST /api/v1/pools/{id}/master, and a surviving member can be promoted with POST /api/v1/pools/{id}/master/promote when the master is lost. Implemented in development product 0.1.0.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -1247,14 +1237,14 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without starting anything. Controller-visible refusals: \&quot;this host already belongs to the selected pool\&quot;, \&quot;pool master must be fresh and active before a host can join\&quot;, \&quot;the joining host must be fresh and active\&quot;, \&quot;adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts\&quot;, \&quot;only the master of its own single-host pool can join another pool\&quot;, \&quot;joining a pool with managed VMs is not supported; migrate or remove workloads first\&quot;, \&quot;joining a pool with existing remote storage is not supported; detach it first\&quot;, \&quot;the joining host must belong to the same site as the target pool\&quot;, \&quot;pool request is already active\&quot;, \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. A refusal the master itself decided is relayed verbatim in the same shape. A failed master result that carries no message becomes \&quot;the pool master refused to issue a join invitation\&quot;, so a terse Core refusal is never an empty body.&quot;,
+      &quot;description&quot;: &quot;Refused without starting anything. Controller-visible refusals: \&quot;this host already belongs to the selected pool\&quot;, \&quot;pool master must be fresh and active before a host can join\&quot;, \&quot;the joining host must be fresh and active\&quot;, \&quot;only the master of its own single-host pool can join another pool\&quot;, \&quot;joining a pool with managed VMs is not supported; migrate or remove workloads first\&quot;, \&quot;joining a pool with existing remote storage is not supported; detach it first\&quot;, \&quot;the joining host must belong to the same site as the target pool\&quot;, \&quot;pool request is already active\&quot;, \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. A refusal the master itself decided is relayed verbatim in the same shape. A failed master result that carries no message becomes \&quot;the pool master refused to issue a join invitation\&quot;, so a terse Core refusal is never an empty body.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
           },
           &quot;example&quot;: {
-            &quot;error&quot;: &quot;adding a host to a pool needs pool-join-v1 on both hosts; upgrade both hosts&quot;
+            &quot;error&quot;: &quot;the joining host must be fresh and active&quot;
           }
         }
       }
@@ -1292,12 +1282,12 @@
   }
 }</pre></details></section>
 <section id="setPoolMaintenance"><h2>POST <code>/api/v1/pools/{id}/members/{host_id}/maintenance</code></h2>
-<p>Drain a pool member, or take it out of maintenance</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable pool-maintenance command to the pool master, which owns the flag inside the membership record it already keeps; the Controller records no drain of its own and the command is never sent to the host being drained. Maintenance refuses new VM placement, definition and start admission on that host and skips it in autostart; it stops no running guest and never blocks stop, shutdown or force-stop, so there is nothing to confirm and no confirmation field. The refusals below are only what the Controller can already see from host reports: the master is fresh, active and advertises pool-maintenance-v1, it has reported a membership, the host is a non-ejected member of it, and expected_version matches what it last reported. Core checks every one of them again against its own record, and its refusals arrive as a failed operation with conflict marked in GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.</p>
+<p>Drain a pool member, or take it out of maintenance</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable pool-maintenance command to the pool master, which owns the flag inside the membership record it already keeps; the Controller records no drain of its own and the command is never sent to the host being drained. Maintenance refuses new VM placement, definition and start admission on that host and skips it in autostart; it stops no running guest and never blocks stop, shutdown or force-stop, so there is nothing to confirm and no confirmation field. The refusals below are only what the Controller can already see from host reports: the master is fresh and active, it has reported a membership, the host is a non-ejected member of it, and expected_version matches what it last reported. Core checks every one of them again against its own record, and its refusals arrive as a failed operation with conflict marked in GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;setPoolMaintenance&quot;,
   &quot;summary&quot;: &quot;Drain a pool member, or take it out of maintenance&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable pool-maintenance command to the pool master, which owns the flag inside the membership record it already keeps; the Controller records no drain of its own and the command is never sent to the host being drained. Maintenance refuses new VM placement, definition and start admission on that host and skips it in autostart; it stops no running guest and never blocks stop, shutdown or force-stop, so there is nothing to confirm and no confirmation field. The refusals below are only what the Controller can already see from host reports: the master is fresh, active and advertises pool-maintenance-v1, it has reported a membership, the host is a non-ejected member of it, and expected_version matches what it last reported. Core checks every one of them again against its own record, and its refusals arrive as a failed operation with conflict marked in GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Relays one durable pool-maintenance command to the pool master, which owns the flag inside the membership record it already keeps; the Controller records no drain of its own and the command is never sent to the host being drained. Maintenance refuses new VM placement, definition and start admission on that host and skips it in autostart; it stops no running guest and never blocks stop, shutdown or force-stop, so there is nothing to confirm and no confirmation field. The refusals below are only what the Controller can already see from host reports: the master is fresh and active, it has reported a membership, the host is a non-ejected member of it, and expected_version matches what it last reported. Core checks every one of them again against its own record, and its refusals arrive as a failed operation with conflict marked in GET /api/v1/pools/{id}/members, not as an HTTP status here. Implemented in development product 0.1.0.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -1398,7 +1388,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The Controller can already see that the master would refuse: \&quot;the pool master must be fresh and active to record maintenance\&quot;; \&quot;maintenance mode needs pool-maintenance-v1 on the pool master; upgrade the pool master\&quot;; \&quot;the pool master has not reported its membership; maintenance cannot be recorded yet\&quot;; \&quot;this host is not a member of the selected pool\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
+      &quot;description&quot;: &quot;The Controller can already see that the master would refuse: \&quot;the pool master must be fresh and active to record maintenance\&quot;; \&quot;the pool master has not reported its membership; maintenance cannot be recorded yet\&quot;; \&quot;this host is not a member of the selected pool\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -2671,12 +2661,12 @@
   &quot;x-audience&quot;: &quot;agent&quot;
 }</pre></details></section>
 <section id="registerAgentWitness"><h2>POST <code>/api/v1/agent/witness/register</code></h2>
-<p>Register a qdevice witness certificate</p><p>Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, a reported membership matching pool_id/master/fencing_generation, and pool-witness-v1. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.</p>
+<p>Register a qdevice witness certificate</p><p>Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, and a reported membership matching pool_id/master/fencing_generation. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;registerAgentWitness&quot;,
   &quot;summary&quot;: &quot;Register a qdevice witness certificate&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, a reported membership matching pool_id/master/fencing_generation, and pool-witness-v1. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.4.11. Outbound host mutual TLS authenticates an enrolled host. Requires a fresh current pool master, and a reported membership matching pool_id/master/fencing_generation. Controller validates the deterministic pool cluster name and signed CSR common name before native qnetd signing. Retries may replace the cluster certificate and return a fresh valid certificate under the current runtime CA; Core validates the returned CA fingerprint and native credentials before marking them ready. Controller stores no pool witness state.&quot;,
   &quot;tags&quot;: [
     &quot;Core agent \u2192 Controller&quot;
   ],
@@ -3331,7 +3321,7 @@
   ],
   &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;x-core-placement&quot;: &quot;Requires selected Core and current pool master to advertise pool-vm-placement-v1. Controller queues the unchanged command; Core makes the fresh placement decision. Missing capability returns 409 before queueing; preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.&quot;,
+  &quot;x-core-placement&quot;: &quot;Controller queues the unchanged command; Core makes the fresh placement decision. preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.&quot;,
   &quot;responses&quot;: {
     &quot;202&quot;: {
       &quot;description&quot;: &quot;Success&quot;,
@@ -4451,12 +4441,12 @@
   }
 }</pre></details></section>
 <section id="offerStorageCredentials"><h2>POST <code>/api/v1/storage/credentials</code></h2>
-<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. Domain and ssh_known_hosts are refused for backup purpose. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.</p>
+<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \ = , ; &#x27; &quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;offerStorageCredentials&quot;,
   &quot;summary&quot;: &quot;Deliver repository credentials to Core&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. Domain and ssh_known_hosts are refused for backup purpose. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \\ = , ; &#x27; \&quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -4509,6 +4499,9 @@
     },
     &quot;503&quot;: {
       &quot;description&quot;: &quot;Core did not acknowledge before offer expiry; delivery is unknown and must be reconciled with the same request ID.&quot;
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Pool not found.&quot;
     }
   }
 }</pre></details></section>
@@ -5006,12 +4999,12 @@
   }
 }</pre></details></section>
 <section id="removeNetworkRegistration"><h2>DELETE <code>/api/v1/networks/{id}</code></h2>
-<p>Remove a pool VLAN guest network</p><p>Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller&#x27;s own request row, audits network.discard and answers 200 {&quot;id&quot;, &quot;deleted&quot;: true} — a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 &quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it&quot;. Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.</p>
+<p>Remove a pool VLAN guest network</p><p>Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller&#x27;s own request row, audits network.discard and answers 200 {&quot;id&quot;, &quot;deleted&quot;: true} — a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 &quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it&quot;. Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;removeNetworkRegistration&quot;,
   &quot;summary&quot;: &quot;Remove a pool VLAN guest network&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Requires the pool master to advertise pool-resource-removal-v1. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller&#x27;s own request row, audits network.discard and answers 200 {\&quot;id\&quot;, \&quot;deleted\&quot;: true} \u2014 a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 \&quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\&quot;. Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.3.5, protocol v1. Administrator session, same HTTPS Origin and X-CSRF-Token required; JSON rejects unknown fields and bodies over 1 MiB. Controller only relays: the target host is always the pool master resolved from the pool record, so host_id is not accepted and a body carrying one is refused with 400 invalid JSON request. The pool master&#x27;s Core checks the expected generation, refuses while any VM on any host in the pool references the network (running or stopped) and while any ready member&#x27;s published VM inventory is stale, tears the guest bridge, its 802.1Q sub-interface when no other Nex stanza uses it and its /etc/network/interfaces.d stanza down, and journals a durable tombstone. Members converge on their next member pull pass, refusing locally while one of their own VMs uses the network. Only kind vlan networks are removable; a host-automatic bridge or libvirt network is refused with 409. 202 is acceptance, not teardown: the registration disappears from the library only when the master reports the tombstone. An identical request_id replays the same operation with 200; a different body under that request_id is 409. Two different answers share this route, decided by what the Controller already holds. On a registration whose operation failed and which no host reports as applied this is a local discard: it takes no body, relays nothing, deletes only the Controller&#x27;s own request row, audits network.discard and answers 200 {\&quot;id\&quot;, \&quot;deleted\&quot;: true} \u2014 a refused registration published nothing on any host, so there is nothing to ask a host to undo. A failed row whose resource a host has since reported as applied is refused with 409 \&quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\&quot;. Everything above describes the relayed pool-VLAN removal, which is unchanged for a registration the master reports as applied. PATCH is unchanged too: a failed request record cannot be renamed.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -5133,7 +5126,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict. A failed registration a host reports as applied is refused with \&quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\&quot;.&quot;,
+      &quot;description&quot;: &quot;No pool master, master stale, not a pool VLAN, stale expected_generation, or replay conflict. A failed registration a host reports as applied is refused with \&quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -5262,7 +5255,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;No pool master, master stale or lacking pool-resource-removal-v1, not a pool VLAN, stale expected_generation, or replay conflict.&quot;,
+      &quot;description&quot;: &quot;No pool master, master stale, not a pool VLAN, stale expected_generation, or replay conflict.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -6432,7 +6425,7 @@
   ],
   &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;x-core-placement&quot;: &quot;Requires the VM&#x27;s selected Core and current pool master to advertise pool-vm-placement-v1. Missing capability returns 409 before queueing. A media change that rewrites the durable definition is Core-mediated as vm-update and receives the same fail-closed master placement preflight; a tray reconnect that leaves the definition unchanged remains media owner admission.&quot;,
+  &quot;x-core-placement&quot;: &quot;A media change that rewrites the durable definition is Core-mediated as vm-update and receives the same fail-closed master placement preflight; a tray reconnect that leaves the definition unchanged remains media owner admission.&quot;,
   &quot;parameters&quot;: [
     {
       &quot;name&quot;: &quot;id&quot;,
@@ -6585,7 +6578,7 @@
   ],
   &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;x-core-placement&quot;: &quot;Requires selected Core and current pool master to advertise pool-vm-placement-v1. Controller queues the unchanged command; Core makes the fresh placement decision. Missing capability returns 409 before queueing; preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.&quot;,
+  &quot;x-core-placement&quot;: &quot;Controller queues the unchanged command; Core makes the fresh placement decision. preflight loss or refusal later fails the task closed. Same request_id and payload replay normally; changed payload conflicts.&quot;,
   &quot;parameters&quot;: [
     {
       &quot;name&quot;: &quot;id&quot;,
@@ -6966,12 +6959,12 @@
   }
 }</pre></details></section>
 <section id="deleteMedia"><h2>DELETE <code>/api/v1/media/{id}</code></h2>
-<p>Discard a failed ISO import, or remove an imported ISO</p><p>Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client&#x27;s bodyless call still gets the upgrade answer). 404 for an unknown id.</p>
+<p>Discard a failed ISO import, or remove an imported ISO</p><p>Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 400 when a succeeded import is removed without a body. 404 for an unknown id.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;deleteMedia&quot;,
   &quot;summary&quot;: &quot;Discard a failed ISO import, or remove an imported ISO&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 409 when the owning host does not advertise pool-resource-removal-v1 (checked before the body is read, so an older client&#x27;s bodyless call still gets the upgrade answer). 404 for an unknown id.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.2.8, protocol v1; the succeeded-import branch added in 0.3.5. Requires an administrator session, same Origin and X-CSRF-Token. For an iso-import whose operation is failed or needs_attention the call takes NO body and removes only this Controller&#x27;s library record and its own staging bytes, so a download that failed does not occupy the library forever with no way to clear it (BUG-0203); no Core command is issued, no host state is touched, and the discard is audited as media.discard. For a SUCCEEDED import the call now relays a media-remove command to the host that stores the ISO (the pool master for pool-shared media) and requires a body {request_id}; no pool_id, host_id or expected_generation is accepted, because the pool, owner and current generation all come from the host-reported record. Core unlinks the published file, refuses while any VM on any host in the pool has the ISO in a CD drive (running or stopped) and while member VM inventory is stale, and journals a durable tombstone that members converge to; the library row disappears only when the host reports that tombstone. Retrying a failed download is POST /api/v1/media/download again under a NEW request_id; there is no separate retry operation. 409 when the import is still queued or dispatched, 409 while another media transfer holds the staging lock, and 400 when a succeeded import is removed without a body. 404 for an unknown id.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -7074,7 +7067,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The import is still running, another media transfer holds the staging lock, the owning host does not support pool-resource-removal-v1, or the request_id replays a different payload.&quot;,
+      &quot;description&quot;: &quot;The import is still running, another media transfer holds the staging lock, or the request_id replays a different payload.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7549,7 +7542,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;The Controller can already see that Core would refuse: \&quot;the pool master must be fresh and active to change the pool master\&quot;; \&quot;changing the pool master needs pool-authority-transfer-v1 on the pool master, the selected host and every ready member; upgrade &lt;host&gt;\&quot;; \&quot;the pool master has not reported its membership; a master change cannot be started yet\&quot;; \&quot;this host is already the pool master\&quot;; \&quot;no such member of this pool\&quot;; \&quot;only a ready member with a peer endpoint can become the pool master\&quot;; \&quot;the selected host must be fresh and active to become the pool master\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;; \&quot;another pool authority transfer is already in progress on this pool\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
+      &quot;description&quot;: &quot;The Controller can already see that Core would refuse: \&quot;the pool master must be fresh and active to change the pool master\&quot;; \&quot;the pool master has not reported its membership; a master change cannot be started yet\&quot;; \&quot;this host is already the pool master\&quot;; \&quot;no such member of this pool\&quot;; \&quot;only a ready member with a peer endpoint can become the pool master\&quot;; \&quot;the selected host must be fresh and active to become the pool master\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;; \&quot;another pool authority transfer is already in progress on this pool\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7668,7 +7661,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;\&quot;the pool master must be fresh and active to cancel a master change\&quot;; \&quot;cancelling a master change needs pool-authority-transfer-v1 on the pool master; upgrade &lt;host&gt;\&quot;; \&quot;the pool master has not reported its membership; a master change cannot be cancelled yet\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
+      &quot;description&quot;: &quot;\&quot;the pool master must be fresh and active to cancel a master change\&quot;; \&quot;the pool master has not reported its membership; a master change cannot be cancelled yet\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7796,7 +7789,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;\&quot;the pool master must be fresh and active to eject a member\&quot;; \&quot;ejecting a member needs pool-authority-transfer-v1 on the pool master and every ready member; upgrade &lt;host&gt;\&quot;; \&quot;the pool master has not reported its membership; a member cannot be ejected yet\&quot;; \&quot;the pool master cannot be ejected; change the pool master first\&quot;; \&quot;no such member of this pool\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;; \&quot;another pool authority transfer is already in progress on this pool\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
+      &quot;description&quot;: &quot;\&quot;the pool master must be fresh and active to eject a member\&quot;; \&quot;the pool master has not reported its membership; a member cannot be ejected yet\&quot;; \&quot;the pool master cannot be ejected; change the pool master first\&quot;; \&quot;no such member of this pool\&quot;; \&quot;the pool master reports membership generation &lt;n&gt;; reload the pool and retry\&quot;; \&quot;another pool authority transfer is already in progress on this pool\&quot;. Also the shared idempotency refusals \&quot;request_id already used with another payload\&quot; and \&quot;request_id already used for another operation\&quot;. Nothing was queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7905,7 +7898,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without asking anything: \&quot;this host is already the pool master\&quot;, \&quot;the promotion candidate must be fresh and active to answer a preflight\&quot; (the candidate, not the master), \&quot;a fence-verified promotion needs pool-authority-transfer-v1 on the promotion candidate; upgrade &lt;host&gt;\&quot;, \&quot;pool request is already active\&quot;. Core&#x27;s own sentence is relayed verbatim when the candidate answers failed; a failure with no text becomes \&quot;the promotion candidate could not compute a promotion verdict\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without asking anything: \&quot;this host is already the pool master\&quot;, \&quot;the promotion candidate must be fresh and active to answer a preflight\&quot; (the candidate, not the master), \&quot;pool request is already active\&quot;. Core&#x27;s own sentence is relayed verbatim when the candidate answers failed; a failure with no text becomes \&quot;the promotion candidate could not compute a promotion verdict\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8054,7 +8047,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used with another payload\&quot;, \&quot;request_id already used for another operation\&quot;, \&quot;this host is already the pool master\&quot;, \&quot;the promotion candidate must be fresh and active to be promoted\&quot;, \&quot;a fence-verified promotion needs pool-authority-transfer-v1 on the promotion candidate; upgrade &lt;host&gt;\&quot;, \&quot;the promotion candidate has not reported its pool membership; it cannot be promoted yet\&quot;, \&quot;only a ready member of this pool can be promoted\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used with another payload\&quot;, \&quot;request_id already used for another operation\&quot;, \&quot;this host is already the pool master\&quot;, \&quot;the promotion candidate must be fresh and active to be promoted\&quot;, \&quot;the promotion candidate has not reported its pool membership; it cannot be promoted yet\&quot;, \&quot;only a ready member of this pool can be promoted\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8192,7 +8185,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used with another payload\&quot;, \&quot;request_id already used for another operation\&quot;, \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;recording a fence profile needs pool-authority-transfer-v1 on the pool master; upgrade &lt;host&gt;\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;, \&quot;credential request is already active\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used with another payload\&quot;, \&quot;request_id already used for another operation\&quot;, \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;, \&quot;credential request is already active\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8224,7 +8217,7 @@
   }
 }</pre></details></section>
 <section id="probePoolBMC"><h2>POST <code>/api/v1/pools/{id}/members/{host_id}/bmc-probe</code></h2>
-<p>Detect how a member&#x27;s management controller answers</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself — HTTPS Redfish and IPMI RMCP+ — from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile&#x27;s gates: a fresh pool master with pool-authority-transfer-v1 whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.</p>
+<p>Detect how a member&#x27;s management controller answers</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself — HTTPS Redfish and IPMI RMCP+ — from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile&#x27;s gates: a fresh pool master whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;tags&quot;: [
@@ -8239,7 +8232,7 @@
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;operationId&quot;: &quot;probePoolBMC&quot;,
   &quot;summary&quot;: &quot;Detect how a member&#x27;s management controller answers&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself \u2014 HTTPS Redfish and IPMI RMCP+ \u2014 from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile&#x27;s gates: a fresh pool master with pool-authority-transfer-v1 whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. One brokered report round trip to the pool master (pool request action bmc-probe), which probes the address itself \u2014 HTTPS Redfish and IPMI RMCP+ \u2014 from the host that would fence, and recommends a kind and system Id or plug. It takes the fence profile&#x27;s gates: a fresh pool master whose reported membership includes the host. An optional password uses the one-time handoff with a probe-only bmc_probe purpose. Core removes both private credential copies after execution and expires an undelivered handoff after 10 minutes on its local probe tick or next startup. No discovery result or pool setting is stored, journalled or audited and no command is issued, so Detect is safe to repeat with a new request_id; recording the result is Set BMC access (POST .../fence-profile), which proves the controller again. The relay waits up to 3 minutes, because Core gives a probe up to 2 minutes and answers on its next report.&quot;,
   &quot;parameters&quot;: [
     {
       &quot;name&quot;: &quot;id&quot;,
@@ -8330,7 +8323,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without asking anything: \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;recording a fence profile needs pool-authority-transfer-v1 on the pool master; upgrade &lt;host&gt;\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;, \&quot;request_id already used with another credential payload\&quot;, \&quot;pool request is already active\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without asking anything: \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;, \&quot;request_id already used with another credential payload\&quot;, \&quot;pool request is already active\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8710,7 +8703,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used for another operation\&quot;, \&quot;request_id already used with another payload\&quot;, \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;recording a fence profile needs pool-authority-transfer-v1 on the pool master; upgrade &lt;host&gt;\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used for another operation\&quot;, \&quot;request_id already used with another payload\&quot;, \&quot;the pool master must be fresh and active to record a fence profile\&quot;, \&quot;the pool master has not reported its membership; a fence profile cannot be recorded yet\&quot;, \&quot;no such member of this pool\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -8732,7 +8725,7 @@
   }
 }</pre></details></section>
 <section id="setPoolHostFencing"><h2>POST <code>/api/v1/pools/{id}/host-fencing</code></h2>
-<p>Turn this pool&#x27;s host fencing on or off</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does, plus pool-host-fencing-v1 on the master. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself — Nex Core arms a host&#x27;s watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master&#x27;s membership and a fresh Controller recovers it from the master&#x27;s reported inventory. Implemented in development product 0.4.2.</p>
+<p>Turn this pool&#x27;s host fencing on or off</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself — Nex Core arms a host&#x27;s watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master&#x27;s membership and a fresh Controller recovers it from the master&#x27;s reported inventory. Implemented in development product 0.4.2.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;tags&quot;: [
@@ -8747,7 +8740,7 @@
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;operationId&quot;: &quot;setPoolHostFencing&quot;,
   &quot;summary&quot;: &quot;Turn this pool&#x27;s host fencing on or off&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does, plus pool-host-fencing-v1 on the master. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself \u2014 Nex Core arms a host&#x27;s watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master&#x27;s membership and a fresh Controller recovers it from the master&#x27;s reported inventory. Implemented in development product 0.4.2.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Host fencing is one pool-wide setting in the durable membership record the pool master owns, so this is relayed to the master and takes the same freshness check a fence profile does. One durable pool-host-fencing command is journaled for the master, which records the setting and replicates it with the pool&#x27;s records; every host reads it from the copy it already holds. It is a desired state, not a transition: re-sending the state the master already records answers succeeded. Turning it on arms nothing by itself \u2014 Nex Core arms a host&#x27;s watchdog only where every prerequisite the master reports in PoolFenceSummary.prerequisites holds, and until this pool runs a quorum service the quorum line is unknown and nothing is armed. It is on for a pool that has never been told otherwise. Nex Controller stores nothing of its own: the setting lives in the master&#x27;s membership and a fresh Controller recovers it from the master&#x27;s reported inventory. Implemented in development product 0.4.2.&quot;,
   &quot;parameters&quot;: [
     {
       &quot;name&quot;: &quot;id&quot;,
@@ -8839,7 +8832,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used for another operation\&quot;, \&quot;request_id already used with another payload\&quot;, \&quot;the pool master must be fresh and active to change host fencing\&quot;, \&quot;changing host fencing needs pool-host-fencing-v1 on the pool master; upgrade &lt;host&gt;\&quot;.&quot;,
+      &quot;description&quot;: &quot;Refused without queueing anything: \&quot;request_id already used for another operation\&quot;, \&quot;request_id already used with another payload\&quot;, \&quot;the pool master must be fresh and active to change host fencing\&quot;.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -9725,7 +9718,7 @@
             &quot;id&quot;: {
               &quot;type&quot;: &quot;string&quot;,
               &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
-              &quot;description&quot;: &quot;Optional repository ID; Controller mints one when omitted.&quot;
+              &quot;description&quot;: &quot;Repository ID. Required for smb3, s3 and sftp because the credential receipt is bound to it; Controller mints one for NFS when omitted.&quot;
             },
             &quot;name&quot;: {
               &quot;type&quot;: &quot;string&quot;
@@ -10026,12 +10019,12 @@
   }
 }</pre></details></section>
 <section id="listBackupCatalog"><h2>GET <code>/api/v1/pools/{id}/backup-catalog</code></h2>
-<p>List pool backup recovery points</p><p>With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.</p>
+<p>List pool backup recovery points</p><p>With a fresh current pool master, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; total counts the records matching the active filters, while summary counts cover the full retained history. An unavailable or stale master never implies an empty history.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listBackupCatalog&quot;,
   &quot;summary&quot;: &quot;List pool backup recovery points&quot;,
-  &quot;description&quot;: &quot;With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.&quot;,
+  &quot;description&quot;: &quot;With a fresh current pool master, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; total counts the records matching the active filters, while summary counts cover the full retained history. An unavailable or stale master never implies an empty history.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -10105,21 +10098,11 @@
   ],
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Core-owned page for a fresh capable master, or complete legacy array from an older Core.&quot;,
+      &quot;description&quot;: &quot;Core-owned page from the fresh current master.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
-            &quot;oneOf&quot;: [
-              {
-                &quot;$ref&quot;: &quot;#/components/schemas/BackupCatalogPage&quot;
-              },
-              {
-                &quot;type&quot;: &quot;array&quot;,
-                &quot;items&quot;: {
-                  &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;
-                }
-              }
-            ]
+            &quot;$ref&quot;: &quot;#/components/schemas/BackupCatalogPage&quot;
           }
         }
       }
@@ -10145,7 +10128,7 @@
       }
     },
     &quot;503&quot;: {
-      &quot;description&quot;: &quot;Pool master or its backup history is unavailable; the read-only channel may not have opened yet.&quot;,
+      &quot;description&quot;: &quot;Pool master is unavailable, stale or no longer master, its backup history is unreadable, or the read-only channel has not opened yet.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10165,7 +10148,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Current master is stale, or retained history changed; restart from the first page.&quot;,
+      &quot;description&quot;: &quot;Retained history changed between pages; restart from the first page.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10203,6 +10186,16 @@
           }
         }
       }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Pool not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   },
   &quot;x-core-channel&quot;: {
@@ -10221,12 +10214,12 @@
   }
 }</pre></details></section>
 <section id="listBackupRuns"><h2>GET <code>/api/v1/pools/{id}/backup-runs</code></h2>
-<p>List pool backup runs</p><p>With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.</p>
+<p>List pool backup runs</p><p>With a fresh current pool master, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; total counts the records matching the active filters, while summary counts cover the full retained history. An unavailable or stale master never implies an empty history.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listBackupRuns&quot;,
   &quot;summary&quot;: &quot;List pool backup runs&quot;,
-  &quot;description&quot;: &quot;With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.&quot;,
+  &quot;description&quot;: &quot;With a fresh current pool master, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; total counts the records matching the active filters, while summary counts cover the full retained history. An unavailable or stale master never implies an empty history.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -10280,21 +10273,11 @@
   ],
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Core-owned page for a fresh capable master, or complete legacy array from an older Core.&quot;,
+      &quot;description&quot;: &quot;Core-owned page from the fresh current master.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
-            &quot;oneOf&quot;: [
-              {
-                &quot;$ref&quot;: &quot;#/components/schemas/BackupRunPage&quot;
-              },
-              {
-                &quot;type&quot;: &quot;array&quot;,
-                &quot;items&quot;: {
-                  &quot;$ref&quot;: &quot;#/components/schemas/BackupRun&quot;
-                }
-              }
-            ]
+            &quot;$ref&quot;: &quot;#/components/schemas/BackupRunPage&quot;
           }
         }
       }
@@ -10320,7 +10303,7 @@
       }
     },
     &quot;503&quot;: {
-      &quot;description&quot;: &quot;Pool master or its backup history is unavailable; the read-only channel may not have opened yet.&quot;,
+      &quot;description&quot;: &quot;Pool master is unavailable, stale or no longer master, its backup history is unreadable, or the read-only channel has not opened yet.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10340,7 +10323,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Current master is stale, or retained history changed; restart from the first page.&quot;,
+      &quot;description&quot;: &quot;Retained history changed between pages; restart from the first page.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10371,6 +10354,16 @@
     },
     &quot;504&quot;: {
       &quot;description&quot;: &quot;Pool master did not answer the page query in time.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Pool not found.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10828,7 +10821,7 @@
   }
 }</pre></details></section>
 <section id="updateBackupPolicy"><h2>PUT <code>/api/v1/pools/{id}/backup-policies/{policy_id}</code></h2>
-<p>Update a backup policy</p><p>Queues a policy update for the pool master using a positive expected_revision. Missing or zero is an invalid request (400). A stale revision is refused by Core on the queued operation; inspect its result. Exact request replay returns the original operation. Older Controllers without the field fail closed.</p>
+<p>Update a backup policy</p><p>Queues a policy update for the pool master using a positive expected_revision. Missing or zero is an invalid request (400). A stale revision is refused by Core on the queued operation; inspect its result. Exact request replay returns the original operation.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;updateBackupPolicy&quot;,
@@ -10933,9 +10926,29 @@
           }
         }
       }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Pool not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   },
-  &quot;description&quot;: &quot;Queues a policy update for the pool master using a positive expected_revision. Missing or zero is an invalid request (400). A stale revision is refused by Core on the queued operation; inspect its result. Exact request replay returns the original operation. Older Controllers without the field fail closed.&quot;
+  &quot;description&quot;: &quot;Queues a policy update for the pool master using a positive expected_revision. Missing or zero is an invalid request (400). A stale revision is refused by Core on the queued operation; inspect its result. Exact request replay returns the original operation.&quot;
 }</pre></details></section>
 <section id="pauseBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/pause</code></h2>
 <p>Pause or resume a backup policy</p><p>Pause or resume a backup policy</p>
@@ -12690,7 +12703,7 @@
       &quot;items&quot;: {
         &quot;type&quot;: &quot;string&quot;
       },
-      &quot;description&quot;: &quot;Last accepted sequenced report capabilities; managed-vm-v1 is required for new managed-VM work and pool-vm-placement-v1 is required on both a selected host and its pool master before Controller queues a VM definition transition. Host connectivity freshness is checked separately.&quot;
+      &quot;description&quot;: &quot;Last accepted sequenced report capabilities; managed-vm-v1 is required for new managed-VM work. Host connectivity freshness is checked separately.&quot;
     }
   },
   &quot;required&quot;: [
@@ -14027,7 +14040,7 @@
         &quot;x-max-utf8-bytes&quot;: 100
       },
       &quot;maxItems&quot;: 64,
-      &quot;description&quot;: &quot;Advertised on every report. managed-vm-v1 enables managed command delivery. pool-vm-placement-v1 means Core supports the fail-closed master-owned placement preflight for VM definition transitions. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields. backup-inventory-pages-v1 offers Core-owned bounded run/catalog pages over the enrolled reverse channel; Controller acknowledges it with backup_inventory_pages before Core considers paged history available. Compact reports leave backup_runs and backup_catalog unreported.&quot;
+      &quot;description&quot;: &quot;Advertised on every report. managed-vm-v1 enables managed command delivery. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields.&quot;
     },
     &quot;storage_discoveries&quot;: {
       &quot;type&quot;: [
@@ -14058,7 +14071,7 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolResult&quot;
       },
       &quot;maxItems&quot;: 32,
-      &quot;description&quot;: &quot;Answers to the pool_requests this host received on an earlier report response, sent by a Core advertising pool-join-v1. More than 32 results is a malformed report (400). The Controller matches each result to its one pending in-memory request and keeps nothing afterwards.&quot;
+      &quot;description&quot;: &quot;Answers to the pool_requests this host received on an earlier report response. More than 32 results is a malformed report (400). The Controller matches each result to its one pending in-memory request and keeps nothing afterwards.&quot;
     }
   },
   &quot;required&quot;: [
@@ -14180,18 +14193,7 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/PoolRequest&quot;
       },
-      &quot;description&quot;: &quot;One-shot addressed pool requests for a Core reporting protocol v2 and pool-join-v1. Delivered once and never journaled; the Controller takes each pending request out of its bounded in-memory broker as it sends it, so a lost response simply expires and the operator retries.&quot;
-    },
-    &quot;backup_support&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;$ref&quot;: &quot;#/components/schemas/BackupSupport&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ],
-      &quot;description&quot;: &quot;Controller acknowledgement of backup-v1 after a protocol-v2 Core offers the capability; Core withholds backup inventory until acknowledged.&quot;
+      &quot;description&quot;: &quot;One-shot addressed pool requests for a Core reporting protocol v2. Delivered once and never journaled; the Controller takes each pending request out of its bounded in-memory broker as it sends it, so a lost response simply expires and the operator retries.&quot;
     },
     &quot;iso_download_progress&quot;: {
       &quot;anyOf&quot;: [
@@ -14214,28 +14216,6 @@
         }
       ],
       &quot;description&quot;: &quot;True only in a v2 response to a Core offering detected-os-v1. Core withholds ManagedState.detected_os until acknowledged; startup and re-enrollment clear readiness without erasing retained history.&quot;
-    },
-    &quot;backup_inventory_pages&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;type&quot;: &quot;boolean&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ],
-      &quot;description&quot;: &quot;True only after a protocol-v2 Core offers backup-inventory-pages-v1. Core then omits bulk backup runs/catalog from normal reports and serves pages over the enrolled read-only channel.&quot;
-    },
-    &quot;pool_membership_hostname&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;type&quot;: &quot;boolean&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ],
-      &quot;description&quot;: &quot;Explicit Controller acknowledgement of pool-membership-hostname-v1 on a v2 report. Core omits PoolMember.hostname from reports to older Controllers until acknowledged; resets on Controller replacement.&quot;
     }
   },
   &quot;required&quot;: [
@@ -17018,7 +16998,7 @@
     },
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL.&quot;
+      &quot;description&quot;: &quot;Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. At most 200 UTF-8 bytes of printable characters.&quot;
     },
     &quot;certificate_sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
@@ -17069,7 +17049,7 @@
     &quot;replica_error&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
-      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\&quot;, \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
+      &quot;description&quot;: &quot;The master&#x27;s bounded reason for the last failed push to this member: \&quot;pool member did not report its authority replica\&quot;, \&quot;pool member did not acknowledge the authority replica\&quot;, \&quot;pool member acknowledged the replica without joining the authority sanlock lockspace\&quot;, \&quot;pool member acknowledged the replica without the Corosync key\&quot;, \&quot;pool member refused the authority replica\&quot; or the member&#x27;s own refusal text, \&quot;pool authority replica exceeds the peer body limit\&quot;, or \&quot;pool member peer certificate cannot receive a wrapped pool CA key\&quot;, \&quot;pool member did not report backup authority page progress\&quot;, \&quot;pool member reported invalid backup authority page progress\&quot;, \&quot;pool member refused backup authority page reuse\&quot;, \&quot;pool member refused a backup authority page\&quot;, or a refusal to report/stage a signed backup authority page.&quot;
     },
     &quot;replica_observed_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -17414,18 +17394,6 @@
       &quot;type&quot;: &quot;boolean&quot;,
       &quot;description&quot;: &quot;True only while master_connection is fresh. When false, every observational master-reported field \u2014 status, error, checks, access counts, failures, maintenance and maintenance_since \u2014 is blank, null or unknown and must be presented as unknown rather than as the last known good state. peer_origin, the member&#x27;s own reported join, its guests and the Controller&#x27;s own last_maintenance are not master observations and are still reported.&quot;
     },
-    &quot;maintenance_supported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;The pool master advertises pool-maintenance-v1. False means no maintenance control may be offered at all, because the refusal that makes the flag mean anything lives in the master.&quot;
-    },
-    &quot;replica_supported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;The pool master advertises pool-authority-replica-v2. False means no member can hold a replica and every member row reports state unsupported.&quot;
-    },
-    &quot;transfer_supported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;The pool master advertises pool-authority-transfer-v1. False means no master change and no eject is offered at all; the selected host&#x27;s own capability is checked by the route.&quot;
-    },
     &quot;authority&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -17500,10 +17468,6 @@
         &quot;$ref&quot;: &quot;#/components/schemas/PoolMemberView&quot;
       }
     },
-    &quot;host_fencing_supported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;The pool master advertises pool-host-fencing-v1. Without it there is no Host fencing switch, because the setting that means anything is the master&#x27;s.&quot;
-    },
     &quot;fence&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -17524,9 +17488,6 @@
     &quot;master_seen_at&quot;,
     &quot;generation&quot;,
     &quot;authoritative&quot;,
-    &quot;maintenance_supported&quot;,
-    &quot;replica_supported&quot;,
-    &quot;transfer_supported&quot;,
     &quot;authority&quot;,
     &quot;transfer&quot;,
     &quot;last_transfer&quot;,
@@ -17534,7 +17495,6 @@
     &quot;promotion&quot;,
     &quot;last_promotion&quot;,
     &quot;members&quot;,
-    &quot;host_fencing_supported&quot;,
     &quot;fence&quot;
   ]
 }</pre></details>
@@ -17667,10 +17627,6 @@
       ],
       &quot;description&quot;: &quot;This host&#x27;s own report of the master change or eject it is part of, with role source, target or ejected. null whenever the host is not reporting now: a participant whose row is null while connection is not fresh is unknown, not finished.&quot;
     },
-    &quot;transfer_supported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;This member&#x27;s own advertised pool-authority-transfer-v1, so a promotion or master change whose target could not perform one is not offered at all. A host that is not reporting keeps its last advertised list, as everywhere else.&quot;
-    },
     &quot;fence&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -17713,7 +17669,6 @@
     &quot;guests&quot;,
     &quot;last_maintenance&quot;,
     &quot;transfer&quot;,
-    &quot;transfer_supported&quot;,
     &quot;fence&quot;,
     &quot;restricted&quot;
   ]
@@ -17960,7 +17915,7 @@
     &quot;action&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolRequest&quot;,
-  &quot;description&quot;: &quot;Transient Controller-to-master request carried in one report response, in the shape storage_clusters already uses. Sent only to a Core that reports protocol v2 and pool-join-v1, and only when host_id is that reporting host. The master answers on its next report and the Controller keeps nothing afterwards.&quot;
+  &quot;description&quot;: &quot;Transient Controller-to-master request carried in one report response, in the shape storage_clusters already uses. Sent only to a Core that reports protocol v2, and only when host_id is that reporting host. The master answers on its next report and the Controller keeps nothing afterwards.&quot;
 }</pre></details>
 <details id="PoolJoinInvitation"><summary>PoolJoinInvitation</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -19071,6 +19026,28 @@
     &quot;credentials&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/StorageCredentials&quot;,
       &quot;description&quot;: &quot;Transient material. Backup purpose accepts username plus secret for SMB3/S3, or username plus ssh_private_key for SFTP; no domain or ssh_known_hosts.&quot;
+    },
+    &quot;repository&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;description&quot;: &quot;Required for a backup-purpose offer: the destination the registration will submit. Controller refuses (400) a destination Core would refuse before offering the secret.&quot;,
+      &quot;required&quot;: [
+        &quot;name&quot;
+      ],
+      &quot;properties&quot;: {
+        &quot;name&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;smb_source&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/SMBStorageSource&quot;
+        },
+        &quot;s3_source&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupS3Source&quot;
+        },
+        &quot;sftp_source&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/BackupSFTPSource&quot;
+        }
+      },
+      &quot;additionalProperties&quot;: false
     }
   },
   &quot;required&quot;: [
@@ -19557,36 +19534,6 @@
     &quot;backup_repositories_reported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
       &quot;description&quot;: &quot;True only when the master successfully loaded and reported the repository list; false or omitted is unknown, not empty.&quot;
-    },
-    &quot;backup_catalog&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;$ref&quot;: &quot;#/components/schemas/BackupRecoveryPoint&quot;
-      },
-      &quot;maxItems&quot;: 10000,
-      &quot;description&quot;: &quot;Legacy complete master-reported backup history. A Core using backup-inventory-pages-v1 omits this array from compact reports; query the current master for bounded pages.&quot;
-    },
-    &quot;backup_catalog_reported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;True only for a complete legacy array. False or omitted is unknown, including compact reports using backup-inventory-pages-v1; it never means an empty history.&quot;
-    },
-    &quot;backup_runs&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;$ref&quot;: &quot;#/components/schemas/BackupRun&quot;
-      },
-      &quot;maxItems&quot;: 30000,
-      &quot;description&quot;: &quot;Legacy complete master-reported backup history. A Core using backup-inventory-pages-v1 omits this array from compact reports; query the current master for bounded pages.&quot;
-    },
-    &quot;backup_runs_reported&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;True only for a complete legacy array. False or omitted is unknown, including compact reports using backup-inventory-pages-v1; it never means an empty history.&quot;
     },
     &quot;backup_policies&quot;: {
       &quot;type&quot;: [
@@ -20755,10 +20702,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
       &quot;description&quot;: &quot;Bounded refusal reason; control characters collapse the whole message to \&quot;pool authority replica refused\&quot;.&quot;
-    },
-    &quot;backup_page_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Maximum backup authority page format this member acknowledges; 2 enables version-2 manifests.&quot;
     }
   },
   &quot;required&quot;: [
@@ -20800,15 +20743,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;maxLength&quot;: 200,
       &quot;description&quot;: &quot;The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it. Includes \&quot;pool member refused backup authority page reuse\&quot; when a reusable blob cannot be safely staged.&quot;
-    },
-    &quot;backup_page_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Maximum backup authority page format this member reports; a fresh value of 2 is required before master backup authority may grow beyond version-0 bounds.&quot;
-    },
-    &quot;membership_hostname_version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0,
-      &quot;description&quot;: &quot;Authenticated peer GET /api/v1/pool/replica reports 1 when this Core can verify signed membership containing PoolMember.hostname. Absent/0 is an older peer; the master defers name writes until every ready member reports support. This field is not sent in Controller inventory preflight.&quot;
     }
   },
   &quot;required&quot;: [
@@ -20974,7 +20908,6 @@
       &quot;type&quot;: &quot;string&quot;,
       &quot;enum&quot;: [
         &quot;unknown&quot;,
-        &quot;unsupported&quot;,
         &quot;refused&quot;,
         &quot;awaiting&quot;,
         &quot;unverified&quot;,
@@ -20982,7 +20915,7 @@
         &quot;behind&quot;,
         &quot;current&quot;
       ],
-      &quot;description&quot;: &quot;First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now, and freshness deliberately outranks capability, because a stale host&#x27;s capability list is a memory too); unsupported when the master or this member does not advertise pool-authority-replica-v2; refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master&#x27;s observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master&#x27;s reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master&#x27;s authority record can itself be an older report than a member&#x27;s. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves \u2014 unsupported, refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member&#x27;s own copy cannot stand in for it.&quot;
+      &quot;description&quot;: &quot;First match wins, in this order: unknown when the master is not fresh or this member is not fresh (a replica that was current an hour ago is not current now); refused when either side reports an error; awaiting when both generations are 0; unverified when the member holds a replica it has not proven; behind when the two generations disagree, the pool master reports an authority generation one of them is below, or another fresh member of this pool is acknowledged at a strictly higher generation; current otherwise. behind with generation above acknowledged_generation means the master&#x27;s observation lags, not the member: both numbers are shown because the single word cannot say which side is stale. The pool master&#x27;s reported authority generation is the absolute reference this ladder gained with the master change slice; the peer comparison stays, because the master&#x27;s authority record can itself be an older report than a member&#x27;s. When authority is null the ladder behaves exactly as it did before. Without a fresh master the ladder stops at what the member alone proves \u2014 refused, unverified, awaiting, otherwise unknown: current and behind are claims about a number only the master reports, and a member&#x27;s own copy cannot stand in for it.&quot;
     }
   },
   &quot;required&quot;: [
@@ -24531,10 +24464,6 @@
         }
       ]
     },
-    &quot;generation&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;minimum&quot;: 0
-    },
     &quot;mount_path&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
@@ -24672,6 +24601,10 @@
     },
     &quot;protected&quot;: {
       &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Policy that created the point; retention prunes only that policy&#x27;s points. Empty for manual backups.&quot;
     },
     &quot;last_test_result&quot;: {
       &quot;type&quot;: &quot;string&quot;,
@@ -25132,6 +25065,10 @@
     &quot;source_vm_name&quot;: {
       &quot;type&quot;: &quot;string&quot;
     },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Creating policy; empty for manual backups.&quot;
+    },
     &quot;captured_at&quot;: {
       &quot;type&quot;: &quot;string&quot;,
       &quot;format&quot;: &quot;date-time&quot;
@@ -25211,6 +25148,10 @@
         &quot;crash&quot;,
         &quot;quiesced&quot;
       ]
+    },
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Creating policy, set by the scheduler; empty for manual backups.&quot;
     }
   },
   &quot;required&quot;: [
@@ -25702,21 +25643,6 @@
   &quot;required&quot;: [],
   &quot;additionalProperties&quot;: false
 }</pre></details>
-<details id="BackupSupport"><summary>BackupSupport</summary><pre>{
-  &quot;type&quot;: &quot;object&quot;,
-  &quot;properties&quot;: {
-    &quot;capability&quot;: {
-      &quot;type&quot;: &quot;string&quot;,
-      &quot;enum&quot;: [
-        &quot;backup-v1&quot;
-      ]
-    }
-  },
-  &quot;required&quot;: [
-    &quot;capability&quot;
-  ],
-  &quot;x-go-type&quot;: &quot;protocol.BackupSupport&quot;
-}</pre></details>
 <details id="BackupMetadataReceipt"><summary>BackupMetadataReceipt</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;description&quot;: &quot;Durable outcome of one Core-owned backup metadata mutation, retained for exact replay after master promotion.&quot;,
@@ -25913,6 +25839,10 @@
     },
     &quot;prefix&quot;: {
       &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;region&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Signing region; empty means us-east-1.&quot;
     }
   },
   &quot;required&quot;: [

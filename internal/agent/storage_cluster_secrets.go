@@ -138,11 +138,16 @@ func clusterSecretDir(s *Store) (string, error) {
 }
 
 func clusterSecretKey(s *Store) ([]byte, error) {
+	return clusterKeyFile(s, "receipt-key")
+}
+
+// clusterKeyFile returns the random 32-byte key stored privately under name, creating it once.
+func clusterKeyFile(s *Store, name string) ([]byte, error) {
 	dir, err := clusterSecretDir(s)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "receipt-key")
+	path := filepath.Join(dir, name)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 			return nil, errors.New("cluster receipt key must be private")

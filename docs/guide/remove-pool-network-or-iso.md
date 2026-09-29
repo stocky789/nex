@@ -24,9 +24,7 @@ Limits in this build:
 
 - An administrator session in Nex Controller (the browser needs its session and CSRF token; both
   are handled by the UI). Every removal and rename is audited.
-- The pool master must be **freshly connected** and report the `pool-resource-removal-v1`
-  capability. An older master leaves the buttons disabled with *"This Nex Core cannot remove pool
-  networks or ISOs yet; upgrade Nex Core."*
+- The pool master must be **freshly connected**.
 - No VM in the pool, on any host, may still use the resource — **including a shut-off VM**. A VM
   definition that names the network on a NIC, or the ISO in either CD drive, is enough to refuse
   the removal. Detach or eject it in each VM first (see
@@ -134,9 +132,7 @@ disks are never touched by either operation.
   or reload the page;
   *Wait for Nex Core to confirm this resource before changing it.* — the registration or import has
   not succeeded yet; *The pool master is not freshly connected. Reconnect it before changing this
-  pool resource.* — see [Set up Nex Controller and enroll a host](manage-controller.md); *This Nex
-  Core cannot remove pool networks or ISOs yet; upgrade Nex Core.* — the master is older than this
-  feature ([Check and apply software updates](software-updates.md)); *A request for this resource
+  pool resource.* — see [Set up Nex Controller and enroll a host](manage-controller.md); *A request for this resource
   is already in flight. Wait for Nex Core to report its result.*
 - **A host row shows no buttons, only "Host network · created and managed on `<host>`".** That
   network was created by the host itself, not as a pool VLAN, and cannot be removed here. Removing

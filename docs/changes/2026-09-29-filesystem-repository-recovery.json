@@ -1,0 +1,46 @@
+{
+  "summary": "Keep the pool's SMB share identity through promotion and member adoption, claim an SMB repository only after its marker matches and inside new-mount rollback, mount SMB backup repositories nosuid,nodev,noexec, and make the NFS/SMB backend hide and later finish interrupted deletions, clear aborted staging and crash leftovers, and report aborted points as absent. API impact: none.",
+  "paths": [
+    "internal/agent/backup_repository_storage.go",
+    "internal/agent/backup_repository_storage_test.go",
+    "internal/agent/backup_repository_smb_test.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_authority_transfer.go",
+    "internal/agent/backup.go",
+    "internal/agent/run.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/vmhost/managed_backup.go",
+    "internal/vmhost/managed_backup_smb.go",
+    "internal/vmhost/managed_backup_test.go",
+    "internal/vmhost/storage_mounts.go",
+    "internal/vmhost/storage_mounts_test.go",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/catalog-rebuild.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-filesystem-repository-recovery.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators now see prune name an unexpected point entry, file-manager litter is removed by Core, and NFS/SMB3 catalog rebuild no longer waits for an interrupted prune.",
+    "pages": ["docs/guide/backup-repositories.md", "docs/guide/catalog-rebuild.md"]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "The peer SMB request already carries the expected identity; Core now passes it into its own preparation. No route, payload, permission or result change between Controller and Core.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects the current destination safety and recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. The replicated repository row on the pool master keeps its SMB share marker identity through promotion; filesystem delete intents in the repository are now removed once the master's catalog entry is gone. A fresh Controller adopts the master's authenticated inventory as before."
+  },
+  "verification": {
+    "method": "New vmhost and agent tests failed red through go test -overlay with the prior ordering or behaviour (owner claimed on a share with another marker; new SMB unit left after a failed publication probe; stale probe directory kept; promotion prepared without the pool marker; half-deleted point readable and scanned; interrupted deletion never finished; .DS_Store blocked delete; aborted point reported as not a directory; abort refused its own staging) and pass after the fix. Focused vmhost backup/storage tests and agent backup/repository tests passed apart from failures in other batches' in-progress files.",
+    "evidence": ["internal/vmhost/managed_backup_test.go", "internal/vmhost/storage_mounts_test.go", "internal/agent/backup_repository_storage_test.go", "internal/agent/backup_repository_smb_test.go", "docs/BUG_LEDGER.md"],
+    "limits": "Unit fixtures only; no real CIFS/NFS mount, promotion lab or NAS. Existing lab SMB backup units written without nosuid,nodev,noexec must be detached before re-preparation. NFS backup mounts gained the same options later (BUG-0724, nfs-backup-mount-options). Forge CI remains open."
+  }
+}

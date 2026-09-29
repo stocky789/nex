@@ -490,7 +490,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if v.Inventory != nil && v.Inventory.Managed != nil {
 		managed := v.Inventory.Managed
 		if managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
-			managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+			managed.BackupRepositoriesReported ||
 			managed.BackupPoliciesReported {
 			if managed.Membership == nil || managed.Membership.Valid() != nil || managed.Membership.MasterHostID != host {
 				fail(w, 400, "snapshot authority must be reported by the pool master")
@@ -559,17 +559,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	// A v2 Core asks for this acknowledgement before it advertises the repository
 	// capability. v1 peers receive their original response shape unchanged.
 	if v.Version == protocol.Version {
-		if slices.Contains(v.Capabilities, protocol.PoolMembershipHostnameCapability) {
-			supported := true
-			out.PoolMembershipHostname = &supported
-		}
-		if slices.Contains(v.Capabilities, protocol.BackupInventoryPagesCapability) {
-			supported := true
-			out.BackupInventoryPages = &supported
-		}
-		if slices.Contains(v.Capabilities, protocol.BackupCapability) {
-			out.BackupSupport = &protocol.BackupSupport{Capability: protocol.BackupCapability}
-		}
 		if slices.Contains(v.Capabilities, protocol.DetectedOSCapability) {
 			supported := true
 			out.DetectedOS = &supported
@@ -605,11 +594,9 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	if v.Version == protocol.Version && slices.Contains(v.Capabilities, protocol.StorageClusterCapability) {
 		out.StorageClusterRequests = c.takeStorageClusters(host)
 	}
-	// The one brokered round trip serves two actions now: an invitation, which needs the
-	// join capability, and a promotion preflight, which needs the transfer one. A host that
-	// advertises either can be asked, and the broker only ever holds a request addressed to
-	// it; a host that advertises neither is never asked anything.
-	if v.Version == protocol.Version && (slices.Contains(v.Capabilities, protocol.PoolJoinCapability) || slices.Contains(v.Capabilities, protocol.PoolAuthorityTransferCapability)) {
+	// The one brokered round trip serves two actions: an invitation and a promotion
+	// preflight. The broker only ever holds a request addressed to this host.
+	if v.Version == protocol.Version {
 		out.PoolRequests = c.takePoolRequests(host)
 	}
 	if v.Sequence > seq && v.Inventory != nil && v.Inventory.Managed != nil {
@@ -707,7 +694,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				return
 			}
 			if managed := v.Inventory.Managed; managed != nil && (managed.PoolVMSnapshotsReported || managed.RecoveryReservationsReported ||
-				managed.BackupRepositoriesReported || managed.BackupCatalogReported || managed.BackupRunsReported ||
+				managed.BackupRepositoriesReported ||
 				managed.BackupPoliciesReported) {
 				var pool, master string
 				if err = tx.QueryRow("SELECT h.pool_id,p.master_host_id FROM hosts h JOIN pools p ON p.id=h.pool_id WHERE h.id=?", host).Scan(&pool, &master); err != nil {
@@ -727,18 +714,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				for _, repo := range managed.BackupRepositories {
 					if repo.PoolID != pool {
 						fail(w, 400, "backup repository belongs to another pool")
-						return
-					}
-				}
-				for _, point := range managed.BackupCatalog {
-					if point.PoolID != pool {
-						fail(w, 400, "backup recovery point belongs to another pool")
-						return
-					}
-				}
-				for _, run := range managed.BackupRuns {
-					if run.PoolID != pool {
-						fail(w, 400, "backup run belongs to another pool")
 						return
 					}
 				}
@@ -820,8 +795,6 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 					PoolVMSnapshots: merged.Managed.PoolVMSnapshots, PoolVMSnapshotsReported: merged.Managed.PoolVMSnapshotsReported,
 					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported,
 					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,
-					BackupCatalog: merged.Managed.BackupCatalog, BackupCatalogReported: merged.Managed.BackupCatalogReported,
-					BackupRuns: merged.Managed.BackupRuns, BackupRunsReported: merged.Managed.BackupRunsReported,
 					BackupPolicies: merged.Managed.BackupPolicies, BackupPoliciesReported: merged.Managed.BackupPoliciesReported,
 					ISODownloads: merged.Managed.ISODownloads, DetectedOS: merged.Managed.DetectedOS}
 			} else {
@@ -841,7 +814,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 	}
 	out.Consoles = c.consoles.pending(host)
 	// The hardware relay shares this channel, so either capability is reason to deliver it.
-	if slices.Contains(v.Capabilities, protocol.UsageHistoryCapability) || slices.Contains(v.Capabilities, protocol.HostHardwareCapability) || slices.Contains(v.Capabilities, protocol.BackupInventoryPagesCapability) {
+	if slices.Contains(v.Capabilities, protocol.UsageHistoryCapability) || slices.Contains(v.Capabilities, protocol.HostHardwareCapability) {
 		out.StatsChannels = c.stats.pending(host)
 	}
 	// Adopted outcome mirrors are passive history: never dispatch them, including snapshot

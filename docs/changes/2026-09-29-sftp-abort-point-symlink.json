@@ -11,7 +11,7 @@
   ],
   "guide": {
     "impact": "none",
-    "reason": "SFTP remains a disabled candidate; supported operator steps do not change.",
+    "reason": "SFTP is an advertised destination. Core now refuses cleanup through a symlinked point path; that is an internal safety refusal with no new operator step.",
     "pages": []
   },
   "api": {

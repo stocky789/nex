@@ -408,7 +408,8 @@ func must(err error) {
     if err != nil { panic(err) }
 }
 ''')
-        subprocess.run(["go", "build", "-o", str(binary), str(source)], cwd=ROOT, check=True,
+        subprocess.run(["go", "build", "-o", str(binary), str(source)], cwd=ROOT,
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True,
                        capture_output=True, text=True, timeout=120)
         ports = owned_guests(lab)
         subprocess.run(["scp", "-q", "-F", "/dev/null", "-o", "StrictHostKeyChecking=yes",
@@ -440,7 +441,7 @@ test "$(cat /root/nex-backup-sftp-directory-read)" = sftp-directory-sync-before-
             time.sleep(1)
         else:
             raise RuntimeError("selected storage guest SSH did not return")
-        remote(lab, "storage", "/usr/sbin/sshd -f /etc/ssh/nex-backup-sftp.conf")
+        remote(lab, "storage", "pgrep -F /run/nex-backup-sftp.pid >/dev/null || /usr/sbin/sshd -f /etc/ssh/nex-backup-sftp.conf")
         try:
             read_final()
         except RuntimeError:
@@ -764,8 +765,10 @@ mv /srv/nex-backup-smoke/minio-data /srv/nex-backup-smoke/minio-data.paused
         complete = remote(lab, "core1", f"curl --config {config} --max-time 5 -X POST -H 'If-None-Match: *' -H 'Content-Type: application/xml' --data-binary @/root/nex-backup-minio-degraded-complete.xml -o /root/nex-backup-minio-degraded-complete-response -w '%{{http_code}}' " + shlex.quote(base + "/multipart?uploadId=" + upload_id) + " 2>/dev/null || true")
         report["checks"]["conditional_during_drive_outage"] = {"simple": simple, "multipart": complete}
     finally:
-        if fault_started:
-            remote(lab, "storage", """set -eu
+        # The report must survive a failed fixture restore.
+        try:
+            if fault_started:
+                remote(lab, "storage", """set -eu
 point=/root/nex-backup-minio-point-meta.saved
 multipart=/root/nex-backup-minio-multipart-meta.saved
 if test -e "$point" || test -e "$multipart"; then
@@ -790,7 +793,8 @@ if test -e /srv/nex-backup-smoke/minio-data.paused; then
   systemctl start nex-backup-minio.service
 fi
 """)
-        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        finally:
+            report_path.write_text(json.dumps(report, indent=2) + "\n")
     for _ in range(30):
         code = remote(lab, "core2", f"curl --config {config} --max-time 5 -o /root/nex-backup-minio-after-degraded -w '%{{http_code}}' {base}/point 2>/dev/null || true")
         if code == "200":
@@ -895,6 +899,7 @@ func main() {
 }
 ''')
         subprocess.run(["go", "build", "-o", str(binary), str(source)], cwd=ROOT,
+                       env={**os.environ, "CGO_ENABLED": "0"},
                        check=True, capture_output=True, text=True, timeout=120)
         ports = owned_guests(lab)
         for host in ("core1", "core2"):
@@ -902,7 +907,7 @@ func main() {
                             "-o", f"UserKnownHostsFile={lab / 'known_hosts'}", "-i", str(lab / "id_ed25519"),
                             "-P", str(ports[host]), str(binary), "root@127.0.0.1:/root/sftp-exclusive-profile"],
                            check=True, capture_output=True, text=True, timeout=120)
-        remote(lab, "storage", "/usr/sbin/sshd -f /etc/ssh/nex-backup-sftp.conf")
+        remote(lab, "storage", "pgrep -F /run/nex-backup-sftp.pid >/dev/null || /usr/sbin/sshd -f /etc/ssh/nex-backup-sftp.conf")
         remote(lab, "core1", "/root/sftp-exclusive-profile prepare")
         report["checks"]["rename_existing_target"] = remote(lab, "core2", "/root/sftp-exclusive-profile collision")
         stamp = str(time.time() + 2)

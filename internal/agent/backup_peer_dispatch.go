@@ -4,14 +4,14 @@ package agent
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -29,6 +29,7 @@ type pendingPeerBackup struct {
 	localRepo protocol.BackupRepository
 	point     *protocol.BackupRecoveryPoint
 	client    *http.Client
+	observe   bool // the run needs attention: read the member's outcome, never start it
 }
 
 type peerBackupCompletion struct {
@@ -39,17 +40,90 @@ type peerBackupCompletion struct {
 
 type permanentPeerBackupError struct{ error }
 
-type peerBackupCredential struct {
-	Repository      protocol.BackupRepository    `json:"repository"`
-	Receipt         backupCredentialReceipt      `json:"receipt"`
-	RecipientHostID string                       `json:"recipient_host_id"`
-	Credentials     protocol.StorageCredentials  `json:"credentials"`
-	Retired         []backupCredentialRetirement `json:"retired,omitempty"`
+// peerBackupRetry spaces repeated observations of one member run. While the member
+// keeps giving the same answer the spacing doubles up to peerBackupRetryMax, or to
+// peerBackupUnreachableMax while the member cannot be reached at all.
+const (
+	peerBackupRetry          = 30 * time.Second
+	peerBackupRetryMax       = time.Hour
+	peerBackupUnreachableMax = 5 * time.Minute
+	peerBackupUnreachable    = "member unreachable"
+)
+
+// peerBackoff holds each run's next observation time in memory. Losing it on
+// restart only means one extra observation before it backs off again.
+type peerBackoff map[string]peerBackoffEntry
+
+type peerBackoffEntry struct {
+	next   time.Time
+	delay  time.Duration
+	answer string
 }
 
-type backupCredentialRetirement struct {
-	Reference string `json:"reference"`
-	Kind      string `json:"kind"`
+func (b peerBackoff) waiting(id string, now time.Time) bool { return now.Before(b[id].next) }
+
+// observed schedules the next observation. An empty answer, or one that differs
+// from the last, restarts the spacing at peerBackupRetry.
+func (b peerBackoff) observed(id, answer string, now time.Time) {
+	e := b[id]
+	limit := peerBackupRetryMax
+	if answer == peerBackupUnreachable {
+		limit = peerBackupUnreachableMax
+	}
+	if answer == "" || answer != e.answer || e.delay == 0 {
+		e.delay = peerBackupRetry
+	} else {
+		e.delay = min(2*e.delay, limit)
+	}
+	e.answer, e.next = answer, now.Add(e.delay)
+	b[id] = e
+}
+
+// skipping adds the runs still waiting to the runs already skipped.
+func (b peerBackoff) skipping(skip map[string]bool, now time.Time) map[string]bool {
+	merged := map[string]bool{}
+	for id := range skip {
+		merged[id] = true
+	}
+	for id := range b {
+		if b.waiting(id, now) {
+			merged[id] = true
+		}
+	}
+	return merged
+}
+
+// peerBackupAnswer classifies what the member gave for a run: "" when it answered
+// normally, peerBackupUnreachable for a transport error (its text carries ports and
+// timings, so it is never compared), else the member's own error text.
+func peerBackupAnswer(c peerBackupCompletion) string {
+	if c.err != nil {
+		var permanent permanentPeerBackupError
+		if !errors.As(c.err, &permanent) {
+			return peerBackupUnreachable
+		}
+		return c.err.Error()
+	}
+	if c.reply.Result.Status == "needs_attention" {
+		return c.reply.Result.Error
+	}
+	return ""
+}
+
+// errPeerBackupNotStarted marks a member that has no record of the operation. A
+// member journals every operation before running it, so the run can settle failed.
+var errPeerBackupNotStarted = errors.New("member never started this operation")
+
+func peerBackupNotStarted(err error) bool {
+	var permanent permanentPeerBackupError
+	return errors.As(err, &permanent) && errors.Is(permanent.error, errPeerBackupNotStarted)
+}
+
+type peerBackupCredential struct {
+	Repository      protocol.BackupRepository   `json:"repository"`
+	Receipt         backupCredentialReceipt     `json:"receipt"`
+	RecipientHostID string                      `json:"recipient_host_id"`
+	Credentials     protocol.StorageCredentials `json:"credentials"`
 }
 
 func exportPeerBackupCredential(s *Store, repo protocol.BackupRepository, recipientHostID string) (peerBackupCredential, error) {
@@ -71,49 +145,27 @@ func exportPeerBackupCredential(s *Store, repo protocol.BackupRepository, recipi
 
 func localBackupCredential(s *Store, repo protocol.BackupRepository) (peerBackupCredential, error) {
 	var empty peerBackupCredential
-	if !backupCredentialKind(repo.Kind) || repo.PoolID != s.State.PoolID || repo.Generation == 0 {
+	if !backupCredentialKind(repo.Kind) || repo.PoolID != s.State.PoolID {
 		return empty, ErrBackupInvalid
 	}
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	key, err := clusterSecretKey(s)
-	if err != nil {
-		return empty, err
-	}
 	dir, err := backupCredentialDir(s)
 	if err != nil {
 		return empty, err
 	}
-	entries, err := os.ReadDir(dir)
+	files, _, err := readBackupCredentials(s, dir)
 	if err != nil {
 		return empty, err
 	}
 	var projection peerBackupCredential
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		raw, err := readClusterSecret(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return empty, err
-		}
-		var stored storedBackupCredential
-		if json.Unmarshal(raw, &stored) != nil {
-			return empty, errors.New("backup credential receipt is corrupt")
-		}
+	for _, file := range files {
+		stored := file.stored
 		r := stored.Receipt
-		if r.PoolID == repo.PoolID && r.HostID == s.State.HostID && r.RepositoryID == repo.ID &&
-			r.Reference != repo.CredentialRef && !r.RetiredAt.IsZero() {
-			if !hmac.Equal([]byte(stored.Proof), []byte(backupCredentialProof(key, r, stored.Credentials))) {
-				return empty, errors.New("backup credential retirement is invalid")
-			}
-			projection.Retired = append(projection.Retired, backupCredentialRetirement{Reference: r.Reference, Kind: r.Kind})
-		}
 		if r.Reference != repo.CredentialRef {
 			continue
 		}
-		if r.PoolID != repo.PoolID || r.HostID != s.State.HostID || r.RepositoryID != repo.ID || r.Kind != repo.Kind || !r.RetiredAt.IsZero() ||
-			!hmac.Equal([]byte(stored.Proof), []byte(backupCredentialProof(key, r, stored.Credentials))) {
+		if r.PoolID != repo.PoolID || r.HostID != s.State.HostID || r.RepositoryID != repo.ID || r.Kind != repo.Kind || !r.RetiredAt.IsZero() {
 			return empty, errors.New("backup credential receipt scope is invalid")
 		}
 		projection.Repository, projection.Receipt, projection.Credentials = portablePeerRepository(repo), r, stored.Credentials
@@ -126,7 +178,7 @@ func localBackupCredential(s *Store, repo protocol.BackupRepository) (peerBackup
 
 func importPeerBackupCredential(s *Store, projection peerBackupCredential) error {
 	repo, receipt := projection.Repository, projection.Receipt
-	if repo.Valid() != nil || !backupCredentialKind(repo.Kind) || repo.Generation == 0 || repo.PoolID != s.State.PoolID ||
+	if repo.Valid() != nil || !backupCredentialKind(repo.Kind) || repo.PoolID != s.State.PoolID ||
 		repo.CredentialRef != receipt.Reference || repo.ID != receipt.RepositoryID || repo.Kind != receipt.Kind ||
 		receipt.PoolID != repo.PoolID || receipt.HostID == s.State.HostID || projection.RecipientHostID != s.State.HostID || !receipt.RetiredAt.IsZero() ||
 		!protocol.ValidSnapshotOperationID(receipt.RequestID) || !protocol.ValidSnapshotOperationID(receipt.OperationID) {
@@ -141,9 +193,8 @@ func importPeerBackupCredential(s *Store, projection peerBackupCredential) error
 		return ErrBackupUnavailable
 	}
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Generation > repo.Generation || current.Generation == repo.Generation &&
-		(current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || repo.Kind == protocol.BackupRepoKindS3 &&
-			(!reflect.DeepEqual(current.S3Source, repo.S3Source) || !reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity)))) {
+	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || repo.Kind == protocol.BackupRepoKindS3 &&
+		(!reflect.DeepEqual(current.S3Source, repo.S3Source) || !reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity))) {
 		return ErrBackupConflict
 	}
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
@@ -162,98 +213,24 @@ func importPeerBackupCredential(s *Store, projection peerBackupCredential) error
 	}
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	key, err := clusterSecretKey(s)
-	if err != nil {
-		return err
-	}
 	path, err := backupCredentialPath(s, local.RequestID)
 	if err != nil {
 		return err
 	}
 	if raw, err := readClusterSecret(path); err == nil {
-		var existing storedBackupCredential
-		if json.Unmarshal(raw, &existing) != nil || existing.Receipt != local ||
-			!hmac.Equal([]byte(existing.Proof), []byte(backupCredentialProof(key, existing.Receipt, existing.Credentials))) ||
-			!hmac.Equal([]byte(existing.Proof), []byte(backupCredentialProof(key, local, projection.Credentials))) {
+		existing, err := openBackupCredential(s, raw)
+		if err != nil || existing.Receipt != local || existing.Credentials != projection.Credentials {
 			return ErrBackupConflict
 		}
-		return retireProjectedBackupCredentialsLocked(s, key, repo, projection.Retired)
+		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	stored := storedBackupCredential{Receipt: local, Credentials: projection.Credentials}
-	stored.Proof = backupCredentialProof(key, local, projection.Credentials)
-	raw, err := json.Marshal(stored)
+	raw, err := sealBackupCredential(s, storedBackupCredential{Receipt: local, Credentials: projection.Credentials})
 	if err != nil {
 		return err
 	}
-	if err := writePrivate(path, raw, 0600); err != nil {
-		return err
-	}
-	return retireProjectedBackupCredentialsLocked(s, key, repo, projection.Retired)
-}
-
-func retireProjectedBackupCredentialsLocked(s *Store, key []byte, repo protocol.BackupRepository, retired []backupCredentialRetirement) error {
-	if len(retired) == 0 {
-		return nil
-	}
-	wanted := make(map[string]string, len(retired))
-	for _, old := range retired {
-		if !protocol.ValidSnapshotOperationID(old.Reference) || old.Reference == repo.CredentialRef || !backupCredentialKind(old.Kind) ||
-			(wanted[old.Reference] != "" && wanted[old.Reference] != old.Kind) {
-			return ErrBackupInvalid
-		}
-		wanted[old.Reference] = old.Kind
-	}
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		raw, err := readClusterSecret(path)
-		if err != nil {
-			return err
-		}
-		var stored storedBackupCredential
-		if json.Unmarshal(raw, &stored) != nil {
-			return errors.New("backup credential receipt is corrupt")
-		}
-		r := stored.Receipt
-		kind, ok := wanted[r.Reference]
-		if !ok {
-			continue
-		}
-		if r.PoolID != repo.PoolID || r.HostID != s.State.HostID || r.RepositoryID != repo.ID || r.Kind != kind ||
-			!hmac.Equal([]byte(stored.Proof), []byte(backupCredentialProof(key, r, stored.Credentials))) {
-			return ErrBackupConflict
-		}
-		if r.RetiredAt.IsZero() {
-			stored.Receipt.RetiredAt = time.Now().UTC()
-			stored.Credentials = protocol.StorageCredentials{}
-			stored.Proof = backupCredentialProof(key, stored.Receipt, stored.Credentials)
-			encoded, err := json.Marshal(stored)
-			if err != nil {
-				return err
-			}
-			if err := writePrivate(path, encoded, 0600); err != nil {
-				return err
-			}
-		}
-		if kind == protocol.BackupRepoKindSMB3 {
-			if err := vmhost.RetireBackupRepositorySMBCredential(s.dir, r.Reference); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return writePrivate(path, raw, 0600)
 }
 
 // The caller authenticates the current master through the pinned peer channel.
@@ -293,9 +270,14 @@ func handlePeerBackupCredentials(s *Store, w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		projection, err := exportPeerBackupCredential(s, repo, member.HostID)
-		if err != nil {
+		if errors.Is(err, ErrBackupUnavailable) {
 			http.Error(w, "backup credentials unavailable", http.StatusConflict)
 			return
+		}
+		if err != nil {
+			// One unreadable receipt must not block the join; dispatch delivers per repository.
+			log.Printf("backup credential for repository %s cannot be exported: %v", repo.ID, err)
+			continue
 		}
 		projections = append(projections, projection)
 	}
@@ -322,7 +304,8 @@ func pullPeerBackupCredentials(ctx context.Context, s *Store, masterURL string) 
 		return errors.New("pool backup credentials unavailable")
 	}
 	var projections []peerBackupCredential
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	// Up to 256 repositories, each within the 128 KiB single-credential delivery bound.
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 256*128<<10))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&projections) != nil {
 		return errors.New("pool backup credentials are invalid")
@@ -433,22 +416,16 @@ func portablePeerRepository(repo protocol.BackupRepository) protocol.BackupRepos
 	return repo
 }
 
+// repo.Valid checks the remote identity fingerprint format.
 func validPeerSFTPIdentity(repo protocol.BackupRepository) bool {
-	if repo.Kind != protocol.BackupRepoKindSFTP || repo.Valid() != nil || repo.Generation == 0 || repo.CredentialRef == "" ||
-		repo.SFTPSource == nil || repo.MountPath != "" || repo.RemoteIdentity == nil || len(repo.RemoteIdentity.Fingerprint) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(repo.RemoteIdentity.Fingerprint)
-	return err == nil && strings.ToLower(repo.RemoteIdentity.Fingerprint) == repo.RemoteIdentity.Fingerprint
+	return repo.Kind == protocol.BackupRepoKindSFTP && repo.Valid() == nil && repo.CredentialRef != "" &&
+		repo.SFTPSource != nil && repo.MountPath == "" && repo.RemoteIdentity != nil
 }
 
+// repo.Valid checks the remote identity fingerprint format.
 func validPeerS3Identity(repo protocol.BackupRepository) bool {
-	if repo.Kind != protocol.BackupRepoKindS3 || repo.Valid() != nil || repo.Generation == 0 || repo.CredentialRef == "" ||
-		repo.S3Source == nil || repo.MountPath != "" || repo.RemoteIdentity == nil || len(repo.RemoteIdentity.Fingerprint) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(repo.RemoteIdentity.Fingerprint)
-	return err == nil && strings.ToLower(repo.RemoteIdentity.Fingerprint) == repo.RemoteIdentity.Fingerprint
+	return repo.Kind == protocol.BackupRepoKindS3 && repo.Valid() == nil && repo.CredentialRef != "" &&
+		repo.S3Source != nil && repo.MountPath == "" && repo.RemoteIdentity != nil
 }
 
 func preparePeerS3Repository(ctx context.Context, s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
@@ -464,9 +441,8 @@ func preparePeerS3Repository(ctx context.Context, s *Store, repo protocol.Backup
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Generation > repo.Generation || current.Generation == repo.Generation &&
-		(current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.S3Source, repo.S3Source) ||
-			!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity))) {
+	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.S3Source, repo.S3Source) ||
+		!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity)) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
@@ -487,7 +463,7 @@ func preflightPeerS3Repository(ctx context.Context, work pendingPeerBackup) erro
 		return permanentPeerBackupError{ErrBackupUnavailable}
 	}
 	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.Generation != work.localRepo.Generation || current.CredentialRef != work.localRepo.CredentialRef ||
+	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
 		!reflect.DeepEqual(current.S3Source, work.localRepo.S3Source) || !reflect.DeepEqual(current.RemoteIdentity, work.localRepo.RemoteIdentity) {
 		return permanentPeerBackupError{ErrBackupConflict}
 	}
@@ -515,7 +491,7 @@ func preflightPeerS3Repository(ctx context.Context, work pendingPeerBackup) erro
 	var reply peerS3CapabilityResponse
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.Generation != work.repo.Generation || reply.CredentialRef != work.repo.CredentialRef ||
+	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
 		work.localRepo.RemoteIdentity == nil || reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
 		return permanentPeerBackupError{errors.New("member S3 backup capability identity changed")}
 	}
@@ -535,9 +511,8 @@ func preparePeerSFTPRepository(ctx context.Context, s *Store, repo protocol.Back
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Generation > repo.Generation || current.Generation == repo.Generation &&
-		(current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SFTPSource, repo.SFTPSource) ||
-			!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity))) {
+	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SFTPSource, repo.SFTPSource) ||
+		!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity)) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
@@ -558,7 +533,7 @@ func preflightPeerSFTPRepository(ctx context.Context, work pendingPeerBackup) er
 		return permanentPeerBackupError{ErrBackupUnavailable}
 	}
 	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.Generation != work.localRepo.Generation || current.CredentialRef != work.localRepo.CredentialRef ||
+	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
 		!reflect.DeepEqual(current.SFTPSource, work.localRepo.SFTPSource) || !reflect.DeepEqual(current.RemoteIdentity, work.localRepo.RemoteIdentity) {
 		return permanentPeerBackupError{ErrBackupConflict}
 	}
@@ -586,7 +561,7 @@ func preflightPeerSFTPRepository(ctx context.Context, work pendingPeerBackup) er
 	var reply peerSFTPCapabilityResponse
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.Generation != work.repo.Generation || reply.CredentialRef != work.repo.CredentialRef ||
+	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
 		work.localRepo.RemoteIdentity == nil || reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
 		return permanentPeerBackupError{errors.New("member SFTP backup capability identity changed")}
 	}
@@ -594,7 +569,7 @@ func preflightPeerSFTPRepository(ctx context.Context, work pendingPeerBackup) er
 }
 
 func validPeerSMBIdentity(repo protocol.BackupRepository, identity *protocol.SMBStorageIdentity) bool {
-	if repo.Kind != protocol.BackupRepoKindSMB3 || repo.Valid() != nil || repo.Generation == 0 || repo.CredentialRef == "" ||
+	if repo.Kind != protocol.BackupRepoKindSMB3 || repo.Valid() != nil || repo.CredentialRef == "" ||
 		repo.SMBSource == nil || repo.MountPath != "" || repo.SMBIdentity != nil || identity == nil ||
 		identity.Server != repo.SMBSource.Server || identity.Share != repo.SMBSource.Share || len(identity.MarkerID) != 32 {
 		return false
@@ -620,15 +595,16 @@ func preparePeerSMBRepository(ctx context.Context, s *Store, repo protocol.Backu
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Generation > repo.Generation || current.Generation == repo.Generation &&
-		(current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SMBSource, repo.SMBSource) ||
-			!samePeerSMBIdentity(identity, current.SMBIdentity))) {
+	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SMBSource, repo.SMBSource) ||
+		!samePeerSMBIdentity(identity, current.SMBIdentity)) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
 		return protocol.BackupRepository{}, err
 	}
-	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, repo)
+	adopt := repo
+	adopt.SMBIdentity = identity
+	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, adopt)
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
@@ -643,7 +619,7 @@ func preflightPeerSMBRepository(ctx context.Context, work pendingPeerBackup) err
 		return permanentPeerBackupError{ErrBackupUnavailable}
 	}
 	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.Generation != work.localRepo.Generation || current.CredentialRef != work.localRepo.CredentialRef ||
+	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
 		!samePeerSMBIdentity(current.SMBIdentity, work.localRepo.SMBIdentity) ||
 		!reflect.DeepEqual(current.SMBSource, work.localRepo.SMBSource) {
 		return permanentPeerBackupError{ErrBackupConflict}
@@ -672,7 +648,7 @@ func preflightPeerSMBRepository(ctx context.Context, work pendingPeerBackup) err
 	var reply peerSMBCapabilityResponse
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.Generation != work.repo.Generation || reply.CredentialRef != work.repo.CredentialRef ||
+	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
 		!samePeerSMBIdentity(&reply.Identity, work.localRepo.SMBIdentity) {
 		return permanentPeerBackupError{errors.New("member SMB backup capability identity changed")}
 	}
@@ -697,116 +673,104 @@ func waitPeerBackupTerminal(ctx context.Context, work pendingPeerBackup) peerBac
 	}
 }
 
-func waitPeerBackupReconciled(ctx context.Context, work pendingPeerBackup) peerBackupCompletion {
-	for {
-		result := getPeerBackup(ctx, work)
-		var permanent permanentPeerBackupError
-		if errors.As(result.err, &permanent) || result.err == nil &&
-			(result.reply.Result.Status == "succeeded" || result.reply.Result.Status == "failed") {
-			return result
-		}
-		select {
-		case <-ctx.Done():
-			return peerBackupCompletion{run: work.run, err: ctx.Err()}
-		case <-time.After(2 * time.Second):
-		}
-	}
-}
-
-func getPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompletion {
-	result := peerBackupCompletion{run: work.run}
-	workCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	url := strings.TrimRight(work.member.PeerOrigin, "/") + poolBackupPeerPath + "/" + work.run.OperationID
-	request, err := http.NewRequestWithContext(workCtx, http.MethodGet, url, nil)
-	if err != nil {
-		result.err = err
-		return result
-	}
-	var status int
-	result.reply, status, result.err = doPeerBackup(work.client, request)
-	if status == http.StatusNotFound {
-		result.err = permanentPeerBackupError{errors.New("member backup operation is absent; outcome needs manual reconciliation")}
-		return result
-	}
-	if result.err == nil {
-		result.err = validatePeerBackupReply(ctx, work, result.reply)
-	}
-	return result
-}
-
 // nextPendingPeerBackup selects one durable member occurrence per pass. A failed
 // peer call leaves the reservation pending for the next pass or a restarted master.
-func nextPendingPeerBackup(s *Store) (pendingPeerBackup, bool, error) {
+// A member run that needs attention and has no local journal (a scheduled run, or one
+// inherited by promotion) is re-observed until the member settles it.
+func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pendingPeerBackup, bool) {
 	membership, err := Membership(s)
 	if err != nil || membership.MasterHostID != s.State.HostID {
-		return pendingPeerBackup{}, false, err
+		return pendingPeerBackup{}, false
 	}
 	runs, err := listPoolBackupRuns(s)
 	if err != nil {
-		return pendingPeerBackup{}, false, err
+		log.Printf("member backup runs are unavailable: %v", err)
+		return pendingPeerBackup{}, false
 	}
 	for _, run := range runs {
-		if run.Status != "pending" ||
-			(run.Kind != protocol.BackupKindScheduled && run.Kind != protocol.BackupKindPolicyRunNow) {
+		if notBefore.waiting(run.OperationID, now) {
+			continue
+		}
+		scheduled := run.Kind == protocol.BackupKindScheduled || run.Kind == protocol.BackupKindPolicyRunNow
+		if !(run.Status == "pending" && scheduled ||
+			run.Status == "needs_attention" && (scheduled || run.Kind == protocol.BackupKindBackupNow)) {
+			delete(notBefore, run.OperationID)
 			continue
 		}
 		if entry, ok := s.State.Journal[run.OperationID]; ok && entry.Command != nil &&
 			(entry.Command.Kind == protocol.BackupKindBackupNow || entry.Command.Kind == protocol.BackupKindPolicyRunNow) {
-			continue // The Controller-owned worker dispatches this run.
+			continue // The Controller-owned worker dispatches and reconciles this run.
 		}
-		vm, err := lookupPoolVMSpec(s, run.VMID)
-		if err != nil || vm.HostID == s.State.HostID {
+		cmd := protocol.Command{OperationID: run.OperationID, Kind: protocol.BackupKindBackupNow,
+			Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode, PolicyID: run.PolicyID}}
+		if vm, err := lookupPoolVMSpec(s, run.VMID); err == nil {
+			cmd.VM = &vm
+		}
+		work, err := peerBackupWorkForCommand(s, cmd, run)
+		if err != nil {
+			if run.HostID != "" && run.HostID != s.State.HostID {
+				log.Printf("member backup %s cannot be dispatched yet: %v", run.OperationID, err)
+			}
+			notBefore.observed(run.OperationID, err.Error(), now)
 			continue
 		}
-		member, ok := poolMemberByID(membership, vm.HostID)
-		if !ok || member.Status != "ready" || member.PeerOrigin == "" {
-			continue
-		}
-		repo, err := GetPoolBackupRepository(s, run.RepositoryID)
-		if err != nil {
-			return pendingPeerBackup{}, false, err
-		}
-		localRepo := repo
-		if repo.Kind != protocol.BackupRepoKindNFS && repo.Kind != protocol.BackupRepoKindSMB3 && repo.Kind != protocol.BackupRepoKindSFTP && repo.Kind != protocol.BackupRepoKindS3 {
-			return pendingPeerBackup{}, false, ErrBackupUnavailable
-		}
-		if repo.Kind == protocol.BackupRepoKindSMB3 && !validPeerSMBIdentity(portablePeerRepository(repo), repo.SMBIdentity) {
-			return pendingPeerBackup{}, false, ErrBackupUnavailable
-		}
-		if repo.Kind == protocol.BackupRepoKindSFTP && !validPeerSFTPIdentity(portablePeerRepository(repo)) {
-			return pendingPeerBackup{}, false, ErrBackupUnavailable
-		}
-		if repo.Kind == protocol.BackupRepoKindS3 && !validPeerS3Identity(portablePeerRepository(repo)) {
-			return pendingPeerBackup{}, false, ErrBackupUnavailable
-		}
-		repo = portablePeerRepository(repo)
-		client, err := poolTransferClient(s, member.PeerOrigin, member.HostID)
-		if err != nil {
-			return pendingPeerBackup{}, false, err
-		}
-		return pendingPeerBackup{
-			store: s, run: run, member: member, repo: repo, localRepo: localRepo, client: client,
-			command: protocol.Command{OperationID: run.OperationID, Kind: "backup-now", VM: &vm,
-				Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode}},
-		}, true, nil
+		work.observe = run.Status == "needs_attention"
+		return work, true
 	}
-	return pendingPeerBackup{}, false, nil
+	return pendingPeerBackup{}, false
 }
 
+// settlePeerBackupCompletion records a scheduled or inherited member run's observed
+// outcome on the master. A member with no record of the run never started it.
+func settlePeerBackupCompletion(ctx context.Context, s *Store, completion peerBackupCompletion) {
+	if peerBackupNotStarted(completion.err) {
+		completion.reply = poolBackupPeerResponse{Result: protocol.Result{Status: "failed", Error: completion.err.Error()}}
+		completion.err = nil
+	}
+	if completion.err != nil {
+		var permanent permanentPeerBackupError
+		if !errors.As(completion.err, &permanent) {
+			log.Printf("member backup occurrence remains unsettled: %v", completion.err)
+		} else if completion.run.Status != "needs_attention" {
+			// Recorded on the run once; re-observing it does not log again.
+			run := completion.run
+			run.Status, run.Stage, run.Error = "needs_attention", "peer_verification", completion.err.Error()
+			if settleErr := settlePoolBackupRun(ctx, s, run, nil); settleErr != nil {
+				log.Printf("member backup occurrence remains pending: %v", settleErr)
+			}
+		}
+		return
+	}
+	status := completion.reply.Result.Status
+	if status != "succeeded" && status != "failed" && (status != "needs_attention" || completion.run.Status == status) {
+		return
+	}
+	run := completion.run
+	run.Status, run.Error = status, completion.reply.Result.Error
+	if completion.reply.Run != nil {
+		run.Stage = completion.reply.Run.Stage
+	} else {
+		run.Stage = status
+	}
+	if err := settlePoolBackupRun(ctx, s, run, completion.reply.Point); err != nil {
+		log.Printf("member backup occurrence remains pending: %v", err)
+	}
+}
+
+// callPeerBackup reads the member's record of the run and, unless work.observe is
+// set, starts the operation when the member has none.
 func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompletion {
 	defer work.client.CloseIdleConnections()
 	result := peerBackupCompletion{run: work.run}
 	if backupCredentialKind(work.repo.Kind) && (work.command.OperationID != work.run.OperationID || work.repo.ID != work.run.RepositoryID ||
-		work.repo.PoolID != work.run.PoolID || work.repo.Generation != work.localRepo.Generation ||
-		work.repo.CredentialRef != work.localRepo.CredentialRef) {
+		work.repo.PoolID != work.run.PoolID || work.repo.CredentialRef != work.localRepo.CredentialRef) {
 		result.err = permanentPeerBackupError{ErrBackupConflict}
 		return result
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	getCtx, cancelGet := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelGet()
 	base := strings.TrimRight(work.member.PeerOrigin, "/") + poolBackupPeerPath
-	get, err := http.NewRequestWithContext(requestCtx, http.MethodGet, base+"/"+work.run.OperationID, nil)
+	get, err := http.NewRequestWithContext(getCtx, http.MethodGet, base+"/"+work.run.OperationID, nil)
 	if err != nil {
 		result.err = err
 		return result
@@ -817,36 +781,50 @@ func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompl
 		result.err = validatePeerBackupReply(ctx, work, reply)
 		return result
 	}
-	if status != http.StatusConflict && status != http.StatusNotFound {
-		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
+	if status != http.StatusConflict && status != http.StatusNotFound || work.observe {
+		if status == http.StatusNotFound {
+			err = permanentPeerBackupError{errPeerBackupNotStarted}
+		} else if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
 			err = permanentPeerBackupError{err}
 		}
 		result.err = err
 		return result
 	}
+	// The member journals an operation before it runs, so after a 404 a refusal here
+	// means nothing ran and the reservation can settle failed.
+	notStarted := func(err error) error {
+		var permanent permanentPeerBackupError
+		if status == http.StatusNotFound && errors.As(err, &permanent) {
+			return permanentPeerBackupError{fmt.Errorf("%w: %v", errPeerBackupNotStarted, permanent.error)}
+		}
+		return err
+	}
+	if backupCommandTargetHost(work.command) != work.member.HostID {
+		result.err = notStarted(permanentPeerBackupError{errors.New("the VM moved off the reserved host before its backup started")})
+		return result
+	}
+	// The member prepares the destination for the preflight and again for the backup.
+	requestCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	if backupCredentialKind(work.repo.Kind) {
 		if err := deliverPeerBackupCredential(requestCtx, work.store, work.member, work.localRepo); err != nil {
-			result.err = err
+			result.err = notStarted(err)
 			return result
 		}
 	}
-	if work.repo.Kind == protocol.BackupRepoKindSMB3 {
-		if err := preflightPeerSMBRepository(requestCtx, work); err != nil {
-			result.err = err
-			return result
-		}
+	switch work.repo.Kind {
+	case protocol.BackupRepoKindSMB3:
+		err = preflightPeerSMBRepository(requestCtx, work)
+	case protocol.BackupRepoKindSFTP:
+		err = preflightPeerSFTPRepository(requestCtx, work)
+	case protocol.BackupRepoKindS3:
+		err = preflightPeerS3Repository(requestCtx, work)
+	default:
+		err = nil
 	}
-	if work.repo.Kind == protocol.BackupRepoKindSFTP {
-		if err := preflightPeerSFTPRepository(requestCtx, work); err != nil {
-			result.err = err
-			return result
-		}
-	}
-	if work.repo.Kind == protocol.BackupRepoKindS3 {
-		if err := preflightPeerS3Repository(requestCtx, work); err != nil {
-			result.err = err
-			return result
-		}
+	if err != nil {
+		result.err = notStarted(err)
+		return result
 	}
 	body, err := json.Marshal(poolBackupPeerRequest{Command: work.command, Repository: work.repo, CatalogPoint: work.point, SMBIdentity: work.localRepo.SMBIdentity})
 	if err != nil {
@@ -879,15 +857,14 @@ func validatePeerBackupReply(ctx context.Context, work pendingPeerBackup, reply 
 	if !peerBackupReplyMatches(work, reply) {
 		return permanentPeerBackupError{errors.New("member backup peer returned a different operation")}
 	}
-	if reply.Run.Status != reply.Result.Status {
+	// A member journal that needs attention is authoritative while its run record settles.
+	if reply.Run.Status != reply.Result.Status && reply.Result.Status != "needs_attention" {
 		if reply.Result.Status == "pending" &&
-			(reply.Run.Status == "succeeded" || reply.Run.Status == "failed" || reply.Run.Status == "needs_attention") ||
-			reply.Result.Status == "needs_attention" && reply.Run.Status == "succeeded" {
+			(reply.Run.Status == "succeeded" || reply.Run.Status == "failed" || reply.Run.Status == "needs_attention") {
 			return errors.New("member backup result is settling")
 		}
 		return permanentPeerBackupError{errors.New("member backup peer returned inconsistent status")}
 	}
-	// ponytail: bound full artifact verification; retry if a large or slow destination exceeds this ceiling.
 	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	return verifyPeerBackupPoint(verifyCtx, work, reply)
@@ -918,13 +895,14 @@ func verifyPeerBackupPoint(ctx context.Context, work pendingPeerBackup, reply po
 		if work.point == nil {
 			return permanentPeerBackupError{errors.New("member restore has no master catalog point")}
 		}
+		const message = "member restore point failed master catalog verification"
 		backend, err := openBackupRepositoryStorage(work.store, work.localRepo)
 		if err != nil {
-			return peerBackupVerificationError(err, "member restore point failed master catalog verification")
+			return peerBackupVerificationError(ctx, nil, err, message)
 		}
-		manifest, digest, err := backend.ReadPoint(ctx, work.run.RecoveryPointID)
+		manifest, digest, err := backend.StatPoint(ctx, work.run.RecoveryPointID)
 		if err != nil {
-			return peerBackupVerificationError(err, "member restore point failed master catalog verification")
+			return peerBackupVerificationError(ctx, backend, err, message)
 		}
 		if vmhost.ValidateBackupFirmwareForRestore(manifest) != nil || digest != work.point.ManifestSHA256 {
 			return permanentPeerBackupError{errors.New("member restore point failed master catalog verification")}
@@ -939,13 +917,14 @@ func verifyPeerBackupPoint(ctx context.Context, work pendingPeerBackup, reply po
 		point.PoolID != work.run.PoolID || point.SourceVMID != work.run.VMID {
 		return permanentPeerBackupError{errors.New("member backup point does not match the reserved run")}
 	}
+	const message = "member backup point failed master repository verification"
 	backend, err := openBackupRepositoryStorage(work.store, work.localRepo)
 	if err != nil {
-		return peerBackupVerificationError(err, "member backup point failed master repository verification")
+		return peerBackupVerificationError(ctx, nil, err, message)
 	}
-	manifest, digest, err := backend.ReadPoint(ctx, point.ID)
+	manifest, digest, err := backend.StatPoint(ctx, point.ID)
 	if err != nil {
-		return peerBackupVerificationError(err, "member backup point failed master repository verification")
+		return peerBackupVerificationError(ctx, backend, err, message)
 	}
 	if manifest.RecoveryPointID != point.ID || manifest.RepositoryID != point.RepositoryID ||
 		manifest.PoolID != point.PoolID || digest != point.ManifestSHA256 || manifest.SourceVMID != point.SourceVMID ||
@@ -955,8 +934,13 @@ func verifyPeerBackupPoint(ctx context.Context, work pendingPeerBackup, reply po
 	return nil
 }
 
-func peerBackupVerificationError(err error, message string) error {
-	if errors.Is(err, ErrBackupConflict) || errors.Is(err, ErrBackupInvalid) {
+// peerBackupVerificationError treats a point the master cannot find or read back in a
+// reachable repository as a content failure. Only an unreachable repository is retried.
+// The member only publishes a manifest after its artifacts verify, so the master's
+// check reads the manifest and artifact sizes, never the artifact content.
+func peerBackupVerificationError(ctx context.Context, backend backupRepositoryStorage, err error, message string) error {
+	if errors.Is(err, ErrBackupConflict) || errors.Is(err, ErrBackupInvalid) ||
+		backend != nil && ctx.Err() == nil && backend.Verify(ctx) == nil {
 		return permanentPeerBackupError{errors.New(message)}
 	}
 	return err

@@ -1,0 +1,62 @@
+{
+  "summary": "Make the version-2 backup authority replicate, settle and promote at scale: build without staging, pack pages, drop the page-version capability, gate only growth, collect page roots after failures. API impact: changed contract.",
+  "paths": [
+    "internal/agent/backup_authority_pages.go",
+    "internal/agent/backup_authority_pages_test.go",
+    "internal/agent/backup_authority_transfer.go",
+    "internal/agent/backup_authority_convergence_test.go",
+    "internal/agent/backup_policy.go",
+    "internal/agent/backup_promote_test.go",
+    "internal/agent/backup_settlement_retry_test.go",
+    "internal/agent/backup_dr_test.go",
+    "internal/agent/pool_authority.go",
+    "internal/agent/pool_promote.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_transfer_test.go",
+    "docs/API.md",
+    "docs/api/peer-openapi.json",
+    "docs/api/peer.html",
+    "docs/guide/backup-now.md",
+    "docs/guide/backup-policies.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-29-backup-authority-v2-convergence.json",
+    "internal/protocol/pool.go",
+    "internal/agent/run.go",
+    "docs/api/openapi.json",
+    "docs/api/index.html"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A capacity refusal no longer stops an admitted run from recording its outcome while a member is offline.",
+    "pages": [
+      "docs/guide/backup-now.md",
+      "docs/guide/backup-policies.md"
+    ]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "backup_page_version is removed from PoolReplicaStatus and PoolReplicaAck and the pool-backup-authority-pages-v1/v2 capabilities are no longer advertised (project owner: no mixed-version compatibility). Version-2 page boundaries are content-chosen, the backup-page progress probe returns 500 on a read failure, and settlement is not refused for member replica state. No route or authentication change; Controller never read the removed field.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/peer-openapi.json",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects defects in the existing recovery slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Page roots and blobs remain Core-owned derived staging of the master's existing backup stores."
+  },
+  "verification": {
+    "method": "Six focused Core regressions failed against the staged sources through go test -overlay and pass after the fix, also under -race. Existing authority, promotion, transfer, settlement and catalog tests were rerun by focused regex.",
+    "evidence": [
+      "internal/agent/backup_authority_convergence_test.go",
+      "docs/BUG_LEDGER.md"
+    ],
+    "limits": "No lab, native host or forge CI run. Replica-per-page request overhead remains, reduced by packing."
+  }
+}
