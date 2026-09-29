@@ -2,12 +2,13 @@
 package protocol
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestBackupRepositoryRequiresExternalNFS(t *testing.T) {
+func TestBackupRepositoryPreservesNFSAndRejectsLocal(t *testing.T) {
 	repo := BackupRepository{
 		ID: "repo-1", PoolID: "pool-1", Name: "Primary NFS", Kind: BackupRepoKindNFS,
 		Source: NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
@@ -15,9 +16,81 @@ func TestBackupRepositoryRequiresExternalNFS(t *testing.T) {
 	if err := repo.Valid(); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := json.Marshal(repo)
+	if err != nil || !strings.Contains(string(raw), `"source":`) {
+		t.Fatalf("legacy NFS source omitted: %s, %v", raw, err)
+	}
+	var decoded BackupRepository
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Valid() != nil {
+		t.Fatalf("legacy NFS round trip: %v, %v", err, decoded.Valid())
+	}
 	repo.Kind = "local"
 	if err := repo.Valid(); err == nil {
 		t.Fatal("local destination must be refused")
+	}
+}
+
+func TestBackupRepositoryTypedSources(t *testing.T) {
+	base := BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Offsite"}
+	cases := []struct {
+		kind string
+		set  func(*BackupRepository)
+	}{
+		{BackupRepoKindSMB3, func(r *BackupRepository) {
+			r.SMBSource = &SMBStorageSource{Server: "smb.example.test", Share: "backups"}
+		}},
+		{BackupRepoKindS3, func(r *BackupRepository) {
+			r.S3Source = &BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups", Prefix: "pool-1"}
+		}},
+		{BackupRepoKindSFTP, func(r *BackupRepository) {
+			r.SFTPSource = &BackupSFTPSource{Host: "sftp.example.test", Root: "/backups", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			repo := base
+			repo.Kind = tc.kind
+			tc.set(&repo)
+			if err := repo.Valid(); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), `"source":`) {
+				t.Fatalf("legacy NFS source emitted for %s: %s", tc.kind, raw)
+			}
+			var decoded BackupRepository
+			if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Valid() != nil {
+				t.Fatalf("round trip: %v, %v", err, decoded.Valid())
+			}
+			repo.Source = NFSStorageSource{Server: "nfs.example.test", Export: "/backup"}
+			if repo.Valid() == nil {
+				t.Fatal("mixed source kinds must be refused")
+			}
+		})
+	}
+}
+
+func TestBackupRepositoryRejectsUnsafeRemoteSources(t *testing.T) {
+	base := BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Offsite"}
+	s3 := base
+	s3.Kind = BackupRepoKindS3
+	s3.S3Source = &BackupS3Source{Endpoint: "http://s3.example.test", Bucket: "backups"}
+	if s3.Valid() == nil {
+		t.Fatal("S3 endpoint must use TLS")
+	}
+	s3.S3Source.Endpoint = "https://s3.example.test"
+	s3.S3Source.Prefix = "../escape"
+	if s3.Valid() == nil {
+		t.Fatal("S3 prefix traversal must be refused")
+	}
+	sftp := base
+	sftp.Kind = BackupRepoKindSFTP
+	sftp.SFTPSource = &BackupSFTPSource{Host: "sftp.example.test", Root: "/backups", HostKeySHA256: ""}
+	if sftp.Valid() == nil {
+		t.Fatal("SFTP host key pin is required")
 	}
 }
 

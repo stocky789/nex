@@ -364,31 +364,104 @@ state. See the [development workflow and verification limits](guide/vm-snapshots
 
 ### Backup development contract (Phase 6 / S4–S5)
 
-Core-owned NFS backup destinations, stopped and online full backup publication and
+Core-owned backup destinations, stopped and online full backup publication and
 restore-as-new from local copies. Authenticated host-local routes:
 
 | Method and route | Request and result |
 |---|---|
-| `GET /api/local/v1/pool/backup-repositories` | Master's durable NFS destination list |
-| `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; external NFS only; `200` with the saved repository |
-| `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; checks the configured NFS source, mounted path, filesystem identity, and repository owner marker |
+| `GET /api/local/v1/pool/backup-repositories` | Master's durable repository list; NFS, SMB3, S3 and SFTP are advertised on current Core |
+| `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; Core accepts validated NFS, SMB3, S3 and SFTP sources when the matching destination capability is advertised; same-ID NFS source or observed filesystem identity replacement is refused to preserve retained points; a failed first NFS/SMB3 mount start cleans its new unit so a fresh operation may retry that ID after service recovery, while exact replay retains the failure; `200` with the saved repository or retained `Result` on replay |
+| `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; Core checks the selected registered backend's exact identity, access and ownership prerequisites |
+
 | `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
 | `GET /api/local/v1/pool/backup-runs` | Retained run records from `pool-backup-runs/` |
 | `GET /api/local/v1/pool/backup-policies` | Master's durable policy list |
-| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment) |
+| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment); update requires `policy.expected_revision` matching the current durable revision; missing/stale values conflict |
 | `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}` |
 | `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; `202` |
 | `GET /api/local/v1/pool/backup-operations/{operation_id}` | Retained `Result` for backup-now or restore-as-new |
 | `POST /api/local/v1/pool/vms/{id}/backup` | `{operation_id,repository_id,consistency?}`; `consistency` omitted/`stopped` for shut-off guests, or `crash` for online crash-consistent; `quiesced` is refused until proven; UEFI online is refused; `202` with durable `Result` |
-| `POST /api/local/v1/pool/backup-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; restore-as-new copies artifacts locally, reconstructs from the captured VM spec, places disks on `storage_id`, and registers a new stopped VM with disconnected NICs before succeeding |
+| `POST /api/local/v1/pool/backup-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; restore-as-new copies artifacts locally, reconstructs from the captured VM spec, places disks on `storage_id`, and registers a new stopped VM with disconnected NICs before succeeding; a missing catalog point fails before run reservation or native work, while uncertain reservation errors retain `needs_attention` |
 | `POST /api/local/v1/pool/backup-restore-replace` | `{operation_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace:true}`; retains originals, places restored disks, exclusive cutover updates the stopped definition (disconnected NICs), settles `replaced`/`succeeded`; pre-cutover failure keeps originals; mid-cutover failure is `needs_attention` with exact stage; never succeeds at cutover-ready alone; refuses powered/in-place overwrite |
 | `POST /api/local/v1/pool/backup-protect` | `{operation_id,repository_id,recovery_point_id,protected}`; catalog + repository `.nex-protected` marker |
 | `POST /api/local/v1/pool/backup-test-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; `202` |
 | `POST /api/local/v1/pool/backup-test-verify` | `{operation_id,repository_id,recovery_point_id,test_vm_id,result}` with `passed`\|`failed`; Core proves this is the current VM created by the exact successful test restore |
 | `POST /api/local/v1/pool/backup-test-cleanup` | `{operation_id,repository_id,recovery_point_id,test_vm_id}`; removes that test staging only |
-| `POST /api/local/v1/pool/backup-catalog/import` | `{operation_id,repository_id}`; merge validated manifests into catalog |
-| `POST /api/local/v1/pool/backup-catalog/rebuild` | `{operation_id,repository_id}`; replace that repository's catalog entries from manifests |
+| `POST /api/local/v1/pool/backup-catalog/import` | `{operation_id,repository_id}`; `202/pending` starts a Core-owned validated manifest scan and merge; poll the operation |
+| `POST /api/local/v1/pool/backup-catalog/rebuild` | `{operation_id,repository_id}`; `202/pending` starts a Core-owned validated scan before removing stale entries; poll the operation |
 | `GET /api/local/v1/pool/backup-status` | `{repositories,catalog,runs}` for Controller-absent recovery |
+
+A pending catalog import or rebuild that refused an invalid artifact can be
+retried with the same operation ID and body after repairing the repository.
+When that Core-local retry settles, Core updates the matching durable command
+outcome as well as its metadata receipt. Authenticated inventory and operation
+reads therefore give a fresh or reconnected Controller the terminal result;
+an already terminal command outcome is never rewritten.
+
+**Destination schema and current availability:** the
+`BackupRepository` DTO now recognizes `kind=smb3|s3|sftp` with one matching
+nonsecret `smb_source`, `s3_source` or `sftp_source`. Existing NFS
+records retain their `source` and `identity` fields and decode unchanged; the
+legacy `source` field is omitted from non-NFS records. SMB3
+uses the existing typed share source and observed identity. S3 requires an HTTPS
+endpoint, bucket and optional prefix; SFTP requires a pinned SSH host-key
+fingerprint. Core owns
+the opaque `credential_ref`; no credential material belongs in the DTO.
+The Core health worker can probe every registered kind and reports `health` with
+`observed_at`; a result older than two minutes is `unknown`. The
+`last_health_transition` is a historical event, not a fresh access result.
+Backend health probes do not establish product acceptance for an unadvertised
+kind. Schema validation alone does not advertise backend support. Controller can
+accept a non-NFS registration only when the fresh pool master advertises
+`backup-destination-<kind>-v1` and the request names a matching acknowledged
+Core credential receipt. Current Core advertises `backup-destination-smb3-v1`,
+`backup-destination-s3-v1` and `backup-destination-sftp-v1` alongside NFS.
+Registration, backup and restore still require the corresponding Core-side
+capability on the selected pool master and matching executing host.
+API impact for capability enablement: **existing contract**; the advertised
+values change, while routes and payload shapes remain the typed contracts
+defined above.
+In the SMB3 candidate, Core verifies the mounted source, owner and share marker
+before reading a retained point or copying restore artifacts. Those reads do
+not require a writable share; backup publication, deletion and repository
+health tests still require the QEMU and publication write probes. A read-only
+share can therefore refuse a new backup while an intact point remains readable.
+Exact replay of a previously published but uncertain manual backup without
+retention can settle from that validated point while writes are denied. A
+policy backup that still owes retention pruning remains unresolved until
+writes recover. A fresh backup still requires the write checks, and an absent
+point does not become a successful replay.
+API impact: **existing contract**; no route or schema change.
+
+For a non-NFS registration, first call `POST /api/v1/storage/credentials` with
+`registration_request_id=backup-credential:<kind>:<registration request_id>`,
+the selected `repository_id`, pool master `host_id`, a separate stable credential
+`request_id`, and transient `credentials`. SMB3 and S3 use `username` and
+`secret`; SFTP uses `username` and `ssh_private_key`. The backup handoff refuses
+`domain` and `ssh_known_hosts`. Controller keeps secret bytes only in the
+one-time offer; Core returns an opaque receipt. Then submit the repository
+registration with the same registration `request_id`, matching `credential_ref`
+and `credential_request_id`, and exactly one typed source. Controller binds the
+receipt to that pool, master, kind, repository and registration request before
+queueing. A missing or mismatched receipt is `409`; an unsupported kind is
+`409`; an exact request replay returns the original operation. No secret value
+is stored in the Controller request or repository record.
+
+Before native registration preparation can claim an owner or probe the
+destination, Core checks the exact pool master and writable authority under
+the same backup authority lock used by transfer freeze. A member or frozen
+former master is refused before remote work; a transfer waits for a bounded
+in-flight preparation. SFTP adoption of an established repository refuses a
+missing owner marker instead of creating one. This tightens the existing
+registration contract without changing its routes or payloads.
+
+If the first NFS/SMB3 mount start fails before registration commits, Core
+removes the newly created managed mount unit. Exact replay retains that
+request's failed result; after fixing the service, a new request can use the
+same repository ID and a fresh credential handoff where applicable. An
+uncertain unit cleanup is reported as a rollback error rather than treated as
+a successful registration. API impact: **existing contract**; no route or
+schema change.
 
 For Core-local repository registration/test and policy upsert/pause, a first
 successful `200` returns the saved resource. An exact operation-ID replay after
@@ -397,19 +470,48 @@ original response resource is no longer retained. Protect, test verification,
 and catalog import/rebuild likewise return the durable `Result` on exact
 receipt replay. Inspect its `status`; Core does not substitute a resource's
 current definition for the original result.
+Catalog import/rebuild may take longer than an HTTP request. The master keeps
+the exact receipt while a bounded background scan runs; `202/pending` is only
+acceptance. Poll `GET /api/local/v1/pool/backup-operations/{operation_id}`
+until it settles, then inspect the catalog. After a lost reply or interrupted
+Core service, resubmit the identical request and operation ID to resume a
+pending scan. A pending receipt can carry the last transient scan error;
+correct repository access before retrying. An unresolved destination delete
+intent blocks rebuild instead of silently dropping a point; NFS/SMB3 retention
+keeps a durable intent so exact backup settlement can finish a partial prune.
+An SFTP point with an unfinished delete intent is unavailable for restore or
+protection until that exact prune settles; an intact manifest is not proof that
+the point remains safe to read during deletion.
+For SFTP registration or publication, an exclusive owner or intent write that
+is denied while the proposed file remains absent reports the destination write
+failure, not a retained-work conflict. An observed different owner or intent
+still conflicts; exact matching intent retries remain valid.
+For a capability-enabled SFTP backup, Core writes the intended manifest to
+the repository before disk artifacts. If publication is uncertain, the same
+Core operation remains `needs_attention` while Core checks for an exact final
+point. If no final point exists, the master uses an exact durable abort record
+to remove only the incomplete upload's listed regular files, then settles the
+original run as failed. Repository loss, a symlink point directory or an
+unexpected file keeps the run `needs_attention`; exact replay never starts
+another capture. Older incomplete
+uploads lacking a valid staged manifest and containing artifact bytes require
+inspection rather than automatic deletion. The current Core advertises SFTP after bounded native backup, restore and
+recovery checks; provider behavior outside the tested OpenSSH profile remains
+unproven.
+Protected missing points remain cataloged.
 
 Controller relay (administrator session, Origin and CSRF; Core remains authoritative):
 
 | Method and route | Request and result |
 |---|---|
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
-| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source,id?}`; queues `backup-repository-register` on the master; `202` |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires a matching Core receipt and destination capability; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
-| `GET /api/v1/pools/{id}/backup-catalog` | Master's recovery points; `503` when `backup_catalog_reported` is false |
-| `GET /api/v1/pools/{id}/backup-runs` | Master's run records; `503` when `backup_runs_reported` is false |
+| `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page when it advertises `backup-inventory-pages-v1`; older Core returns its complete reported array |
+| `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page when it advertises `backup-inventory-pages-v1`; older Core returns its complete reported array |
 | `GET /api/v1/pools/{id}/backup-policies` | Master's policies; `503` when `backup_policies_reported` is false |
 | `POST /api/v1/pools/{id}/backup-policies` | Create policy; omitted `schedule_id` defaults to the policy ID; queues `backup-policy-upsert`; `202` |
-| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update policy; omitted `schedule_id` uses the master's reported schedule ID, or `503` if unavailable; queues `backup-policy-upsert`; `202` |
+| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update policy with positive `expected_revision`; omitted `schedule_id` uses the master's reported schedule ID, or `503` if unavailable; missing/zero revision is `400`, stale revision fails the queued Core operation; queues `backup-policy-upsert`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 | `POST /api/v1/vms/{id}/backup` | `{request_id,repository_id,consistency?}`; queues `backup-now` on the pool master with the VM owner host in the command; `202` |
@@ -421,6 +523,39 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | `POST /api/v1/pools/{id}/backup-test-cleanup` | `{request_id,repository_id,recovery_point_id,test_vm_id}`; `202` `{operation}` |
 | `POST /api/v1/pools/{id}/backup-catalog/import` | `{request_id,repository_id}`; `202` `{operation}` |
 | `POST /api/v1/pools/{id}/backup-catalog/rebuild` | `{request_id,repository_id}`; `202` `{operation}` |
+
+**Paged backup inventory:** Core advertises `backup-inventory-pages-v1` in its
+authenticated report and Controller acknowledges with
+`backup_inventory_pages:true`. A capable Core keeps the full run history and
+catalog on the pool master and omits both bulk arrays from normal reports;
+their `*_reported` flags stay false. The administrator-only Controller GETs
+above choose the fresh current master and relay read-only `GET /backup-runs`
+or `GET /backup-catalog` over that host's enrolled mutual-TLS reverse channel.
+The host must still be the local pool master. Controller validates each page's
+pool scope, item validity, uniqueness, cursor and size, and keeps no
+authoritative copy. A fresh Controller recovers the pool assignment from the
+master's report, then reads history from Core on demand.
+
+A capable GET returns `{items,next_cursor?,generation,total,...}` with at most
+64 items and 2 MiB of JSON, newest first with an ID tie-break. Start without
+`cursor` or `generation`; send both returned values for the next page. The
+64-character lowercase SHA-256 `generation` covers the full unfiltered
+collection. A change between pages returns `409`; restart from page one
+instead of combining generations. `total` reflects the active filters, while
+summary counts cover all retained records. Run pages accept
+`recovery_point_id` and include `attention_count` and `last_backup_run`.
+Catalog pages accept `vm_id`, `repository_id` and case-insensitive `search`
+across VM name/ID, point ID and repository name/ID; they include
+`untested_count`, `last_restore_test` and `backup_days_14` (UTC dates).
+Invalid filters/cursors return `400`, an oversized single record `413`, an
+invalid Core page `502`, and an unavailable master/channel `503` or timeout
+`504`. A stale master also returns `409`; absence never means empty history.
+Older Core retains the legacy complete-array response when it reports that
+collection. Its false `*_reported` flag remains unavailable, not empty. A new
+Core connected to an older Controller receives no page acknowledgement,
+continues compact reports and marks its `backup-history-api` check unsupported;
+that Controller must be upgraded to browse retained history. Core keeps the
+records throughout and never sends a truncated reported array.
 
 Core advertises `backup-v1` in its protocol-v2 report. Controller acknowledges it
 with `backup_support:{"capability":"backup-v1"}` in `ReportResponse`; Core withholds
@@ -440,11 +575,79 @@ run-now backups, the pool master uses the pinned pool peer listener
 (`PoolMasterCertificate`) to read
 `GET /api/v1/pool/backup/{operation_id}` before submitting backup-now or
 test-cleanup through `POST /api/v1/pool/backup` with `{command,repository}`.
+An authenticated GET for an absent exact operation returns `404`; the master
+leaves its reserved run for manual reconciliation and does not replay the POST.
+For repository inventory, the master uses pinned peer mTLS to call
+`POST /api/v1/pool/backup/access` with its current `BackupRepository` on each
+ready member. The member compares the pool, repository ID, kind, generation,
+source, identity and opaque credential reference with its local copy. If it has
+no copy yet, it prepares the requested destination transiently through Core
+adoption, then checks the same identity and probes native read, write and list
+access without saving a member registration. Its `200 PoolStorageAccess` names
+the repository, host, generation and observation time; failed probes return
+`readable:false`, `writable:false` and a generic error. Invalid scope is `400`
+and a caller other than the current master is `401`. The master rejects a
+mismatched reply, stamps accepted observations with its own receipt time, and
+reports peer failures as offline observations. Cached rows expire after two
+minutes; future timestamps are treated as unknown. A member
+without the route cannot be treated as accessible. These per-host access rows
+are process-local observations in master inventory, refreshed after restart;
+the repository registration remains the durable Core record.
+For NFS peer access, backup and restore dispatch, the master sends its
+observed `repository.identity` with the source and generation. The member
+refuses a missing or different local NFS identity before claiming the owner
+marker or executing work; a matching mount path alone is insufficient. The
+same identity stays in signed authority for promotion. These peer messages
+use existing routes and fields. Matching updated Core versions are required
+for this check: an older member that derives identity from the source alone
+must be upgraded before NFS peer work or promotion is treated as safe.
+For a credential-bearing destination, the current master first sends the
+scoped private receipt and secret to an eligible member through
+`POST /api/v1/pool/backup/credential`; the member validates the current master,
+repository generation and receipt binding and saves its own private copy before
+the job is dispatched. An exact peer retry is idempotent; a conflicting receipt
+or changed material is refused. Controller neither stores nor relays this peer
+secret.
+For SMB3, the master also calls authenticated
+`POST /api/v1/pool/backup/capability/smb3` with a source-only repository and
+`expected_identity` before dispatch. The ready member resolves its private
+receipt, prepares its SMB3 mount and returns `{generation,credential_ref,identity}`.
+The master requires that exact proof against current writable authority.
+Malformed scope is `400`, an unauthenticated caller is `401`, and unavailable
+receipt, mount, identity or member is `409`; an older member without the route
+cannot run the work. SMB3 is advertised in the current development build.
+For S3, the master calls authenticated
+`POST /api/v1/pool/backup/capability/s3` with the source-only repository,
+including its endpoint, bucket, prefix, generation, opaque credential reference
+and observed remote fingerprint. The ready member resolves its private receipt
+and returns `{generation,credential_ref,fingerprint}` after checking access and
+identity. The master requires exact agreement with its current writable
+repository. Malformed scope is `400`, an unauthenticated caller is `401`, and
+unavailable credentials or conflicting identity is `409`; an older or
+incompatible member permanently refuses the work. An ambiguous transport
+outcome can be retried with the same request. S3 is advertised in the current development build.
+For SFTP, the master calls authenticated
+`POST /api/v1/pool/backup/capability/sftp` with the source-only repository.
+The ready member resolves its private receipt and checks the pinned SSH
+host-key fingerprint, returning `{generation,credential_ref,fingerprint}`.
+The master requires exact agreement with its current writable repository.
+Malformed scope is `400`, an unauthenticated caller is `401`, and unavailable
+credential, access or identity is `409`; an older member without the route
+cannot run the work. SFTP is advertised in the current development build.
+On join, an authenticated member also pulls the current private credential
+projections from the master through `GET /api/v1/pool/backup/credentials` when
+`backup_credential_sync` in the join response requires it. The master
+addresses each projection to that member. Private receipt replacement and
+retirement are checked before local adoption, and a failed pull does not imply
+the member can use a credential-bearing destination.
 Restore-as-new, replace and test-restore use
 `POST /api/v1/pool/backup/restore` with
-`{command,repository,catalog_point}`. The member checks the
-current master identity, derives its own NFS mount and filesystem identity from
-the source-only repository registration, and returns
+`{command,repository,catalog_point,smb_identity?}`. SMB3 work requires the
+master-observed `smb_identity` and the member checks it against the prepared
+share marker before accepting work; NFS work omits that SMB field but carries
+the master's NFS `repository.identity`. The member checks the current master
+identity and verifies its own mounted NFS filesystem against that identity
+before an owner-marker claim or backup/restore effect, and returns
 `{result,point?,run?,intent_sha256}`. The master compares the durable intent
 digest with its reserved run before settling a result and uses the member run
 to preserve the exact terminal stage. A new restore run pins the master's
@@ -497,25 +700,41 @@ and fresh Controller adoption still reads the master's VM inventory. This is a C
 contract change; no Controller route or state is added.
 
 For master takeover, the signed pool authority replica may carry
-`backup_manifest` in place of inline `backup_authority`. The master sends each
-page (at most 256 KiB, with an exact length in the manifest) to the member's authenticated
-`POST /api/v1/pool/replica/backup-page` with `{replica,index,data}`; `data` is a
-base64 JSON byte string. The member checks the signed replica, target, page
-length and SHA-256 before staging a page. It accepts the final replica only
-after all pages and the full backup authority digest validate. The manifest
-binds counts for repositories, definitions, history, catalog, pins and
-metadata mutation receipts. Missing or corrupt pages refuse the replica;
-staged pages alone grant no authority. An index `-1` POST with empty `data`
-returns `{next_index}` for the first absent or corrupt page, allowing an exact
-retry to resume page transfer. The bundled authority has a 64 MiB
-limit, at most 1024 pages, and bounded record counts (including at most
-100,000 retained run, catalog, pin or metadata receipt records). A record must
-fit one page. Crossing a bound refuses the replica without truncation. The
-master's admission guard refuses new metadata that would cross the bound;
-an older oversized history or failed replica push can still prevent a member
-from taking over the complete history.
-An encoder test reached 60 MiB, but a near-boundary native transfer/promotion
-still needs disposable-lab proof.
+`backup_manifest` in place of inline `backup_authority`. Version 0 keeps each
+page's exact byte length and SHA-256 in the manifest, with a 64 MiB bundle,
+1024-page limit and bounded record counts. Version 2 (`version: 2`) names an
+ordered `page_count`, total bytes, full SHA-256 root and counts of repositories,
+definitions, history, catalog, pins and metadata receipts. Its `page_sha256`
+and `page_bytes` are null. Version 2 permits authority growth past the version-0
+bundle and history bounds; a record still must fit one 256 KiB page.
+
+Both formats use authenticated `POST /api/v1/pool/replica/backup-page` with
+`{replica,index,data,reuse_sha256?}`; `data` is base64 JSON bytes. The current master sends
+nonempty pages of at most 256 KiB. A member verifies the signed replica,
+addressed target, generation and each version-0 page hash/length before staging.
+For version 2 it checks each staged page's nonempty size, then verifies the
+ordered full root and total bytes, valid frames, unique record identities and
+all declared counts before acknowledging the final replica. Version 2 can
+instead send `reuse_sha256` with null `data` to link an existing durable page
+blob; a missing or corrupt blob returns `404` and the master sends its bytes.
+Version 0 refuses reuse hints. Staged pages grant no authority. An index `-1`
+POST with null `data` returns `{next_index}`. Once every version-2 page exists,
+this probe checks the full root and clears corrupt staging before requesting
+the first page again. Exact retries resume transfer without granting authority.
+
+Core advertises `pool-backup-authority-pages-v2` and reports
+`backup_page_version: 2` in `PoolReplicaStatus` and `PoolReplicaAck`. The master
+refuses version-2 transfer to a member reporting an older page version. Before
+admitting growth beyond version-0 bounds, it requires a fresh, error-free
+version-2 observation from each member whose replica acknowledgement is
+required. A mixed-version pool cannot silently truncate its backup history;
+older version-0 manifests remain readable for compatibility. Missing, corrupt
+or conflicting pages refuse the replica without granting authority.
+
+Source checks exercised version-2 history beyond 64 MiB. A disposable
+fence-verified promotion preserved 1,052 seeded runs and passed a bounded
+post-promotion NFS backup and restore; the broader destination recovery
+matrix remains open.
 
 The master checks signed-authority capacity before accepting new backup
 metadata. Repository and policy mutations, run reservations and settlement,
@@ -526,11 +745,13 @@ record. Inspect retained runs and member replica status before retrying.
 Durable master state: `pool-backup-repositories.json`, `pool-backup-catalog/`,
 `pool-backup-runs/`, `pool-backup-policies.json`, `pool-backup-pins.json`, plus
 repository `.nex-protected` markers beside recovery-point payloads. Inventory reports
-`backup_repositories`, `backup_catalog`, `backup_runs` and `backup_policies` with matching
-`*_reported` flags only after a complete master read.
+`backup_repositories` and `backup_policies` with matching `*_reported` flags
+only after a complete master read. A capable Core serves `backup_catalog`
+and `backup_runs` through paged master reads; legacy reports retain those
+complete arrays and set their reported flags.
 The master run record carries `host_id` when an owner has been selected, so a
 member operation retains its target across restart and authority transfer.
-Controller retains those observations for display and adoption, never as catalog
+Controller reads those histories for display and adoption, never as catalog
 authority. Stopped backup converts each disk with `qemu-img convert` to standalone
 qcow2 (no backing links). Online backup uses libvirt `backup-begin --reuse-external`
 with explicit per-disk targets prepared as `libvirt-qemu` mode `0600`; completed-job
@@ -599,9 +820,44 @@ Core-owned job/schedule definitions, master scheduler and retention. Authenticat
 | Method and route | Request and result |
 |---|---|
 | `GET /api/local/v1/pool/backup-policies` | Master's durable policy list from `pool-backup-policies.json` |
-| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment, must match when supplied); `200` with saved policy |
+| `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment, must match when supplied); updates require `policy.expected_revision` equal to the current durable revision; missing/stale values return `409`, success returns `200` with saved policy |
 | `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}`; toggles pause; recalculates next dispatch when resumed |
 | `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; reserves one run without moving next dispatch; `202` |
+
+If a scheduled or policy Run-now backup published its new point but retention
+failed, Core keeps the run unresolved and retries validation/prune under that
+same operation ID after repository access recovers. A `needs_attention` reply
+does not authorize a second capture; inspect the original run and catalog.
+Controller exact request replay returns its retained task while Core continues
+reconciliation and later reports the settled result.
+For policy Run now, the master records the target VM's Core-resolved host in
+the run before dispatch. A pending replay cannot retarget the run after VM
+placement changes; an older blank-host member run already transitioned to
+backup execution needs operator reconciliation rather than a new dispatch.
+For S3 publication, Core keeps an uncertain final manifest write in
+`needs_attention` until exact readback proves publication or a conditional
+same-key abort tombstone fences the final write before incomplete artifacts
+are conditionally replaced by exact artifact tombstones. A service that cannot
+prove conditional create and delete leaves the run in attention. Accepted
+member backup journals use the same Core reconciliation after Controller
+disconnection; the master reads their result through its authenticated peer
+operation API.
+The final-key tombstone wins or loses its conditional race before Core writes
+an abort marker: a winning published manifest stays readable, while a winning
+tombstone fences late writes and lets incomplete cleanup resume.
+For SFTP, an incomplete-upload abort first atomically claims the staged
+manifest source before removing artifacts. A delayed final rename and that
+claim cannot both succeed; interrupted claims resume under the same operation.
+For NFS and SMB3, a final directory rename or parent sync error is uncertain:
+Core checks the exact point and retains `needs_attention` if readback cannot
+prove the result. If the point and staging directory are both absent after
+access returns, writable Core authority atomically fences the exact final
+path before terminal failure; a late rename cannot create an uncataloged
+point. Core syncs a complete abort marker into that file, and catalog rebuild
+skips only a matching marker. An interrupted marker write can resume under
+the same run. A present stage or unexpected final entry retains attention
+for inspection. A failure before the rename settles failed after staging
+cleanup.
 
 Controller relay:
 
@@ -609,7 +865,14 @@ Controller relay:
 |---|---|
 | `GET /api/v1/pools/{id}/backup-policies` | Master's inventory; `503` when `backup_policies_reported` is false |
 | `POST /api/v1/pools/{id}/backup-policies` | Create; queues `backup-policy-upsert` on the master; `202` |
-| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update; queues `backup-policy-upsert`; `202` |
+| `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update with positive `expected_revision`; missing/zero is `400`, stale fails the queued Core operation; queues `backup-policy-upsert`; `202` |
+
+`expected_revision` is a request-only compare-and-set value. Core increments its
+server-owned `revision` on a successful update and removes `expected_revision`
+before persisting or reporting the policy. Creates omit it, and pause/resume
+does not use it. An older Controller update without the value fails closed;
+reload the master's policy inventory and submit the new revision before
+retrying. Exact operation-ID replay still returns its original result.
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 
@@ -622,7 +885,13 @@ index entries for master takeover (NFS recovery-point payloads are never embedde
 fence-verified promotion the survivor materializes those stores before advertising backup
 ops; if the catalog index is empty but a registered repository mount is usable, Core
 rebuilds the catalog from validated manifests. Retention prune never removes protected or
-active restore pins; failed new backups must not prune prior good points.
+active restore pins; failed new backups must not prune prior good points. NFS/SMB3
+prune validates the selected point and records a durable repository delete intent
+before removing artifacts. An exact retry completes an interrupted removal only
+when the intent still matches Core's catalog and any remaining manifest; without
+that intent, an incomplete point remains a conflict rather than being erased.
+SFTP likewise refuses reads of a point with a pending delete record, while an
+exact delete retry can finish using the recorded manifest.
 
 ### Authentication and execution
 
@@ -1539,6 +1808,40 @@ membership). **State owner: core** — the pool master's membership record; a fr
 it from the master's next inventory. Verification: `go test ./internal/controller -run
 TestPoolMembersReportsWhenEachMemberJoined`, `go test ./internal/agent -run
 TestNextPoolMembershipKeepsJoinTimes`. Introduced in development product 0.4.8.
+
+### Offline pool member names after Controller replacement (changed contract, 2026-09-29)
+
+API impact: **changed contract**, additive. A current Core offers its own hostname
+for `PoolMember.hostname` when it creates a pool or joins one; peer
+`POST /api/v1/pool/join` accepts the joining Core's optional `hostname` (at most
+200 UTF-8 bytes, nonblank when supplied, no CR/LF/NUL). The master validates and
+retains it in its durable membership and signed authority replica. Existing
+membership and older peer requests without this field remain valid for
+unnamed pools and exact issued-offer replays. An absent
+legacy name is unknown, never inferred from the pool name or a Controller row.
+An upgraded Core retries a missing name through authenticated peer
+`POST /api/v1/pool/advertise` and the master's own reconcile pass. Before any
+name write in a multi-host pool, the master reads each ready member's pinned
+`GET /api/v1/pool/replica` status and requires
+`membership_hostname_version:1`; otherwise it defers the write. It rechecks
+the member set and authority before committing. A named pool refuses an older
+join request without a hostname before admission. Older peers can continue
+in an unnamed legacy pool until upgraded, after which periodic reports fill
+the record. This prevents older peers from dropping the new field and
+rejecting the membership's signed section digest.
+
+`GET /api/v1/pools/{id}/members` uses the enrolled host name when available,
+then the Core membership name, then the stable host ID. This lets a fresh
+Controller show an offline member without enrolling or authorizing that host;
+the Hosts API still lists only enrolled hosts, so the Members UI leaves such a
+row's name unlinked. Core-local pool membership exposes the durable field.
+Core advertises `pool-membership-hostname-v1` in its Controller report and
+waits for `pool_membership_hostname:true` in the authenticated response before
+including names in Controller inventory. The acknowledgement resets on
+Controller replacement. A newer Controller accepts legacy Core records; an
+older strict Controller continues to receive the prior name-free inventory.
+Safe retry, join replay, signed replication and Controller outage behavior are
+otherwise unchanged.
 
 ### Host maintenance mode (POST /api/v1/pools/{id}/members/{host_id}/maintenance)
 
@@ -3968,7 +4271,11 @@ repository references before deleting its local secret. A refused cleanup change
 retired receipt cannot restore or recreate a secret through request replay; no Controller table
 or secret state is used for cleanup. Ordinary detach and credential rotation already retire the
 attached secret on Core; this pair remains for support of leftovers that never bound to a
-repository. The Controller UI does not expose unused-credential cleanup.
+repository. This also covers SMB3, S3 and SFTP backup handoffs whose registration never
+committed: the pool master reports only receipts with no repository or unresolved registration
+reference, and rechecks that condition during retirement. The retired backup receipt remains
+as a redacted replay tombstone; an SMB3 side credential file is removed. An in-flight
+registration is not eligible. The Controller UI does not expose unused-credential cleanup.
 
 The package also installs a QEMU prepare hook that invokes the internal
 `nex-core-agent storage-guard --state-dir <agent-state-dir>` (or

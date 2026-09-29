@@ -101,15 +101,17 @@ func (b *credentialBroker) receipt(host, requestID, poolID, repositoryID, regist
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	receipt, ok := b.receipts[receiptKey(host, requestID)]
+	if !ok {
+		if entry := b.entries[requestID]; entry != nil && entry.offer.HostID == host && entry.receipt.Status == "ready" {
+			receipt, ok = entry.receipt, true
+		}
+	}
 	return receipt, ok && receipt.PoolID == poolID && receipt.RepositoryID == repositoryID && receipt.RegistrationRequestID == registrationRequestID
 }
 
 func (b *credentialBroker) proof(v storageCredentialRequest) []byte {
 	m := hmac.New(sha256.New, b.key[:])
-	fields := []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret}
-	if v.Credentials.Domain != "" {
-		fields = append(fields, v.Credentials.Domain)
-	}
+	fields := []string{v.RequestID, v.RegistrationRequestID, v.PoolID, v.HostID, v.RepositoryID, v.Credentials.Username, v.Credentials.Secret, v.Credentials.Domain, v.Credentials.SSHPrivateKey, v.Credentials.SSHKnownHosts}
 	for _, field := range fields {
 		_, _ = m.Write([]byte(field))
 		_, _ = m.Write([]byte{0})
@@ -239,7 +241,22 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 	if !decodeLimit(w, r, &v, 1<<20) {
 		return
 	}
-	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) == 0 || len(v.Credentials.Secret) > 65536 || len(v.Credentials.Domain) > 253 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\x00\r\n") {
+	backup := strings.HasPrefix(v.RegistrationRequestID, "backup-credential:")
+	if !nameValid(v.RequestID) || !nameValid(v.PoolID) || !nameValid(v.HostID) || (v.RepositoryID != "" && !nameValid(v.RepositoryID)) || (v.RegistrationRequestID != "" && !nameValid(v.RegistrationRequestID)) || (v.RepositoryID == "" && v.RegistrationRequestID == "") || len(v.Credentials.Username) > 4096 || len(v.Credentials.Secret) > 65536 || len(v.Credentials.SSHPrivateKey) > 65536 || len(v.Credentials.Domain) > 253 || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain+v.Credentials.SSHPrivateKey+v.Credentials.SSHKnownHosts, "\x00") || strings.ContainsAny(v.Credentials.Username+v.Credentials.Secret+v.Credentials.Domain, "\r\n") {
+		fail(w, 400, "valid request, pool, host and bounded credential required")
+		return
+	}
+	if backup {
+		parts := strings.Split(v.RegistrationRequestID, ":")
+		if len(parts) != 3 || !protocol.ValidSnapshotOperationID(parts[2]) || !protocol.ValidSnapshotOperationID(v.RequestID) || !protocol.ValidSnapshotOperationID(v.RepositoryID) ||
+			(parts[1] != protocol.BackupRepoKindSMB3 && parts[1] != protocol.BackupRepoKindS3 && parts[1] != protocol.BackupRepoKindSFTP) ||
+			v.Credentials.Username == "" || v.Credentials.Domain != "" || v.Credentials.SSHKnownHosts != "" ||
+			(parts[1] == protocol.BackupRepoKindSFTP && (v.Credentials.SSHPrivateKey == "" || v.Credentials.Secret != "")) ||
+			(parts[1] != protocol.BackupRepoKindSFTP && (v.Credentials.Secret == "" || v.Credentials.SSHPrivateKey != "")) {
+			fail(w, 400, "valid scoped backup credential required")
+			return
+		}
+	} else if len(v.Credentials.Secret) == 0 || strings.ContainsAny(v.Credentials.Domain, "/\\= \t;'\"`$&|<>()") || v.Credentials.SSHPrivateKey != "" || v.Credentials.SSHKnownHosts != "" {
 		fail(w, 400, "valid request, pool, host and bounded credential required")
 		return
 	}
@@ -249,7 +266,18 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	defer tx.Rollback()
-	if err = c.storageRepositoryHost(tx, v.PoolID, v.HostID); err != nil {
+	if backup {
+		var master string
+		if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", v.PoolID).Scan(&master); err == nil && master != v.HostID {
+			err = errors.New("backup credential must be delivered to the pool master")
+		}
+		if err == nil {
+			err = c.backupDestinationHost(tx, v.PoolID, master, strings.Split(v.RegistrationRequestID, ":")[1])
+		}
+	} else {
+		err = c.storageRepositoryHost(tx, v.PoolID, v.HostID)
+	}
+	if err != nil {
 		fail(w, 409, err.Error())
 		return
 	}

@@ -1,0 +1,37 @@
+{
+  "summary": "Fail a report-dispatched restore when Core proves its catalog point is missing before execution. API impact: existing contract.",
+  "paths": [
+    "internal/agent/run.go",
+    "internal/agent/run_backup_destination_test.go",
+    "docs/API.md",
+    "docs/guide/restore-as-new.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-backup-missing-point-refusal.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "A missing catalog point fails before restoring anything; after a later import, the operator starts a new request.",
+    "pages": ["docs/guide/restore-as-new.md"]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing report Result uses failed for definite missing or invalid pre-reservation restore input and keeps needs_attention for uncertain errors. No route, schema or authentication change.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects an error classification found in the existing destination fault gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record; the Core journal already owns the report-driven result, and refusal precedes a restore run or pin."
+  },
+  "verification": {
+    "method": "The disposable OpenSSH full-target check observed a missing incomplete point refused without a Core run, pin, VM or disk, while Controller retained needs_attention. The focused Core report-loop regression failed before the fix and passed afterward with a registered repository, missing point, terminal failed journal, no run/pin/VM and stable exact replay. Independent read-only source review found no safety defect and its test-coverage request was incorporated. A matched OpenSSH retest returned terminal failed for a fresh missing-point restore, retained that result on exact replay and created no Core run, pin, VM or disk. Forge CI remains open.",
+    "evidence": ["internal/agent/run_backup_destination_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The first native observation used the pre-fix Core. The fixed-build retest used a fresh operation ID for the absent point. The earlier Core journal and Controller task remained historical needs_attention after restart; this fix does not relabel old uncertain results. No forge CI run is claimed."
+  }
+}

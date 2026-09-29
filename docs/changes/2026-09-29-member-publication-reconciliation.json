@@ -1,0 +1,36 @@
+{
+  "summary": "Let accepted member peer backups reconcile uncertain publication autonomously. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup.go",
+    "internal/agent/backup_member_publication_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-member-publication-reconciliation.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The operator starts the same backup; Core now reconciles accepted member publication after an outage. Remote kinds remain gated.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing authenticated member backup operation may advance from needs_attention to an exact terminal result without Controller; no route or schema changes.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Repairs the current Core-owned backup recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Core already owns the member journal, run and adopted repository; the master reports the authenticated peer result to a fresh Controller."
+  },
+  "verification": {
+    "method": "A focused member peer-publication predicate regression failed before the fix and passed afterward, refusing a journal that was not accepted from the master. Focused race passed. Independent read-only review found no concrete integration issue. A matched NFS two-Core fixture injected a post-sync lost reply plus exact-ID readback failure; with Controller off, normal-source Core restarts autonomously settled member/master succeeded, and fresh Controller adoption/exact replay held one point and old hashes. Forge CI remains open.",
+    "evidence": ["internal/agent/backup_member_publication_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The native NFS cycle used a fixture-only injected readback error; actual server read failure and compatible S3 provider coverage remain open."
+  }
+}

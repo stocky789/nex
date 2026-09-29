@@ -151,7 +151,7 @@
       status: "testing",
       title: "Backups and proven restores",
       summary:
-        "Phase 6 had a bounded disposable-lab close on 2026-09-27. Follow-up safety and UI fixes are in review for the current candidate; its acceptance remains open.",
+        "Phase 6 had a bounded disposable-lab close on 2026-09-27. The expanded destination candidate has passed selected native recovery gates; final acceptance remains open.",
       done: [
         "Core NFS backup repository registration, stopped full backup and restore-as-new APIs",
         "Controller relay and Backups UI for repositories, recovery points, Back up now and restore as new",
@@ -163,14 +163,15 @@
         "Bounded nested Campaign A (Controller-absent Run now/restore + fresh Controller adoption)",
         "Bounded nested Campaign B re-run after promote backup-authority fix (continuity, restore-as-new, adoption)",
         "Browser Backups rail walkthrough; settlement bugs fixed in code; hermetic Phase 6 backup CI regression",
-        "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope"
+        "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope",
+        "NFS, SMB3, S3-compatible and SFTP passed bounded native stopped and online cross-host backup/restore, fault and retention checks",
+        "Retained history beyond 64 MiB and signed backup-authority takeover passed bounded native multi-host checks"
       ],
       open: [
         "Nested disposable lab is not physical failure-domain certification",
         "Quiesced online and UEFI online backup remain refused until proven",
-        "Current candidate needs a live browser re-walk of backup, restore, policy and error flows after follow-up fixes",
-        "Post-close safety and cleanup fixes need independent review, relevant checks and current-candidate acceptance",
-        "Full three-host simultaneous join and schedule wall-clock span not fully proven",
+        "Enabled destination build needs a live browser walkthrough of setup, credentials, policy, restore and error flows",
+        "The final Core-down missed-schedule wall-clock span and current-candidate checks remain open",
         "Lab used package 0.4.12 plus binary overlay — not ISO install acceptance",
         "Forge CI on a published push not yet inspected (owner push residual)"
       ]

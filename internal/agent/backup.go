@@ -26,6 +26,30 @@ type poolBackupPeerRequest struct {
 	Command      protocol.Command              `json:"command"`
 	Repository   protocol.BackupRepository     `json:"repository"`
 	CatalogPoint *protocol.BackupRecoveryPoint `json:"catalog_point,omitempty"`
+	SMBIdentity  *protocol.SMBStorageIdentity  `json:"smb_identity,omitempty"`
+}
+
+type peerSMBCapabilityRequest struct {
+	Repository       protocol.BackupRepository   `json:"repository"`
+	ExpectedIdentity protocol.SMBStorageIdentity `json:"expected_identity"`
+}
+
+type peerSMBCapabilityResponse struct {
+	Generation    uint64                      `json:"generation"`
+	CredentialRef string                      `json:"credential_ref"`
+	Identity      protocol.SMBStorageIdentity `json:"identity"`
+}
+
+type peerSFTPCapabilityResponse struct {
+	Generation    uint64 `json:"generation"`
+	CredentialRef string `json:"credential_ref"`
+	Fingerprint   string `json:"fingerprint"`
+}
+
+type peerS3CapabilityResponse struct {
+	Generation    uint64 `json:"generation"`
+	CredentialRef string `json:"credential_ref"`
+	Fingerprint   string `json:"fingerprint"`
 }
 
 type poolBackupPeerResponse struct {
@@ -45,6 +69,77 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 		}
 		var request BackupRequest
 		switch {
+		case r.URL.Path == poolBackupPeerPath+"/credential":
+			handlePeerBackupCredential(s, w, r)
+			return
+		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/access":
+			var repo protocol.BackupRepository
+			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&repo) != nil || repo.Valid() != nil || repo.PoolID != s.State.PoolID || repo.Generation == 0 {
+				http.Error(w, "invalid repository access probe", http.StatusBadRequest)
+				return
+			}
+			switch repo.Kind {
+			case protocol.BackupRepoKindNFS, protocol.BackupRepoKindSMB3, protocol.BackupRepoKindS3, protocol.BackupRepoKindSFTP:
+			default:
+				http.Error(w, "unsupported repository kind", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(probePeerBackupRepository(r.Context(), s, repo))
+			return
+		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/capability/smb3":
+			var body peerSMBCapabilityRequest
+			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&body) != nil || !validPeerSMBIdentity(body.Repository, &body.ExpectedIdentity) {
+				http.Error(w, "invalid SMB repository capability request", http.StatusBadRequest)
+				return
+			}
+			prepared, err := preparePeerSMBRepository(r.Context(), s, body.Repository, &body.ExpectedIdentity)
+			if err != nil {
+				http.Error(w, "SMB repository capability unavailable", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(peerSMBCapabilityResponse{Generation: prepared.Generation,
+				CredentialRef: prepared.CredentialRef, Identity: *prepared.SMBIdentity})
+			return
+		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/capability/sftp":
+			var repo protocol.BackupRepository
+			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&repo) != nil || !validPeerSFTPIdentity(repo) {
+				http.Error(w, "invalid SFTP repository capability request", http.StatusBadRequest)
+				return
+			}
+			prepared, err := preparePeerSFTPRepository(r.Context(), s, repo)
+			if err != nil {
+				http.Error(w, "SFTP repository capability unavailable", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(peerSFTPCapabilityResponse{Generation: prepared.Generation,
+				CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
+			return
+		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/capability/s3":
+			var repo protocol.BackupRepository
+			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&repo) != nil || !validPeerS3Identity(repo) {
+				http.Error(w, "invalid S3 repository capability request", http.StatusBadRequest)
+				return
+			}
+			prepared, err := preparePeerS3Repository(r.Context(), s, repo)
+			if err != nil {
+				http.Error(w, "S3 repository capability unavailable", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(peerS3CapabilityResponse{Generation: prepared.Generation,
+				CredentialRef: prepared.CredentialRef, Fingerprint: prepared.RemoteIdentity.Fingerprint})
+			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/verify-test":
 			var plan testRestoreVerificationPlan
 			if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&plan) != nil ||
@@ -75,13 +170,17 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				(!backupCommand(body.Command.Kind) && body.Command.Kind != "backup-test-cleanup") ||
 				body.Repository.ID != backupCommandRepositoryID(body.Command) || body.Repository.PoolID != s.State.PoolID ||
 				(restoreBackupCommand(body.Command.Kind) != (r.URL.Path == poolBackupPeerPath+"/restore")) ||
+				(body.Command.Kind != "backup-test-cleanup" && body.Repository.Kind == protocol.BackupRepoKindSMB3 && !validPeerSMBIdentity(body.Repository, body.SMBIdentity)) ||
+				(body.Command.Kind != "backup-test-cleanup" && body.Repository.Kind != protocol.BackupRepoKindSMB3 && body.SMBIdentity != nil) ||
+				(body.Command.Kind != "backup-test-cleanup" && body.Repository.Kind == protocol.BackupRepoKindSFTP && !validPeerSFTPIdentity(body.Repository)) ||
+				(body.Command.Kind != "backup-test-cleanup" && body.Repository.Kind == protocol.BackupRepoKindS3 && !validPeerS3Identity(body.Repository)) ||
 				(restoreBackupCommand(body.Command.Kind) && (body.CatalogPoint == nil ||
 					body.CatalogPoint.ID != backupCommandRecoveryPointID(body.Command) ||
 					body.CatalogPoint.RepositoryID != body.Repository.ID || body.CatalogPoint.PoolID != s.State.PoolID)) {
 				http.Error(w, "invalid backup request", http.StatusBadRequest)
 				return
 			}
-			request.Command, request.PeerRepository, request.PeerCatalogPoint = &body.Command, &body.Repository, body.CatalogPoint
+			request.Command, request.PeerRepository, request.PeerCatalogPoint, request.PeerSMBIdentity = &body.Command, &body.Repository, body.CatalogPoint, body.SMBIdentity
 		case r.Method == http.MethodGet && len(r.URL.Path) > len(poolBackupPeerPath)+1 &&
 			strings.HasPrefix(r.URL.Path, poolBackupPeerPath+"/"):
 			request.OperationID = strings.TrimPrefix(r.URL.Path, poolBackupPeerPath+"/")
@@ -97,6 +196,10 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 		request.Reply = make(chan BackupResponse, 1)
 		response, err := peerBackupRequest(r.Context(), s, request)
 		if err != nil || response.Err != nil {
+			if request.PeerStatus && errors.Is(response.Err, ErrBackupNotFound) {
+				http.Error(w, "backup operation not found", http.StatusNotFound)
+				return
+			}
 			if errors.Is(response.Err, ErrBackupConflict) || errors.Is(response.Err, ErrBackupInvalid) {
 				http.Error(w, "backup request conflicts with retained work", http.StatusBadRequest)
 				return
@@ -126,6 +229,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 type BackupRequest struct {
 	Command              *protocol.Command
 	PeerRepository       *protocol.BackupRepository
+	PeerSMBIdentity      *protocol.SMBStorageIdentity
 	PeerCatalogPoint     *protocol.BackupRecoveryPoint
 	PreparedRepository   *protocol.BackupRepository
 	PreparedCleanup      *testRestoreCleanupPlan
@@ -273,7 +377,11 @@ func readyBackupTarget(s *Store, hostID string) error {
 }
 
 func backupResult(id string, entry JournalEntry) *protocol.Result {
-	return &protocol.Result{OperationID: id, Status: entry.Status, Error: entry.Error, ObservedAt: entry.ObservedAt}
+	observedAt := entry.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = entry.RequestedAt
+	}
+	return &protocol.Result{OperationID: id, Status: entry.Status, Error: entry.Error, ObservedAt: observedAt}
 }
 
 func hasUnsettledBackup(journal map[string]JournalEntry, vmID string) bool {
@@ -373,9 +481,45 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 	poolBackupAuthorityMu.Lock()
 	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
 	if err == nil {
-		poolBackupAuthorityMu.Unlock()
 		if receipt.Kind != cmd.Kind || receipt.IntentSHA256 != intent {
+			poolBackupAuthorityMu.Unlock()
 			return BackupResponse{Err: ErrBackupConflict}
+		}
+		if receipt.Status == "pending" && cmd.Kind == protocol.BackupKindPolicyRunNow && !request.ReserveOnly {
+			if entry, ok := s.State.Journal[cmd.OperationID]; ok && entry.Status == "pending" &&
+				entry.Command != nil && entry.Command.Kind == protocol.BackupKindPolicyRunNow {
+				poolBackupAuthorityMu.Unlock()
+				return finishBackupMetadataRequest(ctx, s, request, receipt)
+			}
+		}
+		if cmd.Kind == protocol.BackupKindPolicyRunNow && receipt.Status == "pending" {
+			run, runErr := loadPoolBackupRun(s, cmd.OperationID)
+			if runErr == nil {
+				if run.Kind != protocol.BackupKindPolicyRunNow || cmd.BackupPolicy == nil || cmd.VM == nil ||
+					run.PolicyID != cmd.BackupPolicy.ID || run.VMID != cmd.VM.ID {
+					poolBackupAuthorityMu.Unlock()
+					return BackupResponse{Err: ErrBackupConflict}
+				}
+				if run.Status == "succeeded" || run.Status == "failed" || run.Status == "needs_attention" {
+					if err := settlePolicyRunNowReceipt(s, run); err != nil {
+						poolBackupAuthorityMu.Unlock()
+						return BackupResponse{Err: err}
+					}
+					receipt, err = loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+					if err != nil {
+						poolBackupAuthorityMu.Unlock()
+						return BackupResponse{Err: err}
+					}
+				}
+			} else if !errors.Is(runErr, os.ErrNotExist) {
+				poolBackupAuthorityMu.Unlock()
+				return BackupResponse{Err: runErr}
+			}
+		}
+		poolBackupAuthorityMu.Unlock()
+		if receipt.Status == "pending" && !request.ReserveOnly &&
+			(cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild") {
+			return finishBackupMetadataRequest(ctx, s, request, receipt)
 		}
 		if receipt.Status == "pending" && (request.PreparedCleanup != nil || request.PreparedVerification != nil) && !request.ReserveOnly {
 			return finishBackupMetadataRequest(ctx, s, request, receipt)
@@ -439,15 +583,27 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 
 func finishBackupMetadataRequest(ctx context.Context, s *Store, request BackupRequest, receipt protocol.BackupMetadataReceipt) BackupResponse {
 	response := acceptBackupRequestUnrecorded(ctx, s, request)
+	return settleBackupMetadataResponse(s, *request.Command, receipt, response)
+}
+
+func settleBackupMetadataResponse(s *Store, cmd protocol.Command, receipt protocol.BackupMetadataReceipt, response BackupResponse) BackupResponse {
 	if response.Result == nil {
-		if errors.Is(response.Err, ErrBackupInvalid) || errors.Is(response.Err, ErrBackupNotFound) ||
-			request.Command.Kind == "backup-test-verify" && errors.Is(response.Err, ErrBackupConflict) {
+		terminal := errors.Is(response.Err, ErrBackupInvalid) || errors.Is(response.Err, ErrBackupNotFound) ||
+			(cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-policy-upsert") && errors.Is(response.Err, ErrBackupConflict)
+		if response.Err != nil && (terminal || cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild") {
 			poolBackupAuthorityMu.Lock()
-			if writeErr := requirePoolAuthorityWritable(s); writeErr == nil {
-				receipt.Status, receipt.Error, receipt.ObservedAt = "failed", response.Err.Error(), time.Now().UTC()
+			writeErr := requirePoolAuthorityWritable(s)
+			if writeErr == nil {
+				if terminal {
+					receipt.Status = "failed"
+				}
+				receipt.Error, receipt.ObservedAt = response.Err.Error(), time.Now().UTC()
 				writeErr = savePoolBackupMetadataReceipt(s, receipt)
 			}
 			poolBackupAuthorityMu.Unlock()
+			if writeErr != nil {
+				return BackupResponse{Err: writeErr}
+			}
 		}
 		return response
 	}
@@ -461,7 +617,44 @@ func finishBackupMetadataRequest(ctx context.Context, s *Store, request BackupRe
 	if err != nil {
 		return BackupResponse{Err: err}
 	}
+	if cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" {
+		if err := reconcileCatalogMetadataJournal(s, cmd.OperationID); err != nil {
+			return BackupResponse{Err: err}
+		}
+	}
 	return response
+}
+
+// A Core-local exact retry can settle the receipt after the Controller's
+// journal reached needs_attention. Keep its reported outcome in step, including
+// after a crash between those two durable writes.
+func reconcileCatalogMetadataJournal(s *Store, id string) error {
+	entry, ok := s.State.Journal[id]
+	if !ok || entry.Command == nil ||
+		(entry.Command.Kind != "backup-catalog-import" && entry.Command.Kind != "backup-catalog-rebuild") ||
+		(entry.Status != "pending" && entry.Status != "needs_attention") {
+		return nil
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, id)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return persistenceError{err}
+	}
+	intent, err := backupMetadataIntent(*entry.Command)
+	if err != nil || entry.Command.OperationID != id || receipt.Kind != entry.Command.Kind || receipt.IntentSHA256 != intent {
+		return ErrBackupConflict
+	}
+	if receipt.Status != "succeeded" && receipt.Status != "failed" {
+		return nil
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return err
+	}
+	return completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
+		OperationID: id, Status: receipt.Status, Error: receipt.Error, ObservedAt: receipt.ObservedAt,
+	}, background: true}, nil)
 }
 
 func reserveBackupMetadataReceipt(s *Store, cmd protocol.Command, peer bool) error {
@@ -517,7 +710,8 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 					return BackupResponse{Err: ErrBackupNotFound}
 				}
 				status := receipt.Status
-				if status == "pending" && !request.PeerStatus {
+				if status == "pending" && !request.PeerStatus &&
+					receipt.Kind != "backup-catalog-import" && receipt.Kind != "backup-catalog-rebuild" {
 					status = "needs_attention"
 				}
 				return BackupResponse{Result: &protocol.Result{OperationID: receipt.OperationID, Status: status, Error: receipt.Error, ObservedAt: receipt.ObservedAt}}
@@ -539,6 +733,16 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 	}
 	if request.PeerRepository != nil {
 		repo := *request.PeerRepository
+		if repo.Kind != protocol.BackupRepoKindNFS && repo.Kind != protocol.BackupRepoKindSMB3 && repo.Kind != protocol.BackupRepoKindSFTP && repo.Kind != protocol.BackupRepoKindS3 {
+			return BackupResponse{Err: ErrBackupUnavailable}
+		}
+		if cmd.Kind != "backup-test-cleanup" && (repo.Kind == protocol.BackupRepoKindNFS && repo.Identity == nil ||
+			repo.Kind == protocol.BackupRepoKindSMB3 && !validPeerSMBIdentity(repo, request.PeerSMBIdentity) ||
+			repo.Kind != protocol.BackupRepoKindSMB3 && request.PeerSMBIdentity != nil ||
+			repo.Kind == protocol.BackupRepoKindSFTP && !validPeerSFTPIdentity(repo) ||
+			repo.Kind == protocol.BackupRepoKindS3 && !validPeerS3Identity(repo)) {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
 		membership, err := Membership(s)
 		if err != nil || membership.MasterHostID == s.State.HostID ||
 			repo.Valid() != nil || repo.PoolID != s.State.PoolID ||
@@ -561,22 +765,49 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			if request.PreparedRepository != nil {
 				prepared = *request.PreparedRepository
 			} else {
-				prepared, err = prepareBackupRepository(ctx, repo)
+				prepared, err = prepareBackupRepositoryForAdoption(ctx, s, repo)
 				if err != nil {
 					return BackupResponse{Err: err}
 				}
 			}
-			if prepared.ID != repo.ID || prepared.PoolID != repo.PoolID ||
-				!reflect.DeepEqual(prepared.Source, repo.Source) || prepared.MountPath == "" || prepared.Identity == nil {
+			if !preparedBackupRepositoryMatches(repo, prepared) {
 				return BackupResponse{Err: ErrBackupInvalid}
+			}
+			if repo.Kind == protocol.BackupRepoKindSMB3 && !samePeerSMBIdentity(request.PeerSMBIdentity, prepared.SMBIdentity) {
+				return BackupResponse{Err: ErrBackupConflict}
+			}
+			if repo.Kind == protocol.BackupRepoKindSFTP && (prepared.RemoteIdentity == nil || prepared.RemoteIdentity.Fingerprint != repo.RemoteIdentity.Fingerprint) {
+				return BackupResponse{Err: ErrBackupConflict}
+			}
+			if repo.Kind == protocol.BackupRepoKindS3 && (prepared.RemoteIdentity == nil || prepared.RemoteIdentity.Fingerprint != repo.RemoteIdentity.Fingerprint) {
+				return BackupResponse{Err: ErrBackupConflict}
+			}
+			if repo.Kind == protocol.BackupRepoKindNFS && !reflect.DeepEqual(prepared.Identity, repo.Identity) {
+				return BackupResponse{Err: ErrBackupConflict}
 			}
 			state, err := loadPoolBackupRepositories(s)
 			if err != nil {
 				return BackupResponse{Err: err}
 			}
+			oldRepo, hadOldRepo := state.Repositories[repo.ID]
+			if hadOldRepo && (oldRepo.Generation > repo.Generation || repo.Kind == protocol.BackupRepoKindNFS && oldRepo.Generation == repo.Generation &&
+				(oldRepo.Kind != repo.Kind || !reflect.DeepEqual(oldRepo.Source, repo.Source) || !reflect.DeepEqual(oldRepo.Identity, repo.Identity)) || repo.Kind == protocol.BackupRepoKindS3 && oldRepo.Generation == repo.Generation &&
+				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.S3Source, repo.S3Source) ||
+					!reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity)) || repo.Kind == protocol.BackupRepoKindSFTP && oldRepo.Generation == repo.Generation &&
+				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.SFTPSource, repo.SFTPSource) ||
+					!reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity)) || repo.Kind == protocol.BackupRepoKindSMB3 && oldRepo.Generation == repo.Generation &&
+				(oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(oldRepo.SMBSource, repo.SMBSource) ||
+					!samePeerSMBIdentity(request.PeerSMBIdentity, oldRepo.SMBIdentity))) {
+				return BackupResponse{Err: ErrBackupConflict}
+			}
 			state.Repositories[repo.ID] = prepared
 			if err := savePoolBackupRepositories(s, state); err != nil {
 				return BackupResponse{Err: err}
+			}
+			if hadOldRepo && backupCredentialKind(oldRepo.Kind) && oldRepo.CredentialRef != prepared.CredentialRef {
+				if err := RetireBackupCredential(s, oldRepo, prepared); err != nil {
+					return BackupResponse{Err: ErrBackupUnavailable}
+				}
 			}
 			if restoreBackupCommand(cmd.Kind) {
 				if pointErr := savePeerRestoreCatalogPoint(s, *request.PeerCatalogPoint); pointErr != nil {
@@ -604,7 +835,7 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 		}
 		prepared := request.PreparedRepository
 		if prepared == nil {
-			result, err := prepareBackupRepository(ctx, repo)
+			result, err := prepareBackupRepositoryForRegistration(ctx, s, repo, cmd.OperationID)
 			if err != nil {
 				return BackupResponse{Err: err}
 			}
@@ -711,9 +942,9 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			err      error
 		)
 		if cmd.Kind == "backup-catalog-rebuild" {
-			imported, err = RebuildPoolBackupCatalogFromRepository(s, cmd.CatalogImport.RepositoryID)
+			imported, err = rebuildPoolBackupCatalogFromRepository(ctx, s, cmd.CatalogImport.RepositoryID)
 		} else {
-			imported, err = ImportPoolBackupCatalog(s, cmd.CatalogImport.RepositoryID)
+			imported, err = importPoolBackupCatalog(ctx, s, cmd.CatalogImport.RepositoryID)
 		}
 		if err != nil {
 			return BackupResponse{Err: err}
@@ -784,6 +1015,16 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 	if old, ok := s.State.Journal[cmd.OperationID]; ok {
 		if old.Command == nil || old.Command.Kind != cmd.Kind || !sameBackupRequest(old.Command, cmd) {
 			return BackupResponse{Err: ErrBackupConflict}
+		}
+		if old.Status == "needs_attention" && cmd.Kind == protocol.BackupKindBackupNow &&
+			cmd.VM != nil && cmd.VM.HostID == s.State.HostID && request.PeerRepository == nil {
+			result := reconcilePublishedBackupNow(ctx, s, *old.Command, time.Now().UTC())
+			if result.Status == "succeeded" {
+				if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, nil); err != nil {
+					return BackupResponse{Err: err}
+				}
+				return BackupResponse{Result: &result}
+			}
 		}
 		if request.PeerRepository != nil && !old.PeerDispatched {
 			old.PeerDispatched = true
@@ -1105,6 +1346,97 @@ func ensureBackupRunReserved(store *Store, cmd protocol.Command) error {
 	return reserveRestoreRunWithPin(store, run, pinKind)
 }
 
+func settlePublishedBackupNow(ctx context.Context, store *Store, backend backupRepositoryStorage, repo protocol.BackupRepository, cmd protocol.Command, observed time.Time) *protocol.Result {
+	persisted, digest, readErr := backend.ReadPoint(ctx, cmd.OperationID)
+	if errors.Is(readErr, os.ErrNotExist) {
+		return nil
+	}
+	result := protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", ObservedAt: observed}
+	if readErr != nil {
+		result.Error = readErr.Error()
+		return &result
+	}
+	if persisted.RecoveryPointID != cmd.OperationID || persisted.RepositoryID != repo.ID ||
+		persisted.PoolID != store.State.PoolID || persisted.SourceVMID != cmd.VM.ID ||
+		persisted.Consistency != cmd.Backup.EffectiveConsistency() {
+		result.Error = "published recovery point cannot be reconciled"
+		return &result
+	}
+	point := protocol.BackupRecoveryPoint{
+		ID: cmd.OperationID, RepositoryID: repo.ID, PoolID: store.State.PoolID,
+		SourceVMID: persisted.SourceVMID, SourceVMName: persisted.SourceVMName,
+		CapturedAt: persisted.CapturedAt, Consistency: persisted.Consistency, ManifestSHA256: digest,
+	}
+	intent, _ := backupIntentSHA256(cmd)
+	if err := settlePoolBackupRun(ctx, store, protocol.BackupRun{
+		OperationID: cmd.OperationID, Kind: protocol.BackupKindBackupNow, PoolID: store.State.PoolID,
+		VMID: cmd.VM.ID, RepositoryID: repo.ID, RecoveryPointID: cmd.OperationID,
+		IntentSHA256: intent, Stage: "published", Status: "succeeded", CreatedAt: observed,
+	}, &point); err != nil {
+		result.Error = err.Error()
+		return &result
+	}
+	result.Status = "succeeded"
+	return &result
+}
+
+func reconcilePublishedBackupNow(ctx context.Context, store *Store, cmd protocol.Command, observed time.Time) protocol.Result {
+	result := protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", ObservedAt: observed}
+	repo, err := GetPoolBackupRepository(store, cmd.Backup.RepositoryID)
+	if err == nil {
+		var backend backupRepositoryStorage
+		backend, err = openBackupRepositoryStorage(store, repo)
+		if err == nil {
+			// ReadPoint verifies the source; a published point can settle after writes fail.
+			settled := settlePublishedBackupNow(ctx, store, backend, repo, cmd, observed)
+			if settled != nil && settled.Status == "succeeded" {
+				return *settled
+			}
+			if aborter, ok := backend.(interface {
+				AbortIncomplete(context.Context, string) error
+			}); ok {
+				run, runErr := loadPoolBackupRun(store, cmd.OperationID)
+				if runErr == nil && run.Stage == "publication" && run.Status == "needs_attention" {
+					if err := aborter.AbortIncomplete(ctx, cmd.OperationID); err != nil {
+						result.Error = err.Error()
+						return result
+					}
+					return failBackupRun(store, cmd, observed, run.Error)
+				}
+			}
+			if settled != nil {
+				return *settled
+			}
+			result.Error = "published recovery point is absent"
+			return result
+		}
+	}
+	result.Error = err.Error()
+	return result
+}
+
+func publishedLocalBackupNeedsReconcile(s *Store, entry JournalEntry) bool {
+	if entry.Status != "needs_attention" || entry.Command == nil || entry.Command.Kind != protocol.BackupKindBackupNow ||
+		entry.Command.VM == nil || entry.Command.VM.HostID != s.State.HostID || entry.Command.Backup == nil {
+		return false
+	}
+	membership, err := Membership(s)
+	if err != nil || membership.PoolID != s.State.PoolID ||
+		(membership.MasterHostID != s.State.HostID && !entry.PeerDispatched) {
+		return false
+	}
+	cmd := *entry.Command
+	run, err := loadPoolBackupRun(s, cmd.OperationID)
+	if err != nil || run.Status != "pending" && run.Status != "needs_attention" && run.Status != "succeeded" ||
+		run.Kind != protocol.BackupKindBackupNow && run.Kind != protocol.BackupKindScheduled && run.Kind != protocol.BackupKindPolicyRunNow ||
+		run.RecoveryPointID != cmd.OperationID || run.RepositoryID != cmd.Backup.RepositoryID || run.VMID != cmd.VM.ID ||
+		run.HostID != "" && run.HostID != s.State.HostID {
+		return false
+	}
+	intent, err := backupIntentSHA256(cmd)
+	return err == nil && (run.IntentSHA256 == "" || run.IntentSHA256 == intent)
+}
+
 func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, observed time.Time) (protocol.Result, error) {
 	if cmd.VM == nil || cmd.Backup == nil || cmd.Backup.Valid() != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "invalid backup-now command", ObservedAt: observed}, nil
@@ -1117,36 +1449,15 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 	if err != nil {
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failBackupRun(store, cmd, observed, "backup repository mount path is missing"), nil
-	}
-	if err := vmhost.VerifyBackupRepository(ctx, repo); err != nil {
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, cmd.OperationID)
-	if _, statErr := os.Stat(pointDir); statErr == nil {
-		persisted, digest, readErr := vmhost.ReadBackupManifest(pointDir)
-		if readErr != nil || persisted.RecoveryPointID != cmd.OperationID || persisted.RepositoryID != repo.ID ||
-			persisted.PoolID != store.State.PoolID || persisted.SourceVMID != cmd.VM.ID ||
-			persisted.Consistency != consistency || vmhost.VerifyPublishedBackupRecoveryPoint(pointDir, persisted) != nil {
-			return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: "published recovery point cannot be reconciled", ObservedAt: observed}, nil
-		}
-		point := protocol.BackupRecoveryPoint{
-			ID: cmd.OperationID, RepositoryID: repo.ID, PoolID: store.State.PoolID,
-			SourceVMID: persisted.SourceVMID, SourceVMName: persisted.SourceVMName,
-			CapturedAt: persisted.CapturedAt, Consistency: persisted.Consistency, ManifestSHA256: digest,
-		}
-		intent, _ := backupIntentSHA256(cmd)
-		if err := SettlePoolBackupRun(store, protocol.BackupRun{
-			OperationID: cmd.OperationID, Kind: protocol.BackupKindBackupNow, PoolID: store.State.PoolID,
-			VMID: cmd.VM.ID, RepositoryID: repo.ID, RecoveryPointID: cmd.OperationID,
-			IntentSHA256: intent, Stage: "published", Status: "succeeded", CreatedAt: observed,
-		}, &point); err != nil {
-			return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
-		}
-		return protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: observed}, nil
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: statErr.Error(), ObservedAt: observed}, nil
+	if err := backend.Verify(ctx); err != nil {
+		return failBackupRun(store, cmd, observed, err.Error()), nil
+	}
+	if result := settlePublishedBackupNow(ctx, store, backend, repo, cmd, observed); result != nil {
+		return *result, nil
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	vm, err := engine.VMDefinition(cmd.VM.ID)
@@ -1169,11 +1480,7 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
 
-	workRoot := filepath.Join(store.dir, "backup-staging", cmd.OperationID)
-	if protocol.BackupConsistencyRunning(consistency) {
-		// QEMU writes as libvirt-qemu; keep push-mode outputs on the repository mount.
-		workRoot = filepath.Join(repo.MountPath, ".nex-backup-work", cmd.OperationID)
-	}
+	workRoot := backend.CaptureWorkDir(cmd.OperationID, protocol.BackupConsistencyRunning(consistency))
 	var workErr error
 	if protocol.BackupConsistencyRunning(consistency) {
 		workErr = vmhost.PrepareOnlineBackupWorkDir(ctx, workRoot)
@@ -1181,9 +1488,9 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		workErr = os.MkdirAll(workRoot, 0750)
 	}
 	if workErr != nil {
-		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: workErr.Error(), ObservedAt: observed}, nil
+		return failBackupRun(store, cmd, observed, workErr.Error()), nil
 	}
-	cleanupWork := false
+	cleanupWork := true
 	defer func() {
 		if cleanupWork {
 			_ = os.RemoveAll(workRoot)
@@ -1204,6 +1511,7 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 		}
 		if err := vmhost.CaptureOnlineDisks(ctx, vm.ID, disks, destinations); err != nil {
 			if inactiveErr := vmhost.OnlineBackupJobInactive(context.Background(), vm.ID); inactiveErr != nil {
+				cleanupWork = false
 				return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: inactiveErr.Error(), ObservedAt: observed}, nil
 			}
 			return failBackupRun(store, cmd, observed, err.Error()), nil
@@ -1246,12 +1554,21 @@ func executeBackupNow(ctx context.Context, store *Store, cmd protocol.Command, o
 	if err != nil {
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
-	manifestSHA, err := vmhost.PublishBackupRecoveryPoint(repo.MountPath, manifest, stageFiles)
+	manifestSHA, err := backend.Publish(ctx, manifest, stageFiles)
 	if err != nil {
+		if _, ok := backend.(filesystemBackupStorage); ok && !errors.Is(err, vmhost.ErrBackupPublishUncertain) {
+			return failBackupRun(store, cmd, observed, err.Error()), nil
+		}
+		switch backend.(type) {
+		case filesystemBackupStorage, sftpBackupStorage, *s3BackupStorage:
+			if saveErr := attentionBackupPublication(store, cmd, observed, err.Error()); saveErr != nil {
+				return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: saveErr.Error(), ObservedAt: observed}, nil
+			}
+			return reconcilePublishedBackupNow(ctx, store, cmd, observed), nil
+		}
 		return failBackupRun(store, cmd, observed, err.Error()), nil
 	}
-	cleanupWork = true
-	persisted, persistedSHA, err := vmhost.ReadBackupManifest(filepath.Join(repo.MountPath, cmd.OperationID))
+	persisted, persistedSHA, err := backend.ReadPoint(ctx, cmd.OperationID)
 	if err != nil || persistedSHA != manifestSHA || persisted.RepositoryID != repo.ID || persisted.PoolID != store.State.PoolID {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: "published backup manifest cannot be reconciled", ObservedAt: observed}, nil
 	}
@@ -1282,10 +1599,10 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 	if err != nil {
 		return failRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	if repo.MountPath == "" {
-		return failRestoreRun(store, cmd, observed, "backup repository mount path is missing"), nil
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		return failRestoreRun(store, cmd, observed, err.Error()), nil
 	}
-	pointDir := filepath.Join(repo.MountPath, cmd.Restore.RecoveryPointID)
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
 	if err != nil {
 		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}, nil
@@ -1301,7 +1618,7 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 		return failRestoreRun(store, cmd, observed, "recovery point lacks a captured VM specification; re-backup before restore-as-new"), nil
 	}
 	localDir := filepath.Join(store.dir, "backup-restore", cmd.OperationID)
-	if err := vmhost.CopyBackupArtifactsLocal(ctx, pointDir, localDir, manifest); err != nil {
+	if err := backend.CopyArtifacts(ctx, cmd.Restore.RecoveryPointID, localDir, manifest); err != nil {
 		return failRestoreRun(store, cmd, observed, err.Error()), nil
 	}
 	spec, err := vmhost.BuildRestoreAsNewSpec(*manifest.CapturedSpec, *cmd.Restore, store.State.PoolID, store.State.HostID)
@@ -1335,12 +1652,23 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 
 func failBackupRun(store *Store, cmd protocol.Command, observed time.Time, message string) protocol.Result {
 	intent, _ := backupIntentSHA256(cmd)
-	_ = SettlePoolBackupRun(store, protocol.BackupRun{
+	if err := SettlePoolBackupRun(store, protocol.BackupRun{
 		OperationID: cmd.OperationID, Kind: protocol.BackupKindBackupNow, PoolID: store.State.PoolID,
 		VMID: cmd.VM.ID, RepositoryID: cmd.Backup.RepositoryID, RecoveryPointID: cmd.OperationID,
 		IntentSHA256: intent, Stage: "failed", Status: "failed", Error: message, CreatedAt: observed, UpdatedAt: observed,
-	}, nil)
+	}, nil); err != nil {
+		return protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", Error: err.Error(), ObservedAt: observed}
+	}
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
+}
+
+func attentionBackupPublication(store *Store, cmd protocol.Command, observed time.Time, message string) error {
+	intent, _ := backupIntentSHA256(cmd)
+	return SettlePoolBackupRun(store, protocol.BackupRun{
+		OperationID: cmd.OperationID, Kind: protocol.BackupKindBackupNow, PoolID: store.State.PoolID,
+		VMID: cmd.VM.ID, RepositoryID: cmd.Backup.RepositoryID, RecoveryPointID: cmd.OperationID,
+		IntentSHA256: intent, Stage: "publication", Status: "needs_attention", Error: message, CreatedAt: observed, UpdatedAt: observed,
+	}, nil)
 }
 
 func failRestoreRun(store *Store, cmd protocol.Command, observed time.Time, message string) protocol.Result {
@@ -1401,7 +1729,10 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 	result := protocol.Result{OperationID: cmd.OperationID, Status: "needs_attention", ObservedAt: observed}
 	store := &Store{dir: dir, State: identity}
 	run, err := loadPoolBackupRun(store, cmd.OperationID)
-	if err != nil || run.Status != "needs_attention" || run.Kind != cmd.Kind {
+	entry := identity.Journal[cmd.OperationID]
+	if err != nil || run.Kind != cmd.Kind ||
+		(run.Status != "needs_attention" && (run.Status != "pending" || entry.Status != "needs_attention" ||
+			!sameBackupRequest(entry.Command, &cmd))) {
 		result.Error = "restore run has no retained uncertain state"
 		return result, nil
 	}
@@ -1440,6 +1771,11 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 		result.Error = err.Error()
 		return result, nil
 	}
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		result.Error = err.Error()
+		return result, nil
+	}
 	manifest, manifestSHA, err := validatedCatalogBackupManifest(ctx, store, repo, req.RecoveryPointID, run.ManifestSHA256)
 	if err != nil {
 		result.Error = err.Error()
@@ -1472,7 +1808,7 @@ func reconcileNewVMRestoreAttention(ctx context.Context, dir string, identity St
 	}
 	if allocating {
 		localDir := filepath.Join(dir, "backup-restore", cmd.OperationID)
-		if err := vmhost.CopyBackupArtifactsLocal(ctx, filepath.Join(repo.MountPath, req.RecoveryPointID), localDir, manifest); err != nil {
+		if err := backend.CopyArtifacts(ctx, req.RecoveryPointID, localDir, manifest); err != nil {
 			result.Error = err.Error()
 			return result, nil
 		}

@@ -251,7 +251,7 @@ func TestPoolJoinInvitationBindsCSRAtRedemptionAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := peerJoinRequest{Offer: decoded.Token, HostID: "member-1", CSRPEM: csr}
+	request := peerJoinRequest{Offer: decoded.Token, HostID: "member-1", Hostname: "member.example.test", CSRPEM: csr}
 	first, err := acceptPeerJoin(master, request)
 	if err != nil {
 		t.Fatal(err)
@@ -289,11 +289,11 @@ func TestPoolJoinInvitationIsSingleUseAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-2", CSRPEM: otherCSR}); err == nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-2", Hostname: "other.example.test", CSRPEM: otherCSR}); err == nil {
 		t.Fatal("invitation redeemed by another host")
 	}
 	// An invitation cannot be minted for a host that is already a member.
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-1", CSRPEM: csr}); err != nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: decoded.Token, HostID: "member-1", Hostname: "member.example.test", CSRPEM: csr}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = CreatePoolJoinInvitation(master, "https://master.example.test", "member-1"); err == nil {
@@ -528,7 +528,7 @@ func TestJoinNeverReportsFailedAfterTheMasterMayHaveAdmittedIt(t *testing.T) {
 	}
 	// The master admits the host; its reply never reaches the joining Core, which stays at
 	// stage "joined" with the invitation it was given.
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: mustDecodeOffer(t, bound).Token, HostID: member.State.HostID, CSRPEM: csr}); err != nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: mustDecodeOffer(t, bound).Token, HostID: member.State.HostID, Hostname: "member.example.test", CSRPEM: csr}); err != nil {
 		t.Fatal(err)
 	}
 	if row := poolMember(t, master, member.State.HostID); row.Status != "ready" {

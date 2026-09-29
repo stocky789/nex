@@ -18,8 +18,12 @@ func setTestPromotionBackupMount(t *testing.T, mount string) {
 	t.Cleanup(func() { testBackupMounts.Delete(mount) })
 	previous := prepareBackupRepositoryNative
 	prepareBackupRepositoryNative = func(_ context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
+		identity := &protocol.NFSStorageIdentity{Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs"}
+		if repo.Identity != nil && *repo.Identity != *identity {
+			return protocol.BackupRepository{}, ErrBackupUnavailable
+		}
 		repo.MountPath = mount
-		repo.Identity = &protocol.NFSStorageIdentity{Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs"}
+		repo.Identity = identity
 		return repo, nil
 	}
 	t.Cleanup(func() { prepareBackupRepositoryNative = previous })
@@ -28,8 +32,11 @@ func setTestPromotionBackupMount(t *testing.T, mount string) {
 func TestPromotedCatalogImportFailureRemainsRetryable(t *testing.T) {
 	s := seedBackupMaster(t)
 	mount := t.TempDir()
+	setTestPromotionBackupMount(t, mount)
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
-		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount, Generation: 1}
+		Source:    protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
+		Identity:  &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"},
+		MountPath: mount, Generation: 1}
 	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
 		t.Fatal(err)
 	}
@@ -337,6 +344,7 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 		Repositories: []protocol.BackupRepository{{
 			ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
 			Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+			Identity:   &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"},
 			Generation: 1,
 		}},
 		Definitions: []protocol.BackupPolicy{testPolicy()},

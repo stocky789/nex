@@ -70,8 +70,8 @@ export function Settings({ section, pool, hosts = [], api, busy, unavailable, up
   const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
   const updatesPanel = <UpdatesPanel {...updates} busy={busy} />;
   switch (section) {
-    case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
-    case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;
+    case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
+    case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;
     case "ha": return <HighAvailability />;
     case "members": return members;
     case "updates": return updatesPanel;

@@ -34,6 +34,12 @@ func init() {
 		}
 		return vmhost.VerifyBackupRepository(ctx, repo)
 	}
+	verifyBackupRepositoryRead = func(ctx context.Context, repo protocol.BackupRepository) error {
+		if _, ok := testBackupMounts.Load(repo.MountPath); ok {
+			return verifyBackupRepository(ctx, repo)
+		}
+		return vmhost.VerifyBackupRepositoryRead(ctx, repo)
+	}
 }
 
 func upsertTestBackupRepository(s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {

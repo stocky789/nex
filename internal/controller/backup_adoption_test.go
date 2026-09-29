@@ -541,8 +541,10 @@ func TestBackupPolicyCreateAndUpdatePreserveScheduleID(t *testing.T) {
 		body["request_id"] = tc.requestID
 		if tc.method == "POST" {
 			body["id"] = "new-policy"
+			delete(body, "expected_revision")
 		} else {
 			delete(body, "id")
+			body["expected_revision"] = 1
 		}
 		a.call(tc.method, tc.path, body, nil, 202)
 		var raw string
@@ -554,6 +556,14 @@ func TestBackupPolicyCreateAndUpdatePreserveScheduleID(t *testing.T) {
 			t.Fatalf("%s schedule: %+v, %v", tc.requestID, command.BackupPolicy, err)
 		}
 	}
+	delete(body, "expected_revision")
+	body["request_id"] = "missing-revision"
+	a.call("PUT", "/api/v1/pools/"+pool+"/backup-policies/existing-policy", body, nil, 400)
+	body["expected_revision"] = 0
+	body["request_id"] = "zero-revision"
+	a.call("PUT", "/api/v1/pools/"+pool+"/backup-policies/existing-policy", body, nil, 400)
+	body["expected_revision"] = 1
+	body["request_id"] = "update-policy"
 	a.call("PUT", "/api/v1/pools/"+pool+"/backup-policies/other-policy", body, nil, 409)
 	if _, err := a.c.db.Exec("UPDATE hosts SET inventory='{}' WHERE id=?", master.HostID); err != nil {
 		t.Fatal(err)

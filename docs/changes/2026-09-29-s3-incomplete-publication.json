@@ -1,0 +1,43 @@
+{
+  "summary": "Reconcile ambiguous S3 publication and fence incomplete upload cleanup at the final manifest key. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "internal/agent/backup.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/local.html",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-s3-incomplete-publication.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "S3 remains a disabled candidate; no supported operator workflow changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "An uncertain S3 final manifest write keeps the existing needs_attention result until exact publication or fenced abort settles; no route, schema, authentication or authorization change.",
+    "pages": ["docs/API.md", "docs/api/local-openapi.json", "docs/api/openapi.json", "docs/api/local.html", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects the current destination publication and recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The existing Core run/journal remain authoritative; new exact intent and abort records plus permanent final-key and artifact-key tombstones live in the S3 destination under the pool repository owner. A fresh Controller adopts settled or uncertain runs from authenticated Core inventory.",
+    "record": "S3 repository .nex-intent-<operation>, .nex-abort-<operation> and permanent <operation>/manifest.json plus artifact-key abort tombstones",
+    "adoption": "The pool master reads its retained run/catalog and repository records; Controller reads the master's authenticated inventory and operation results."
+  },
+  "verification": {
+    "method": "Source review found terminal failure after a possible committed S3 manifest. Fake-S3 focused tests cover denied final write, interrupted cleanup, unknown or mutated objects, lost reply plus failed immediate read, delayed conditional final PUT and delayed single/multipart artifact writes released after abort. Independent P1 final-write and P2 artifact-orphan findings corrected the initial design; the final same-key tombstones and adversarial tests passed independent read-only review. Focused S3 and member predicate race tests passed. A matched disposable MinIO build ignored wrong-ETag conditional delete, so Core safely refused registration. A pinned single-process S3Proxy filesystem service passed Core registration, protected two-disk backup/restore and a fixture-only final-manifest 403 after full artifacts; same-ID Core restart terminal-failed with exact permanent abort tombstones, no point, stable replay and protected/source hashes. A separate committed final PUT with dropped reply and nine failed reads autonomously settled the same member run succeeded, one point and byte-identical objects without recapture. Broader provider proof and forge CI remain open.",
+    "evidence": ["internal/agent/backup_repository_s3_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "Provider safety depends on atomic conditional PutObject at the final key and conditional DeleteObject; the available MinIO build failed Core registration because it deleted a wrong-ETag sentinel; a bounded S3Proxy single-process cleanup gate passed, but production multi-process/provider proof remains pending. S3 versioning may retain historical object versions after logical cleanup."
+  }
+}

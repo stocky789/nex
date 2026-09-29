@@ -1,0 +1,42 @@
+{
+  "summary": "Reconcile uncertain SFTP publication and clean exact incomplete uploads under Core authority. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup.go",
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/openapi.json",
+    "docs/api/local.html",
+    "docs/api/index.html",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-sftp-partial-publication-recovery.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "SFTP remains a disabled candidate, so no supported operator instruction changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "No route or schema changes. A capability-enabled SFTP backup with uncertain publication reports needs_attention under the retained operation until Core verifies the exact point or finishes an exact abort, then reports its terminal result.",
+    "pages": ["docs/API.md", "docs/api/local-openapi.json", "docs/api/openapi.json", "docs/api/local.html", "docs/api/index.html"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Repairs a required full-target recovery gate in the existing destination expansion.",
+    "pages": []
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool-master-authorized SFTP destination stores a staged `.nex-manifest` before artifacts and a durable `.nex-abort-ID` record for an interrupted exact cleanup. Core's existing run and operation journal retain the original identity and status; a fresh Controller adopts those through authenticated Core inventory and operation APIs while Core resumes cleanup without it.",
+    "reason": "Incomplete publication must be recoverable after Controller loss or Core restart without recapture, duplicate points or deletion of another operation's bytes."
+  },
+  "verification": {
+    "method": "A disposable size-capped OpenSSH target reproduced one terminal failed backup with a retained partial artifact and intent, no catalog point, stable exact replay and a successful protected control restore under exhaustion. Focused SFTP checks cover staged manifest before artifact, partial abort, interrupted abort marker, zero-byte-marker reconciliation, mismatched or unexpected files, protected/final refusal and empty pre-artifact cleanup. The first corrected native restart exposed a zero-byte abort marker that blocked cleanup; a through-reconciliation regression failed and then passed after the read-path fix. On a further matched OpenSSH restart, Core autonomously removed the preserved partial, staged manifest, intent and abort marker, settled one failed run and retained stable exact replay without a point; prior catalog hashes stayed intact. Independent review then found the BUG-0706 symlink-point risk, fixed separately; its correction review found no further defect. A matched guarded build restored the protected two-disk control with both markers, verified and cleaned it, reported healthy access and retained the exact catalog/control/source hashes.",
+    "evidence": ["internal/agent/backup_repository_sftp_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The old hash-only partial with artifact bytes lacks a durable staged manifest and remains inspection-required. The native cleanup result predates the later symlink-point guard, but the guarded build later passed protected restore, cleanup and health with intact catalog/source hashes. A later measured OpenSSH child and whole-service upload cutoff passed same-operation recovery, but final-manifest interruption, storage-guest power loss and forge CI remain open."
+  }
+}

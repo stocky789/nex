@@ -10009,3 +10009,1374 @@ Append resolved defects with their evidence and the approach to avoid.
   -timeout 20m ./...` on pushes and pull requests; no CI run is claimed.
 - Avoid: adding negotiated capabilities without checking the receiver's bounded report
   count and an actual post-negotiation report.
+
+## BUG-0674 — Hwmon stall regression depended on another test's live sensor read
+
+- Date: 2026-09-28.
+- Symptom: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls` intermittently failed
+  with `first read = []` in the full agent package, while passing alone.
+- Root cause: the test used the package's single `hwmonLast` reader. An earlier hardware
+  report can leave a real sensor read in flight after its deadline; the test's first call
+  then returns no cached values for its different fixture root without starting a read.
+- Fix: keep the production singleton, and run the fixture against a local `hwmonReader`
+  instance so its FIFO and cache assertions do not depend on host sensors or test order.
+- Regression: before the fix, `go test ./internal/agent -count=1 -timeout=60s -json`
+  reported `first read = []` twice. After the fix, `go test ./internal/agent -count=2
+  -timeout=5m` passed, as did `go test -race ./internal/agent -count=3 -run
+  'TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls|TestStatsChannelServesHistoryAndHardware'`.
+  The existing forge `phase1.yml` runs the agent package with `go test -race ./...`;
+  no forge run is claimed.
+- Avoid: resetting the production singleton in a test while its background goroutine
+  can still finish and overwrite the fixture state.
+
+## BUG-0675 — Policy run-now returned 503 after reserving a backup
+
+- Date: 2026-09-28.
+- Symptom: Core-local policy run-now returned `503 backup operation unavailable` for two
+  separate requests, while each durable run published a recovery point and succeeded.
+- Root cause: a newly queued backup journal entry has no `ObservedAt` yet. Its pending
+  result copied that zero timestamp into the metadata receipt, which validation refused
+  after the run was already reserved. The initial receipt remained pending.
+- Fix: pending backup results use the journal's request time until an observed result
+  exists. Core can acknowledge the reservation while execution continues.
+- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before the fix with
+  `backup metadata receipt is invalid` and passed after it. The existing forge Go
+  suites run `./...` on pushes and pull requests. A disposable Core-local rerun
+  returned `202 pending` and published one recovery point; no CI run is claimed.
+- Avoid: treating a 503 submit reply as proof that no durable run exists, or retrying
+  under a new operation ID before checking the original run and operation result.
+
+## BUG-0676 — S3 restore copy omitted its local destination directory
+
+- Date: 2026-09-28.
+- Symptom: a disposable Core two-disk S3 backup published successfully, but restore-as-new
+  failed before VM registration opening `backup-restore/<operation>/vda.qcow2`: the directory
+  did not exist. The source disks had been moved aside to require repository recovery.
+- Root cause: S3 `CopyArtifacts` opened the destination file without creating the local
+  restore directory. It also rejected an exact retry when a prior local artifact existed.
+- Fix: create the private restore directory before copying; verify and reuse exact local
+  artifacts, and replace corrupt local copies on retry.
+- Regression: `TestS3CopyArtifactsCreatesRestoreDirectory` failed before the fix with
+  `no such file or directory`, then passed with fresh, exact-retry, and corrupt-copy cases.
+  Focused S3 tests passed; the full agent package run hit an unrelated temporary-directory
+  cleanup race in `TestRunRefusesUnadvertisedBackupDestinations`. After that test's
+  shutdown was fixed, the full agent suite passed. A fresh disposable two-disk
+  restore-as-new succeeded with both markers read from an isolated guest; this
+  does not establish cross-host or failover recovery.
+- Avoid: testing restore copies only into an already-existing temporary directory.
+
+## BUG-0677 — Policy run-now replay stayed uncertain after a completed run
+
+- Date: 2026-09-28.
+- Symptom: after a Core-local run-now returned `202 pending`, its durable run published
+  successfully, but the metadata receipt stayed pending and an exact same-ID replay
+  returned `needs_attention`. The replay did not create a second run.
+- Root cause: run settlement updated the run and catalog but never settled the
+  run-now admission receipt. The generic metadata replay path read that stale receipt
+  without checking the terminal run.
+- Fix: settle the run-now receipt after the durable run; on exact replay, reconcile
+  a pending receipt from the terminal run so an interrupted receipt write can recover.
+- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before this fix with
+  a pending receipt after successful run settlement. It now checks settlement,
+  a simulated interrupted receipt update, successful exact replay, and one retained
+  run. `go test ./internal/agent ./internal/localcore -count=1` and the focused race
+  test passed. A disposable Core-local rerun returned `202 pending`, then the
+  exact same-ID replay returned `202 succeeded` with one run and a succeeded
+  receipt. The forge runs the agent package in its Go suite; no CI run is claimed.
+- Avoid: treating a reservation receipt as the final backup outcome or issuing
+  a new run ID to resolve an uncertain exact replay.
+
+## BUG-0678 — Controller policy run-now collided with its backup command
+
+- Date: 2026-09-28.
+- Symptom: Controller queued a policy run-now operation, but Core reported
+  `controller reused command ID with different input` after reserving a pending
+  run under that ID. No backup artifact was published.
+- Root cause: Core journaled the Controller's `backup-policy-run-now` command,
+  then tried to journal `backup-now` under the same operation ID. Journal input
+  identity checks correctly rejected the different command. After that collision
+  was fixed, the Run loop still tried to complete a pending reservation as a
+  terminal command and stopped. An interruption between run reservation and
+  journal transition also let the member scheduler select the same run.
+- Fix: after reservation, Core makes the existing journal entry executable as
+  `backup-now` under the same ID. The durable receipt binds exact Controller
+  replays to the original policy and VM; the reported outcome retains the
+  Controller's `backup-policy-run-now` kind. The Run loop leaves the converted
+  pending entry for its backup worker. Member dispatch skips runs with either
+  Controller journal kind, including before transition. An interrupted
+  reservation resumes the same run.
+- Regression: `TestControllerPolicyRunNowReusesJournalIdentity` failed before
+  the fix with the reported collision. It now covers dispatchability, exact and
+  changed Controller replay, reservation recovery, terminal replay and one run.
+  `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed with a second peer
+  dispatch before journal recovery and now passes. A pending reservation made
+  `TestControllerPolicyRunNowReusesJournalIdentity` fail with `invalid local
+  managed command completion` before the Run-loop fix.
+  `TestControllerPolicyRunNowRunLoopDispatchesAfterReservation` exercises the
+  actual Run loop. The forge Go suites run the agent package; no CI run is claimed.
+- Avoid: bypassing journal identity checks or starting another run under a new
+  operation ID after reservation uncertainty.
+
+## BUG-0679 — Stale member observations refused large backup authority writes
+
+- Date: 2026-09-28.
+- Symptom: after both members verified a signed v2 backup authority root beyond
+  64 MiB, the master refused an NFS repository metadata receipt before commit.
+- Root cause: admission used master-side member replica observations that were
+  more than two minutes old, even though the members held current verified v2
+  roots. It treated an old observation as proof that members lacked support.
+  Independent review then found that admitting from a fresh cached observation
+  could allow a just-disconnected member, and a v2-capable member could still
+  be behind the master's current generation.
+- Fix: require a live, certificate-pinned mTLS status GET from every required
+  member with a three-second bound, and match verified v2 status to the
+  master's exact current generation and digest. Recheck generation and
+  membership before the metadata commit. Disconnected, lagging or old-version
+  members fail closed.
+- Regression: `go test ./internal/agent -run
+  'TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory|TestBackupAuthorityV2RefusesMemberBehindMasterGeneration|TestBackupAuthorityV2RequiresCurrentMemberSupport'
+  -count=1` covers admission after stale observations, refusal after immediate
+  disconnect, refusal of a member behind the master, and unsupported members.
+  The stale-observation case failed before its fix and passed after it; the
+  disconnect and lagging-member cases exposed the later admission gaps and
+  passed after the final source correction. Native repository registration
+  still returned 503 on the older lab overlay; retry with the corrected
+  candidate remains unrun, and no CI run is claimed.
+- API impact: existing Core-local contract; repository admission may now
+  succeed after live authenticated proof from every required member. Guide
+  impact: none.
+- Avoid: raising the authority size limit by skipping current-member proof or
+  trusting cached observations or capability alone as current replica proof.
+
+## BUG-0680 — Member backup requests treated adopted repositories as new registrations
+
+- Date: 2026-09-28.
+- Symptom: in a disposable SFTP cross-host restore, Controller submission
+  returned HTTP 202, then Core reported `needs_attention` with `member backup
+  peer refused the request`. The master run stayed pending/reserved; the member
+  created no restore run, staging files or VM.
+- Root cause: the member's backup worker sent a peer repository with its
+  retained remote identity through new-registration preparation. Registration
+  rejects that identity before restore can begin. The same route would use
+  the peer operation ID rather than the registration receipt scope for SMB3
+  credential lookup.
+- Fix: prepare peer repositories through Core's existing adoption path and
+  new registrations through the registration path. This preserves the remote
+  identity and uses the correct credential scope for the peer request.
+- Regression: `TestPeerBackupPreparationAcceptsRetainedRemoteIdentity`
+  failed before the source fix with `ErrBackupInvalid` for SFTP and passed
+  after it with `GOCACHE=/tmp/nex-go-cache go test ./internal/agent -run
+  '^TestPeerBackupPreparationAcceptsRetainedRemoteIdentity$' -count=1`.
+  It also checks the S3 retained-identity path. SMB3 credential scope was
+  source-traced but has no separate red/green regression. Independent source
+  review found no issue; the regression reaches the missing credential
+  receipt, not a successful remote probe or restore. Native cross-host
+  retry remains unrun because the current workspace denies local and QEMU/VDE
+  sockets; no CI run is claimed.
+- API impact: existing peer repository contract. Guide impact: none; no
+  operator step changed.
+- Avoid: routing a repository already adopted from the master through
+  registration validation or a new credential receipt lookup.
+
+## BUG-0681 — Backup authority snapshot could be numbered after a newer commit
+
+- Date: 2026-09-28.
+- Symptom: independent source review found a race in authority push: a backup
+  metadata receipt could commit after the replica snapshot was built but
+  before that snapshot's generation was advanced. No native symptom or replay
+  was observed.
+- Root cause: snapshot build and generation advance did not hold the same
+  backup authority lock, leaving a window for a newer metadata commit.
+- Fix: hold the existing backup authority lock through snapshot build and
+  generation advance, then release it before the network push.
+- Regression: `TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit`
+  paused generation advance and attempted a concurrent metadata commit. It
+  failed before the fix and passed after with `GOCACHE=/tmp/nex-go-cache go
+  test -race ./internal/agent -run
+  '^TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit$' -count=1`.
+  Independent review found no blocking issue and traced the lock order and
+  network boundary. The test uses a 100 ms negative assertion and a nonparallel
+  global hook; native member replication remains unrun because the current
+  workspace denies local and QEMU/VDE sockets. No CI run is claimed.
+- API impact: existing signed authority peer contract. Guide impact: none;
+  no operator step changed.
+- Avoid: assigning a generation to a snapshot while Core-owned backup state
+  can change between its build and numbering.
+
+## BUG-0682 — Interrupted remote prune vanished from catalog rebuild
+
+- Date: 2026-09-28.
+- Symptom: source review found that rebuilding an S3 or SFTP repository after
+  an interrupted prune could discard the catalog row needed for an exact
+  deletion retry. No native crash was observed.
+- Root cause: S3 listed only manifests, hiding a deletion record after the
+  manifest was removed. SFTP ignored its root-level deletion record after
+  the point directory was removed.
+- Fix: S3 listing refuses an active deletion record. SFTP records completion
+  durably after removing the point and intent; listing refuses an incomplete
+  deletion record and preserves the completed record to prevent ID reuse.
+- Regression: `TestS3BackupDeleteResumesAfterLostManifestReply` and
+  `TestSFTPDeleteResumesExactInterruptedPoint` failed before the fix with
+  `entries hid interrupted prune` and `scan hid prune after point directory
+  removal`. Both passed with `go test -race ./internal/agent -run
+  'Test(S3BackupDeleteResumesAfterLostManifestReply|SFTPDeleteResumesExactInterruptedPoint)$'
+  -count=1`. These use in-process S3/SFTP protocol fakes; native remote crash
+  durability and CI remain unverified.
+- API impact: existing repository storage contract. Guide impact: none; no
+  operator step changed.
+- Avoid: treating an absent manifest or point directory as proof that prune
+  finished while its durable deletion record remains unresolved.
+
+## BUG-0683 — Missing member restore operation held the master's dispatch slot
+
+- Date: 2026-09-28.
+- Symptom: after a member refused a cross-host restore before creating its
+  operation, the master's `needs_attention` reconciliation kept polling the
+  missing operation and held `activeSnapshot`, leaving a later restore pending.
+- Root cause: the peer GET collapsed a missing exact operation into a generic
+  retryable error, and the member returned HTTP 409 for that absence.
+- Fix: authenticated peer GET returns HTTP 404 for a missing operation. The
+  master ends that reconciliation attempt as `needs_attention` without
+  settling the reserved run, clearing its restore pin, or replaying the POST.
+  Unavailable peers and other uncertain errors remain retryable.
+- Regression: `TestPeerBackupReconciliationStopsOnMissingExactOperation`
+  failed before the fix and passed afterward. The authenticated member route
+  check `TestPeerBackupMissingOperationReturnsNotFound` and related peer
+  checks passed with `go test -race ./internal/agent -run
+  '^TestPeerBackup(ReconciliationStopsOnMissingExactOperation|MissingOperationReturnsNotFound)$|^TestPeerTestRestoreWaitsForJournalToCatchUpWithRun$|^TestPeerS3DispatchSendsPortableRepositoryAndReconcilesReplay$'
+  -count=1`. A later disposable three-Core retest with the peer fix and an
+  SFTP capability-only overlay completed a fresh cross-host restore: master
+  and member reported `succeeded`, and both restored disk markers matched in
+  `qemu-io` and an isolated, network-free guest. The earlier refused operation
+  stayed `needs_attention` with no member operation; it was not replayed.
+- API impact: changed peer GET contract: a missing exact operation now returns
+  HTTP 404 instead of 409. Guide impact: none; operator steps are unchanged.
+- Avoid: treating absence of a member operation as permission to replay a
+  restore with an uncertain native outcome.
+
+## BUG-0684 — Recovered promotion retained an acknowledged attention receipt
+
+- Date: 2026-09-28.
+- Symptom: after a transient fencer error, the candidate's durable pool transfer
+  later completed, but the Controller operation remained `needs_attention`.
+- Root cause: Core did not reconcile the acknowledged `pool-promote` command
+  journal from the completed transfer; its report sends only unacknowledged
+  results. Controller also declined a later terminal result for promotion. An
+  older Controller could acknowledge that later result without settling its
+  row, leaving no result for an upgraded Controller to consume.
+- Fix: on Core's journal-owning loop, reconcile only the exact candidate
+  promotion receipt when its durable transfer reaches `done`, then report the
+  result again. Controller accepts the authenticated success for that operation
+  and can settle the same row from the candidate's fresh, durable `done` inventory
+  report after an older Controller already acknowledged the result.
+- Regression: `TestPoolPromotionJournalRecoversAfterDurableCompletion` and
+  `TestPromotionOperationRecoversAfterCoreCompletes` each failed before the fix
+  and passed after it. The Core check keeps the receipt uncertain after the
+  transient fence failure, then proves the same transfer finished before
+  reconciling it. `TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedResult`
+  failed before the mixed-version fix and passed afterward; it sends no later
+  result and checks that an unfinished promotion remains uncertain. `go test -race ./internal/agent -run
+  '^TestPoolPromotionJournalRecoversAfterDurableCompletion$|^TestPoolPromotionResumesFromEveryStage$'
+  -count=1` and `go test -race ./internal/controller -run
+  '^TestPromotionOperationRecovers(AfterCoreCompletes|FromInventoryAfterOldControllerAcknowledgedResult)$|^TestOnlyZFSProvisionResultsRecoverFromAttention$'
+  -count=1` passed. In a disposable native fixture, restarting Controller then
+  the promoted Core with the original acknowledged attention receipt and
+  completed transfer recovered the same operation to `succeeded`; exact POST
+  replay returned the same ID without another transfer or fence, and the old
+  master stayed off. A separate fresh two-Core fixture then ran a verified
+  historical Controller through one transient fencer failure. Core finished
+  the exact durable transfer and its journal was `succeeded`/acknowledged,
+  while the historical Controller kept the task `needs_attention`. Replacing
+  only Controller with current on the same data and certificate settled that
+  row to `succeeded` from Core inventory, despite no fresh result; exact POST
+  replay returned HTTP 200 with the same ID, transfer/journal bytes were
+  unchanged, the fencer command count did not increase and the old master
+  stayed off. No CI run is claimed.
+- API impact: existing Core report/result contract; no payload or route change.
+  Guide impact: none; operator steps are unchanged.
+- Avoid: treating a timeout or an independent success projection as sufficient
+  to settle a promotion command without its exact durable transfer completion.
+
+## BUG-0685 — Partial SFTP prune completion marker blocked exact retry
+
+- Date: 2026-09-28.
+- Symptom: source review found that a short write of `.nex-deleted-ID` could
+  leave a digest prefix that blocked both repository rebuild and deletion retry.
+  No native interrupted write was observed.
+- Root cause: exclusive marker creation can leave a partial file after a write
+  or sync failure, but retry accepted only a complete digest and could not
+  replace the partial file.
+- Fix: treat only an exact digest prefix as unresolved work; deletion retry
+  removes and syncs that partial marker, then writes the complete digest. If
+  file sync fails after a full marker write, exact retry reopens and syncs that
+  marker before reporting deletion settled. The original deletion record
+  remains throughout and still blocks point ID reuse.
+- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` injects a partial
+  completion marker after point removal. It failed before the fix with
+  `partial completion marker retry: backup request conflicts with retained
+  work` and passed after it. The check also rejects an unrelated marker and
+  keeps rebuild blocked until completion. The same test injects failure of the
+  full marker's file sync: deletion and rebuild refuse settlement, then exact
+  retry succeeds after sync recovers. That case failed before the reopen/sync
+  fix and passed afterward; focused race and broader SFTP checks passed.
+  In-process SFTP testing does not establish native server crash durability;
+  no CI run is claimed.
+- API impact: existing repository storage contract. Guide impact: none; no
+  operator step changed.
+- Avoid: assuming an exclusive write leaves either a complete file or no file.
+
+## BUG-0686 — Same-ID remote repository replacement orphaned retained points
+
+- Date: 2026-09-28.
+- Symptom: source review found that registering an S3 or SFTP repository with an
+  existing ID but a new destination or credential reference replaced the
+  master's durable destination while catalog points kept the old ID. Restore,
+  rebuild and retention then resolved those points through the new destination.
+- Root cause: registration and commit guarded SMB3 replacement only. S3 and
+  SFTP changes incremented the generation without preserving the old target.
+- Fix: refuse same-ID S3 and SFTP source or credential-reference changes before
+  remote preparation and again under the master's commit lock. Use a new
+  repository ID and keep the old destination available for retained restores.
+- Regression: `TestRemoteRepositoryReplacementPreservesRetainedPoints` failed
+  before the fix for S3/SFTP source and credential changes: each committed a
+  generation-2 replacement. It passes after the fix and checks the durable
+  destination and catalog point stay intact. Focused agent race tests covering
+  this check, SMB replacement and S3 exact preparation replay passed. No native
+  remote service or CI run is claimed.
+- API impact: existing Core repository registration contract; no route or
+  payload change. Guide impact: updated with new-ID rotation instructions.
+- Avoid: reusing a repository ID when the old catalog still needs its original
+  destination and credentials.
+
+## BUG-0687 — Published backup could not settle after authority admission recovered
+
+- Date: 2026-09-28.
+- Symptom: a post-promotion NFS backup published its complete manifest and two
+  matching disk artifacts, but a lagging member blocked authority admission.
+  The run stayed pending/reserved and its journal reported `needs_attention`;
+  exact same-ID replay still could not settle after the member caught up.
+- Root cause: backup replay returned the retained uncertain journal result
+  without retrying settlement of the already published point.
+- Fix: exact replay checks the published point and retries catalog/run
+  settlement when authority admission is available, without recapturing or
+  republishing the backup.
+- Regression: `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
+  failed before the fix and passed afterward. It checks admission refusal,
+  pending run, absent catalog point, missing-point refusal without recapture,
+  successful exact retry, settled reply replay and unchanged artifact hashes.
+  In the disposable promoted fixture, an exact Core-local POST returned HTTP
+  202/`succeeded`: the same journal and run settled, the catalog manifest SHA
+  matched the published manifest, and the member's signed v2 history matched
+  the master's 1,053 runs at generation 16. The original 1,052 seeded run-ID
+  set retained its pre-replay digest. Full `go test ./...` passed before a later
+  restore reconciliation edit; no final-candidate suite or CI run is claimed.
+  The post-promotion restore later settled and its two disk markers were read
+  inside an isolated guest under BUG-0689. This closes only the bounded NFS
+  marker-disk payload check; the four-kind acceptance matrix remains open.
+- API impact: existing Core-local backup request and Core-owned run/catalog
+  contracts; no route or payload change. Guide impact: none; no operator step
+  changed.
+- Avoid: publishing a second point or creating a new operation to resolve
+  uncertain settlement of the exact published backup.
+
+## BUG-0688 — Member repository probes misreported remote access
+
+- Date: 2026-09-28.
+- Symptom: in a disposable diagnostic overlay, member NFS access became
+  current, but S3 on both members and SFTP on one member failed with a stale
+  credential-repository error; both SMB3 repositories failed retained-work
+  identity checks despite matching share markers.
+- Root cause: transient S3/SFTP preparation did not save the member's exact
+  repository before credential-gated access checks. SMB3 comparison included
+  a filesystem ID that differs by client. Master access also did not refresh
+  with its periodic health probe, and member results could outlive their
+  useful observation window.
+- Fix: save the exact prepared member repository before the probe; compare
+  SMB3 server, share and marker identity; stamp member receipt time at the
+  master, expire stale/future observations and refresh master access on each
+  periodic health probe.
+- Regression: `TestBackupMemberProbeAdoptsRemoteCredentialBeforeCheckingAccess`
+  and `TestBackupMemberProbeUsesStableSMBIdentity` failed before their fixes
+  and passed afterward. `TestBackupMasterAccessFollowsPeriodicProbe` likewise
+  failed before and passed after its fix. Focused member/master/health race
+  tests passed; `TestBackupMemberAccessProbeOfflineExpiryAndRestart` covers
+  authenticated probe, generation mismatch, peer outage, expiry and Core
+  restart. The final combined build was not installed before fixture shutdown;
+  native member retest, browser recapture and CI remain open.
+- API impact: existing authenticated peer member-access POST and repository
+  access fields; no further route or payload change. Guide impact: none;
+  operator steps did not change.
+- Avoid: reporting a member healthy from stale observations or comparing
+  client-specific filesystem IDs as shared SMB repository identity.
+
+## BUG-0689 — Registered restore stayed uncertain with a pending run
+
+- Date: 2026-09-28.
+- Symptom: an exact post-promotion restore-as-new request registered a VM, but
+  authority admission left its Core run pending/reserved and its journal at
+  `needs_attention`. The restored VM existed while the operation had no
+  settled result.
+- Root cause: restore reconciliation accepted a run already marked
+  `needs_attention` but excluded an exact pending run whose matching command
+  journal recorded the uncertain native outcome.
+- Fix: allow reconciliation of a pending restore run only when the journal
+  retains `needs_attention` for the same command. Observe the existing native
+  registration and settle the original run; do not issue another restore.
+- Regression: `TestAllocatingRestoreResumesOnlyExactRetainedOperation` was
+  extended to cover a pending/reserved run paired with the exact uncertain
+  journal. `go test ./internal/agent -run
+  '^TestAllocatingRestoreResumesOnlyExactRetainedOperation$' -count=1` failed
+  before the fix with `restore run has no retained uncertain state` and passed
+  afterward. The broader `go test ./internal/agent -run
+  'Test(AllocatingRestore|PublishedBackup|Restore|PoolBackup)' -count=1`
+  passed; independent source review passed. In the disposable promoted fixture,
+  restarting the matched Core overlay auto-reconciled the same restore:
+  journal, run and API reported `succeeded`, the run stage was `registered`,
+  and the restored VM started with zero NICs and returned to shut off. A
+  separate isolated, network-free, read-only Linux guest attached both
+  restored disks, read the exact root and data ASCII markers at the tested
+  offsets, then powered off. After restore, all 1,052 original seeded run IDs
+  retained their original set digest; the master held 1,054 total run records,
+  and the surviving member's signed generation 19/history of 1,054 matched
+  it. These marker disks lacked a guest OS, so this does not prove guest OS
+  recovery or the broader four-kind matrix; no CI run is claimed.
+- API impact: existing Core restore request and Core-owned run/journal
+  contracts; no route or payload change. Guide impact: none; no operator step
+  changed.
+- Avoid: treating a pending run as proof that no native restore occurred, or
+  retrying a restore without checking its exact journal and VM registration.
+
+## BUG-0690 — Same-ID NFS replacement could orphan retained points
+
+- Date: 2026-09-28.
+- Symptom: independent review found that changing an NFS repository's source
+  or observed filesystem identity under the same ID could redirect retained
+  points to a different destination. A changed generation could also leave
+  member access observations mismatched.
+- Root cause: the replacement guard returned false for NFS-to-NFS changes.
+  Early registration reached native preparation for a changed source, and the
+  commit path could accept changed source or filesystem identity.
+- Fix: refuse same-ID NFS source changes before preparation and source or
+  observed-filesystem identity changes under the commit lock. Register a new
+  repository ID for a moved destination, preserving the old one for retained
+  restores. Peer requests carry the master's observed NFS identity so member
+  adoption and promotion pin that filesystem before claiming its owner marker;
+  a different observed filesystem is refused.
+- Regression: `TestNFSRepositoryReplacementPreservesRetainedPoints` failed
+  before the fix: source change reached native mount preparation and failed
+  there with permission denied, while changed filesystem identity committed.
+  It passed after the guard and verifies the original destination, generation
+  and catalog point remain intact. `TestPeerNFSAdoptionPinsMasterFilesystem`
+  passed in the focused run: it checks that the peer carries the master's
+  identity, preparation receives it, and a different filesystem identity is
+  rejected. In the disposable promoted fixture, same-ID NFS source change and
+  exact replay each returned HTTP 503; source, observed identity and generation
+  stayed unchanged. In a later matched disposable fixture, replacing the NFS
+  export's backing filesystem changed the kernel NFSv4 FSID on both mounted
+  hosts. Member access failed, and same-ID registration plus exact replay
+  returned HTTP 503. After the original export was restored, the repository's
+  identity and generation stayed unchanged. Test restore of a retained old
+  point succeeded; read-only mounts of its two restored disks matched the
+  original marker hashes. Verification and exact VM/disk cleanup succeeded,
+  and the point remained in Core's catalog. Mixed-version peer refusal and CI
+  remain pending.
+- API impact: existing Core repository registration route with stricter
+  same-ID replacement refusal, and changed authenticated peer NFS contract:
+  dispatch, member access and promotion now carry and require the master's
+  observed filesystem identity. Older peers derived identity from source
+  alone, so matching updated Core versions are required. Guide impact:
+  updated with new-ID instructions for NFS moves.
+- Avoid: reusing a repository ID whose retained recovery points still depend
+  on its original NFS source and filesystem identity.
+
+## BUG-0691 — Online remote capture used a Core-private work directory
+
+- Date: 2026-09-28.
+- Symptom: a disposable Controller-submitted S3 online backup stopped before
+  QEMU capture because `libvirt-qemu` could not create its work directory
+  below Core's private state. The operation became `needs_attention` with a
+  pending/reserved run even though no capture had begun. SFTP used the same
+  staging path.
+- Root cause: S3 and SFTP selected `backup-staging/` below the root-only Core
+  state for both stopped and online capture. Preparation returned an
+  uncertain result for a proven pre-capture failure.
+- Fix: online S3/SFTP capture uses a private QEMU-owned work root below the
+  existing libvirt storage path; stopped capture keeps its Core-private
+  staging. Work-root creation checks the path and owner-only mode. A
+  pre-capture preparation error settles the exact run as failed.
+- Regression: `TestRemoteOnlineBackupUsesQEMUAccessibleWorkDir` failed before
+  the path fix and passed after it. On the selected disposable matched Core
+  build, S3 and SFTP each published an online two-disk point; S3, SFTP and
+  SMB3 online points each returned one succeeded run/point and HTTP 200 on
+  exact backup replay. A deliberate work-root mode fault then returned one
+  failed S3 run, no point and HTTP 200/failed on replay; the disposable root
+  mode was restored immediately. The original uncertain fixture operations
+  remain recorded and were not replayed as new captures. These results do
+  not establish the wider per-kind fault matrix or CI.
+- API impact: existing Core backup-now and Controller VM backup operations;
+  no route or payload change. Guide impact: none; the supported operator
+  steps do not change. Core retains all run and point state.
+- Avoid: giving QEMU a path under Core's root-only state or treating a
+  pre-capture permission failure as an uncertain native backup outcome.
+
+## BUG-0692 — Slow peer verification stranded a completed restore
+
+- Date: 2026-09-28.
+- Symptom: an online S3 point restored and booted on a disposable member,
+  but the master reported `needs_attention` and kept the run pending/reserved.
+  Its exact replay returned the same uncertain result.
+- Root cause: the master's full S3 artifact readback inherited a 10-second
+  peer HTTP request context. A timeout during verification was classified as
+  permanent even though the member's exact restore had succeeded.
+- Fix: give full point verification its own bounded context, retain the
+  short authenticated peer request timeout, and retry transient repository
+  read failures. Invalid point content and digest mismatches remain terminal.
+- Regression: `TestPeerS3RestoreVerificationTimeoutCanRetry` failed before
+  the fix by classifying a canceled S3 verification as permanent, then passed.
+  A matched disposable Core restart reconciled the **same** S3 restore to
+  succeeded/registered; exact Controller replay returned HTTP 200/succeeded
+  with one run and no second VM. Its zero-NIC member VM had already booted in
+  isolation while the original disks were unavailable; both marker hashes
+  matched. Large-volume verification throughput beyond the bounded fixture
+  and CI remain unproven.
+- API impact: existing authenticated Core peer backup operation and Core-owned
+  restore run contracts; no route or payload change. Guide impact: none; no
+  operator instruction changes.
+- Avoid: treating a timed-out readback as proof that a completed member
+  restore or its repository point is invalid.
+
+## BUG-0693 — Failed capture retained local staging disks
+
+- Date: 2026-09-28.
+- Symptom: a terminal backup failure during capture or remote publication could
+  leave full staged disk images on the VM host indefinitely.
+- Root cause: backup work-directory cleanup was enabled only after successful
+  repository publication. Failed runs cannot resume capture on exact replay.
+- Fix: remove work files on every terminal path after the native capture job is
+  known inactive. Preserve them when native job inactivity cannot be proven.
+- Regression: `TestFailedBackupRemovesPartialCapture` creates a partial disk
+  before a conversion error; it failed with the original cleanup condition and
+  passed after the fix. The existing Go package suites in both forge workflows
+  and the cheap GitHub workflow run this test on pushes and pull requests.
+  A matched disposable Core build then ran a selected NFS stopped backup with
+  a faulted `qemu-img` that wrote a partial disk and failed. Core recorded one
+  failed run, removed the staging directory, published no point, and exact
+  Core-local replay returned the same failure. The fault hook was removed and
+  all fixture processes stopped. Online and interrupted-upload cleanup, and
+  CI results remain open.
+- API impact: existing Core backup-now result; no contract change. Guide
+  impact: none; no operator step changes. Core owns the run and point state.
+- Avoid: keeping terminal failed-run staging files as if exact replay could
+  resume their capture.
+
+## BUG-0694 — Offline member blocked backup repository registration
+
+- Date: 2026-09-29.
+- Symptom: a live browser SFTP credential handoff succeeded and registration
+  queued, but Core failed registration while a ready pool member was offline;
+  no repository appeared.
+- Root cause: Core required credential delivery to every durable `ready` member
+  before saving the master's repository record. Membership readiness does not
+  mean the member is reachable. The same delivery error could also turn a
+  committed registration into a failed operation.
+- Fix: verify the master's private credential before commit, save the Core-owned
+  repository, and deliver credentials to every reachable member without making
+  a temporarily unreachable member fail registration. Periodic Core probes
+  retry delivery. Member dispatch and promotion still refuse missing private
+  credentials or inaccessible repositories.
+- Regression: `TestBackupRepositoryRegistrationWithOfflineMember` failed before
+  the fix with `ErrBackupUnavailable`, then passed. It checks master commit,
+  exact retry, delivery to a second reachable member despite a failed first
+  delivery, promotion refusal before delivery, reconnect delivery, and missing
+  master credential refusal before commit. The existing Go package jobs in
+  both forge workflows and the cheap GitHub workflow run it on pushes and pull
+  requests. In a disposable matched Core build, browser SFTP credential
+  handoff returned HTTP 201 and registration HTTP 202; Core then reported the
+  repository with a succeeded operation while one ready member guest was off.
+  The online member reported read/write access and the offline member a failed
+  probe. After swapping the running member guest, the reconnected member
+  reported read/write access and held a verified signed authority replica at
+  the master's generation with a repository manifest. The two Core guests,
+  storage guest, Controller, tunnels and browser were stopped afterward.
+  Native promotion after reconnect, broad faults and forge CI remain open.
+- API impact: existing Controller credential handoff and backup repository
+  registration contracts; no route or payload change. Guide impact: none;
+  current supported NFS instructions do not change. Core owns the durable
+  repository and credential records.
+- Avoid: treating durable membership status as a liveness prerequisite for
+  saving pool repository state, or acknowledging registration before checking
+  the master's own credential receipt.
+
+## BUG-0695 — Large catalog rebuild outlived its request and could not resume
+
+- Date: 2026-09-29.
+- Symptom: a disposable S3 catalog rebuild lost its Core-local HTTPS reply
+  after the 30-second server write limit. Its receipt stayed `pending`, but an
+  exact retry returned `needs_attention` without resuming the scan; a later
+  SFTP rebuild conflicted with that unsettled operation.
+- Root cause: catalog import/rebuild scanned and hashed the repository on the
+  single Core request loop under a 30-second context. A pending metadata
+  receipt had no catalog retry path.
+- Fix: Core reserves the exact receipt, runs the bounded scan in a background
+  worker, and settles the receipt after the scan. Local POST returns
+  `202/pending`; operation GET remains `pending` during work. Exact input can
+  resume a pending receipt after interruption, while a transient scan error
+  stays visible on that receipt for a later retry.
+- Regression: `TestCatalogRebuildRetriesPendingReceipt` failed before the
+  pending-receipt fix and passed after it; it also checks pending GET and
+  transient-error visibility. `TestBackupCatalogPendingResponseAccepted`
+  checks the local HTTP 202 for import and rebuild. Existing Go package jobs
+  in both forge workflows and the cheap GitHub workflow run these tests on
+  pushes and pull requests. On a matched disposable Core build, the original
+  S3 operation returned `202/pending` on exact retry, then `succeeded` after
+  19 two-second polls; the catalog still contained 24 points. The SFTP
+  rebuild remained pending because that older fixture held incomplete remote
+  delete records; Core reported a conflict, and the selected catalog index
+  was restored from a disposable rollback copy. In a later full-pool check,
+  a fresh missing-index S3 rebuild restored the selected point byte-for-byte,
+  retained a protected old point and left a pruned point absent. A separate
+  clean SFTP repository published one two-disk point and rebuilt its removed
+  index byte-for-byte, while the older repository's unresolved delete records
+  were left untouched. Interrupted prune, broader interruption and forge CI
+  remain open.
+- API impact: changed existing Core-local import/rebuild response timing:
+  `202/pending` precedes a settled operation GET or exact replay. Controller
+  uses its existing asynchronous operation contract. Guide impact: updated
+  catalog rebuild recovery steps. Core owns the receipt and catalog.
+- Avoid: treating a successful request reservation, a timed-out HTTPS reply,
+  or a pending receipt as proof that the catalog was rebuilt.
+
+## BUG-0696 — Replacement Controller lost an offline member name and linked to a missing Host
+
+- Date: 2026-09-29.
+- Symptom: after a fenced promotion and Controller replacement, the former
+  master remained in the Core-reported Members list with unknown connection,
+  but its name fell back to a UUID and its link opened a missing Hosts panel.
+- Root cause: Core membership saved the member ID but not its hostname; the
+  Controller knew names only for hosts enrolled with that Controller, while
+  the Members UI assumed every member had an enrolled Hosts row.
+- Fix: Core stores the host-reported hostname in the master's durable
+  membership and replicates it with signed authority. Older pools backfill
+  names on authenticated reconcile only after every ready peer proves it can
+  verify the new signed format. A named pool refuses an older first join, but
+  retained issued-offer replay still returns its original certificate. Core
+  omits names from strict older Controller reports until the new capability is
+  acknowledged. Controller uses the Core name for an unenrolled member, and
+  the UI links only members present in the Controller Hosts inventory. Legacy
+  empty names remain valid and use the stable ID; no host control identity is
+  invented.
+- Regression: `TestPoolMembershipRetainsHostnamesAcrossJoin` failed to compile
+  before the field and passed after it; focused join/replay tests passed.
+  `TestLegacyJoinReplaySurvivesHostnameBackfill` failed before its ordering
+  correction and passed after. Legacy/offline peer, Controller preflight,
+  `TestReplacementControllerShowsOfflineMemberNameFromCore` and
+  `web/src/pool-members.test.mjs` passed; the UI link assertion failed before
+  the fix. Existing Go, web and API-contract forge jobs include these files.
+  A separate new disposable pool installed the current-source Core on two
+  hosts, joined them, and verified both saved hostnames in master membership
+  and the signed member replica. A fresh Controller with a new data directory
+  and CA adopted only the live master: Members showed the offline member by
+  its Core name with unknown connection, while Hosts had no row. All fixture
+  processes stopped. A later headless browser pass on that fresh Controller
+  showed the named offline member with Connection Unknown and no Hosts link;
+  only the enrolled master linked. Native mixed-version upgrade and forge CI
+  remain open.
+- API impact: changed contract, additive optional peer join and Core
+  membership `hostname`; the Controller Members response keeps its existing
+  `name` field. Guide impact: updated join/replacement guidance. Core owns the
+  durable membership and its signed replica.
+- Avoid: treating a Controller enrollment row as the only source of a pool
+  member's name or assuming a membership row grants Host-panel access.
+
+## BUG-0697 — Failed backup registration stranded a private credential
+
+- Date: 2026-09-29.
+- Symptom: failed SMB3, S3 and SFTP registration attempts left Core-private
+  handoff receipts, but the existing support list and retire API did not show
+  or retire them. Four failed handoffs were observed in a disposable lab;
+  no secret cleanup was claimed there.
+- Root cause: generic receipt reporting and retirement covered VM storage
+  credentials only. Backup handoffs had a separate private receipt store, with
+  cleanup only when a committed repository replaced an earlier receipt.
+- Fix: Core includes redacted backup receipts in the existing report and
+  routes the existing retire command through backup receipt cleanup. It checks
+  repository and unresolved registration references again under Core's locks,
+  keeps a signed replay tombstone after clearing the secret, and removes an
+  unused SMB3 side credential file.
+- Regression: focused Core receipt, failed registration, pending operation,
+  in-flight retirement, SMB side-file and ordinary storage-path tests passed;
+  a red baseline was not captured. On a matched current-source disposable Core
+  overlay, four earlier failed handoffs appeared as eligible, retired through
+  Controller, and stayed retired after exact handoff replay returned 503.
+  Private inspection confirmed four empty-secret 0600 tombstones and removal
+  of the unused SMB side file. Five active receipts remained ineligible with
+  their private material intact; four-kind repository access and exact
+  repository/point/run ID sets survived. Forge CI remains open.
+- API impact: changed existing Core report and credential-retire semantics;
+  the Controller list and retire routes retain their payloads. Guide impact:
+  none for the currently supported NFS workflow; the support cleanup contract
+  is documented in `docs/API.md`. Core owns the private receipt and tombstone.
+- Avoid: treating a failed Controller registration response as evidence that
+  the Core-private handoff was erased, or deleting a receipt while an
+  ambiguous registration can still commit.
+
+## BUG-0698 — Interrupted NFS/SMB3 prune left a partial point and blocked retry
+
+- Date: 2026-09-29.
+- Symptom: if Core or the destination stopped after filesystem prune removed
+  an artifact but before the point and catalog row were removed, exact backup
+  settlement could not finish and catalog rebuild refused the incomplete
+  point. A retained catalog row could still name an unrestorable point.
+- Root cause: filesystem deletion used `os.RemoveAll` without a durable
+  decision record. On retry, the pre-delete `ReadPoint` rejected the partial
+  directory, and rebuild could not distinguish an authorized deletion from
+  corruption.
+- Fix: NFS/SMB3 records a durable repository-root delete intent tied to the
+  validated manifest and Core catalog digest before removing named files.
+  Exact retry rechecks authority, active restore pins and protection; it
+  resumes only a matching intent. A present manifest must match the saved
+  bytes, so a replacement with the same ID cannot be deleted. A completion
+  tombstone survives the catalog-removal window. Scan refuses an unfinished
+  intent, while incomplete points without one remain conflicts.
+- Regression: `TestFilesystemPruneResumesOnlyRecordedPartialDeletion` failed
+  before the fix on exact retry and passed afterward; a same-ID replacement
+  case failed before its correction and passed afterward. Focused race,
+  corrupt-point and retention checks, the full agent package suite and the
+  privacy check passed. Independent source review found the replacement
+  hazard, then re-reviewed its correction with no remaining material finding.
+  In a disposable native NFS/SMB3 fixture, an ignored exact-point hook stopped
+  Core after manifest and one disk artifact were removed. The durable intent
+  matched the catalog digest, and another artifact remained. Core was killed
+  with automatic service restart disabled, then its clean current-source
+  capability overlay resumed the retained operation. Exact Controller replay
+  used the same operation with no extra run or point; each old directory was
+  gone, tombstone remained, rebuild succeeded and new/protected points plus
+  source disk hashes survived. This is controlled fault injection, not a
+  spontaneous hardware crash. Forge CI and broader faults remain open.
+- API impact: changed existing retention and catalog-rebuild failure/retry
+  behavior with no schema change. Guide impact: updated catalog rebuild
+  troubleshooting. Core owns the catalog/run and destination delete intent;
+  a fresh Controller reads the Core result, not a private cleanup registry.
+- Avoid: removing a partially deleted point or its intent manually to force
+  a successful catalog scan, or treating an arbitrary incomplete point as an
+  authorized prune without the matching durable intent.
+
+## BUG-0699 — SMB3 restore required a write probe on the source repository
+
+- Date: 2026-09-29.
+- Symptom: a disposable SMB3 share set read-only refused a new backup as
+  expected, but also refused restoration of an intact protected point before
+  VM creation. Core reported that it could not create a QEMU access probe.
+- Root cause: the shared repository verification path ran SMB3 write probes
+  for both publication and read-only point access.
+- Fix: Core keeps mount, owner and SMB marker checks on reads, while reserving
+  the QEMU and publication write probes for write operations and health tests.
+  Manifest and artifact validation still run during restore. Exact retry of
+  an already published, uncertain manual backup without retention now reads
+  the point before settling its existing run, without requiring a new write
+  probe; a new backup still checks write access. Policy settlement still
+  requires writes if retention pruning remains due.
+- Regression: `TestVerifySMBBackupReadSkipsPublicationProbe` failed to compile
+  before the read path was added and passed after. It checks that read access
+  skips both write probes, write access executes both, and a wrong share marker
+  is refused. Focused race and serial full Go tests passed. In the same
+  disposable fixture, a fresh current-source SMB3 capability overlay restored
+  the protected point while the mounted share's server denied writes. Both
+  copied disks had the exact old markers, exact replay reused the operation,
+  the five catalog point IDs and source hashes stayed unchanged, and no NBD
+  mount remained. The original Samba configuration was restored and writes
+  recovered. `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
+  failed before the reconciliation correction and passed afterward with
+  writes denied; its absent-point replay still stayed unresolved. Focused
+  race passed. Independent follow-up review confirmed that the policy
+  retention path remains write-dependent; the regression covers manual
+  backup only. Native published-point replay under write denial, forge CI and
+  broader destination faults remain open.
+- API impact: existing contract; restore and catalog read behavior changes
+  when the SMB3 server denies writes without a route or schema change. Guide
+  impact: updated. Core owns the mounted source and recovery point.
+- Avoid: using a writable repository health probe as the precondition for
+  reading a retained recovery point.
+
+## BUG-0700 — Failed first SMB3 mount start blocked fresh same-ID registration
+
+- Date: 2026-09-29.
+- Symptom: a new disposable SMB3 share was briefly unavailable at registration.
+  The failed request left a Core-managed mount unit. After the share recovered,
+  fresh requests with the same repository ID and new credentials were refused
+  as a mount rotation even though no repository had been committed. Exact
+  replay correctly returned the original failure. A different new ID worked.
+- Root cause: `prepareRemote` wrote the mount unit, then returned on a failed
+  `systemctl enable --now` before the NFS/SMB caller installed its validation
+  cleanup. The failed unit was treated as an existing mount on the next
+  request.
+- Fix: Core tracks a newly created remote mount unit and detaches it if
+  preparation fails. Existing units and credential-rotation rollback keep
+  their prior handling; failed detach remains an explicit uncertain rollback.
+  Remote NFS/SMB preparation and its cleanup are serialized so an overlapping
+  successful preparation cannot lose its mount to another request's rollback.
+- Regression: `TestFailedFirstRemoteMountStartLeavesNoUnit` failed before the
+  fix because the unit remained and passed afterward with a fresh same-ID
+  request using a different credential path. A second concurrent preparation
+  regression failed before serialization and passed after it. Focused race
+  and full vmhost package tests passed. Independent review found the overlap
+  hazard and re-reviewed its correction with no further concrete finding.
+  A fresh current-source disposable Core then failed first registration
+  against a deliberately absent new SMB share with no new unit, CIFS mount or
+  repository left behind. Exact replay kept the failed operation. After the
+  share became available, a fresh credential/request for that same repository
+  ID succeeded and Core access was readable/writable. The first failed
+  handoff was already retired; the active receipt stayed ready. Original
+  seven point IDs, hashes and the pre-fix orphan unit were unchanged. Forge
+  CI and broader interrupted-mount cases remain open.
+- API impact: existing contract; a failed first NFS/SMB mount preparation now
+  cleans its private unit so a new registration request can retry the same ID.
+  No route or schema changes. Guide impact: none; the operator retry step is
+  unchanged. No new durable state is added.
+- Avoid: assuming a failed `systemctl enable --now` cannot leave Core's new
+  unit on disk, or treating that orphan as a committed repository.
+
+## BUG-0701 — Pending SFTP prune remained readable
+
+- Date: 2026-09-29.
+- Symptom: source review found that a point with a durable SFTP delete record
+  and still-intact manifest passed the public read path. A restore could begin
+  after deletion had started. Catalog rebuild already refused the same pending
+  record, and protection writes already checked it under the peer lock.
+- Root cause: SFTP `readPoint` validated the manifest and artifacts but did not
+  check the repository's delete record before returning them.
+- Fix: `readPoint` refuses any pending delete record. Exact prune retry reads
+  its recorded manifest before calling `readPoint` only for a first deletion,
+  so an interrupted prune can still finish.
+- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` now asserts that an
+  intact point with a published delete record returns conflict. It failed
+  before the fix (`<nil>`) and passed afterward, including focused race
+  checking. Serial full Go tests also passed. Independent read-only source
+  and documentation reviews found no concrete issue. A later matched native
+  SFTP post-intent fault left the old manifest intact but Core refused restore
+  of that point and catalog rebuild; after permission recovery, the original
+  prune settled and rebuild succeeded. Forge CI has not run.
+- API impact: existing contract; SFTP restore/read of a point pending deletion
+  now refuses it, with no route or schema change. Guide impact: none while
+  SFTP remains a disabled candidate; no operator step changed. No new durable
+  state is added.
+- Avoid: treating an intact SFTP manifest as proof a point is restorable when
+  its durable deletion has already begun.
+
+## BUG-0702 — A published policy backup could not resume interrupted retention
+
+- Date: 2026-09-29.
+- Symptom: a disposable S3 policy **Run now** published its new point, then
+  received a scoped `DeleteObject` refusal while pruning an older point. Core
+  kept the delete intent and reported `needs_attention`; restore and rebuild
+  refused the pending deletion. After permission recovery and a matched Core
+  restart, exact Controller replay still returned `needs_attention`, and an
+  SFTP run for the same VM stayed pending behind the unresolved S3 run.
+- Root cause: `SettlePoolBackupRun` saved the new catalog point but pruned
+  before saving the terminal run and Run-now receipt. The journal became
+  `needs_attention`; Core only reconciled direct backup-now journal replays,
+  while Controller exact replay returned its retained task without redispatch.
+  Scheduled backups shared the journal recovery gap.
+- Fix: Core's periodic recovery lane selects one local published backup with
+  a matching retained run and `needs_attention` journal, validates its existing
+  point, and retries settlement and retention under the original operation ID.
+  It never recaptures the VM; unresolved or still-denied work remains
+  `needs_attention`. Attempts run off the Store-owning loop, one at a time,
+  with five minutes between unsuccessful attempts. The retry context now
+  reaches remote pruning and closes a stalled SFTP transport. A terminal run
+  with an unfinished journal is also reconciled after restart.
+- Regression: the focused Run-loop test reproduces write-denied retention,
+  then verifies Core-owned recovery of the same policy Run-now run/receipt and
+  exact replay, a scheduled run, and the terminal-run/journal crash window.
+  It also checks cancellation before settlement. The SFTP stalled-handshake
+  cancellation check and focused race run passed. The full agent package
+  passed. Independent read-only review found the initially unbounded prune
+  context; its corrected path was re-reviewed without a further concrete
+  issue. On matched current-source disposable Core, S3 and SFTP each resumed
+  their own post-intent prune after service permission recovery and Core
+  restart, before Controller was needed. Each original run, receipt and
+  journal settled `succeeded`; exact Controller replay reported that same
+  result with one run and one new point. Protected controls and original
+  point/source hashes remained intact. Forge CI and broader interruption
+  cases remain open.
+- API impact: existing contract; Core can settle an existing published
+  scheduled or Run-now backup after destination recovery and report the later
+  result to Controller. No new route or schema. Guide impact: updated so
+  operators wait for the original run to settle after correcting access.
+  Core owns the existing run, receipt, journal and delete intent.
+- Avoid: treating a terminal Controller `needs_attention` task as proof that
+  Core has no recoverable published point, or starting a second backup to
+  clear an interrupted prune.
+
+## BUG-0703 — SFTP write denial was reported as a retained-work conflict
+
+- Date: 2026-09-29.
+- Symptom: a matched native OpenSSH target allowed reads but denied writes.
+  A new stopped backup settled one failed run with no point or local stage,
+  yet the terminal error said `backup request conflicts with retained work`.
+  Exact replay retained that misleading result.
+- Root cause: when an exclusive owner or publication-intent write failed,
+  SFTP retried reading the target to resolve an ambiguous write. If the file
+  was absent, it discarded the original permission error and returned a
+  conflict, which Core mapped to a client error.
+- Fix: preserve the write error if the follow-up read proves the file absent;
+  return a read error if its state cannot be checked, and reserve conflict for
+  a present but different owner or intent. Exact matching retries still work.
+- Regression: `TestSFTPPublishReportsReadOnlyRoot` failed before the fix with
+  a conflict and passed afterward with the permission failure for both owner
+  claim, publication intent and exact intent retry. Focused SFTP tests, race
+  checking and the full agent package passed. Independent read-only source
+  review found no remaining concrete issue. A matched fixed-build OpenSSH
+  retest returned one terminal failed run with `permission denied`, no new
+  point or staging, and exact replay retained that result. The protected
+  two-disk control restored under denial and verified both markers; typed
+  cleanup cleared its VM and pin. Original point and source hashes matched
+  after access recovery. Forge CI remains open.
+- API impact: existing contract; permission failure now uses the existing
+  backend-error path instead of a false retained-work conflict. No route or
+  schema changes. Guide impact: none while SFTP is disabled. No new durable
+  state is added.
+- Avoid: converting an unavailable write target into a conflict when a
+  follow-up read shows the proposed file was never created.
+
+## BUG-0704 — Failed SFTP upload stranded a full remote target
+
+- Date: 2026-09-29.
+- Symptom: a disposable size-capped OpenSSH target filled during a two-disk
+  backup. Core recorded one terminal failed run with no point, but the remote
+  repository retained a partial disk and publication intent after exact
+  replay. Local capture staging had been removed, so the operation could not
+  resume or reclaim that space. A protected point still restored under the
+  full condition.
+- Root cause: SFTP published its manifest staging after artifact upload, so
+  the durable intent contained only a digest when a disk write failed.
+  `executeBackupNow` terminal-failed every `Publish` error, leaving no Core
+  reconciliation path for the incomplete upload.
+- Fix: SFTP now syncs its existing staged manifest before artifact bytes.
+  An uncertain SFTP publication keeps the original Core run/journal
+  `needs_attention`; Core first checks for an exact completed point. If none
+  exists, the master uses a durable repository abort marker to remove only
+  files named by the staged manifest, after ownership, authority, catalog,
+  protection and file-type checks. Interrupted abort resumes under the same
+  operation and only then terminal-fails the run. A malformed pre-artifact
+  stage may be removed only when no artifact exists. A legacy hash-only
+  partial with artifact bytes is preserved for inspection.
+- Regression: focused SFTP protocol checks cover partial-upload abort,
+  interrupted abort-marker completion, exact retries, unknown/symlink and
+  protected/final refusal, plus empty pre-artifact cleanup. They passed with
+  focused race checking. A through-reconciliation test then caught a zero-byte
+  abort marker blocking Core cleanup; after `readPoint` distinguished an absent
+  final manifest from a conflicting final manifest, that regression, focused
+  race checking and the full agent package passed. Serial full Go tests passed
+  before this last correction and need repeating;
+  independent read-only review then found BUG-0706, a symlink-point cleanup
+  risk, which was fixed separately. On a matched disposable OpenSSH build
+  before that guard, Core restarted after capacity recovery and autonomously
+  removed the retained partial disk, staged manifest, intent and abort marker.
+  The original operation settled one terminal failed run with no point and
+  stable exact replay; prior catalog hashes stayed intact. A later matched
+  guarded build restored the protected two-disk control with both markers,
+  verified and cleaned it, reported healthy repository access, and retained
+  exact catalog/control/source hashes. Forge CI remains open.
+- API impact: existing contract; an uncertain SFTP backup remains
+  `needs_attention` under the same operation until Core proves publication
+  or finishes exact abort. No new route or schema. Guide impact: none while
+  SFTP remains disabled. State owner: Core; the destination-local staged
+  manifest and abort marker are durable records reconciled by the pool master,
+  and a fresh Controller reads the existing Core run/journal status.
+- Avoid: terminal-failing an ambiguous remote write while leaving an
+  incomplete upload that no Core operation can resume or clean.
+
+## BUG-0705 — Missing restore point stayed in attention after definite refusal
+
+- Date: 2026-09-29.
+- Symptom: restoring an incomplete SFTP point through Controller created no
+  Core run, pin or VM, but the task remained `needs_attention` with `backup
+  operation not found` on exact replay.
+- Root cause: the Core report loop mapped every backup run reservation error
+  to `needs_attention`, including a definite missing catalog point before any
+  native work or durable restore reservation.
+- Fix: report `failed` for `ErrBackupNotFound` and `ErrBackupInvalid` at this
+  pre-execution boundary. Conflict, unavailable and uncertain persistence
+  errors remain `needs_attention`.
+- Regression: `TestReportRestoreMissingPointFailsBeforeReservation` failed
+  before the fix with `needs_attention` and passed afterward with a registered
+  NFS repository, missing catalog point, terminal failed journal, no run/pin/VM
+  and unchanged exact replay. Independent read-only source review found no
+  safety defect; it requested the registered-repository and absence assertions,
+  which were added. A matched disposable OpenSSH retest submitted a fresh
+  restore for the now-absent incomplete point: Controller returned terminal
+  `failed`, exact replay retained that result, and Core created no run, pin,
+  VM or disk. The earlier pre-fix `needs_attention` task remained historical
+  attention after restart; Core does not automatically re-enter an uncertain
+  backup journal. Forge CI remains open.
+- API impact: existing contract; report-driven restore now uses the existing
+  terminal `failed` Result for definite pre-execution refusal. No route or
+  schema change. Guide impact: updated to explain missing-point failure and
+  the need for a new request after a later import. Core owns the existing
+  journal; no new durable record.
+- Avoid: preserving uncertainty for a restore that Core proved never began.
+
+## BUG-0706 — SFTP incomplete-upload abort followed a symlink point directory
+
+- Date: 2026-09-29.
+- Symptom: independent source review found that abort cleanup checked files
+  inside a point but not the point directory itself. A symlink point could
+  redirect cleanup into a different directory and delete its matching files.
+- Root cause: `abortIncompleteOnClient` called `ReadDir` and `Remove` through
+  the point path without first checking its file type with `Lstat`.
+- Fix: reject any existing point path that is not a real directory before
+  checking its manifest or descending into it. An absent point remains
+  resumable for an interrupted abort.
+- Regression: the SFTP abort test moved an incomplete point to another
+  directory and replaced the point path with a symlink. Before the fix,
+  cleanup returned success and removed the target artifact; after the fix,
+  it returns `ErrBackupConflict` and leaves target bytes unchanged. Focused
+  race and serial full Go tests passed after the fix; independent correction
+  review found no further concrete defect. The later matched native guarded
+  build preserved the 17 catalog point/hash pairs, restored and cleaned the
+  protected two-disk control, and reported healthy repository access; it did
+  not exercise a malicious symlink through a public Core operation. Forge CI
+  remains open.
+- API impact: existing contract; unsafe abort now returns the existing
+  conflict result. Guide impact: none while SFTP remains disabled. No new
+  durable state; Core owns the existing abort marker and journal.
+- Avoid: validating only directory entries before a recursive remote cleanup;
+  check the directory itself before any child path is opened or removed.
+
+## BUG-0707 — Controller Run now sent member VM backup to pool master
+
+- Date: 2026-09-29.
+- Symptom: a disposable Controller policy Run now for a member-hosted VM stayed
+  queued, then failed on the master with `source VM definition is unavailable`.
+  The member received no backup request.
+- Root cause: Core prepared the command with the VM's member host but reserved
+  the run without `HostID`. The master dispatch loop routes from the durable
+  run's host, so it treated this as a local backup.
+- Fix: bind the run to Core's resolved VM host before reservation. Exact pending
+  metadata replay binds an older blank-host run only before its journal
+  transitions to backup execution, and refuses a changed placement. A
+  previously transitioned blank-host member run is left for attention rather
+  than risk executing or retargeting it; blank-host local runs retain their
+  original local path.
+- Regression: `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed before
+  the fix on the missing host and passed after it. It also checks blank-host
+  metadata replay, one Controller dispatcher and changed-placement refusal.
+  Focused race and full agent tests passed. Independent read-only review
+  found the legacy local-run compatibility issue; the narrowed guard passed
+  its correction review. On a frozen-source disposable two-Core overlay, a
+  fresh Controller Run now for the member VM settled succeeded/published:
+  the master run named the member, its journal succeeded, the Controller task
+  and exact replay agreed, and one point had a final manifest and both
+  artifacts. The prior 18 point hashes, source disks and signed replica
+  verified. The historical failed operation remains failed. Forge CI remains
+  open.
+- API impact: existing contract; the same Controller and Core policy Run now
+  requests now route to the member named by the durable Core run. Guide impact:
+  none; the documented operator action is unchanged. No new record: Core owns
+  the existing run, journal and policy; Controller adopts their results.
+- Avoid: routing a pool operation from a field omitted during reservation.
+
+## BUG-0708 — S3 ambiguous final publication could be reported failed
+
+- Date: 2026-09-29.
+- Symptom: source review found that a final S3 manifest write could commit
+  while its reply and immediate read failed. Core would terminal-fail the run
+  without cataloging a restorable point. A definite final-write denial also
+  left uncataloged artifacts with no bounded cleanup path.
+- Root cause: Core treated every S3 `Publish` error as a definite failure;
+  S3 had no durable incomplete-upload intent or safe abort protocol.
+- Fix: Core retains publication attention and first verifies an exact
+  published point. S3 stages an exact manifest intent, records an abort
+  marker, and conditionally places a permanent tombstone at that same final
+  manifest key before conditionally replacing every exact artifact with its
+  own permanent same-key tombstone. Late conditional final or artifact writes
+  then lose their key races. Cleanup verifies authority,
+  catalog, pins, protection, object names, digests and conditional deletion;
+  unknown or changed objects remain for inspection. Interrupted cleanup
+  resumes under the original operation, and a published point remains
+  authoritative.
+- Regression: fake-S3 tests cover denied final write, interrupted abort,
+  foreign/mutated objects, committed write with lost reply and failed read,
+  a delayed final write, delayed single and multipart artifact writes, and
+  partial-fence retry. The first cleanup design failed independent review
+  because a separate abort key did not fence the delayed final write. A
+  second independent review found a delayed-artifact orphan leak; the
+  per-artifact fence correction passed its read-only re-review. Focused S3
+  tests passed. A matched disposable MinIO build ignored wrong-ETag
+  `DeleteObject If-Match`, deleting the sentinel, so Core correctly refused
+  registration before native cleanup could run. A separate pinned S3Proxy
+  4.1.1 single-process filesystem service passed Core registration and
+  protected two-disk backup/restore. A fixture-only final-manifest 403 after
+  both artifacts uploaded retained attention, then Core restarted and
+  terminal-failed the same run, replacing exact final/artifact keys with
+  durable abort tombstones; replay, old catalog/source hashes and protected
+  restore held. A separate fixture gate let the final PUT commit, returned
+  503 for its reply and nine exact readbacks, then released access. Core
+  autonomously settled that same member run succeeded with one catalog point,
+  byte-identical manifest/artifacts, stable replay and prior hashes. The
+  provider's single-process limit, broader provider behavior and forge CI
+  remain open.
+- API impact: existing contract; uncertain S3 publication now uses the
+  existing `needs_attention` and later exact succeeded/failed result. No
+  route or schema changes. Guide impact: none while S3 remains disabled.
+  Core owns the existing run/journal and new repository-local intent, abort
+  and tombstone; fresh Controller adoption uses Core inventory.
+- Avoid: deleting artifacts after an ambiguous write without fencing the
+  exact final and artifact keys against late commits.
+
+## BUG-0709 — Member publication attention could not reconcile autonomously
+
+- Date: 2026-09-29.
+- Symptom: a member's accepted peer backup could retain a published or
+  incomplete point in `needs_attention`; its periodic Core worker was gated
+  to pool masters, and exact peer replay returned the retained result.
+- Root cause: the publication reconciliation predicate required the local
+  host to be master even for a journal explicitly accepted from the master.
+- Fix: permit the local member worker to reconcile only an accepted peer
+  journal with the exact retained run and matching command intent when the
+  older run recorded one. The master still
+  observes the member result through the authenticated peer API.
+- Regression: `TestMemberPeerPublicationAttentionReconcilesWithoutController`
+  failed before and passed after the predicate change; it rejects a member
+  command without `PeerDispatched`. Focused race passed, and independent
+  read-only integration review found no concrete issue. Serial full Go
+  passed after the correction. A matched NFS member operation published under
+  a private post-sync lost-reply plus exact-ID read-error overlay and reached
+  attention. With Controller off, restarting both Cores on normal source
+  autonomously settled member and master succeeded/published; fresh
+  Controller adoption and exact replay kept one point, 25 prior catalog
+  hashes and protected/source hashes. This is a fault injection, not an
+  observed NFS server error; forge CI remains open.
+- API impact: existing contract; no request or schema change. Guide impact:
+  none while remote destinations remain gated. No new durable state; Core
+  owns the existing member journal, run and repository record.
+- Avoid: excluding accepted peer work from Core's outage reconciliation.
+
+## BUG-0710 — SFTP abort could race a delayed final manifest rename
+
+- Date: 2026-09-29.
+- Symptom: independent review found that a lost final-rename reply could
+  leave the server rename in flight after Core's abort checked for a final
+  manifest. Abort could then delete artifacts while that rename published
+  the final manifest.
+- Root cause: the separate abort record did not atomically fence the staged
+  `.nex-manifest` source used by final publication.
+- Fix: before deleting artifacts, abort atomically renames that exact staged
+  source to a durable `.nex-abort-manifest` claim and syncs it. Final
+  publication and abort now compete for the same source path: a published
+  final refuses cleanup, while a completed claim prevents a late final
+  rename. Exact claimed bytes resume an interrupted abort; unknown,
+  symlink, protected and cataloged points remain refused.
+- Regression: an adversarial SFTP test forced final rename to win after
+  abort's initial final-path check; the old path removed an artifact, while
+  the corrected path preserved final and artifact bytes and refused abort.
+  Focused race and full agent tests passed; independent read-only correction
+  review found no concrete defect. A second abort-wins delayed-rename check
+  passed focused race testing and preserved a separate published control.
+  A matched native OpenSSH final-manifest denial and recovery settled the
+  same operation failed with no incomplete point, preserved old catalog and
+  source hashes, and passed a protected two-disk control restore. Native
+  delayed-rename ordering and forge CI remain open.
+- API impact: existing contract; uncertain SFTP publication still uses the
+  same attention and exact terminal results. Guide impact: none while SFTP
+  is disabled. Core owns the existing run/journal plus the destination-local
+  abort claim; a fresh Controller reads Core inventory.
+- Avoid: treating a prior final-path absence check as proof that a remote
+  rename cannot complete after artifact cleanup starts.
+
+## BUG-0711 — Filesystem publication reply error lost a complete point
+
+- Date: 2026-09-29.
+- Symptom: NFS or SMB3 could commit a staged point's final rename, then fail
+  to sync the repository parent or lose that reply. Core would mark the run
+  failed while the complete point existed outside the catalog.
+- Root cause: Core treated every filesystem `Publish` error as definite and
+  did not check exact readback after the rename boundary.
+- Fix: Core marks rename and later errors as uncertain, reconciles the exact
+  point, and retains attention if readback cannot prove the outcome. Proven
+  pre-rename failures settle failed after stage cleanup, so they cannot block
+  later work indefinitely.
+- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` failed
+  before the fix and now passes. The same fixture forces an actual pre-rename
+  missing-source error and checks terminal failure with no point. Focused
+  agent and vmhost tests, serial full Go, Python and web checks passed;
+  independent read-only correction review found no concrete issue. A private
+  fixture overlay returned a lost reply after native NFS rename and parent
+  sync; the member/Core and Controller settled one succeeded run and point,
+  exact replay, protected controls and source hashes held. A matched SMB3
+  member then returned the same uncertain error only after real SMB rename
+  and parent sync; one succeeded run/point, exact Controller replay, 29 prior
+  catalog hashes, protected SMB control and source hashes held. Both overlays
+  simulate lost replies after successful sync; actual server sync failures
+  and forge CI remain open.
+- API impact: existing contract; Core uses the existing attention, exact
+  result and catalog contracts. Guide impact: none; operator steps are
+  unchanged. No new durable record; Core owns the existing run and catalog.
+- Avoid: treating filesystem `rename`/sync error as proof of no publication,
+  or treating a proven pre-rename error as permanently uncertain.
+
+## BUG-0712 — S3 abort marker could block a valid published point
+
+- Date: 2026-09-29.
+- Symptom: a delayed conditional final manifest PUT could win after Core
+  wrote an abort marker but before it placed the final-key tombstone. The
+  complete point then remained unreadable and uncataloged indefinitely.
+- Root cause: abort wrote its separate marker before resolving the atomic
+  same-key publication race; `ReadPoint` and rebuild reject that marker.
+- Fix: conditionally place and verify the final-key tombstone before writing
+  the abort marker. If final publication wins, abort leaves no marker and Core
+  can adopt the exact point. If the tombstone wins, it fences later writes;
+  intent plus embedded manifest allow cleanup to resume after interruption.
+- Regression: `TestS3PublishedFinalWinsAbortAfterAbsenceCheck` forced the
+  delayed final PUT to win at the tombstone request. Before the fix it failed
+  because `ReadPoint` returned a retained-work conflict; afterward the point
+  remained readable and adoptable. Existing abort-wins, delayed artifact and
+  partial retry tests passed; focused race passed. Independent correction
+  review found no concrete issue. A matched two-Core S3Proxy lab held the final
+  PUT before the provider, returned lost replies and failed reads, then let
+  provider 404s trigger abort. The delayed final PUT won with HTTP 200; the
+  conditional tombstone lost with HTTP 412. Core kept one published catalog
+  point and one succeeded member run, exact Controller replay returned the
+  same success, and no abort/delete marker or tombstone remained. The final
+  manifest, both artifacts, 28 prior catalog hashes, protected old point and
+  source disks stayed intact. A symmetric native operation committed the
+  final-key tombstone first (HTTP 200), then refused the delayed final PUT
+  (HTTP 412): one terminal failed run, no new point, exact failed replay,
+  and 30 prior catalog hashes plus protected/source hashes intact. These are
+  single-process provider and fixture-only timing checks; forge CI remains
+  open.
+- API impact: existing contract; existing attention/result/catalog behavior
+  now settles the winning publication. Guide impact: none while S3 is gated.
+  No new durable record; Core owns the existing intent, abort marker and
+  same-key tombstone, and a fresh Controller adopts Core inventory.
+- Avoid: publishing a separate abort marker before the exact final key is
+  durably fenced against a competing final PUT.
+
+## BUG-0713 — Absent SMB3 final publication stayed in attention
+
+- Date: 2026-09-29.
+- Symptom: after the SMB service stopped at final rename, a complete staged
+  point never became final. Once service returned, both stage and final were
+  absent, but exact replay and Core restart kept one run in
+  `needs_attention` indefinitely.
+- Root cause: uncertain-publication reconciliation terminalized absent
+  points only for S3/SFTP backends with `AbortIncomplete`; the NFS/SMB3
+  filesystem backend had no safe same-key abort fence.
+- Fix: when writable Core authority is held and no catalog point or stage
+  exists, atomically create and sync an exact final-key file with a complete
+  abort marker. A late directory rename cannot replace it. Catalog rebuild
+  skips only the matching marker; an interrupted marker write can resume.
+  Existing valid points or staging remain untouched and in attention. The
+  authority check precedes writable repository verification.
+- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` gained
+  an absent uncertain-publication case. It failed before the fix with
+  `needs_attention` and passed after with one terminal failed run and a
+  final-key fence that rejects late rename. The focused test also checks
+  catalog rebuild, interrupted marker completion, a published point, foreign
+  stage, FIFO and restricted authority; the earlier focused race passed.
+  Independent review of the first correction found and led to fixes for
+  stale-authority verification writes and a FIFO hang; final correction
+  review found no blocker. In a matched SMB3 retest, the preserved same-ID
+  operation automatically settled failed with no recapture. Catalog rebuild
+  retained all 33 prior ID/hash pairs; a same-ID directory rename against
+  the complete final-key marker failed ENOTDIR, exact replay survived Core
+  restart, and an older protected two-disk point restored with both marker
+  and artifact hashes. Source/protected hashes stayed intact and the fixture
+  was stopped. Forge CI remains open.
+- API impact: existing contract; existing attention, terminal result and
+  catalog semantics settle a proven absent filesystem publication. Guide
+  impact: none; supported NFS operator steps are unchanged and SMB3 remains
+  gated. Core owns the final-key fence and run; Controller adopts the result.
+- Avoid: declaring an uncertain final rename failed from absence alone,
+  because a delayed rename could still publish without a same-key fence.
+
+## BUG-0714 — Repaired catalog rebuild left Controller in attention
+
+- Date: 2026-09-29.
+- Symptom: an NFS rebuild refused a one-byte-corrupt published artifact and
+  retained `needs_attention`. After the artifact was repaired byte-for-byte,
+  a Core-local retry with the same operation ID imported the point once and
+  reported success, but Controller exact replay and inventory still showed
+  the old attention outcome.
+- Root cause: the Core-local retry settled its durable backup metadata receipt
+  but did not settle the matching managed-command journal. Core reported that
+  stale journal outcome to Controller, which correctly retained it.
+- Fix: reconcile a terminal catalog receipt to only a matching pending or
+  attention journal entry, checking kind, intent and current writable pool
+  authority. The Core run loop also reconciles the receipt-to-journal crash
+  gap on restart and backup ticks. Existing terminal journal entries are
+  preserved. Receipt and journal persistence failures propagate rather than
+  masquerading as ordinary catalog errors.
+- Regression: `TestCatalogRebuildLocalRetrySettlesControllerJournal` failed
+  before the fix with the journal in attention after the receipt succeeded;
+  it passes after the fix and checks operation projection, durable restart
+  convergence, intent mismatch and terminal preservation. A forced receipt
+  write failure test failed before the persistence correction and now passes
+  for successful and failed scans; a forced journal-save failure recovers
+  from the terminal receipt after store reopen. A separate red/green test
+  caught an authority-capacity refusal incorrectly classified as a disk
+  failure; only actual receipt writes now carry the fatal persistence type.
+  Focused catalog tests and full local Go, Python, web, API, documentation,
+  privacy and diff checks passed; independent review caught both corrections.
+  In a matched disposable NFS retest, the preserved stale task converged at
+  Core startup. A fresh one-byte-corrupt point was refused without VM or pin;
+  after byte-exact repair, the same Core rebuild ID settled its receipt,
+  journal and live Controller task without a Controller restart. Exact Core
+  and Controller replays returned success, one point was imported, 43 prior
+  catalog hashes stayed exact, and a protected two-disk restore passed both
+  markers and cleanup. All fixture processes were stopped. Forge CI remains
+  open.
+- API impact: existing contract; the same Core operation and Controller task
+  now converge through existing result and managed-outcome APIs. Guide impact:
+  none; the catalog-rebuild guide already instructs an exact-ID retry after
+  repairing a pending scan failure. Core owns the receipt, journal and catalog;
+  a fresh Controller adopts the terminal outcome from authenticated Core
+  inventory.
+- Avoid: treating a successful metadata receipt as sufficient while the
+  Controller-visible Core journal for that exact operation remains stale.
+
+## BUG-0715 — Repository preparation could write after authority changed
+
+- Date: 2026-09-29.
+- Symptom: independent source review found that a member's new Core-local
+  SFTP registration could create a remote owner marker before Core refused
+  its master-only commit. A master could also pass a pre-write authority
+  check, then create the marker after a concurrent transfer froze authority.
+  The same asynchronous preparation ordering affected the other destination
+  kinds' precommit side effects.
+- Root cause: registration began native preparation before master membership
+  and transfer authority were checked under the backup authority lock. The
+  SFTP owner claim had no established-identity distinction for adoption.
+- Fix: serialize new registration preparation with transfer freeze under
+  `poolBackupAuthorityMu`, checking exact master membership, pool and writable
+  authority before any native destination work. Release the lock before the
+  separate inventory commit. SFTP adoption refuses a missing owner marker
+  when it already has a pinned remote identity. The existing 30-second
+  preparation context bounds transfer waiting.
+- Regression: focused member-registration and freeze-race tests failed before
+  the shared guard and passed afterward. A missing-owner adoption test failed
+  before the SFTP correction and now passes. Focused SFTP/peer/registration
+  tests, a serial full Go suite and `git diff --check` passed; independent
+  correction review found no blocker. A fresh matched two-Core SFTP fixture
+  on binary SHA-256
+  `af5f3ed6e16f5f410515d9ba30ac5ddf84fca816c975a1acabcff364e87b994c`
+  registered a new exact owner, observed member read/write access, published
+  and restored a protected two-disk point with matching markers and full
+  hashes, and passed exact replays and cleanup. Sixty-four prior catalog
+  hashes and source disks stayed exact; all processes stopped. A member-local
+  registration attempt returned 503 with no remote files or run, but used a
+  mismatched master credential receipt because Controller refused member
+  handoff; valid-credential member ordering has focused source proof only.
+  Forge CI remains open.
+- API impact: existing contract; registration now refuses an ineligible Core
+  before touching the selected destination, with no route or payload change.
+  Guide impact: none for this authority fix; the four-kind guide is updated
+  with capability enablement. Core owns the remote
+  owner marker and durable repository record; a fresh Controller reads the
+  record from authenticated master inventory.
+- Avoid: checking authority only at the final repository commit or outside
+  the lock that transfer freeze uses. A lawful precommit owner claim may remain
+  if transfer freezes before inventory commit; it names the same pool and ID
+  and contains no recovery point, and exact same-pool retry remains the safe
+  reconciliation path.

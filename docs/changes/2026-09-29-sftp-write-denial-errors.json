@@ -1,0 +1,36 @@
+{
+  "summary": "Preserve SFTP write failures instead of reporting false retained-work conflicts. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-sftp-write-denial-errors.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "SFTP remains a disabled candidate, so no supported operator step changes.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "A failed SFTP owner or publication write now reports the underlying destination error when no conflicting file exists. No route or schema changes; the existing terminal operation result carries the corrected error. Machine-readable response shapes are unchanged.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects error reporting within the existing destination fault gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record; Core already owns the operation, run, point and SFTP publication intent."
+  },
+  "verification": {
+    "method": "A matched disposable OpenSSH target denied writes while allowing reads; the pre-fix backup produced one failed run and no point or staging, but its terminal error falsely said retained-work conflict. The focused in-process SFTP regression failed before the fix and passed afterward for owner claim, first intent write and exact intent retry. Focused race and the full agent package passed; independent read-only source review found no remaining concrete issue after the resumed-publication correction. A matched fixed-build OpenSSH retest then returned one failed run with permission denied, no point or staging, and the same result on exact replay. Its protected two-disk control restored and verified under denial; typed cleanup removed the VM/pin, health recovered, and original point/source hashes matched. Forge CI remains open.",
+    "evidence": ["internal/agent/backup_repository_sftp_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The native write denial used a controlled OpenSSH directory mode. Abrupt server loss, full-target exhaustion and final-publication faults remain open."
+  }
+}

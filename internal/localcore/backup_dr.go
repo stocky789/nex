@@ -234,7 +234,11 @@ func (s *Service) catalogImportOrRebuild(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if response.Catalog == nil && response.Result != nil {
-		reply(w, http.StatusOK, response.Result)
+		status := http.StatusOK
+		if response.Result.Status == "pending" {
+			status = http.StatusAccepted
+		}
+		reply(w, status, response.Result)
 		return
 	}
 	reply(w, http.StatusOK, append([]protocol.BackupRecoveryPoint{}, response.Catalog...))

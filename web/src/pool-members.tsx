@@ -404,7 +404,9 @@ export function MembersTable({ report, hosts = [], coreAvailable, onMaintenance,
       const light = version ? versionLight(version, coreAvailable) : undefined;
       return <li key={member.host_id} className="pool-member" data-host-id={member.host_id}>
         <div className="pool-member-head">
-          <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a> <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
+          {hosts.some(h => h.id === member.host_id)
+            ? <a href={`#/hosts/${encodeURIComponent(member.host_id)}`}>{member.name || member.host_id}</a>
+            : <span>{member.name || member.host_id}</span>} <Badge value={member.role} label={member.role === "master" ? "Pool master" : "Member"} />
           <small className="pool-version">Nex Core {version?.replace(/^Nex Core /, "") || "not reported"}{light && light.level !== "current" && <> <Badge value="warning" label="Update" /></>}</small>
           {/* When the host joined, as the pool master records it. */}
           <small className="muted">Joined {member.joined_at ? <time dateTime={member.joined_at} title={date(member.joined_at)}>{relativeTime(member.joined_at)}</time> : "—"}</small>

@@ -1,0 +1,36 @@
+{
+  "summary": "Refuse SFTP incomplete-upload cleanup when its point path is a symlink or other non-directory. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup_repository_sftp.go",
+    "internal/agent/backup_repository_sftp_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-sftp-abort-point-symlink.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "SFTP remains a disabled candidate; supported operator steps do not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing uncertain-result path now refuses a symlink or non-directory point before cleanup. No route, schema, authentication or authorization change.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects a safety defect in the existing SFTP publication recovery gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record; Core already owns the abort marker and run/journal, and a symlink point is refused before mutation."
+  },
+  "verification": {
+    "method": "Independent source review found that SFTP AbortIncomplete did not check the point path before descending. A focused authenticated SFTP regression replaced that path with a symlink and showed cleanup succeeded while deleting the target artifact before the fix; afterward Core returned ErrBackupConflict and target bytes were unchanged. Focused race and serial full Go tests passed after the fix. Independent correction review found no further concrete defect. On a matched guarded OpenSSH build the protected two-disk control restored, both markers matched, verification and typed cleanup passed, health recovered, and the 17 catalog hashes plus four source hashes were unchanged. Forge CI remains open.",
+    "evidence": ["internal/agent/backup_repository_sftp_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The regression covers a static symlink path. No symlink was injected through a public Core lab operation. Exclusive ownership of the destination root is assumed; a separate writer replacing paths concurrently is outside this bounded proof."
+  }
+}

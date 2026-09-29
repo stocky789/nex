@@ -254,7 +254,7 @@ func TestReadHardwareWithoutSysfsOrProc(t *testing.T) {
 func TestStatsChannelServesHistoryAndHardware(t *testing.T) {
 	h := newUsageHistory(t.TempDir(), "host-1")
 	h.record("host", time.Now(), []historyPoint{point("cpu.total", 1)})
-	handler := statsChannelHandler(h)
+	handler := statsChannelHandler(h, nil)
 	for path, want := range map[string]int{"/stats?object=host&range=10m": 200, "/hardware": 200, "/nope": 404} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://host"+path, nil))

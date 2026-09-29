@@ -27,6 +27,16 @@ import (
 
 type persistenceError struct{ error }
 
+var backupDestinationCapabilities = []string{
+	"backup-destination-smb3-v1",
+	"backup-destination-s3-v1",
+	"backup-destination-sftp-v1",
+}
+
+func backupDestinationSupported(kind string) bool {
+	return kind == protocol.BackupRepoKindNFS || slices.Contains(backupDestinationCapabilities, "backup-destination-"+kind+"-v1")
+}
+
 var peerBackupRequests sync.Map // *Store -> chan BackupRequest
 
 type preparedBackupRequest struct {
@@ -34,6 +44,7 @@ type preparedBackupRequest struct {
 	journalID  string
 	repository *protocol.BackupRepository
 	err        error
+	finish     func()
 }
 
 type completedBackupVerification struct {
@@ -41,6 +52,12 @@ type completedBackupVerification struct {
 	journalID string
 	plan      *testRestoreVerificationPlan
 	err       error
+}
+
+type completedBackupCatalog struct {
+	command   protocol.Command
+	journalID string
+	response  BackupResponse
 }
 
 type completedBackupCleanup struct {
@@ -65,6 +82,13 @@ func backupNeedsPreparation(request BackupRequest) bool {
 		return true
 	}
 	return request.Command != nil && (request.Command.Kind == "backup-repository-register" || request.Command.Kind == "backup-repository-test")
+}
+
+func prepareBackupRequestRepository(ctx context.Context, s *Store, request BackupRequest, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
+	if request.PeerRepository != nil {
+		return prepareBackupRepositoryForAdoption(ctx, s, repo)
+	}
+	return prepareBackupRepositoryForRegistration(ctx, s, repo, request.Command.OperationID)
 }
 
 func terminalBackupMetadataResponse(s *Store, request BackupRequest) (BackupResponse, bool) {
@@ -143,11 +167,12 @@ var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterRe
 var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
 
 func resetReportExtensions(s *Store) error {
-	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
+	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.PoolMembershipHostnameReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
 		return nil
 	}
 	s.State.StorageClusterProtocolReady = false
 	s.State.StorageClusterSessionMonitorProtocolReady = false
+	s.State.PoolMembershipHostnameReady = false
 	s.State.ISODownloadProgressReady = false
 	s.State.DetectedOSReady = false
 	return s.Save()
@@ -169,6 +194,20 @@ func managedExtensionsForController(managed *protocol.ManagedState, isoReady, os
 	if !osReady {
 		copy.DetectedOS = nil
 	}
+	return &copy
+}
+
+func membershipNamesForController(managed *protocol.ManagedState, ready bool) *protocol.ManagedState {
+	if ready || managed == nil || managed.Membership == nil {
+		return managed
+	}
+	copy := *managed
+	membership := *managed.Membership
+	membership.Members = append([]protocol.PoolMember(nil), membership.Members...)
+	for i := range membership.Members {
+		membership.Members[i].Hostname = ""
+	}
+	copy.Membership = &membership
 	return &copy
 }
 
@@ -248,6 +287,7 @@ var ApplianceJournalDir = "/var/lib/nex/core-local/vmhost"
 var PoolPeerListen = ":" + strconv.Itoa(protocol.DefaultPoolPeerPort)
 
 func completeJournal(s *Store, inv *protocol.Inventory, timeout time.Duration) {
+	reconcilePoolPromotionJournal(s)
 	for id, e := range s.State.Journal {
 		if e.Status != "pending" || (e.Command != nil && managedCommand(e.Command.Kind)) {
 			continue
@@ -294,6 +334,17 @@ func applyResponseWithPeer(s *Store, r protocol.ReportResponse, peer bool) error
 				a, _ := json.Marshal(old.Command)
 				b, _ := json.Marshal(cmd)
 				if string(a) != string(b) {
+					if old.Command.Kind == protocol.BackupKindBackupNow && cmd.Kind == protocol.BackupKindPolicyRunNow {
+						receipt, receiptErr := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+						intent, intentErr := backupMetadataIntent(cmd)
+						run, runErr := loadPoolBackupRun(s, cmd.OperationID)
+						if receiptErr == nil && intentErr == nil && runErr == nil && receipt.Kind == cmd.Kind &&
+							receipt.IntentSHA256 == intent && run.Kind == cmd.Kind && cmd.BackupPolicy != nil && cmd.VM != nil &&
+							run.PolicyID == cmd.BackupPolicy.ID && run.VMID == cmd.VM.ID && old.Command.VM != nil &&
+							old.Command.VM.ID == run.VMID && old.Command.Backup != nil && old.Command.Backup.RepositoryID == run.RepositoryID {
+							continue
+						}
+					}
 					return errors.New("controller reused command ID with different input")
 				}
 			} else if cmd.Kind != "refresh-inventory" {
@@ -421,17 +472,23 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			managed.PoolVMSnapshots = snapshots
 			managed.PoolVMSnapshotsReported = true
 		}
-		if repos, catalog, runs, policies, reported, backupErr := PoolBackupInventory(s); backupErr != nil {
+		if repos, backupErr := ListPoolBackupRepositories(s); backupErr != nil {
 			checks = append(checks, protocol.Check{Name: "pool-backup", Status: "failed", Error: "pool backup state is unavailable", ObservedAt: time.Now().UTC()})
-		} else if reported {
+		} else if policies, backupErr := ListPoolBackupPolicies(s); backupErr != nil {
+			checks = append(checks, protocol.Check{Name: "pool-backup", Status: "failed", Error: "pool backup state is unavailable", ObservedAt: time.Now().UTC()})
+		} else {
 			managed.BackupRepositories = repos
 			managed.BackupRepositoriesReported = true
-			managed.BackupCatalog = catalog
-			managed.BackupCatalogReported = true
-			managed.BackupRuns = runs
-			managed.BackupRunsReported = true
 			managed.BackupPolicies = policies
 			managed.BackupPoliciesReported = true
+		}
+		if s.State.BackupProtocolReady {
+			check := protocol.Check{Name: "backup-history-api", Status: "healthy", ObservedAt: time.Now().UTC()}
+			if !s.State.BackupInventoryPagesReady {
+				check.Status = "unsupported"
+				check.Error = "Nex Controller does not support paged backup history; upgrade Nex Controller"
+			}
+			checks = append(checks, check)
 		}
 	}
 	// This host's own part of a master change or an eject, from every participant, so the
@@ -467,9 +524,15 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		credentialsReadable = false
 		checks = append(checks, protocol.Check{Name: "storage-credentials", Status: "failed", Error: "storage credential state is unavailable", ObservedAt: time.Now().UTC()})
 	}
+	if receipts, err := BackupCredentialReceipts(s); err != nil {
+		credentialsReadable = false
+		checks = append(checks, protocol.Check{Name: "backup-credentials", Status: "failed", Error: "backup credential state is unavailable", ObservedAt: time.Now().UTC()})
+	} else {
+		managed.CredentialReceipts = append(managed.CredentialReceipts, receipts...)
+	}
 	managed.Appliances = vmhost.Deployments(ApplianceJournalDir)
 	confirmCtx, cancelConfirm := context.WithTimeout(ctx, cfg.ProbeTimeout)
-	managed.Outcomes = confirmPoolVMUpdateOutcomes(confirmCtx, s, commandOutcomes(s.State.Journal, managed.Outcomes), managed.Storage)
+	managed.Outcomes = policyRunNowOutcomes(s, confirmPoolVMUpdateOutcomes(confirmCtx, s, commandOutcomes(s.State.Journal, managed.Outcomes), managed.Storage))
 	cancelConfirm()
 	managed.ZFSProvisions = PoolZFSInventory(s)
 	// This host's own management network: the durable record projected for adoption, so a
@@ -507,7 +570,8 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// DriversDriveCapability is deliberately absent from the legacy v1 list below: a host
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
-	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.PoolBackupPagedAuthorityCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability, protocol.PoolWitnessCapability, protocol.BackupCapability}
+	capabilities := []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.PoolResourceRemovalCapability, protocol.PoolJoinCapability, protocol.PoolMaintenanceCapability, protocol.ManagementNetworkCapability, protocol.PoolAuthorityReplicaCapability, protocol.PoolAuthorityTransferCapability, protocol.PoolMembershipHostnameCapability, protocol.PoolBackupPagedAuthorityCapability, protocol.PoolBackupLargeAuthorityCapability, protocol.BackupInventoryPagesCapability, protocol.HostHardwareCapability, protocol.PoolHostFencingCapability, protocol.PoolWatchdogClusterCapability, protocol.PoolWitnessCapability, protocol.BackupCapability}
+	capabilities = append(capabilities, backupDestinationCapabilities...)
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.PoolVMPlacementCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -564,6 +628,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// Controller ignores it and acknowledges the base capability instead.
 		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
 	}
+	if inv.Managed != nil {
+		copy := *inv
+		copy.Managed = membershipNamesForController(inv.Managed, version == protocol.Version && s.State.PoolMembershipHostnameReady)
+		inv = &copy
+	}
 	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
 	if s.State.StorageClusterProtocolReady {
@@ -616,6 +685,13 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
 	ready := response.ISODownloadProgress != nil && *response.ISODownloadProgress
 	osReady := response.DetectedOS != nil && *response.DetectedOS
+	hostnameReady := version == protocol.Version && response.PoolMembershipHostname != nil && *response.PoolMembershipHostname
+	if s.State.PoolMembershipHostnameReady != hostnameReady {
+		s.State.PoolMembershipHostnameReady = hostnameReady
+		if err = s.Save(); err != nil {
+			return persistenceError{fmt.Errorf("persist pool membership hostname preflight: %w", err)}
+		}
+	}
 	if s.State.ISODownloadProgressReady != ready || s.State.DetectedOSReady != osReady {
 		s.State.ISODownloadProgressReady = ready
 		s.State.DetectedOSReady = osReady
@@ -641,6 +717,13 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		s.State.BackupProtocolReady = true
 		if err = s.Save(); err != nil {
 			return persistenceError{fmt.Errorf("persist backup protocol preflight: %w", err)}
+		}
+	}
+	pageReady := response.BackupInventoryPages != nil && *response.BackupInventoryPages
+	if s.State.BackupInventoryPagesReady != pageReady {
+		s.State.BackupInventoryPagesReady = pageReady
+		if err = s.Save(); err != nil {
+			return persistenceError{fmt.Errorf("persist backup history protocol preflight: %w", err)}
 		}
 	}
 	if response.StorageClusters != nil && (response.StorageClusters.Capability == protocol.StorageClusterCapability || response.StorageClusters.Capability == protocol.StorageClusterSessionMonitorCapability) {
@@ -738,7 +821,7 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 			break
 		}
 		go func(req protocol.StatsChannelRequest) {
-			if err := serveStatsChannel(ctx, s.State, req, statsChannelHandler(cfg.history)); err != nil {
+			if err := serveStatsChannel(ctx, s.State, req, statsChannelHandler(cfg.history, s)); err != nil {
 				log.Printf("stats channel: %v", err)
 			}
 		}(channel)
@@ -994,6 +1077,12 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			return err
 		}
 	}
+	if s.State.BackupInventoryPagesReady {
+		s.State.BackupInventoryPagesReady = false
+		if err := s.Save(); err != nil {
+			return err
+		}
+	}
 	// Pending read-only refreshes reconcile against a new sample after restart.
 	// Retain monotonic time in memory; serialized timestamps are history only.
 	for id, e := range s.State.Journal {
@@ -1005,6 +1094,18 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	if err := s.Save(); err != nil {
 		return err
 	}
+	reconcileCatalogReceipts := func() {
+		for id, entry := range s.State.Journal {
+			if entry.Command == nil || entry.Status != "pending" && entry.Status != "needs_attention" ||
+				entry.Command.Kind != "backup-catalog-import" && entry.Command.Kind != "backup-catalog-rebuild" {
+				continue
+			}
+			if err := reconcileCatalogMetadataJournal(s, id); err != nil {
+				log.Printf("catalog journal reconciliation needs attention: %v", err)
+			}
+		}
+	}
+	reconcileCatalogReceipts()
 	// This is the only automatic stale-reservation cleanup. It runs before the
 	// worker can reserve an operation, so it cannot erase the reserve→journal
 	// admission window. Periodic reconciliation deliberately never performs it.
@@ -1045,6 +1146,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			// A retained peer advertisement is Core recovery work; retry it with
 			// the cluster worker, never from a Controller request.
 			_ = RetryPoolPeerOrigin(work, s)
+			_ = ReportPoolHostname(work, s)
 			// Which machine this host is, recorded on the master beside where it listens.
 			_ = ReportPoolSystemUUID(work, s)
 			// And the native generation of its live host lease, pinned to the authority
@@ -1145,20 +1247,28 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	go func() { defer runWork.Done(); sampler.run(probeCtx) }()
 	go m.WatchLibvirt(probeCtx)
 	backupTicks := make(chan time.Time, 1)
+	var backupHealthRunning atomic.Bool
+	var nextBackupHealth time.Time
 	preparedBackupDone := make(chan preparedBackupRequest, 2)
 	verificationDone := make(chan completedBackupVerification, 2)
+	catalogDone := make(chan completedBackupCatalog, 1)
 	cleanupDone := make(chan completedBackupCleanup, 1)
 	backupPrepSlots := make(chan struct{}, 2)
 	preparingBackupRepo := map[string]bool{}
 	activeBackupCleanup := map[string]bool{}
+	activeBackupCatalog := map[string]bool{}
 	cleanupNextAttempt := map[string]time.Time{}
 	peerBackupDone := make(chan peerBackupCompletion, 1)
 	directPeerDone := make(chan directPeerBackupCompletion, 1)
 	restoreReconcileDone := make(chan managedCompletion, 1)
+	publishedBackupDone := make(chan managedCompletion, 1)
 	peerCleanupDone := make(chan peerCleanupCompletion, 1)
 	peerCleanupReconcileActive := false
 	deferredBackupRetry := make(chan string, 8)
 	restoreReconcileActive := false
+	// ponytail: one whole-point retry at a time; use per-repository workers if recovery throughput matters.
+	publishedBackupActive := false
+	publishedBackupNext := map[string]time.Time{}
 	directPeerReconcileActive := false
 	peerBackupActive := false
 	runWork.Add(1)
@@ -1166,8 +1276,25 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		defer runWork.Done()
 		ticker := time.NewTicker(cfg.ProbeInterval)
 		defer ticker.Stop()
+		healthTicker := time.NewTicker(backupHealthInterval)
+		defer healthTicker.Stop()
+		scheduleBackupHealth := func() {
+			now := time.Now()
+			if !now.Before(nextBackupHealth) && backupHealthRunning.CompareAndSwap(false, true) {
+				nextBackupHealth = now.Add(backupHealthInterval)
+				runWork.Add(1)
+				go func() {
+					defer runWork.Done()
+					defer backupHealthRunning.Store(false)
+					if err := probePoolBackupRepositories(probeCtx, s, cfg.ProbeTimeout); err != nil && probeCtx.Err() == nil {
+						log.Printf("backup repository health probe could not complete: %v", err)
+					}
+				}()
+			}
+		}
 		tickStorage := func() {
 			now := time.Now()
+			scheduleBackupHealth()
 			if !now.Before(nextProbeSecretSweep) {
 				if err := retireExpiredProbeSecrets(s, now); err != nil {
 					log.Printf("management controller probe credential cleanup failed")
@@ -1254,6 +1381,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			case <-ticker.C:
 				m.Tick(probeCtx)
 				tickStorage()
+			case <-healthTicker.C:
+				scheduleBackupHealth()
 			}
 		}
 	}()
@@ -1338,10 +1467,20 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		} else {
 			return ErrBackupInvalid
 		}
+		if repo.Valid() != nil {
+			return ErrBackupInvalid
+		}
+		if !backupDestinationSupported(repo.Kind) {
+			return fmt.Errorf("%w: %s backup destination is not supported by this Core", ErrBackupConflict, repo.Kind)
+		}
 		select {
 		case backupPrepSlots <- struct{}{}:
 		default:
 			return ErrBackupUnavailable
+		}
+		var finish func()
+		if request.Command.Kind == "backup-repository-register" && backupCredentialKind(repo.Kind) {
+			finish = beginBackupCredentialPreparation(s, repo.CredentialRef)
 		}
 		runWork.Add(1)
 		go func() {
@@ -1352,17 +1491,20 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			var prepared protocol.BackupRepository
 			var err error
 			if request.Command.Kind == "backup-repository-test" {
-				prepared, err = checkBackupRepositoryAccess(work, repo)
+				prepared, err = checkBackupRepositoryAccessForStore(work, s, repo)
 			} else {
-				prepared, err = prepareBackupRepository(work, repo)
+				prepared, err = prepareBackupRequestRepository(work, s, request, repo)
 			}
-			completion := preparedBackupRequest{request: request, journalID: journalID, err: err}
+			completion := preparedBackupRequest{request: request, journalID: journalID, err: err, finish: finish}
 			if err == nil {
 				completion.repository = &prepared
 			}
 			select {
 			case preparedBackupDone <- completion:
 			case <-probeCtx.Done():
+				if finish != nil {
+					finish()
+				}
 			}
 		}()
 		return nil
@@ -1434,6 +1576,40 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}()
 		return nil
 	}
+	startBackupCatalog := func(request BackupRequest, journalID string) BackupResponse {
+		if request.Command == nil || request.Command.CatalogImport == nil ||
+			(request.Command.Kind != "backup-catalog-import" && request.Command.Kind != "backup-catalog-rebuild") {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
+		cmd := *request.Command
+		reserved := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd, ReserveOnly: true})
+		if reserved.Err != nil || reserved.Result == nil || reserved.Result.Status != "pending" {
+			return reserved
+		}
+		if activeBackupCatalog[cmd.OperationID] {
+			return reserved
+		}
+		select {
+		case backupPrepSlots <- struct{}{}:
+		default:
+			return BackupResponse{Err: ErrBackupUnavailable}
+		}
+		activeBackupCatalog[cmd.OperationID] = true
+		worker := &Store{dir: s.dir, State: copyState(s.State)}
+		runWork.Add(1)
+		go func() {
+			defer runWork.Done()
+			defer func() { <-backupPrepSlots }()
+			work, cancel := context.WithTimeout(probeCtx, 10*time.Minute)
+			defer cancel()
+			response := acceptBackupRequestUnrecorded(work, worker, BackupRequest{Command: &cmd})
+			select {
+			case catalogDone <- completedBackupCatalog{command: cmd, journalID: journalID, response: response}:
+			case <-probeCtx.Done():
+			}
+		}()
+		return reserved
+	}
 	ticker := time.NewTicker(cfg.Heartbeat)
 	defer ticker.Stop()
 	disconnected := false
@@ -1456,7 +1632,11 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					}()
 				} else if backupCommand(cmd.Kind) {
 					if reserveErr := ensureBackupRunReserved(s, cmd); reserveErr != nil {
-						result := protocol.Result{OperationID: id, Status: "needs_attention", Error: reserveErr.Error(), ObservedAt: time.Now().UTC()}
+						status := "needs_attention"
+						if errors.Is(reserveErr, ErrBackupNotFound) || errors.Is(reserveErr, ErrBackupInvalid) {
+							status = "failed"
+						}
+						result := protocol.Result{OperationID: id, Status: status, Error: reserveErr.Error(), ObservedAt: time.Now().UTC()}
 						err = completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history)
 						if err != nil {
 							return err
@@ -1609,14 +1789,25 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 							continue
 						}
 					}
-					response := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd})
-					result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "backup request failed", ObservedAt: time.Now().UTC()}
-					if response.Result != nil {
-						result = *response.Result
-					} else if response.Err != nil {
-						result.Error = response.Err.Error()
+					if cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" {
+						response := startBackupCatalog(BackupRequest{Command: &cmd}, id)
+						if response.Result != nil && response.Result.Status == "pending" {
+							preparingBackupRepo[id] = true
+							continue
+						}
+						result := protocol.Result{OperationID: id, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
+						if response.Result != nil {
+							result = *response.Result
+						} else if response.Err != nil {
+							result.Error = response.Err.Error()
+						}
+						if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
+							return err
+						}
+						continue
 					}
-					active, err = completeManagedCommand(s, id, managedCompletion{result: result}, cfg.history)
+					response := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd})
+					err = completeBackupMetadataRequest(s, id, cmd, response, cfg.history)
 					if err != nil {
 						return err
 					}
@@ -1625,6 +1816,21 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 						return err
 					}
 					joined = true
+				} else if cmd.Kind == "storage-credential-retire" && cmd.CredentialRetire != nil {
+					v := cmd.CredentialRetire
+					handled, retireErr := RetireUnusedBackupCredential(s, v.Receipt, v.PoolID, v.HostID)
+					if handled || retireErr != nil {
+						result := protocol.Result{OperationID: id, Status: "succeeded", ObservedAt: time.Now().UTC()}
+						if retireErr != nil {
+							result.Status, result.Error = "failed", retireErr.Error()
+						}
+						if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
+							return err
+						}
+					} else {
+						active = id
+						commands <- cmd
+					}
 				} else {
 					active = id
 					commands <- cmd
@@ -1718,6 +1924,10 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
+			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
+				request.Reply <- startBackupCatalog(request, "")
+				break
+			}
 			response := acceptBackupRequest(ctx, s, request)
 			var diskError persistenceError
 			if errors.As(response.Err, &diskError) {
@@ -1765,11 +1975,38 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
+			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
+				request.Reply <- startBackupCatalog(request, "")
+				break
+			}
 			response := acceptBackupRequest(ctx, s, request)
 			select {
 			case request.Reply <- response:
 			case <-ctx.Done():
 				return nil
+			}
+		case completion := <-catalogDone:
+			delete(activeBackupCatalog, completion.command.OperationID)
+			receipt, loadErr := loadPoolBackupMetadataReceipt(s, completion.command.OperationID)
+			if loadErr != nil {
+				return loadErr
+			}
+			response := settleBackupMetadataResponse(s, completion.command, receipt, completion.response)
+			var persistErr persistenceError
+			if errors.As(response.Err, &persistErr) {
+				return persistErr
+			}
+			if completion.journalID != "" {
+				delete(preparingBackupRepo, completion.journalID)
+				result := protocol.Result{OperationID: completion.journalID, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
+				if response.Result != nil {
+					result = *response.Result
+				} else if response.Err != nil {
+					result.Error = response.Err.Error()
+				}
+				if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
+					return err
+				}
 			}
 		case completion := <-preparedBackupDone:
 			completion.request.PreparedRepository = completion.repository
@@ -1789,7 +2026,11 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				if err != nil {
 					return err
 				}
-			} else {
+			}
+			if completion.finish != nil {
+				completion.finish()
+			}
+			if completion.journalID == "" {
 				select {
 				case completion.request.Reply <- response:
 				case <-ctx.Done():
@@ -1899,6 +2140,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		case id := <-deferredBackupRetry:
 			delete(preparingBackupRepo, id)
 		case now := <-backupTicks:
+			reconcileCatalogReceipts()
 			if err := rehydratePendingTestCleanup(s); err != nil && ctx.Err() == nil {
 				log.Printf("pending test cleanup could not be recovered: %v", err)
 			}
@@ -1981,6 +2223,29 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 						}
 						select {
 						case restoreReconcileDone <- managedCompletion{result: result, err: workErr, background: true}:
+						case <-probeCtx.Done():
+						}
+					}()
+					break
+				}
+			}
+			if !publishedBackupActive && activeSnapshot == "" {
+				for _, entry := range s.State.Journal {
+					if entry.Command == nil || now.Before(publishedBackupNext[entry.Command.OperationID]) ||
+						!publishedLocalBackupNeedsReconcile(s, entry) {
+						continue
+					}
+					publishedBackupActive = true
+					cmd := *entry.Command
+					worker := &Store{dir: s.dir, State: copyState(s.State)}
+					runWork.Add(1)
+					go func() {
+						defer runWork.Done()
+						work, cancel := context.WithTimeout(probeCtx, 10*time.Minute)
+						defer cancel()
+						result := reconcilePublishedBackupNow(work, worker, cmd, time.Now().UTC())
+						select {
+						case publishedBackupDone <- managedCompletion{result: result, background: true}:
 						case <-probeCtx.Done():
 						}
 					}()
@@ -2106,6 +2371,15 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			if err != nil {
 				return err
 			}
+		case done := <-publishedBackupDone:
+			publishedBackupActive = false
+			publishedBackupNext[done.result.OperationID] = time.Now().Add(5 * time.Minute)
+			if entry, ok := s.State.Journal[done.result.OperationID]; ok && entry.Status == "needs_attention" {
+				err = completeBackgroundManagedCommand(s, done, cfg.history)
+				if err != nil {
+					return err
+				}
+			}
 		case <-ticker.C:
 		}
 	}
@@ -2141,6 +2415,23 @@ func verifyMemberRestoreOwnerRecord(s *Store, run protocol.BackupRun) error {
 
 // completeManagedCommand runs only on the heartbeat owner of Store. Background
 // recovery may finish while a different command is queued for the worker.
+func completeBackupMetadataRequest(s *Store, id string, cmd protocol.Command, response BackupResponse, history *usageHistory) error {
+	if cmd.Kind == protocol.BackupKindPolicyRunNow && response.Result != nil && response.Result.Status == "pending" {
+		entry := s.State.Journal[id]
+		if entry.Command != nil && entry.Command.Kind == protocol.BackupKindBackupNow && entry.Status == "pending" {
+			return nil // The same journal entry now owns the executable backup.
+		}
+	}
+	result := protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "backup request failed", ObservedAt: time.Now().UTC()}
+	if response.Result != nil {
+		result = *response.Result
+	} else if response.Err != nil {
+		result.Error = response.Err.Error()
+	}
+	_, err := completeManagedCommand(s, id, managedCompletion{result: result}, history)
+	return err
+}
+
 func completeBackgroundManagedCommand(s *Store, done managedCompletion, history *usageHistory) error {
 	_, err := completeManagedCommand(s, "", done, history)
 	return err
@@ -2325,6 +2616,18 @@ func managedCommandVMID(cmd *protocol.Command) string {
 // The Core queue is inventory too: a replacement Controller can display accepted work
 // without reconstructing commands or dispatching them again. Engine outcomes win when
 // execution has settled but its completion has not yet reached the agent journal.
+func policyRunNowOutcomes(s *Store, outcomes []protocol.ManagedOutcome) []protocol.ManagedOutcome {
+	for i := range outcomes {
+		if outcomes[i].Kind != protocol.BackupKindBackupNow {
+			continue
+		}
+		if receipt, err := loadPoolBackupMetadataReceipt(s, outcomes[i].OperationID); err == nil && receipt.Kind == protocol.BackupKindPolicyRunNow {
+			outcomes[i].Kind = protocol.BackupKindPolicyRunNow
+		}
+	}
+	return outcomes
+}
+
 func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.ManagedOutcome) []protocol.ManagedOutcome {
 	filtered := make([]protocol.ManagedOutcome, 0, len(outcomes))
 	for _, outcome := range outcomes {

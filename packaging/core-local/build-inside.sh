@@ -48,6 +48,28 @@ cp -a docs/api "$pkg/usr/share/nex/core-local/"
 cp LICENSE NOTICE ARTWORK-LICENSE.md docs/LICENSING.md "$pkg/usr/share/doc/nex-core-local/"
 install -m644 /usr/local/go/LICENSE "$pkg/usr/share/doc/nex-core-local/go-LICENSE"
 install -m644 /usr/share/doc/libpam0g/copyright "$pkg/usr/share/doc/nex-core-local/pam-copyright"
+for file in \
+    vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/NOTICE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/feature/s3/manager/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/internal/configsources/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight/LICENSE \
+    vendor/github.com/aws/aws-sdk-go-v2/internal/v4a/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/checksum/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/s3shared/LICENSE.txt \
+    vendor/github.com/aws/aws-sdk-go-v2/service/s3/LICENSE.txt \
+    vendor/github.com/aws/smithy-go/LICENSE \
+    vendor/github.com/aws/smithy-go/NOTICE \
+    vendor/github.com/aws/smithy-go/internal/sync/singleflight/LICENSE \
+    vendor/github.com/kr/fs/LICENSE \
+    vendor/github.com/pkg/sftp/LICENSE \
+    vendor/golang.org/x/crypto/LICENSE; do
+    install -D -m644 "$file" "$pkg/usr/share/doc/nex-core-local/go-dependencies/${file#vendor/}"
+done
 go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version.txt"
 for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
     cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"

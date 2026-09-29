@@ -5,8 +5,8 @@ import type { Storage } from "./managed";
 import { Badge, Panel, Section, date } from "./ui";
 import { Icon } from "./icons";
 import {
-  backupOpID, rid, stableBody,
-  type BackupRecoveryPoint, type BackupRepository, type BackupRun,
+  appendBackupPage, backupOpID, backupPage, collectBackupPageItems, refreshBackupPage, rid, stableBody,
+  type BackupCatalogPage, type BackupRecoveryPoint, type BackupRepository, type BackupRun, type BackupRunPage,
 } from "./backup-types";
 import { BackupPolicies, type BackupPolicy } from "./backup-policies";
 import "./settings.css";
@@ -59,14 +59,18 @@ export function activeTestRestores(runs: BackupRun[] | null, point: BackupRecove
 }
 
 export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, vmFilter = "", flow = "" }: Props) {
-  const [points, setPoints] = useState<BackupRecoveryPoint[] | null>(null);
+  const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [repos, setRepos] = useState<BackupRepository[] | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[] | null>(null);
-  const [runs, setRuns] = useState<BackupRun[] | null>(null);
+  const [runPage, setRunPage] = useState<BackupRunPage | null>(null);
+  const [pointRuns, setPointRuns] = useState<BackupRun[] | null>(null);
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
+  const [repositoryError, setRepositoryError] = useState("");
   const [policyError, setPolicyError] = useState("");
   const [runError, setRunError] = useState("");
+  const [pageNotice, setPageNotice] = useState("");
+  const [loadingMore, setLoadingMore] = useState("");
   const [query, setQuery] = useState("");
   const [filterVM, setFilterVM] = useState(vmFilter);
   const [filterRepo, setFilterRepo] = useState("");
@@ -94,8 +98,23 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const restoreDrafts = useRef<Record<string, RestoreDraft>>({});
   const loadGen = useRef(0);
   const loadAbort = useRef<AbortController | null>(null);
+  const catalogGen = useRef(0);
+  const catalogAbort = useRef<AbortController | null>(null);
+  const catalogScope = useRef("");
+  const runGen = useRef(0);
+  const runAbort = useRef<AbortController | null>(null);
+  const runScope = useRef("");
+  const filters = useRef({ filterVM, filterRepo, query });
+  filters.current = { filterVM, filterRepo, query };
+  const selectedIDRef = useRef(selectedID);
+  selectedIDRef.current = selectedID;
+  const filterKey = `${filterVM}\x00${filterRepo}\x00${query}`;
+  const currentFilterKey = () => `${filters.current.filterVM}\x00${filters.current.filterRepo}\x00${filters.current.query}`;
+  const previousFilterKey = useRef(filterKey);
 
   const poolID = pool?.id || "";
+  const points = catalogPage?.items ?? null;
+  const runs = pointRuns;
   const poolVMs = useMemo(() => data.vms.filter(v => !poolID || v.pool_id === poolID), [data.vms, poolID]);
   const poolStorage = useMemo(() => data.storage.filter(s => !poolID || s.pool_id === poolID), [data.storage, poolID]);
   const repoByID = useMemo(() => new Map((repos || []).map(r => [r.id, r])), [repos]);
@@ -104,9 +123,73 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const uncertainRestore = Boolean(selected && restoreDrafts.current[restoreKey(restoreMode, selected.id)]);
   const activeTests = activeTestRestores(runs, selected, data.vms, poolID);
 
+  const catalogPath = () => {
+    const { filterVM, filterRepo, query } = filters.current;
+    const params = new URLSearchParams();
+    if (filterVM) params.set("vm_id", filterVM);
+    if (filterRepo) params.set("repository_id", filterRepo);
+    if (query.trim()) params.set("search", query.trim());
+    return `pools/${encodeURIComponent(poolID)}/backup-catalog${params.size ? `?${params}` : ""}`;
+  };
+
+  const loadCatalog = async () => {
+    if (!poolID) { setCatalogPage({ items: [], generation: "", total: 0, untested_count: 0, backup_days_14: [] }); return; }
+    catalogAbort.current?.abort();
+    const abort = new AbortController();
+    catalogAbort.current = abort;
+    const gen = ++catalogGen.current;
+    const scope = currentFilterKey();
+    try {
+      const response = await api<BackupRecoveryPoint[] | BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, abort.signal);
+      if (gen !== catalogGen.current || abort.signal.aborted) return;
+      const page = backupPage(response) as BackupCatalogPage;
+      const sameScope = catalogScope.current === scope;
+      catalogScope.current = scope;
+      setCatalogPage(current => refreshBackupPage(current, page, sameScope));
+      setCatalogError("");
+    } catch (err) {
+      if (gen !== catalogGen.current || abort.signal.aborted) return;
+      setCatalogPage(null);
+      setCatalogError(`Recovery points unavailable: ${String(err)}`);
+    }
+  };
+
+  const runPath = () => {
+    const pointID = selectedIDRef.current;
+    return `pools/${encodeURIComponent(poolID)}/backup-runs${pointID ? `?recovery_point_id=${encodeURIComponent(pointID)}` : ""}`;
+  };
+
+  const loadRuns = async (retry = 0) => {
+    if (!poolID) { setRunPage({ items: [], generation: "", total: 0, attention_count: 0 }); return; }
+    const pointID = selectedIDRef.current;
+    runAbort.current?.abort();
+    const abort = new AbortController();
+    runAbort.current = abort;
+    const gen = ++runGen.current;
+    const base = runPath();
+    if (pointID) setPointRuns(null);
+    try {
+      const response = await api<BackupRun[] | BackupRunPage>(base, "GET", undefined, undefined, undefined, abort.signal);
+      if (gen !== runGen.current || abort.signal.aborted) return;
+      const page = backupPage(response) as BackupRunPage;
+      const sameScope = runScope.current === pointID;
+      runScope.current = pointID;
+      setRunPage(current => refreshBackupPage(current, page, sameScope));
+      setRunError("");
+      if (!pointID) { setPointRuns(null); return; }
+      const all = await collectBackupPageItems(page, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, abort.signal));
+      if (gen !== runGen.current || abort.signal.aborted) return;
+      setPointRuns(all);
+    } catch (err) {
+      if (gen !== runGen.current || abort.signal.aborted) return;
+      if ((err as { status?: number }).status === 409 && retry < 2) { await loadRuns(retry + 1); return; }
+      setPointRuns(null);
+      setRunError(`Test restore history unavailable: ${String(err)}`);
+    }
+  };
+
   const load = async () => {
     if (!poolID) {
-      setPoints([]);
       setRepos([]);
       return;
     }
@@ -114,20 +197,64 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     const abort = new AbortController();
     loadAbort.current = abort;
     const gen = ++loadGen.current;
-    const [catalog, repositories, policyList, runList] = await Promise.allSettled([
-        api<BackupRecoveryPoint[]>(`pools/${encodeURIComponent(poolID)}/backup-catalog`, "GET", undefined, undefined, undefined, abort.signal),
+    const [repositories, policyList] = await Promise.allSettled([
         api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, abort.signal),
         api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, abort.signal),
-        api<BackupRun[]>(`pools/${encodeURIComponent(poolID)}/backup-runs`, "GET", undefined, undefined, undefined, abort.signal),
       ]);
     if (gen !== loadGen.current || abort.signal.aborted) return;
-    setPoints(catalog.status === "fulfilled" ? catalog.value : null);
     setRepos(repositories.status === "fulfilled" ? repositories.value : null);
     setPolicies(policyList.status === "fulfilled" ? policyList.value : null);
-    setRuns(runList.status === "fulfilled" ? runList.value : null);
-    setCatalogError(catalog.status === "rejected" ? `Recovery points unavailable: ${String(catalog.reason)}` : repositories.status === "rejected" ? `Repository inventory unavailable: ${String(repositories.reason)}` : "");
+    setRepositoryError(repositories.status === "rejected" ? `Repository inventory unavailable: ${String(repositories.reason)}` : "");
     setPolicyError(policyList.status === "rejected" ? `Policies unavailable: ${String(policyList.reason)}` : "");
-    setRunError(runList.status === "rejected" ? `Test restore history unavailable: ${String(runList.reason)}` : "");
+  };
+  const refresh = async () => { await Promise.all([load(), loadCatalog(), loadRuns()]); };
+
+  const loadMoreCatalog = async () => {
+    if (!catalogPage?.next_cursor || loadingMore) return;
+    setLoadingMore("catalog");
+    const base = catalogPath();
+    const cursor = catalogPage.next_cursor;
+    const scope = filterKey;
+    const path = `${base}${base.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(catalogPage.generation)}`;
+    try {
+      const page = await api<BackupCatalogPage>(path);
+      if (scope !== currentFilterKey()) return;
+      setCatalogPage(current => current?.generation === page.generation && current.next_cursor === cursor ? appendBackupPage(current, page, point => point.id) as BackupCatalogPage : current);
+      setCatalogError("");
+      setPageNotice("");
+    } catch (err) {
+      if (scope !== currentFilterKey()) return;
+      if ((err as { status?: number }).status === 409) {
+        await loadCatalog();
+        setPageNotice("Recovery point inventory changed. Showing the newest page; load more again to continue.");
+      } else setCatalogError(`Could not load more recovery points: ${String(err)}`);
+    } finally {
+      setLoadingMore("");
+    }
+  };
+
+  const loadMoreRuns = async () => {
+    if (!runPage?.next_cursor || loadingMore || !selectedID) return;
+    setLoadingMore("runs");
+    const base = runPath();
+    const cursor = runPage.next_cursor;
+    const pointID = selectedID;
+    const path = `${base}${base.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(runPage.generation)}`;
+    try {
+      const page = await api<BackupRunPage>(path);
+      if (pointID !== selectedIDRef.current) return;
+      setRunPage(current => current?.generation === page.generation && current.next_cursor === cursor ? appendBackupPage(current, page, run => run.operation_id) as BackupRunPage : current);
+      setRunError("");
+      setPageNotice("");
+    } catch (err) {
+      if (pointID !== selectedIDRef.current) return;
+      if ((err as { status?: number }).status === 409) {
+        await loadRuns();
+        setPageNotice("Test history changed. Showing the newest page; load more again to continue.");
+      } else setRunError(`Could not load more test history: ${String(err)}`);
+    } finally {
+      setLoadingMore("");
+    }
   };
 
   useEffect(() => {
@@ -139,14 +266,17 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   }, [vmFilter, flow]);
 
   useEffect(() => {
-    setPoints(null);
+    setCatalogPage(null);
     setRepos(null);
     setPolicies(null);
-    setRuns(null);
+    setRunPage(null);
+    setPointRuns(null);
     setError("");
     setCatalogError("");
+    setRepositoryError("");
     setPolicyError("");
     setRunError("");
+    setPageNotice("");
     setSelectedID("");
     setBackupUncertain(false);
     setBackupOpen(flow === "backup-now");
@@ -157,10 +287,25 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     pendingBackup.current = {};
     pendingProtect.current = {};
     restoreDrafts.current = {};
-    void load();
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 15000);
-    return () => { window.clearInterval(timer); loadAbort.current?.abort(); };
+    void refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 15000);
+    return () => { window.clearInterval(timer); loadAbort.current?.abort(); catalogAbort.current?.abort(); runAbort.current?.abort(); };
   }, [poolID]);
+
+  useEffect(() => {
+    if (previousFilterKey.current === filterKey) return;
+    previousFilterKey.current = filterKey;
+    setCatalogPage(null);
+    setPageNotice("");
+    void loadCatalog();
+  }, [poolID, filterKey]);
+
+  useEffect(() => {
+    if (!selectedID) return;
+    setRunPage(null);
+    setPointRuns(null);
+    void loadRuns();
+  }, [poolID, selectedID]);
 
   useEffect(() => {
     if (backupUncertain) return;
@@ -176,15 +321,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   };
   const clearRequest = (key: string) => { delete requests.current[key]; };
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return (points || [])
-      .filter(p => !filterVM || p.source_vm_id === filterVM)
-      .filter(p => !filterRepo || p.repository_id === filterRepo)
-      .filter(p => !q || [p.source_vm_name, p.source_vm_id, p.id, repoByID.get(p.repository_id)?.name].some(v => (v || "").toLowerCase().includes(q)))
-      .slice()
-      .sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""));
-  }, [points, filterVM, filterRepo, query, repoByID]);
+  const filtered = useMemo(() => (points || []).slice().sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
 
   const openRestore = (point: BackupRecoveryPoint, mode: RestoreMode = "new") => {
     if (working) return;
@@ -248,7 +385,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       setBackupOpen(false);
       setBackupStep(1);
       await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      await load();
+      await refresh();
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) {
@@ -272,6 +409,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     if (!selected) return "Select a recovery point.";
     if (unavailable) return "Controller inventory could not be loaded.";
     if (busy) return "Another task is already in progress.";
+    if (restoreMode === "test" && pointRuns === null) return runError || "Loading complete test restore history.";
     if (restoreMode === "replace") {
       const original = restoreOriginal;
       if (!original) return "Original VM unavailable; use Restore as new.";
@@ -318,7 +456,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       onNotice(`${restoreName.trim() || selected.source_vm_name || selected.id}: ${label} requested`, backupOpID(reply));
       setSelectedID("");
       await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      await load();
+      await refresh();
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) {
@@ -349,7 +487,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       clearRequest(key);
       delete pendingProtect.current[key];
       onNotice(`${point.source_vm_name || point.id}: ${body.protected ? "protect" : "unprotect"} requested`, backupOpID(reply));
-      await load();
+      await refresh();
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) {
@@ -365,7 +503,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const testAction = async (point: BackupRecoveryPoint, vmID: string, action: "verify" | "cleanup", result?: "passed" | "failed") => {
     const test = activeTests.find(({ vm }) => vm.id === vmID);
     const cleanupReady = test?.vm.freshness === "fresh" && test.vm.state === "shut off" && data.hosts.find(h => h.id === test.vm.host_id)?.connection === "fresh";
-    if (!pool || !test || busy || unavailable || working || (action === "cleanup" && (cleanupConfirm[vmID] !== vmID || !cleanupReady))) return;
+    if (!pool || pointRuns === null || !test || busy || unavailable || working || (action === "cleanup" && (cleanupConfirm[vmID] !== vmID || !cleanupReady))) return;
     const key = `test-${action}-${point.id}-${vmID}-${result || ""}`;
     setWorking(key);
     setError("");
@@ -381,7 +519,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       onNotice(`${point.source_vm_name || point.id}: ${action === "verify" ? `${result} test result` : "test VM cleanup"} requested`, backupOpID(reply));
       setCleanupConfirm({});
       await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      await load();
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -402,20 +540,22 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     <BackupPolicies key={pool.id} active={tab === "policies"}
       api={api} data={data} pool={pool} repos={repos || []} points={points} policies={policies} error={error || policyError}
       busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
-      onNotice={onNotice} onError={setError} reload={async () => { await reload(); await load(); }}
+      onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
       requestID={requestID} clearRequest={clearRequest}
       openCreate={policyOpen} onOpenCreate={() => setPolicyOpen(true)} onCloseCreate={() => setPolicyOpen(false)}
     />
-    {tab === "points" ? <Section icon="backup" title="Recovery points" count={filtered.length} actions={<>
+    {tab === "points" ? <Section icon="backup" title="Recovery points" count={catalogPage?.total ?? filtered.length} actions={<>
       <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={() => { setBackupOpen(true); setBackupStep(1); }}>
         <Icon kind="backup" />Back up now
       </button>
       <button type="button" className="sm" disabled={unavailable || busy || Boolean(working)} onClick={() => { setTab("policies"); setPolicyOpen(true); }}>Create policy</button>
-      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working) || !selected} onClick={() => selected && openRestore(selected, "test")}>Test restore</button>
+      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working) || !selected || pointRuns === null} onClick={() => selected && openRestore(selected, "test")}>Test restore</button>
       <button type="button" className="sm" onClick={() => { location.hash = "/settings/backups"; }}>Repositories</button>
     </>}>
-      {(error || catalogError) && <p className="why" role="alert">{error || catalogError}</p>}
+      {(error || catalogError || repositoryError) && <p className="why" role="alert">{error || catalogError || repositoryError}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
+      {selected && pointRuns === null && !runError && <p className="muted" role="status">Loading complete test restore history…</p>}
+      {pageNotice && <p className="why" role="status">{pageNotice}</p>}
       <div className="vm-fields" style={{ marginBottom: 8 }}>
         <label>Search<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="VM, repository or ID" /></label>
         <label>VM<select value={filterVM} onChange={e => setFilterVM(e.target.value)}>
@@ -430,7 +570,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
         </select></label>
       </div>
       {points === null && !catalogError ? <p className="muted">Loading…</p> : null}
-      {points && filtered.length === 0 ? <p className="empty">{points.length ? "No recovery points match." : repos?.length ? "No recovery points yet. Back up a VM to create one." : "No backup repositories. Create an NFS destination in Settings first."}</p> : null}
+      {points && filtered.length === 0 ? <p className="empty">{filterVM || filterRepo || query.trim() ? "No recovery points match." : repos?.length ? "No recovery points yet. Back up a VM to create one." : "No backup repositories. Create a destination in Settings first."}</p> : null}
       {filtered.length > 0 ? <div className="table-scroll"><table className="records">
         <thead><tr><th>VM</th><th>Captured</th><th>Repository</th><th>Consistency</th><th>Protect</th><th>Test</th><th><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
@@ -458,6 +598,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           })}
         </tbody>
       </table></div> : null}
+      {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {catalogPage.total} recovery points.</p>}
+      {catalogPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreCatalog()}>{loadingMore === "catalog" ? "Loading…" : "Load more recovery points"}</button>}
     </Section> : null}
 
     {backupOpen && <section className="panel form-panel" aria-label="Back up now">
@@ -520,6 +662,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       </>}>
       {error && <p className="why" role="alert">{error}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
+      {pageNotice && <p className="why" role="status">{pageNotice}</p>}
       {!restoreOriginal && <p className="why" role="status">Replace unavailable: the original VM is not in this pool. Use Restore as new.</p>}
       <section className="tile" aria-label="Recovery point">
         <dl className="details">
@@ -593,6 +736,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           </section>;
         })}
       </section>}
+      {runPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreRuns()}>{loadingMore === "runs" ? "Loading…" : "Load more test history"}</button>}
     </Panel>}
   </>;
 }

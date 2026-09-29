@@ -24,7 +24,13 @@ var (
 	ErrOnlineBackupUncertain = errors.New("online backup native job outcome is uncertain")
 )
 
-// PrepareOnlineBackupWorkDir lets QEMU create and own its NFS work directory.
+var onlineBackupLocalRoot = filepath.Join(DefaultStoragePath, ".nex-backup-work")
+
+func OnlineBackupWorkDir(operationID string) string {
+	return filepath.Join(onlineBackupLocalRoot, operationID)
+}
+
+// PrepareOnlineBackupWorkDir lets QEMU create and own its work directory.
 // Core must not precreate it as root with an inaccessible mode.
 func PrepareOnlineBackupWorkDir(ctx context.Context, path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -39,6 +45,11 @@ func PrepareOnlineBackupWorkDir(ctx context.Context, path string) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(path, onlineBackupLocalRoot+string(os.PathSeparator)) {
+		if err := prepareLocalOnlineBackupRoot(ctx); err != nil {
+			return err
+		}
+	}
 	script := `umask 077; mkdir -p -- "$1"; test -w "$1" && test -x "$1"`
 	if _, err := run(ctx, "runuser", "-u", "libvirt-qemu", "--", "sh", "-c", script, "sh", path); err != nil {
 		return err
@@ -48,6 +59,36 @@ func PrepareOnlineBackupWorkDir(ctx context.Context, path string) error {
 		return errors.New("online backup work directory is unsafe")
 	}
 	return nil
+}
+
+func prepareLocalOnlineBackupRoot(ctx context.Context) error {
+	if err := os.Mkdir(onlineBackupLocalRoot, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(onlineBackupLocalRoot)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0700 {
+		return errors.New("local online backup work directory is unsafe")
+	}
+	uidText, err := qemuID(ctx, "-u")
+	if err != nil {
+		return err
+	}
+	uid, err := strconv.Atoi(uidText)
+	if err != nil {
+		return err
+	}
+	gidText, err := qemuID(ctx, "-g")
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(gidText)
+	if err != nil {
+		return err
+	}
+	return os.Chown(onlineBackupLocalRoot, uid, gid)
 }
 
 // PrepareOnlineBackupTarget creates a reusable qcow2 target as libvirt-qemu mode 0600

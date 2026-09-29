@@ -3,7 +3,8 @@
 ## Status
 
 Development Phase 6 / S5 Controller UI for stopped and online full backup into a
-registered NFS backup repository. Core validates the guest, captures disks
+registered NFS, SMB3, S3-compatible or SFTP repository. Core validates the guest,
+captures disks
 (stopped convert or online libvirt push-mode), publishes a complete manifest, then
 catalogs the recovery point. Quiesced online capture and UEFI online remain refused.
 
@@ -38,8 +39,14 @@ time when the catalog is available. Closing the browser does not cancel accepted
 - Quiesced refused: use Crash-consistent for running guests.
 - No repositories: register one under **Settings** → **Backup repositories**.
 - Backup authority capacity refusal: Core could not admit more history within
-  the member replica bound. Inspect the retained Core run and replica status
-  before retrying; keep the master available while the limit is unresolved.
+  a member's verified replica state. The legacy version 0 transfer has a 64 MiB
+  limit; the development candidate uses v2 signed pages for larger histories
+  but requires live proof that each required member holds the exact current
+  replica. Inspect the retained Core run and member status before retrying;
+  keep the master available when an exact complete replica cannot be verified.
+  A disposable fixture passed complete-history promotion with directly seeded
+  runs beyond 69 MB and bounded post-promotion backup and restore on all four
+  destinations. Check the current authority and member access before retrying.
 - Request refused or stuck: inspect the task and host operation before retrying. Reuse
   a request ID only for the identical request after the host reports a safe retry state.
 
@@ -48,4 +55,7 @@ time when the catalog is available. Closing the browser does not cancel accepted
 The [product NFS lab](../qa/2026-09-27-phase6-product-backup-lab.md) exercised stopped
 full backup; the later [browser report](../qa/2026-09-27-phase6-backup-browser.md)
 records its actual UI flow and settlement limits. Focused Go tests cover online job
-failure refusal; a live online backup of a running guest remains unproven in that lab.
+failure refusal. A later [destination lab](../qa/2026-09-28-backup-repository-destinations.md)
+passed bounded online two-disk backup and isolated cross-host booted restore
+for NFS, SMB3, S3 and SFTP. Final tracked enabled-build browser review and
+the genuine two-slot missed-schedule gate remain open.

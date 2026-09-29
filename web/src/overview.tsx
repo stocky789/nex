@@ -10,7 +10,7 @@ import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { AttentionList, Badge, Meter, badgeTone, monotone, date } from "./ui";
-import { type BackupRecoveryPoint, type BackupRun } from "./backup-types";
+import { backupPage, type BackupCatalogPage, type BackupRecoveryPoint, type BackupRun, type BackupRunPage } from "./backup-types";
 import "./overview.css";
 
 export { monotone };
@@ -54,7 +54,9 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const [histories, setHistories] = useState<StatsHistory[] | null>(null);
   const [members, setMembers] = useState<Report | null>(null);
   const [catalog, setCatalog] = useState<BackupRecoveryPoint[] | null>(null);
+  const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [backupRuns, setBackupRuns] = useState<BackupRun[] | null>(null);
+  const [runPage, setRunPage] = useState<BackupRunPage | null>(null);
   const [backupError, setBackupError] = useState(false);
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
   const hostKey = hosts.map(h => h.id).join(",");
@@ -83,18 +85,22 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   useEffect(() => {
     if (!pool) {
       setCatalog(null);
+      setCatalogPage(null);
       setBackupRuns(null);
+      setRunPage(null);
       return;
     }
     let live = true;
     const load = () => {
-      void api<BackupRecoveryPoint[]>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
-        .then(points => { if (live) { setCatalog(points); setBackupError(false); } }, () => { if (live) { setCatalog(null); setBackupError(true); } });
-      void api<BackupRun[]>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
-        .then(runs => { if (live) setBackupRuns(runs); }, () => { if (live) setBackupRuns(null); });
+      void api<BackupRecoveryPoint[] | BackupCatalogPage>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
+        .then(response => { if (live) { setCatalog(backupPage(response).items); setCatalogPage(Array.isArray(response) ? null : response); setBackupError(false); } }, () => { if (live) { setCatalog(null); setCatalogPage(null); setBackupError(true); } });
+      void api<BackupRun[] | BackupRunPage>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
+        .then(response => { if (live) { setBackupRuns(backupPage(response).items); setRunPage(Array.isArray(response) ? null : response); } }, () => { if (live) { setBackupRuns(null); setRunPage(null); } });
     };
     setCatalog(null);
+    setCatalogPage(null);
     setBackupRuns(null);
+    setRunPage(null);
     setBackupError(false);
     load();
     const timer = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
@@ -138,10 +144,10 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const storageShare = capacity ? 100 * (capacity - free) / capacity : null;
 
   const attention = attentionItems(data, hosts, vms, storage, coreAvailable);
-  const failedBackups = backupRuns?.filter(r => ["failed", "missed", "needs_attention"].includes(r.status)) || [];
-  if (failedBackups.length) attention.push({ tone: "bad", title: `${failedBackups.length} backup or restore runs need attention`, detail: "Review Core run outcomes and errors.", href: "#/backups" });
-  const untestedPoints = catalog?.filter(p => p.last_test_result !== "passed") || [];
-  if (untestedPoints.length) attention.push({ tone: "warn", title: `${untestedPoints.length} recovery points lack a passed restore test`, detail: "Test a point before relying on it.", href: "#/backups" });
+  const failedBackups = runPage?.attention_count ?? backupRuns?.filter(r => ["failed", "missed", "needs_attention"].includes(r.status)).length ?? 0;
+  if (failedBackups) attention.push({ tone: "bad", title: `${failedBackups} backup or restore runs need attention`, detail: "Review Core run outcomes and errors.", href: "#/backups" });
+  const untestedPoints = catalogPage?.untested_count ?? catalog?.filter(p => p.last_test_result !== "passed").length ?? 0;
+  if (untestedPoints) attention.push({ tone: "warn", title: `${untestedPoints} recovery points lack a passed restore test`, detail: "Test a point before relying on it.", href: "#/backups" });
 
   const sharedStorage = storage.filter(s => s.capabilities?.shared);
   const sharedHealthy = sharedStorage.filter(s => badgeTone(storageAccess(s)) === "ok" && !s.access?.error).length;
@@ -159,9 +165,9 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
     ? [...catalog].sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""))
     : null;
   const lastBackup = backupPoints?.[0] || null;
-  const lastRun = backupRuns?.filter(r => ["backup-now", "backup-scheduled", "backup-policy-run-now"].includes(r.kind))
+  const lastRun = runPage ? runPage.last_backup_run || null : backupRuns?.filter(r => ["backup-now", "backup-scheduled", "backup-policy-run-now"].includes(r.kind))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] || null;
-  const lastRestoreTest = backupPoints
+  const lastRestoreTest = catalogPage ? catalogPage.last_restore_test ? { last_tested_at: catalogPage.last_restore_test.tested_at, last_test_result: catalogPage.last_restore_test.result } : null : backupPoints
     ?.filter(p => p.last_tested_at)
     .sort((a, b) => (b.last_tested_at || "").localeCompare(a.last_tested_at || ""))[0] || null;
   const nights = Array.from({ length: 14 }, (_, i) => {
@@ -169,7 +175,7 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
     day.setUTCHours(0, 0, 0, 0);
     day.setUTCDate(day.getUTCDate() - (13 - i));
     const key = day.toISOString().slice(0, 10);
-    return backupPoints?.some(p => (p.captured_at || "").slice(0, 10) === key) ?? false;
+    return catalogPage ? catalogPage.backup_days_14.includes(key) : backupPoints?.some(p => (p.captured_at || "").slice(0, 10) === key) ?? false;
   });
   const backupsSummary = !pool
     ? "Choose a pool"

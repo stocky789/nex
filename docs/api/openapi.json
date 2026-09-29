@@ -3782,7 +3782,7 @@
       "post": {
         "operationId": "offerStorageCredentials",
         "summary": "Deliver repository credentials to Core",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Controller keeps credential bytes in bounded memory only while the addressed Core redeems a one-time offer and durably acknowledges its receipt. The response never contains the secret. Retry the same request_id after 503; a changed replay is 409. Credentials require at least one of registration_request_id for a new repository or repository_id for rotation.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:<kind>:<registration request_id> for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-<kind>-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. Domain and ssh_known_hosts are refused for backup purpose. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.",
         "security": [
           {
             "AdminSession": []
@@ -3841,7 +3841,7 @@
       "get": {
         "operationId": "listRetireEligibleStorageCredentials",
         "summary": "List Core-eligible credential receipts",
-        "description": "Administrator session required. Returns only redacted receipt metadata that the selected Core currently reports as eligible for explicit cleanup. Eligibility is advisory: Core checks it again when a retire command runs. This does not expose any credential bytes.",
+        "description": "Administrator session required. Returns only redacted receipt metadata that the selected Core currently reports as eligible for explicit cleanup, including unused backup handoffs for SMB3, S3 and SFTP. Eligibility is advisory: Core checks repository and unresolved registration references again when a retire command runs. This does not expose any credential bytes.",
         "security": [
           {
             "AdminSession": []
@@ -3977,7 +3977,7 @@
       "post": {
         "operationId": "retireStorageCredential",
         "summary": "Retire an unreferenced storage credential",
-        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues Core-owned cleanup for an opaque receipt. Core rechecks active and pending repository references before removing its local secret; a rejected cleanup changes no credentials. A retired receipt replay cannot restore or recreate a secret. Controller stores no secret or cleanup registry.",
+        "description": "Administrator session, same HTTPS Origin and X-CSRF-Token required. Queues Core-owned cleanup for an opaque storage or backup receipt. Core rechecks repository and unresolved registration references before removing its local secret; an in-flight registration or rejected cleanup changes no credentials. A retired backup receipt retains a redacted replay tombstone and SMB3 retirement also removes its side credential file. A retired receipt replay cannot restore or recreate a secret. Controller stores no secret or cleanup registry.",
         "security": [
           {
             "AdminSession": []
@@ -8949,7 +8949,7 @@
       "post": {
         "operationId": "createBackupRepository",
         "summary": "Register a pool backup repository",
-        "description": "Queues backup-repository-register on the pool master. Requires administrator session, CSRF and a stable request_id. External NFS only. Controller only relays; Core owns the durable registration.",
+        "description": "Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only when the fresh master advertises backup-destination-<kind>-v1 and a matching one-time Core credential receipt has been acknowledged; no new kind is advertised by this schema alone. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core's new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -8980,8 +8980,7 @@
                 "required": [
                   "request_id",
                   "name",
-                  "kind",
-                  "source"
+                  "kind"
                 ],
                 "properties": {
                   "request_id": {
@@ -8999,7 +8998,10 @@
                   "kind": {
                     "type": "string",
                     "enum": [
-                      "nfs"
+                      "nfs",
+                      "smb3",
+                      "s3",
+                      "sftp"
                     ]
                   },
                   "source": {
@@ -9020,9 +9022,74 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "smb_source": {
+                    "$ref": "#/components/schemas/SMBStorageSource"
+                  },
+                  "s3_source": {
+                    "$ref": "#/components/schemas/BackupS3Source"
+                  },
+                  "sftp_source": {
+                    "$ref": "#/components/schemas/BackupSFTPSource"
+                  },
+                  "credential_ref": {
+                    "type": "string",
+                    "description": "Opaque Core-acknowledged receipt; no secret bytes."
+                  },
+                  "credential_request_id": {
+                    "type": "string",
+                    "description": "Stable request ID of the preceding one-time credential offer."
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "nfs"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "smb3"
+                      }
+                    },
+                    "required": [
+                      "smb_source",
+                      "credential_ref",
+                      "credential_request_id"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "s3"
+                      }
+                    },
+                    "required": [
+                      "s3_source",
+                      "credential_ref",
+                      "credential_request_id"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "sftp"
+                      }
+                    },
+                    "required": [
+                      "sftp_source",
+                      "credential_ref",
+                      "credential_request_id"
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -9081,7 +9148,7 @@
             }
           },
           "409": {
-            "description": "Conflict.",
+            "description": "Changed request replay, missing matching credential receipt, unavailable master, or absent destination capability.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9227,7 +9294,7 @@
       "get": {
         "operationId": "listBackupCatalog",
         "summary": "List pool backup recovery points",
-        "description": "Returns the pool master's completed recovery-point catalog from retained inventory. Requires backup_catalog_reported; never invents an empty catalog.",
+        "description": "With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -9247,18 +9314,75 @@
               "type": "string"
             },
             "description": "Pool ID."
+          },
+          {
+            "name": "vm_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "description": "Restrict points to this source VM ID."
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "description": "Restrict points to this repository ID."
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Case-insensitive search over VM name/ID, point ID and repository name/ID."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            },
+            "description": "Decimal offset returned as next_cursor; use together with generation."
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "description": "Generation returned on the first page; required with cursor."
           }
         ],
         "responses": {
           "200": {
-            "description": "Master-reported recovery points.",
+            "description": "Core-owned page for a fresh capable master, or complete legacy array from an older Core.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BackupRecoveryPoint"
-                  }
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupCatalogPage"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BackupRecoveryPoint"
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -9284,7 +9408,7 @@
             }
           },
           "503": {
-            "description": "Pool master or backup catalog unavailable.",
+            "description": "Pool master or its backup history is unavailable; the read-only channel may not have opened yet.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9292,6 +9416,70 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid page filter or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current master is stale, or retained history changed; restart from the first page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "One retained record exceeds the Core page limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Pool master returned an invalid page or the enrolled read-only channel failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Pool master did not answer the page query in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-core-channel": {
+          "method": "GET",
+          "path": "/backup-catalog",
+          "transport": "enrolled-host mutual-TLS reverse channel requested in the agent report response",
+          "scope": "current pool master only; Controller selects the fresh master for the requested pool and validates every returned item",
+          "response_schema": "#/components/schemas/BackupCatalogPage",
+          "limits": "64 items and 2 MiB JSON per page; reverse channel itself has a 4 MiB body and 10 second query deadline",
+          "errors": {
+            "400": "invalid filter or cursor",
+            "409": "not current master or generation changed",
+            "413": "single record exceeds page",
+            "503": "Core history unavailable"
           }
         }
       }
@@ -9300,7 +9488,7 @@
       "get": {
         "operationId": "listBackupRuns",
         "summary": "List pool backup runs",
-        "description": "Returns the pool master's retained backup/restore run records from inventory. Requires backup_runs_reported; never invents an empty list.",
+        "description": "With a fresh current pool master advertising backup-inventory-pages-v1, Controller relays bounded read-only Core pages over the enrolled mutual-TLS reverse channel and keeps no authoritative history. The first request omits cursor/generation; follow-up requests supply both from the prior page. A changed generation returns 409 and the client restarts. Pages are newest first with ID tie-break; totals and summaries cover the full retained history before filters. Older Core keeps the legacy array response from its complete reported inventory when available. An unavailable or stale master never implies an empty history.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -9320,18 +9508,55 @@
               "type": "string"
             },
             "description": "Pool ID."
+          },
+          {
+            "name": "recovery_point_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "description": "Restrict runs to this recovery point ID."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            },
+            "description": "Decimal offset returned as next_cursor; use together with generation."
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "description": "Generation returned on the first page; required with cursor."
           }
         ],
         "responses": {
           "200": {
-            "description": "Master-reported runs.",
+            "description": "Core-owned page for a fresh capable master, or complete legacy array from an older Core.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BackupRun"
-                  }
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRunPage"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BackupRun"
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -9357,7 +9582,57 @@
             }
           },
           "503": {
-            "description": "Pool master or backup runs unavailable.",
+            "description": "Pool master or its backup history is unavailable; the read-only channel may not have opened yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid page filter or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current master is stale, or retained history changed; restart from the first page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "One retained record exceeds the Core page limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Pool master returned an invalid page or the enrolled read-only channel failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Pool master did not answer the page query in time.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9366,6 +9641,20 @@
               }
             }
           }
+        },
+        "x-core-channel": {
+          "method": "GET",
+          "path": "/backup-runs",
+          "transport": "enrolled-host mutual-TLS reverse channel requested in the agent report response",
+          "scope": "current pool master only; Controller selects the fresh master for the requested pool and validates every returned item",
+          "response_schema": "#/components/schemas/BackupRunPage",
+          "limits": "64 items and 2 MiB JSON per page; reverse channel itself has a 4 MiB body and 10 second query deadline",
+          "errors": {
+            "400": "invalid filter or cursor",
+            "409": "not current master or generation changed",
+            "413": "single record exceeds page",
+            "503": "Core history unavailable"
+          }
         }
       }
     },
@@ -9373,7 +9662,7 @@
       "post": {
         "operationId": "restoreBackupAsNew",
         "summary": "Restore a recovery point as a new VM",
-        "description": "Queues backup-restore-as-new on the pool master with the selected executing host. Requires administrator session, CSRF, stable request_id and host_id. Controller only relays; the master dispatches member work over the authenticated Core peer route, and the executing Core copies artifacts locally then creates the stopped guest.",
+        "description": "Queues backup-restore-as-new on the pool master with the selected executing host. Requires administrator session, CSRF, stable request_id and host_id. Controller only relays; the master dispatches member work over the authenticated Core peer route, and the executing Core copies validated artifacts locally then creates the stopped guest. An intact SMB3 point can be read while its share rejects writes; backup publication and repository health checks still require write access. An SFTP point with a pending delete record is refused until the exact prune settles.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -9511,7 +9800,7 @@
       "post": {
         "operationId": "backupVMNow",
         "summary": "Back up a VM now",
-        "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.",
+        "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In a capability-enabled SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -9833,7 +10122,17 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "additionalProperties": true,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Required current durable policy revision for an update."
+                  }
+                },
+                "required": [
+                  "expected_revision"
+                ]
               }
             }
           }
@@ -9851,7 +10150,7 @@
             }
           },
           "400": {
-            "description": "Error.",
+            "description": "Invalid request, including missing or zero expected_revision.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9871,7 +10170,7 @@
             }
           },
           "409": {
-            "description": "Error.",
+            "description": "Controller request identity or pool state conflicts; a stale revision is reported by Core on the queued operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9891,7 +10190,7 @@
             }
           }
         },
-        "description": "Update a backup policy"
+        "description": "Queues a policy update for the pool master using a positive expected_revision. Missing or zero is an invalid request (400). A stale revision is refused by Core on the queued operation; inspect its result. Exact request replay returns the original operation. Older Controllers without the field fail closed."
       }
     },
     "/api/v1/pools/{id}/backup-policies/{policy_id}/pause": {
@@ -10009,6 +10308,7 @@
       "post": {
         "operationId": "runNowBackupPolicy",
         "summary": "Run a backup policy for one VM now",
+        "description": "Queues a Core-owned policy backup. Exact Controller replay returns the retained task. If publication succeeded but retention failed, Core later reconciles the same run and reports its settled result without another capture.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -10258,7 +10558,7 @@
       "post": {
         "operationId": "protectBackupPoint",
         "summary": "Protect recovery point",
-        "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker).",
+        "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker). Refuses an SFTP point with a pending delete record.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -10963,7 +11263,7 @@
       "post": {
         "operationId": "rebuildBackupCatalog",
         "summary": "Rebuild backup catalog",
-        "description": "Rebuilds catalog entries for one repository from validated manifests.",
+        "description": "Rebuilds catalog entries for one repository from validated manifests. An unresolved destination delete intent blocks rebuild until the original prune settles; Core does not import a partial point or silently clear its catalog evidence.",
         "tags": [
           "Client \u2192 Controller"
         ],
@@ -12977,7 +13277,7 @@
               "x-max-utf8-bytes": 100
             },
             "maxItems": 64,
-            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. pool-vm-placement-v1 means Core supports the fail-closed master-owned placement preflight for VM definition transitions. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields."
+            "description": "Advertised on every report. managed-vm-v1 enables managed command delivery. pool-vm-placement-v1 means Core supports the fail-closed master-owned placement preflight for VM definition transitions. storage-cluster-session-monitor-v1 offers the additive clustered session-monitor projection; it must be acknowledged through storage_clusters_support before Core sends that projection. Omission or null disables managed delivery for this report; a newer sequence also replaces stored capabilities. vm-cpu-baseline-v1 advertises generic fixed CPU feature support and native pool baseline discovery; upgrade Controller before Core for additive fields. backup-inventory-pages-v1 offers Core-owned bounded run/catalog pages over the enrolled reverse channel; Controller acknowledges it with backup_inventory_pages before Core considers paged history available. Compact reports leave backup_runs and backup_catalog unreported."
           },
           "storage_discoveries": {
             "type": [
@@ -13120,7 +13420,7 @@
             "items": {
               "$ref": "#/components/schemas/StatsChannelRequest"
             },
-            "description": "Sent only to a host that offered usage-history-v1 when a browser query needs a stats channel and none is open. Delivered once, never journaled."
+            "description": "One-shot enrolled host reverse-channel request for usage history, hardware or backup inventory pages; delivered when the host offered the matching capability and a client query needs the channel."
           },
           "pool_requests": {
             "type": [
@@ -13164,6 +13464,24 @@
               }
             ],
             "description": "True only in a v2 response to a Core offering detected-os-v1. Core withholds ManagedState.detected_os until acknowledged; startup and re-enrollment clear readiness without erasing retained history."
+          },
+          "backup_inventory_pages": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True only after a protocol-v2 Core offers backup-inventory-pages-v1. Core then omits bulk backup runs/catalog from normal reports and serves pages over the enrolled read-only channel."
+          },
+          "pool_membership_hostname": {
+            "anyOf": [
+              { "type": "boolean" },
+              { "type": "null" }
+            ],
+            "description": "Explicit Controller acknowledgement of pool-membership-hostname-v1 on a v2 report. Core omits PoolMember.hostname from reports to older Controllers until acknowledged; resets on Controller replacement."
           }
         },
         "required": [
@@ -15944,6 +16262,10 @@
           "host_id": {
             "type": "string"
           },
+          "hostname": {
+            "type": "string",
+            "description": "Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL."
+          },
           "certificate_sha256": {
             "type": "string"
           },
@@ -15993,7 +16315,7 @@
           "replica_error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member acknowledged the replica without the Corosync key\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\", \"pool member reported invalid backup authority page progress\", or a refusal to report/stage a signed backup authority page."
+            "description": "The master's bounded reason for the last failed push to this member: \"pool member does not support pool-authority-replica-v2; upgrade it before relying on its replica\", \"pool member did not report its authority replica\", \"pool member did not acknowledge the authority replica\", \"pool member acknowledged the replica without joining the authority sanlock lockspace\", \"pool member acknowledged the replica without the Corosync key\", \"pool member refused the authority replica\" or the member's own refusal text, \"pool authority replica exceeds the peer body limit\", or \"pool member peer certificate cannot receive a wrapped pool CA key\", \"pool member reported invalid backup authority page progress\", \"pool member refused backup authority page reuse\", or a refusal to report/stage a signed backup authority page."
           },
           "replica_observed_at": {
             "type": "string",
@@ -16470,7 +16792,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Host name from the Controller's host record; empty for a reported member this Controller does not know."
+            "description": "Host name from the enrolled host when known, otherwise from Core-owned membership; falls back to the stable host ID for a legacy record without a name. An offline member need not have an enrolled Controller host row."
           },
           "role": {
             "type": "string",
@@ -17979,7 +18301,8 @@
             "type": "string"
           },
           "registration_request_id": {
-            "type": "string"
+            "type": "string",
+            "description": "For a backup registration use backup-credential:<kind>:<registration request_id>; the addressed host must be the pool master."
           },
           "pool_id": {
             "type": "string"
@@ -17988,10 +18311,12 @@
             "type": "string"
           },
           "repository_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Required for a backup-purpose offer; binds the receipt to one repository."
           },
           "credentials": {
-            "$ref": "#/components/schemas/StorageCredentials"
+            "$ref": "#/components/schemas/StorageCredentials",
+            "description": "Transient material. Backup purpose accepts username plus secret for SMB3/S3, or username plus ssh_private_key for SFTP; no domain or ssh_known_hosts."
           }
         },
         "required": [
@@ -18342,7 +18667,7 @@
             "items": {
               "$ref": "#/components/schemas/StorageCredentialReceipt"
             },
-            "description": "Redacted Core-owned receipt metadata for adoption; it never contains credential bytes."
+            "description": "Redacted Core-owned storage and backup receipt metadata for adoption; it never contains credential bytes. Backup handoffs remain in the pool master's private Core state and are reported as cleanup eligible only without repository or unresolved registration references."
           },
           "zfs_provisions": {
             "type": [
@@ -18488,11 +18813,11 @@
               "$ref": "#/components/schemas/BackupRecoveryPoint"
             },
             "maxItems": 10000,
-            "description": "Master catalog of completed recovery points; the repository remains authoritative for payloads."
+            "description": "Legacy complete master-reported backup history. A Core using backup-inventory-pages-v1 omits this array from compact reports; query the current master for bounded pages."
           },
           "backup_catalog_reported": {
             "type": "boolean",
-            "description": "True only when the master successfully loaded and reported the catalog; false or omitted is unknown, not empty."
+            "description": "True only for a complete legacy array. False or omitted is unknown, including compact reports using backup-inventory-pages-v1; it never means an empty history."
           },
           "backup_runs": {
             "type": [
@@ -18503,11 +18828,11 @@
               "$ref": "#/components/schemas/BackupRun"
             },
             "maxItems": 30000,
-            "description": "Master-owned backup and restore run records."
+            "description": "Legacy complete master-reported backup history. A Core using backup-inventory-pages-v1 omits this array from compact reports; query the current master for bounded pages."
           },
           "backup_runs_reported": {
             "type": "boolean",
-            "description": "True only when the master successfully loaded and reported run history; false or omitted is unknown, not empty."
+            "description": "True only for a complete legacy array. False or omitted is unknown, including compact reports using backup-inventory-pages-v1; it never means an empty history."
           },
           "backup_policies": {
             "type": [
@@ -19676,6 +20001,10 @@
             "type": "string",
             "maxLength": 200,
             "description": "Bounded refusal reason; control characters collapse the whole message to \"pool authority replica refused\"."
+          },
+          "backup_page_version": {
+            "type": "integer",
+            "description": "Maximum backup authority page format this member acknowledges; 2 enables version-2 manifests."
           }
         },
         "required": [
@@ -19716,7 +20045,16 @@
           "error": {
             "type": "string",
             "maxLength": 200,
-            "description": "The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it."
+            "description": "The last refusal this host recorded, kept alongside whatever it still holds; a later accepted push clears it. Includes \"pool member refused backup authority page reuse\" when a reusable blob cannot be safely staged."
+          },
+          "backup_page_version": {
+            "type": "integer",
+            "description": "Maximum backup authority page format this member reports; a fresh value of 2 is required before master backup authority may grow beyond version-0 bounds."
+          },
+          "membership_hostname_version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Authenticated peer GET /api/v1/pool/replica reports 1 when this Core can verify signed membership containing PoolMember.hostname. Absent/0 is an older peer; the master defers name writes until every ready member reports support. This field is not sent in Controller inventory preflight."
           }
         },
         "required": [
@@ -23403,7 +23741,7 @@
       },
       "BackupRepository": {
         "type": "object",
-        "description": "Master-owned external NFS backup destination.",
+        "description": "Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.",
         "x-go-type": "protocol.BackupRepository",
         "properties": {
           "id": {
@@ -23419,11 +23757,15 @@
           "kind": {
             "type": "string",
             "enum": [
-              "nfs"
+              "nfs",
+              "smb3",
+              "s3",
+              "sftp"
             ]
           },
           "source": {
-            "$ref": "#/components/schemas/NFSStorageSource"
+            "$ref": "#/components/schemas/NFSStorageSource",
+            "description": "Legacy NFS source; emitted for NFS records and omitted for other destination kinds."
           },
           "identity": {
             "anyOf": [
@@ -23461,14 +23803,80 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "smb_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SMBStorageSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s3_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupS3Source"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sftp_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupSFTPSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "smb_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SMBStorageIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRemoteIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Opaque Core-owned credential receipt reference; never credential material."
+          },
+          "health": {
+            "$ref": "#/components/schemas/BackupRepositoryHealth"
+          },
+          "last_health_transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRepositoryHealthTransition"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "id",
           "pool_id",
           "name",
-          "kind",
-          "source"
+          "kind"
         ],
         "additionalProperties": false
       },
@@ -23840,6 +24248,18 @@
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "expected_revision": {
+            "description": "Request-only compare-and-set value for a policy update. It must equal the current durable revision; Core removes it before persisting or reporting the policy.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "next_dispatch_at": {
             "type": "string",
@@ -24579,7 +24999,7 @@
       },
       "PoolBackupManifest": {
         "type": "object",
-        "description": "Signed reference to all paged backup authority bytes. Every page and the full bundle are SHA-256 checked before promotion.",
+        "description": "Signed backup authority reference. Version 0 retains per-page SHA-256 and byte lengths with a 64 MiB/1024-page bound. Version 2 binds ordered page_count, total_bytes, full SHA-256 root and record counts; page_sha256 and page_bytes are null and every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.",
         "x-go-type": "protocol.PoolBackupManifest",
         "properties": {
           "sha256": {
@@ -24592,7 +25012,8 @@
             ],
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Version 0 per-page SHA-256 values; null in version 2."
           },
           "total_bytes": {
             "type": "integer"
@@ -24625,7 +25046,15 @@
               "minimum": 1,
               "maximum": 262144
             },
-            "description": "Exact expected byte length of each ordered page."
+            "description": "Version 0 exact per-page byte lengths; null in version 2."
+          },
+          "version": {
+            "type": "integer",
+            "description": "0 or omitted for legacy per-page-hash format; 2 for streaming large-authority format."
+          },
+          "page_count": {
+            "type": "integer",
+            "description": "Version 2 ordered page count; zero or omitted in version 0."
           }
         },
         "required": [
@@ -24714,6 +25143,278 @@
         ],
         "x-go-type": "protocol.DetectedOS",
         "description": "Durable historical OS identity retained by Core. It does not establish current guest-agent availability or guest health."
+      },
+      "BackupS3Source": {
+        "type": "object",
+        "description": "Backup BackupS3Source contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupS3Source",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "HTTPS endpoint with verified TLS identity."
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "bucket"
+        ],
+        "additionalProperties": false
+      },
+      "BackupSFTPSource": {
+        "type": "object",
+        "description": "Backup BackupSFTPSource contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupSFTPSource",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "root": {
+            "type": "string"
+          },
+          "host_key_sha256": {
+            "type": "string",
+            "description": "Pinned SHA256 SSH host-key fingerprint."
+          }
+        },
+        "required": [
+          "host",
+          "root",
+          "host_key_sha256"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRemoteIdentity": {
+        "type": "object",
+        "description": "Backup BackupRemoteIdentity contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRemoteIdentity",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRepositoryHealth": {
+        "type": "object",
+        "description": "Backup BackupRepositoryHealth contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRepositoryHealth",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "unknown"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "BackupRepositoryHealthTransition": {
+        "type": "object",
+        "description": "Backup BackupRepositoryHealthTransition contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRepositoryHealthTransition",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "offline",
+              "recovered"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRunSummary": {
+        "type": "object",
+        "x-go-type": "protocol.BackupRunSummary",
+        "description": "Latest backup run over the unfiltered retained history.",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "status",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "BackupTestSummary": {
+        "type": "object",
+        "x-go-type": "protocol.BackupTestSummary",
+        "description": "Latest restore test over the unfiltered retained catalog.",
+        "properties": {
+          "result": {
+            "type": "string"
+          },
+          "tested_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "result",
+          "tested_at"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRunPage": {
+        "type": "object",
+        "x-go-type": "protocol.BackupRunPage",
+        "description": "At most 64 retained runs and 2 MiB of JSON. A changed generation requires restarting at the first page.",
+        "properties": {
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRun"
+            },
+            "maxItems": 64
+          },
+          "next_cursor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Decimal offset for the next page; omitted on the last page."
+          },
+          "generation": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the complete unfiltered run collection; pass it with next_cursor."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of runs matching the current filter."
+          },
+          "attention_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed, missed or needs-attention runs in the unfiltered retained history."
+          },
+          "last_backup_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "generation",
+          "total",
+          "attention_count"
+        ],
+        "additionalProperties": false
+      },
+      "BackupCatalogPage": {
+        "type": "object",
+        "x-go-type": "protocol.BackupCatalogPage",
+        "description": "At most 64 recovery points and 2 MiB of JSON. A changed generation requires restarting at the first page.",
+        "properties": {
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackupRecoveryPoint"
+            },
+            "maxItems": 64
+          },
+          "next_cursor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Decimal offset for the next page; omitted on the last page."
+          },
+          "generation": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the complete unfiltered catalog; pass it with next_cursor."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of recovery points matching the current filters."
+          },
+          "untested_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Points without a passing restore test in the unfiltered retained catalog."
+          },
+          "last_restore_test": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupTestSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "backup_days_14": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "UTC dates with backups in the latest 14 calendar days, across the unfiltered catalog."
+          }
+        },
+        "required": [
+          "items",
+          "generation",
+          "total",
+          "untested_count",
+          "backup_days_14"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -25119,7 +25820,7 @@
       "result": {
         "$ref": "#/components/schemas/Result"
       },
-      "semantics": "Controller queues a stopped full backup of one VM into a registered repository. Client request_id is the Core operation ID. Core publishes a complete recovery point or refuses; Controller adopts outcomes and catalog rows from master inventory."
+      "semantics": "Controller queues a stopped full backup of one VM into a registered repository. Client request_id is the Core operation ID. Core publishes a complete recovery point or refuses; Controller adopts outcomes and catalog rows from master inventory. An uncertain, already published manual backup without retention can settle on exact replay from a validated point even if the destination later refuses writes; a fresh backup still requires write access."
     },
     "backup-restore-as-new": {
       "transport": "POST /api/v1/agent/report response.commands",

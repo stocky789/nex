@@ -562,3 +562,43 @@ Evidence: Debian Trixie package records for [`sanlock`](https://packages.debian.
 source copyright files for [sanlock](https://metadata.ftp-master.debian.org/changelogs/main/s/sanlock/sanlock_3.9.5-1_copyright),
 [libvirt](https://sources.debian.org/src/libvirt/11.3.0-3%2Bdeb13u3/debian/copyright),
 and [corosync-qdevice](https://sources.debian.org/src/corosync-qdevice/3.0.3-2/debian/copyright).
+
+## Backup destination Go modules — 2026-09-28
+
+The Core S3 and SFTP clients add the following modules to the `go list -deps`
+import graph of `cmd/nex-core-agent` and `cmd/nex-core-local` after `go mod tidy`.
+The licenses and separate notices below were checked in downloaded source for
+these exact versions. This is not an inventory of a finished Core binary or ISO.
+
+| Modules and exact versions | Source license and separate notice |
+|---|---|
+| `github.com/aws/aws-sdk-go-v2` 1.47.1; `aws/protocol/eventstream` 1.7.20; `feature/s3/manager` 1.23.10; `internal/configsources` 1.5.4; `internal/endpoints/v2` 2.8.4; `internal/v4a` 1.5.4; `service/internal/accept-encoding` 1.13.19; `service/internal/checksum` 1.11.5; `service/internal/presigned-url` 1.14.4; `service/internal/s3shared` 1.20.4; `service/s3` 1.113.4 | Apache-2.0 in each module's `LICENSE.txt`; root module also has `NOTICE.txt`. |
+| `github.com/aws/smithy-go` 1.28.1 | Apache-2.0 `LICENSE` and `NOTICE`. |
+| `github.com/pkg/sftp` 1.13.10 | BSD-2-Clause `LICENSE`. |
+| `github.com/kr/fs` 0.1.0; `golang.org/x/crypto` 0.48.0 | BSD-3-Clause `LICENSE` in each module. |
+
+The compiled AWS SDK and Smithy `internal/sync/singleflight` packages each
+also carry a BSD-3-Clause `LICENSE` for incorporated Go code. The Core package
+build copies these files and the module licenses and notices above from the
+vendored build input into `/usr/share/doc/nex-core-local/go-dependencies/`,
+preserving their paths; a missing file fails the build.
+An isolated disposable package build ran this copy step and produced a `.deb`.
+All 19 packaged dependency license/notice files matched the vendored source
+archive byte for byte; `go version -m` on the packaged Core binary listed the
+15 expected modules at the versions above. Nex, Go toolchain and PAM notices
+were present.
+The appliance bundle in that test contained placeholders, so this does not
+verify a signed release package or ISO.
+
+The `feature/s3/manager` module's `go.mod` marks it deprecated in favor of
+[`feature/s3/transfermanager`](https://github.com/aws/aws-sdk-go-v2/discussions/3306).
+That changes maintenance planning, not its Apache-2.0 redistribution terms.
+
+These permissive licenses permit combination with original AGPL-3.0-only Nex
+code while their own copyright and license terms remain in force. Preserve the
+exact applicable license texts, copyright statements and AWS/Smithy
+notices in binary distribution materials; retain corresponding source and
+recheck the actual built dependency graph and final artifact before external
+distribution. This source inspection does not certify an ISO, package or
+source-delivery path. The existing complete-component and matching-source
+release gate still applies.

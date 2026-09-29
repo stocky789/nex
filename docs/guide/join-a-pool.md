@@ -112,6 +112,11 @@ OpenZFS, exclusive iSCSI and host-local bridges stay on the host that owns them.
 The membership lives on the pool master, not in Controller. A replacement Controller connected to
 the same hosts reads the same membership, names, peer addresses and any unfinished join back from
 them, with nothing to re-enter.
+An offline member still appears under **Members** with an unknown connection and its name from
+Core's membership record; it has no Hosts-panel link until it enrolls with this Controller.
+Older membership records without a saved host name show the stable host ID
+until the upgraded hosts report their names to the master. A host that is
+already offline cannot supply a missing name.
 
 ## Troubleshooting
 

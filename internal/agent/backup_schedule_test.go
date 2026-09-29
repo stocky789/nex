@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	work, ok, err := nextPendingPeerBackup(master)
-	if err != nil || !ok || work.repo.MountPath != "" || work.repo.Identity != nil || work.repo.Access.Status != "" {
+	if err != nil || !ok || work.repo.MountPath != "" || !reflect.DeepEqual(work.repo.Identity, work.localRepo.Identity) || work.repo.Access.Status != "" {
 		t.Fatalf("peer work retained host-local repository fields: %+v ok=%v err=%v", work.repo, ok, err)
 	}
 	queue := make(chan BackupRequest)
@@ -79,7 +80,7 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 		t.Fatalf("authenticated peer dispatch: %+v", completion)
 	}
 	wire := <-seen
-	if wire.MountPath != "" || wire.Identity != nil || wire.Access.Status != "" {
+	if wire.MountPath != "" || !reflect.DeepEqual(wire.Identity, work.localRepo.Identity) || wire.Access.Status != "" {
 		t.Fatalf("POST carried master host mount: %+v", wire)
 	}
 }
@@ -441,7 +442,7 @@ func TestMemberCleanupPeerBindsExactReceipt(t *testing.T) {
 	cmd := protocol.Command{OperationID: "cleanup-op", Kind: "backup-test-cleanup", TestRestoreClean: &protocol.TestRestoreCleanupRequest{
 		RepositoryID: "repo-1", RecoveryPointID: "point-1", TestVMID: testRun.NewVMID}}
 	work, remote, err := memberCleanupWork(master, cmd)
-	if err != nil || !remote || work.repo.MountPath != "" || work.repo.Identity != nil {
+	if err != nil || !remote || work.repo.MountPath != "" || work.repo.Identity == nil {
 		t.Fatalf("member cleanup work: %+v remote=%v err=%v", work, remote, err)
 	}
 	receipt := protocol.BackupMetadataReceipt{OperationID: cmd.OperationID, Kind: cmd.Kind, IntentSHA256: work.intent,

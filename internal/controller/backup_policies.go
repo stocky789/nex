@@ -10,20 +10,21 @@ import (
 )
 
 type upsertBackupPolicyRequest struct {
-	RequestID    string                            `json:"request_id"`
-	ID           string                            `json:"id,omitempty"`
-	ScheduleID   string                            `json:"schedule_id,omitempty"`
-	Name         string                            `json:"name"`
-	Enabled      bool                              `json:"enabled"`
-	Paused       bool                              `json:"paused"`
-	RepositoryID string                            `json:"repository_id"`
-	CaptureMode  string                            `json:"capture_mode"`
-	TimeZone     string                            `json:"time_zone"`
-	Rule         protocol.BackupScheduleRule       `json:"rule"`
-	VMIDs        []string                          `json:"vm_ids"`
-	Retention    protocol.BackupRetention          `json:"retention"`
-	Limits       protocol.BackupPolicyLimits       `json:"limits,omitempty"`
-	Overrides    []protocol.BackupPolicyVMOverride `json:"overrides,omitempty"`
+	RequestID        string                            `json:"request_id"`
+	ExpectedRevision *uint64                           `json:"expected_revision,omitempty"`
+	ID               string                            `json:"id,omitempty"`
+	ScheduleID       string                            `json:"schedule_id,omitempty"`
+	Name             string                            `json:"name"`
+	Enabled          bool                              `json:"enabled"`
+	Paused           bool                              `json:"paused"`
+	RepositoryID     string                            `json:"repository_id"`
+	CaptureMode      string                            `json:"capture_mode"`
+	TimeZone         string                            `json:"time_zone"`
+	Rule             protocol.BackupScheduleRule       `json:"rule"`
+	VMIDs            []string                          `json:"vm_ids"`
+	Retention        protocol.BackupRetention          `json:"retention"`
+	Limits           protocol.BackupPolicyLimits       `json:"limits,omitempty"`
+	Overrides        []protocol.BackupPolicyVMOverride `json:"overrides,omitempty"`
 }
 
 type pauseBackupPolicyRequest struct {
@@ -70,7 +71,7 @@ func (c *Controller) createBackupPolicy(w http.ResponseWriter, r *http.Request, 
 		CaptureMode: capture, TimeZone: body.TimeZone, Rule: body.Rule, VMIDs: body.VMIDs,
 		Retention: body.Retention, Limits: body.Limits, Overrides: body.Overrides, Revision: 1,
 	}
-	if !protocol.ValidSnapshotOperationID(body.RequestID) || policy.Valid() != nil {
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || body.ExpectedRevision != nil || policy.Valid() != nil {
 		fail(w, 400, "stable request_id and valid backup policy required")
 		return
 	}
@@ -93,9 +94,14 @@ func (c *Controller) updateBackupPolicy(w http.ResponseWriter, r *http.Request, 
 		Enabled: body.Enabled, Paused: body.Paused, RepositoryID: body.RepositoryID,
 		CaptureMode: capture, TimeZone: body.TimeZone, Rule: body.Rule, VMIDs: body.VMIDs,
 		Retention: body.Retention, Limits: body.Limits, Overrides: body.Overrides, Revision: 1,
+		ExpectedRevision: body.ExpectedRevision,
 	}
 	if !protocol.ValidSnapshotOperationID(body.RequestID) || !protocol.ValidSnapshotOperationID(policyID) {
 		fail(w, 400, "stable request_id and valid backup policy required")
+		return
+	}
+	if body.ExpectedRevision == nil || *body.ExpectedRevision == 0 {
+		fail(w, 400, "expected_revision is required; reload the policy before updating")
 		return
 	}
 	c.enqueueBackupPolicy(w, pool, user, body.RequestID, "backup-policy-upsert", &policy, nil, body, policyID)

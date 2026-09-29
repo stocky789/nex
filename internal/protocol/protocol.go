@@ -309,12 +309,14 @@ type ReportRequest struct {
 }
 type ReportResponse struct {
 	DetectedOS             *bool                     `json:"detected_os,omitempty"`
+	PoolMembershipHostname *bool                     `json:"pool_membership_hostname,omitempty"`
 	Commands               []Command                 `json:"commands"`
 	AcknowledgedResults    []string                  `json:"acknowledged_results"`
 	Consoles               []ConsoleRequest          `json:"consoles,omitempty"`
 	CredentialOffers       []StorageCredentialOffer  `json:"credential_offers,omitempty"`
 	StorageRepositories    *StorageRepositorySupport `json:"storage_repositories,omitempty"`
 	BackupSupport          *BackupSupport            `json:"backup_support,omitempty"`
+	BackupInventoryPages   *bool                     `json:"backup_inventory_pages,omitempty"`
 	StorageClusters        *StorageClusterSupport    `json:"storage_clusters_support,omitempty"`
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`

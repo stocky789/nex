@@ -1,0 +1,37 @@
+{
+  "summary": "Bind Core policy Run now reservations to the VM host before member dispatch. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup_schedule.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_run_now_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-member-policy-run-routing.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "The supported Run now operator steps and responses are unchanged; Core corrects which enrolled host performs the reserved backup.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing Controller and Core policy Run now operations now bind the Core-resolved member host before dispatch; requests, authentication, authorization and result schema are unchanged.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes routing and replay in the current destination acceptance slice.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Core already owns the policy, run and journal; the existing run HostID now names the VM's Core-resolved target and fresh Controllers adopt its result."
+  },
+  "verification": {
+    "method": "A disposable Controller policy Run now for a member VM failed on the master without member work. The focused reservation regression failed before the fix on blank HostID and passed after it, with legacy pending metadata replay and placement-change refusal. Focused race and full agent tests passed. Independent read-only review found a legacy local compatibility issue; its correction was reviewed without a remaining concrete safety finding. A frozen-source two-Core retest then settled a fresh Controller Run now on the member with one run/point and exact replay; prior catalog/source hashes and the signed replica verified. Forge CI remains open.",
+    "evidence": ["internal/agent/backup_run_now_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The focused regression checks durable routing state; the matched native retest supplies bounded peer-dispatch evidence. Older blank-host member runs already transitioned to backup execution remain in attention for manual reconciliation."
+  }
+}

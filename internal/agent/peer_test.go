@@ -162,7 +162,7 @@ func TestEjectedMemberCanRejoinWithANewCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: offer.Token, HostID: member.State.HostID, CSRPEM: csr}); err != nil {
+	if _, err = acceptPeerJoin(master, peerJoinRequest{Offer: offer.Token, HostID: member.State.HostID, Hostname: "member.example.test", CSRPEM: csr}); err != nil {
 		t.Fatalf("rejoin after eject: %v", err)
 	}
 	state, err = loadPoolPeer(master)

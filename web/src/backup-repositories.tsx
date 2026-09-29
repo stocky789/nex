@@ -4,37 +4,58 @@ import type { API, Host } from "./types";
 import { AccessLights, Badge, MiniBar, Section, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
 import {
-  backupOpID, nfsTarget, rid,
-  type BackupMemberAccess, type BackupRepository,
+  availableBackupKinds, backupOpID, repositoryTarget, repositoryHealth, rid,
+  type BackupKind, type BackupMemberAccess, type BackupRepository,
 } from "./backup-types";
 import "./settings.css";
 
 type Props = {
   api: API;
   poolID: string;
+  masterHostID: string;
   hosts: Host[];
   busy: boolean;
   unavailable: boolean;
   onNotice: (text: string, operationID?: string) => void;
 };
 
+const blankRemote = { kind: "nfs" as BackupKind, share: "", endpoint: "", bucket: "", prefix: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "" };
+
 function memberState(repo: BackupRepository, access: BackupMemberAccess): string {
-  if (access.repository_id !== repo.id || (repo.generation != null && access.generation !== repo.generation) || !access.identity) {
+  if (access.repository_id !== repo.id || (repo.generation != null && access.generation !== repo.generation)) {
     return "pending";
   }
   if (access.error) return access.error;
-  return access.readable && access.writable && access.qemu_writable && access.locking ? "accessible" : "not accessible";
+  return access.readable && access.writable ? "accessible" : "not accessible";
 }
 
-function hostAccess(repo: BackupRepository, hosts: Host[]): HostAccess[] {
+export function hostAccess(repo: BackupRepository, hosts: Host[], masterHostID: string): HostAccess[] {
   const poolHosts = hosts.filter(h => h.pool_id === repo.pool_id && !h.revoked);
   return poolHosts.map(host => {
     if (host.connection !== "fresh") {
       return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: "Host is not reporting current access" };
     }
+    if (host.id === masterHostID) {
+      const access = repo.access;
+      const observed = Date.parse(access?.observed_at || "");
+      if (!Number.isFinite(observed) || observed > Date.now() || Date.now() - observed > 2 * 60_000) {
+        return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: `Last report: ${date(access?.observed_at)}` };
+      }
+      if (access?.status === "failed" || (access?.status === "ok" && (!access.readable || !access.writable))) {
+        return { host: { id: host.id, hostname: host.hostname }, tone: "bad" as const, label: "No access", detail: access.error || date(access.observed_at) };
+      }
+      if (access?.status === "ok") {
+        return { host: { id: host.id, hostname: host.hostname }, tone: "ok", label: "Accessible", detail: date(access.observed_at) };
+      }
+      return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: date(access?.observed_at) };
+    }
     const member = repo.member_access?.find(a => a.host_id === host.id);
     if (!member) {
       return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: "No access report" };
+    }
+    const observed = Date.parse(member.observed_at || "");
+    if (!Number.isFinite(observed) || observed > Date.now() || Date.now() - observed > 2 * 60_000) {
+      return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: `Last report: ${date(member.observed_at)}` };
     }
     const state = memberState(repo, member);
     if (state === "accessible") {
@@ -52,7 +73,7 @@ function hostAccess(repo: BackupRepository, hosts: Host[]): HostAccess[] {
   });
 }
 
-function capacityCell(repo: BackupRepository) {
+function capacityCell(repo: BackupRepository, current: boolean) {
   const a = repo.access;
   const total = a?.total_bytes;
   const available = a?.available_bytes;
@@ -60,20 +81,22 @@ function capacityCell(repo: BackupRepository) {
   const used = total - available;
   return <>
     <MiniBar percent={(used / total) * 100} />
-    <small>{size(used)} used · {size(available)} free</small>
+    <small>{current ? "" : "Last reported "}{size(used)} used · {size(available)} free</small>
   </>;
 }
 
-function accessSummary(repo: BackupRepository) {
-  const a = repo.access;
-  if (!a) return <span className="muted">Not checked</span>;
-  if (a.error) return <Badge value="failed" label={a.error} />;
-  if (a.readable && a.writable) return <Badge value="ok" label={a.status || "Accessible"} />;
-  if (a.status) return <Badge value={a.status} />;
-  return <Badge value="degraded" label="Limited" />;
+function healthSummary(repo: BackupRepository) {
+  const status = repositoryHealth(repo);
+  const transition = repo.last_health_transition;
+  return <>
+    <Badge value={status} label={status === "unknown" ? "Unknown" : undefined} />
+    {status === "offline" && <small role="alert">{repo.health?.error || "Repository is offline"}</small>}
+    {status === "unknown" && <small>Current access is unknown; the last check is not current.</small>}
+    {transition && <small>Last {transition.status === "offline" ? "offline" : "recovered"}: {date(transition.at)}{transition.error ? ` · ${transition.error}` : ""}</small>}
+  </>;
 }
 
-export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNotice }: Props) {
+export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, unavailable, onNotice }: Props) {
   const [rows, setRows] = useState<BackupRepository[] | null>(null);
   const [error, setError] = useState("");
   const [form, setForm] = useState(false);
@@ -81,13 +104,28 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
   const [server, setServer] = useState("");
   const [exportPath, setExportPath] = useState("");
   const [directory, setDirectory] = useState("");
+  const [remote, setRemote] = useState(blankRemote);
   const [working, setWorking] = useState("");
   const [createUncertain, setCreateUncertain] = useState(false);
   const requests = useRef<Record<string, string>>({});
   const createID = useRef("");
+  const credentialReceipt = useRef("");
   const loadGen = useRef(0);
   const loadAbort = useRef<AbortController | null>(null);
   const createKey = "create";
+  const credentialKey = "credential";
+  const master = hosts.find(h => h.id === masterHostID);
+  const availableKinds = availableBackupKinds(master?.connection, master?.capabilities);
+  const remoteAvailable = remote.kind === "nfs" || availableKinds.includes(remote.kind);
+  const destinationReady = {
+    nfs: Boolean(server.trim() && exportPath.trim()),
+    smb3: Boolean(server.trim() && remote.share.trim()),
+    s3: remote.endpoint.startsWith("https://") && Boolean(remote.bucket.trim()),
+    sftp: Boolean(server.trim() && remote.root.trim() && remote.hostKey.trim()),
+  }[remote.kind];
+  const credentialReady = remote.kind === "nfs" || Boolean(remote.username.trim() &&
+    (credentialReceipt.current || (remote.kind === "sftp" ? remote.sshKey.trim() : remote.secret)));
+  const canCreate = Boolean(name.trim() && destinationReady && credentialReady && remoteAvailable && !unavailable && !busy);
 
   const load = async () => {
     loadAbort.current?.abort();
@@ -126,13 +164,23 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
 
   const resetForm = () => {
     clearRequest(createKey);
+    clearRequest(credentialKey);
     createID.current = "";
+    credentialReceipt.current = "";
     setCreateUncertain(false);
     setForm(false);
     setName("");
     setServer("");
     setExportPath("");
     setDirectory("");
+    setRemote(blankRemote);
+  };
+  const change = (update: () => void) => {
+    clearRequest(createKey);
+    clearRequest(credentialKey);
+    createID.current = "";
+    credentialReceipt.current = "";
+    update();
   };
   const closeForm = () => {
     if (working || createUncertain) return;
@@ -141,21 +189,33 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !server.trim() || !exportPath.trim() || unavailable || busy) return;
+    if (!canCreate) return;
     setWorking(createKey);
     setError("");
     try {
       createID.current ||= rid("brepo");
+      const registrationID = requestID(createKey, "brepo");
+      const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred");
+      if (credentialID && !credentialReceipt.current) {
+        const credentials = remote.kind === "sftp" ? { username: remote.username.trim(), ssh_private_key: remote.sshKey } : { username: remote.username.trim(), secret: remote.secret };
+        credentialReceipt.current = (await api<{ receipt: string }>("storage/credentials", "POST", {
+          request_id: credentialID, registration_request_id: `backup-credential:${remote.kind}:${registrationID}`,
+          pool_id: poolID, host_id: masterHostID, repository_id: createID.current, credentials,
+        })).receipt;
+        setRemote(current => ({ ...current, secret: "", sshKey: "" }));
+      }
+      let source;
+      if (remote.kind === "nfs") source = { source: { server: server.trim(), export: exportPath.trim(), ...(directory.trim() ? { directory: directory.trim() } : {}) } };
+      else if (remote.kind === "smb3") source = { smb_source: { server: server.trim(), share: remote.share.trim(), ...(directory.trim() ? { directory: directory.trim() } : {}) } };
+      else if (remote.kind === "s3") source = { s3_source: { endpoint: remote.endpoint.trim(), bucket: remote.bucket.trim(), ...(remote.prefix.trim() ? { prefix: remote.prefix.trim() } : {}) } };
+      else source = { sftp_source: { host: server.trim(), root: remote.root.trim(), host_key_sha256: remote.hostKey.trim(), ...(remote.port ? { port: Number(remote.port) } : {}) } };
       const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "POST", {
-        request_id: requestID(createKey, "brepo"),
+        request_id: registrationID,
         id: createID.current,
         name: name.trim(),
-        kind: "nfs",
-        source: {
-          server: server.trim(),
-          export: exportPath.trim(),
-          ...(directory.trim() ? { directory: directory.trim() } : {}),
-        },
+        kind: remote.kind,
+        ...source,
+        ...(credentialID ? { credential_ref: credentialReceipt.current, credential_request_id: credentialID } : {}),
       });
       clearRequest(createKey);
       onNotice(`Backup repository ${name.trim()}: registration requested`, backupOpID(reply));
@@ -165,7 +225,9 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
       const status = (err as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) {
         clearRequest(createKey);
+        clearRequest(credentialKey);
         createID.current = "";
+        credentialReceipt.current = "";
         setCreateUncertain(false);
       } else setCreateUncertain(true);
       setError(err instanceof Error ? err.message : String(err));
@@ -216,6 +278,8 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
 
   const blocked = unavailable || busy;
   const createWhy = unavailable ? "Controller inventory could not be loaded." : busy ? "Another task is already in progress." : "";
+  const fieldsDisabled = Boolean(working) || createUncertain;
+  const patchRemote = (values: Partial<typeof blankRemote>) => change(() => setRemote(current => ({ ...current, ...values })));
 
   return <Section icon="backup" title="Backup repositories" actions={<>
     <button type="button" className="sm primary" disabled={blocked || form || Boolean(working)} title={createWhy || undefined} onClick={() => setForm(true)}>
@@ -231,12 +295,34 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
       </div>
       <form className="vm-fields" onSubmit={onCreate}>
         {createUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact registration.</p>}
-        <label>Name<input required maxLength={100} value={name} autoFocus disabled={Boolean(working) || createUncertain} onChange={e => { setName(e.target.value); clearRequest(createKey); createID.current = ""; }} /></label>
-        <label>NFS server<input required value={server} disabled={Boolean(working) || createUncertain} placeholder="nfs.example.test" onChange={e => { setServer(e.target.value); clearRequest(createKey); createID.current = ""; }} /></label>
-        <label>Export path<input required value={exportPath} disabled={Boolean(working) || createUncertain} placeholder="/exports/backups" pattern="/.*" onChange={e => { setExportPath(e.target.value); clearRequest(createKey); createID.current = ""; }} /></label>
-        <label>Directory within export<input value={directory} disabled={Boolean(working) || createUncertain} placeholder="Optional" onChange={e => { setDirectory(e.target.value); clearRequest(createKey); createID.current = ""; }} /></label>
+        <label>Name<input required maxLength={100} value={name} autoFocus disabled={fieldsDisabled} onChange={e => change(() => setName(e.target.value))} /></label>
+        {(availableKinds.length > 1 || remote.kind !== "nfs") && <label>Destination type<select value={remote.kind} disabled={fieldsDisabled} onChange={e => patchRemote({ ...blankRemote, kind: e.target.value as BackupKind })}>
+          {availableKinds.map(kind => <option key={kind} value={kind}>{kind === "smb3" ? "SMB3" : kind === "s3" ? "S3 compatible" : kind === "sftp" ? "SFTP" : "NFS"}</option>)}
+          {!remoteAvailable && <option value={remote.kind} disabled>{remote.kind.toUpperCase()} unavailable</option>}
+        </select></label>}
+        {!remoteAvailable && <p className="why" role="status">This destination type is no longer available from the pool master. Reconnect or select NFS.</p>}
+        {remote.kind === "s3" ? <>
+          <label>HTTPS endpoint<input required type="url" value={remote.endpoint} disabled={fieldsDisabled} placeholder="https://objects.example.test" onChange={e => patchRemote({ endpoint: e.target.value })} /></label>
+          <label>Bucket<input required value={remote.bucket} disabled={fieldsDisabled} onChange={e => patchRemote({ bucket: e.target.value })} /></label>
+          <label>Prefix<input value={remote.prefix} disabled={fieldsDisabled} placeholder="Optional" onChange={e => patchRemote({ prefix: e.target.value })} /></label>
+        </> : <>
+          <label>{remote.kind === "nfs" ? "NFS server" : remote.kind === "smb3" ? "SMB server" : "Server"}<input required value={server} disabled={fieldsDisabled} placeholder="backup.example.test" onChange={e => change(() => setServer(e.target.value))} /></label>
+          {remote.kind === "nfs" && <label>Export path<input required value={exportPath} disabled={fieldsDisabled} placeholder="/exports/backups" pattern="/.*" onChange={e => change(() => setExportPath(e.target.value))} /></label>}
+          {remote.kind === "smb3" && <label>Share<input required value={remote.share} disabled={fieldsDisabled} onChange={e => patchRemote({ share: e.target.value })} /></label>}
+          {(remote.kind === "nfs" || remote.kind === "smb3") && <label>Directory within {remote.kind === "nfs" ? "export" : "share"}<input value={directory} disabled={fieldsDisabled} placeholder="Optional" onChange={e => change(() => setDirectory(e.target.value))} /></label>}
+          {remote.kind === "sftp" && <>
+            <label>Port<input type="number" min="1" max="65535" value={remote.port} disabled={fieldsDisabled} placeholder="22" onChange={e => patchRemote({ port: e.target.value })} /></label>
+            <label>Repository root<input required value={remote.root} disabled={fieldsDisabled} placeholder="/backups" pattern="/.*" onChange={e => patchRemote({ root: e.target.value })} /></label>
+          </>}
+          {remote.kind === "sftp" && <label>Pinned SSH host key fingerprint<input required value={remote.hostKey} disabled={fieldsDisabled} placeholder="SHA256:…" onChange={e => patchRemote({ hostKey: e.target.value })} /></label>}
+        </>}
+        {remote.kind !== "nfs" && <>
+          <label>{remote.kind === "s3" ? "Access key ID" : "Username"}<input required value={remote.username} autoComplete="username" disabled={fieldsDisabled} onChange={e => patchRemote({ username: e.target.value })} /></label>
+          {remote.kind === "sftp" ? <label>SSH private key<textarea required={!credentialReceipt.current} value={remote.sshKey} autoComplete="off" spellCheck={false} disabled={fieldsDisabled} onChange={e => patchRemote({ sshKey: e.target.value })} /></label>
+            : <label>{remote.kind === "s3" ? "Secret access key" : "Password"}<input required={!credentialReceipt.current} type="password" value={remote.secret} autoComplete="new-password" disabled={fieldsDisabled} onChange={e => patchRemote({ secret: e.target.value })} /></label>}
+        </>}
         <div className="actions">
-          <button type="submit" className="primary" disabled={Boolean(working) || !name.trim() || !server.trim() || !exportPath.trim()}>
+          <button type="submit" className="primary" disabled={Boolean(working) || !canCreate}>
             {working === createKey ? "Working…" : "Save"}
           </button>
           <button type="button" disabled={Boolean(working)} onClick={closeForm}>Cancel</button>
@@ -244,17 +330,17 @@ export function BackupRepositories({ api, poolID, hosts, busy, unavailable, onNo
       </form>
     </section>}
     {rows === null && !error ? <p className="muted">Loading…</p> : null}
-    {rows && rows.length === 0 ? <p className="empty">No backup repositories. Create an NFS destination first.</p> : null}
+    {rows && rows.length === 0 ? <p className="empty">No backup repositories. Create a destination first.</p> : null}
     {rows && rows.length > 0 ? <div className="table-scroll"><table className="records resources">
-      <thead><tr><th>Name</th><th>Target</th><th>Capacity</th><th>Access</th><th>Host access</th><th>Last check</th><th><span className="sr-only">Actions</span></th></tr></thead>
+      <thead><tr><th>Name</th><th>Target</th><th>Capacity</th><th>Health</th><th>Host access</th><th>Last check</th><th><span className="sr-only">Actions</span></th></tr></thead>
       <tbody>
         {rows.map(repo => <tr key={repo.id}>
           <td><strong>{repo.name}</strong><small className="mono">{repo.id}</small></td>
-          <td className="mono">{nfsTarget(repo)}</td>
-          <td>{capacityCell(repo)}</td>
-          <td>{accessSummary(repo)}</td>
-          <td><AccessLights items={hostAccess(repo, hosts)} /></td>
-          <td><span className="muted">{repo.access?.observed_at ? date(repo.access.observed_at) : "Not checked"}</span></td>
+          <td><small>{repo.kind.toUpperCase()}</small><span className="mono">{repositoryTarget(repo)}</span></td>
+          <td>{capacityCell(repo, repositoryHealth(repo) === "online")}</td>
+          <td>{healthSummary(repo)}</td>
+          <td><AccessLights items={hostAccess(repo, hosts, masterHostID)} /></td>
+          <td><span className="muted">{repo.health?.observed_at ? date(repo.health.observed_at) : "Not checked"}</span></td>
           <td className="row-actions">
             <button type="button" className="sm" disabled={blocked || Boolean(working)} title={createWhy || undefined} onClick={() => void onTest(repo)}>
               {working === `test-${repo.id}` ? "Testing…" : "Test access"}

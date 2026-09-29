@@ -2291,7 +2291,7 @@
       "post": {
         "operationId": "registerBackupRepositoryLocal",
         "summary": "Register an NFS backup repository",
-        "description": "Authenticated local root session, same-origin and CSRF required. External NFS only. Persists the destination on the pool master.",
+        "description": "Authenticated local root session, same-origin and CSRF required. External NFS only in the current build. Persists the destination on the pool master. Core refuses same-ID source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. A failed first NFS/SMB3 mount start cleans its new Core unit so a fresh operation can retry the same ID after service recovery; exact replay retains the failure.",
         "security": [
           {
             "LocalSession": []
@@ -2647,7 +2647,7 @@
       "post": {
         "operationId": "backupNowLocal",
         "summary": "Start a stopped full backup for a VM",
-        "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. Controller only relays; Core owns publication.",
+        "description": "Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In a capability-enabled SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller only relays; Core owns publication.",
         "security": [
           {
             "LocalSession": []
@@ -2758,7 +2758,7 @@
       "post": {
         "operationId": "restoreBackupAsNewLocal",
         "summary": "Restore a recovery point as a new VM",
-        "description": "Copies repository exports to local files before restore. Does not open NFS paths in place as VM disks.",
+        "description": "Copies repository exports to local files before restore. Does not open NFS paths in place as VM disks. An SFTP point with a pending delete record is refused until the exact prune settles.",
         "security": [
           {
             "LocalSession": []
@@ -2913,7 +2913,7 @@
       "post": {
         "operationId": "upsertBackupPolicyLocal",
         "summary": "Create or update a backup policy",
-        "description": "Persists a policy/schedule on the pool master.",
+        "description": "Persists a policy/schedule on the pool master. Creates omit policy.expected_revision; updates require a positive value equal to the current durable revision. Core clears that request-only field before storage and inventory. Missing, zero or stale expected_revision on update conflicts. Exact operation-ID replay returns the retained outcome.",
         "security": [
           {
             "LocalSession": []
@@ -2964,7 +2964,7 @@
             }
           },
           "400": {
-            "description": "Error.",
+            "description": "Invalid policy request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2984,7 +2984,7 @@
             }
           },
           "409": {
-            "description": "Error.",
+            "description": "Policy update has missing, zero or stale expected_revision, or conflicts with other pool state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3118,7 +3118,7 @@
       "post": {
         "operationId": "runNowBackupPolicyLocal",
         "summary": "Run a backup policy for one VM now",
-        "description": "Reserves one run without moving next_dispatch_at.",
+        "description": "Reserves one run without moving next_dispatch_at. If the new point was published but retention failed, Core keeps the run unresolved and retries validation/prune under the same operation ID after repository access recovers; it does not recapture the VM.",
         "security": [
           {
             "LocalSession": []
@@ -3353,7 +3353,7 @@
       "post": {
         "operationId": "protectBackupPointLocal",
         "summary": "Protect recovery point",
-        "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker).",
+        "description": "Sets or clears deletion protection on a recovery point (catalog + repository marker). Refuses an SFTP point with a pending delete record.",
         "tags": [
           "Host-local"
         ],
@@ -3833,7 +3833,7 @@
       "post": {
         "operationId": "importBackupCatalogLocal",
         "summary": "Import recovery points",
-        "description": "Imports validated repository manifests into the catalog.",
+        "description": "Starts a Core-owned validated repository scan and catalog merge. HTTP 202 is a pending receipt, not completion. Poll the backup operation; after an interrupted request or Core restart, retry the exact operation_id and body. A pending receipt may include the last transient scan error.",
         "tags": [
           "Host-local"
         ],
@@ -3940,7 +3940,7 @@
       "post": {
         "operationId": "rebuildBackupCatalogLocal",
         "summary": "Rebuild backup catalog",
-        "description": "Rebuilds catalog entries for one repository from validated manifests.",
+        "description": "Starts a Core-owned validated repository scan before removing stale catalog entries. HTTP 202 is a pending receipt, not completion. Poll the backup operation; after an interrupted request or Core restart, retry the exact operation_id and body. Unresolved destination delete intents, including NFS/SMB3 partial prune records, block rebuild until the original prune settles.",
         "tags": [
           "Host-local"
         ],
@@ -4995,6 +4995,10 @@
         "properties": {
           "host_id": {
             "type": "string"
+          },
+          "hostname": {
+            "type": "string",
+            "description": "Host-reported name retained in the Core master membership and signed replica so a fresh Controller can name an offline member. Omitted for legacy records; nonempty values have at most 200 UTF-8 bytes and no CR, LF or NUL."
           },
           "certificate_sha256": {
             "type": "string"
@@ -6114,7 +6118,7 @@
       },
       "BackupRepository": {
         "type": "object",
-        "description": "Master-owned external NFS backup destination.",
+        "description": "Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.",
         "x-go-type": "protocol.BackupRepository",
         "properties": {
           "id": {
@@ -6129,7 +6133,10 @@
           "kind": {
             "type": "string",
             "enum": [
-              "nfs"
+              "nfs",
+              "smb3",
+              "s3",
+              "sftp"
             ]
           },
           "source": {
@@ -6149,7 +6156,8 @@
               "server",
               "export"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "Legacy NFS source; emitted for NFS records and omitted for other destination kinds."
           },
           "identity": {
             "anyOf": [
@@ -6190,14 +6198,85 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "smb_source": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s3_source": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sftp_source": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "smb_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Opaque Core-owned credential receipt reference; never credential material."
+          },
+          "health": {
+            "$ref": "#/components/schemas/BackupRepositoryHealth"
+          },
+          "last_health_transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupRepositoryHealthTransition"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "id",
           "pool_id",
           "name",
-          "kind",
-          "source"
+          "kind"
         ],
         "additionalProperties": false
       },
@@ -6473,6 +6552,18 @@
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "expected_revision": {
+            "description": "Request-only compare-and-set value for a policy update. It must equal the current durable revision; Core removes it before persisting or reporting the policy.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "next_dispatch_at": {
             "type": "string",
@@ -7128,6 +7219,120 @@
           "state"
         ],
         "x-go-type": "protocol.PoolFenceWitness"
+      },
+      "BackupS3Source": {
+        "type": "object",
+        "description": "Backup BackupS3Source contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupS3Source",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "HTTPS endpoint with verified TLS identity."
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "bucket"
+        ],
+        "additionalProperties": false
+      },
+      "BackupSFTPSource": {
+        "type": "object",
+        "description": "Backup BackupSFTPSource contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupSFTPSource",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "root": {
+            "type": "string"
+          },
+          "host_key_sha256": {
+            "type": "string",
+            "description": "Pinned SHA256 SSH host-key fingerprint."
+          }
+        },
+        "required": [
+          "host",
+          "root",
+          "host_key_sha256"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRemoteIdentity": {
+        "type": "object",
+        "description": "Backup BackupRemoteIdentity contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRemoteIdentity",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "BackupRepositoryHealth": {
+        "type": "object",
+        "description": "Backup BackupRepositoryHealth contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRepositoryHealth",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "unknown"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "BackupRepositoryHealthTransition": {
+        "type": "object",
+        "description": "Backup BackupRepositoryHealthTransition contract. Planned until the corresponding Core capability is advertised.",
+        "x-go-type": "protocol.BackupRepositoryHealthTransition",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "offline",
+              "recovered"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "at"
+        ],
+        "additionalProperties": false
       }
     }
   },

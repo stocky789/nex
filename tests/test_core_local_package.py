@@ -337,6 +337,29 @@ class CoreLocalPackageTests(unittest.TestCase):
         # The prerm removes the generated source so removal leaves no source with a missing key.
         self.assertIn('/etc/apt/sources.list.d/nex.sources', (ROOT / 'packaging/core-local/prerm').read_text())
 
+    def test_core_package_retains_compiled_go_notices(self):
+        build = (ROOT / 'packaging/core-local/build-inside.sh').read_text()
+        start = build.index('for file in \\\n    vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt')
+        end = build.index('\ndone', start) + len('\ndone')
+        copy_notices = 'set -euo pipefail\npkg="$1"\n' + build[start:end]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['go', 'mod', 'vendor', '-o', str(root / 'vendor')], cwd=ROOT, check=True)
+            package = root / 'package'
+            def run_copy():
+                return subprocess.run(['bash', '-c', copy_notices, 'copy-notices', str(package)],
+                                      cwd=root, capture_output=True, text=True)
+            self.assertEqual(run_copy().returncode, 0)
+            notices = package / 'usr/share/doc/nex-core-local/go-dependencies'
+            self.assertEqual(len(list(notices.rglob('*LICENSE*'))) + len(list(notices.rglob('*NOTICE*'))), 19)
+            self.assertTrue((notices / 'github.com/aws/aws-sdk-go-v2/NOTICE.txt').is_file())
+            self.assertTrue((notices / 'github.com/aws/smithy-go/NOTICE').is_file())
+            self.assertTrue((notices / 'github.com/aws/aws-sdk-go-v2/internal/sync/singleflight/LICENSE').is_file())
+            self.assertTrue((notices / 'github.com/aws/smithy-go/internal/sync/singleflight/LICENSE').is_file())
+            self.assertFalse((notices / 'golang.org/x/sys').exists())
+            (root / 'vendor/github.com/aws/smithy-go/NOTICE').unlink()
+            self.assertNotEqual(run_copy().returncode, 0)
+
     def test_depends_cover_what_core_runs(self):
         """A host that installs this package on its own must get the tools Core execs.
 

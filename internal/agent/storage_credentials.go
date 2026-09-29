@@ -118,6 +118,9 @@ func clusterCredentialReceipt(s *Store, handoff protocol.StorageCredentialHandof
 // offers use their purpose-bound marker; ordinary storage retains the existing
 // receipt path unchanged.
 func saveCredentialHandoff(s *Store, handoff protocol.StorageCredentialHandoff) (protocol.StorageCredentialReceipt, error) {
+	if strings.HasPrefix(handoff.Offer.RegistrationRequestID, "backup-credential") {
+		return saveBackupCredential(s, handoff)
+	}
 	if cluster, ok := clusterCredentialReceipt(s, handoff); ok {
 		material := ClusterSecretMaterial{SSHPrivateKey: handoff.Credentials.SSHPrivateKey, SSHKnownHosts: handoff.Credentials.SSHKnownHosts}
 		if cluster.Kind != "fence_ssh" {

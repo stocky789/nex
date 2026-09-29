@@ -27,10 +27,21 @@ const (
 	maxBackupDiskArtifacts = 32
 )
 
+var ErrBackupPublishUncertain = errors.New("backup publication outcome is uncertain")
+
 type backupRepositoryOwner struct {
 	Repository string `json:"repository"`
 	Pool       string `json:"pool"`
 }
+
+var prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, repositoryID string) (storageAccess, error) {
+	return prepareSMBWithAdmission(ctx, registration, func(root string) error {
+		return claimBackupRepositoryOwnerExact(root, repositoryID, registration.PoolID)
+	})
+}
+var inspectBackupSMB = inspectSMB
+var probeBackupQEMUAccess = qemuStorageAccess
+var probeBackupPublication = probeBackupFilesystemPublication
 
 func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageRegistration {
 	sum := sha256.Sum256([]byte(repo.ID))
@@ -39,56 +50,144 @@ func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageR
 		Name: repo.Name, Kind: protocol.StorageKindNFS,
 		Source: protocol.StorageSource{NFS: &repo.Source},
 	}
-	if repo.Identity != nil {
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		registration.Kind = protocol.StorageKindSMB
+		registration.Source = protocol.StorageSource{SMB: repo.SMBSource}
+		registration.Identity.SMB = repo.SMBIdentity
+		registration.CredentialReceipt = repo.CredentialRef
+	} else if repo.Identity != nil {
 		registration.Identity.NFS = repo.Identity
 	}
 	return registration
 }
 
-// PrepareBackupRepository mounts the registered NFS source with Core's native
-// mount machinery and claims only the selected data directory for this pool.
+// PrepareBackupRepository mounts the registered filesystem source and claims
+// only the selected data directory for this pool.
 func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
 	if err := repo.Valid(); err != nil {
 		return protocol.BackupRepository{}, err
 	}
 	registration := backupStorageRegistration(repo)
-	access, err := prepareNFS(ctx, registration)
+	var access storageAccess
+	var err error
+	switch repo.Kind {
+	case protocol.BackupRepoKindNFS:
+		access, err = prepareNFS(ctx, registration)
+	case protocol.BackupRepoKindSMB3:
+		if repo.CredentialRef == "" {
+			return protocol.BackupRepository{}, errors.New("backup repository SMB credentials are unavailable")
+		}
+		root := filepath.Join(remoteMountPath(registration), repo.SMBSource.Directory)
+		if err := checkExistingBackupRepositoryOwner(root, repo.ID, repo.PoolID); err != nil {
+			return protocol.BackupRepository{}, err
+		}
+		access, err = prepareBackupSMB(ctx, registration, repo.ID)
+	default:
+		return protocol.BackupRepository{}, errors.New("backup repository kind is unsupported")
+	}
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
 	if repo.MountPath != "" && repo.MountPath != access.Path {
-		return protocol.BackupRepository{}, errors.New("backup repository mount path differs from Core's mounted NFS source")
+		return protocol.BackupRepository{}, errors.New("backup repository mount path differs from Core's mounted source")
 	}
 	repo.MountPath = access.Path
-	repo.Identity = access.Observed.NFS
-	if err := ClaimBackupRepositoryOwner(repo.MountPath, repo.ID, repo.PoolID); err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return protocol.BackupRepository{}, err
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		repo.SMBIdentity = access.Observed.SMB
+		if repo.SMBIdentity == nil || repo.SMBIdentity.MarkerID == "" {
+			return protocol.BackupRepository{}, errors.New("backup repository SMB identity is incomplete")
 		}
-		ownerRepo, ownerPool, readErr := ReadBackupRepositoryOwner(repo.MountPath)
-		if readErr != nil || ownerRepo != repo.ID || ownerPool != repo.PoolID {
-			return protocol.BackupRepository{}, errors.New("backup repository is owned by another pool")
+	} else {
+		repo.Identity = access.Observed.NFS
+	}
+	if err := claimBackupRepositoryOwnerExact(repo.MountPath, repo.ID, repo.PoolID); err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		if err := probeBackupPublication(repo.MountPath); err != nil {
+			return protocol.BackupRepository{}, err
 		}
 	}
 	return repo, nil
 }
 
-// VerifyBackupRepository proves the exact NFS source, selected directory,
-// kernel filesystem ID, and owner before any backup or restore file access.
+func checkExistingBackupRepositoryOwner(root, repositoryID, poolID string) error {
+	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || ownerRepo != repositoryID || ownerPool != poolID {
+		return errors.New("backup repository is owned by another pool")
+	}
+	return nil
+}
+
+func claimBackupRepositoryOwnerExact(root, repositoryID, poolID string) error {
+	if err := ClaimBackupRepositoryOwner(root, repositoryID, poolID); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		return checkExistingBackupRepositoryOwner(root, repositoryID, poolID)
+	}
+	return nil
+}
+
+// VerifyBackupRepository proves the mounted source is writable for publication.
 func VerifyBackupRepository(ctx context.Context, repo protocol.BackupRepository) error {
-	if err := repo.Valid(); err != nil || repo.MountPath == "" || repo.Identity == nil {
+	return verifyBackupRepository(ctx, repo, true)
+}
+
+// VerifyBackupRepositoryRead proves the mounted source and owner for read access.
+func VerifyBackupRepositoryRead(ctx context.Context, repo protocol.BackupRepository) error {
+	return verifyBackupRepository(ctx, repo, false)
+}
+
+func verifyBackupRepository(ctx context.Context, repo protocol.BackupRepository, writable bool) error {
+	if err := repo.Valid(); err != nil || repo.MountPath == "" {
 		return errors.New("backup repository mount identity is incomplete")
 	}
-	access, err := inspectNFS(ctx, backupStorageRegistration(repo))
+	registration := backupStorageRegistration(repo)
+	var access storageAccess
+	var err error
+	switch repo.Kind {
+	case protocol.BackupRepoKindNFS:
+		if repo.Identity == nil {
+			return errors.New("backup repository mount identity is incomplete")
+		}
+		access, err = inspectNFS(ctx, registration)
+	case protocol.BackupRepoKindSMB3:
+		if repo.SMBIdentity == nil || repo.SMBIdentity.MarkerID == "" || repo.CredentialRef == "" {
+			return errors.New("backup repository SMB identity is incomplete")
+		}
+		access, err = inspectBackupSMB(ctx, registration)
+	default:
+		return errors.New("backup repository kind is unsupported")
+	}
 	if err != nil {
 		return err
 	}
-	if access.Path != repo.MountPath || access.Observed.NFS == nil || *access.Observed.NFS != *repo.Identity {
-		return errors.New("backup repository NFS identity changed")
+	if access.Path != repo.MountPath {
+		return errors.New("backup repository mount path changed")
 	}
 	ownerRepo, ownerPool, err := ReadBackupRepositoryOwner(repo.MountPath)
 	if err != nil || ownerRepo != repo.ID || ownerPool != repo.PoolID {
 		return errors.New("backup repository owner marker does not match")
+	}
+	if repo.Kind == protocol.BackupRepoKindSMB3 {
+		observed := access.Observed.SMB
+		if observed == nil || observed.Server != repo.SMBIdentity.Server || observed.Share != repo.SMBIdentity.Share || observed.MarkerID != repo.SMBIdentity.MarkerID {
+			return errors.New("backup repository SMB identity changed")
+		}
+		if writable {
+			if err := probeBackupQEMUAccess(ctx, repo.MountPath); err != nil {
+				return err
+			}
+			if err := probeBackupPublication(repo.MountPath); err != nil {
+				return err
+			}
+		}
+	} else if access.Observed.NFS == nil || *access.Observed.NFS != *repo.Identity {
+		return errors.New("backup repository NFS identity changed")
 	}
 	return nil
 }
@@ -266,10 +365,10 @@ func PublishBackupRecoveryPoint(repoRoot string, manifest protocol.BackupManifes
 		return "", err
 	}
 	if err := os.Rename(staging, published); err != nil {
-		return "", err
+		return "", errors.Join(ErrBackupPublishUncertain, err)
 	}
 	if err := syncManagedDir(repoRoot); err != nil {
-		return "", err
+		return "", errors.Join(ErrBackupPublishUncertain, err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil

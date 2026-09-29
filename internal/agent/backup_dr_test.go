@@ -1352,6 +1352,252 @@ func TestCatalogRebuildImportsValidatedManifestsOnly(t *testing.T) {
 	}
 }
 
+func TestCatalogRebuildRetriesPendingReceipt(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-ok")
+	cmd := protocol.Command{OperationID: "rebuild-retry", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	reserved := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true})
+	if reserved.Err != nil || reserved.Result == nil || reserved.Result.Status != "pending" {
+		t.Fatalf("reserve rebuild: %+v", reserved)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settleBackupMetadataResponse(s, cmd, receipt, BackupResponse{Err: ErrBackupUnavailable})
+	status := acceptBackupRequestUnrecorded(context.Background(), s, BackupRequest{OperationID: cmd.OperationID})
+	if status.Err != nil || status.Result == nil || status.Result.Status != "pending" || status.Result.Error == "" {
+		t.Fatalf("reserved rebuild status: %+v", status)
+	}
+	response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
+	if response.Err != nil || response.Result == nil || response.Result.Status != "succeeded" ||
+		len(response.Catalog) != 1 || response.Catalog[0].ID != "point-ok" {
+		t.Fatalf("pending rebuild did not resume: %+v", response)
+	}
+	replay := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
+	if replay.Err != nil || replay.Result == nil || replay.Result.Status != "succeeded" {
+		t.Fatalf("settled rebuild did not replay: %+v", replay)
+	}
+}
+
+func TestCatalogRebuildLocalRetrySettlesControllerJournal(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-ok")
+	cmd := protocol.Command{OperationID: "rebuild-controller-retry", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+		t.Fatalf("reserve: %+v", response)
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "needs_attention", Error: "corrupt artifact",
+		Command: &cmd, ObservedAt: time.Now().UTC()}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd})
+	if response.Err != nil || response.Result == nil || response.Result.Status != "succeeded" {
+		t.Fatalf("repaired Core-local retry: %+v", response)
+	}
+	entry := s.State.Journal[cmd.OperationID]
+	if entry.Status != "succeeded" || entry.Error != "" {
+		t.Fatalf("Controller journal did not settle: %+v", entry)
+	}
+	status := acceptBackupRequestUnrecorded(context.Background(), s, BackupRequest{OperationID: cmd.OperationID})
+	if status.Err != nil || status.Result == nil || status.Result.Status != "succeeded" {
+		t.Fatalf("Core operation status stayed stale: %+v", status)
+	}
+	outcomes := commandOutcomes(s.State.Journal, nil)
+	if len(outcomes) != 1 || outcomes[0].OperationID != cmd.OperationID || outcomes[0].Status != "succeeded" {
+		t.Fatalf("Core outcome projection: %+v", outcomes)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(s.dir)
+	if err == nil {
+		defer reopened.Close()
+	}
+	if err != nil || reopened.State.Journal[cmd.OperationID].Status != "succeeded" {
+		t.Fatalf("durable Controller journal: %+v %v", reopened, err)
+	}
+}
+
+func TestCatalogRebuildReceiptReconcilesStaleJournalAfterRestart(t *testing.T) {
+	s := seedBackupMaster(t)
+	cmd := protocol.Command{OperationID: "rebuild-crash-gap", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+		t.Fatalf("reserve: %+v", response)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.Status, receipt.Error, receipt.ObservedAt = "succeeded", "", time.Now().UTC()
+	if err := savePoolBackupMetadataReceipt(s, receipt); err != nil {
+		t.Fatal(err)
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "needs_attention", Error: "interrupted before journal settlement", Command: &cmd}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.State.Journal[cmd.OperationID].Status != "succeeded" {
+		t.Fatal("durable receipt did not settle stale journal")
+	}
+	entry := reopened.State.Journal[cmd.OperationID]
+	entry.Status = "failed"
+	entry.Error = "terminal result"
+	reopened.State.Journal[cmd.OperationID] = entry
+	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); err != nil || reopened.State.Journal[cmd.OperationID].Status != "failed" {
+		t.Fatalf("terminal result was changed: %+v %v", reopened.State.Journal[cmd.OperationID], err)
+	}
+	entry.Status = "needs_attention"
+	wrong := cmd
+	wrong.CatalogImport = &protocol.CatalogImportRequest{RepositoryID: "repo-other"}
+	entry.Command = &wrong
+	reopened.State.Journal[cmd.OperationID] = entry
+	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); !errors.Is(err, ErrBackupConflict) ||
+		reopened.State.Journal[cmd.OperationID].Status != "needs_attention" {
+		t.Fatalf("mismatched intent settled: %+v %v", reopened.State.Journal[cmd.OperationID], err)
+	}
+}
+
+func TestCatalogRebuildReceiptWriteFailureIsPersistenceError(t *testing.T) {
+	for _, failedScan := range []bool{false, true} {
+		name := "success"
+		if failedScan {
+			name = "failed-scan"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := seedBackupMaster(t)
+			cmd := protocol.Command{OperationID: "rebuild-receipt-failure", Kind: "backup-catalog-rebuild",
+				CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+			if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+				t.Fatalf("reserve: %+v", response)
+			}
+			receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := writeBackupMetadataReceipt
+			writeBackupMetadataReceipt = func(string, []byte, os.FileMode) error {
+				return errors.New("injected receipt write failure")
+			}
+			t.Cleanup(func() { writeBackupMetadataReceipt = previous })
+			response := BackupResponse{Result: &protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}}
+			if failedScan {
+				response = BackupResponse{Err: ErrBackupUnavailable}
+			}
+			got := settleBackupMetadataResponse(s, cmd, receipt, response)
+			var persistence persistenceError
+			if !errors.As(got.Err, &persistence) {
+				t.Fatalf("receipt write failure was not fatal persistence error: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCatalogRebuildReceiptAdmissionRefusalIsNotPersistenceError(t *testing.T) {
+	s := seedBackupMaster(t)
+	cmd := protocol.Command{OperationID: "rebuild-admission-refusal", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+		t.Fatalf("reserve: %+v", response)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := peerState(t, s)
+	peer.Membership.Generation++
+	peer.Membership.Members = append(peer.Membership.Members, protocol.PoolMember{
+		HostID: "member-1", CertificateSHA256: strings.Repeat("a", 64), Generation: 1, Status: "ready",
+	})
+	if err := savePoolPeer(s, peer); err != nil {
+		t.Fatal(err)
+	}
+	previous := poolBackupBundleLimit
+	poolBackupBundleLimit = 1
+	t.Cleanup(func() { poolBackupBundleLimit = previous })
+	got := settleBackupMetadataResponse(s, cmd, receipt, BackupResponse{Result: &protocol.Result{
+		OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC(),
+	}})
+	var persistence persistenceError
+	if got.Err == nil || errors.As(got.Err, &persistence) {
+		t.Fatalf("replica admission refusal was classified as storage failure: %+v", got)
+	}
+	stored, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil || stored.Status != "pending" {
+		t.Fatalf("refused receipt changed: %+v %v", stored, err)
+	}
+}
+
+func TestCatalogRebuildJournalWriteFailureRecoversFromReceipt(t *testing.T) {
+	s := seedBackupMaster(t)
+	cmd := protocol.Command{OperationID: "rebuild-journal-failure", Kind: "backup-catalog-rebuild",
+		CatalogImport: &protocol.CatalogImportRequest{RepositoryID: "repo-1"}}
+	if response := acceptBackupRequest(context.Background(), s, BackupRequest{Command: &cmd, ReserveOnly: true}); response.Err != nil || response.Result == nil || response.Result.Status != "pending" {
+		t.Fatalf("reserve: %+v", response)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, cmd.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.State.Journal[cmd.OperationID] = JournalEntry{Status: "needs_attention", Command: &cmd}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	s.beforePublish = func() error { return errors.New("injected journal write failure") }
+	response := settleBackupMetadataResponse(s, cmd, receipt, BackupResponse{Result: &protocol.Result{
+		OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC(),
+	}})
+	var persistence persistenceError
+	if !errors.As(response.Err, &persistence) {
+		t.Fatalf("journal write failure was not fatal: %+v", response)
+	}
+	s.beforePublish = nil
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.State.Journal[cmd.OperationID].Status != "needs_attention" {
+		t.Fatal("injected failure unexpectedly persisted journal")
+	}
+	if err := reconcileCatalogMetadataJournal(reopened, cmd.OperationID); err != nil ||
+		reopened.State.Journal[cmd.OperationID].Status != "succeeded" {
+		t.Fatalf("receipt did not recover journal: %+v %v", reopened.State.Journal[cmd.OperationID], err)
+	}
+}
+
 func TestCatalogRebuildRetainsProtectedAndPinnedMissingPoints(t *testing.T) {
 	s := seedBackupMaster(t)
 	mount := t.TempDir()

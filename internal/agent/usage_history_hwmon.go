@@ -34,13 +34,15 @@ const hwmonLastMaxAge = 2 * usageSampleInterval
 // one sample rather than the caller's whole deadline. root is remembered with them because the
 // hardware report and the sampler can be pointed at different trees, and at because a stalled
 // chip must not keep publishing the same number for ever.
-var hwmonLast struct {
+type hwmonReader struct {
 	mu      sync.Mutex
 	reading bool
 	root    string
 	at      time.Time
 	sensors []hwmonSensor
 }
+
+var hwmonLast hwmonReader
 
 // hwmonSensorsWithin reads the sensors on a background goroutine and returns the last known
 // values when a chip does not answer within wait. An nvme or drivetemp reading is a command to
@@ -49,20 +51,24 @@ var hwmonLast struct {
 // cannot leave a goroutine behind on every tick — and a caller that found one already in flight
 // does not wait on it at all, because the tick it would burn buys nothing.
 func hwmonSensorsWithin(root string, wait time.Duration) []hwmonSensor {
+	return hwmonLast.sensorsWithin(root, wait)
+}
+
+func (last *hwmonReader) sensorsWithin(root string, wait time.Duration) []hwmonSensor {
 	var done chan []hwmonSensor
-	hwmonLast.mu.Lock()
-	if !hwmonLast.reading {
-		hwmonLast.reading = true
+	last.mu.Lock()
+	if !last.reading {
+		last.reading = true
 		done = make(chan []hwmonSensor, 1)
 		go func() {
 			sensors := readHwmonSensors(root)
-			hwmonLast.mu.Lock()
-			hwmonLast.reading, hwmonLast.root, hwmonLast.at, hwmonLast.sensors = false, root, time.Now(), sensors
-			hwmonLast.mu.Unlock()
+			last.mu.Lock()
+			last.reading, last.root, last.at, last.sensors = false, root, time.Now(), sensors
+			last.mu.Unlock()
 			done <- sensors
 		}()
 	}
-	hwmonLast.mu.Unlock()
+	last.mu.Unlock()
 
 	if done != nil {
 		timer := time.NewTimer(wait)
@@ -73,12 +79,12 @@ func hwmonSensorsWithin(root string, wait time.Duration) []hwmonSensor {
 		case <-timer.C:
 		}
 	}
-	hwmonLast.mu.Lock()
-	defer hwmonLast.mu.Unlock()
-	if hwmonLast.root != root || time.Since(hwmonLast.at) > hwmonLastMaxAge {
+	last.mu.Lock()
+	defer last.mu.Unlock()
+	if last.root != root || time.Since(last.at) > hwmonLastMaxAge {
 		return nil
 	}
-	return hwmonLast.sensors
+	return last.sensors
 }
 
 // hwmonSensor is one temperature input. Celsius is NaN when the reading is missing, unreadable

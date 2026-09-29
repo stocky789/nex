@@ -28,10 +28,11 @@ import (
 // every step of a master change runs over the real mTLS peer transport with real
 // certificates, real membership pinning and real signatures.
 type transferLab struct {
-	t      *testing.T
-	hosts  []*Store
-	origin map[string]string
-	fail   map[string]*atomic.Value
+	t             *testing.T
+	hosts         []*Store
+	origin        map[string]string
+	fail          map[string]*atomic.Value
+	pageDataBytes atomic.Int64
 	// off are the hosts this lab has powered off. A fenced host is not executing, so it
 	// neither writes authority nor starts a guest, and the invariant counters below must
 	// not count its on-disk state as a running writer.
@@ -135,6 +136,20 @@ func (l *transferLab) serve(host *Store) {
 	l.fail[host.State.HostID] = drop
 	handler := PoolPeerHandler(host)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == poolBackupPagePath {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "invalid page request", http.StatusBadRequest)
+				return
+			}
+			var upload struct {
+				Data []byte `json:"data"`
+			}
+			if json.Unmarshal(body, &upload) == nil {
+				l.pageDataBytes.Add(int64(len(upload.Data)))
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		path, _ := drop.Load().(string)
 		onlyMethod := ""
 		if strings.HasPrefix(path, "POST:") {

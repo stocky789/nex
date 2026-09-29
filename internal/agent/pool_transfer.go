@@ -805,14 +805,20 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 	// activation: the survivor must not become master with empty backup authority while
 	// the signed replica still named those jobs (Campaign B).
 	backupAuthority := replica.BackupAuthority
-	if replica.BackupManifest != nil {
+	if replica.BackupManifest != nil && replica.BackupManifest.Version == 0 {
 		backupAuthority, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest)
 		if err != nil {
 			return nil, errors.New("the signed backup authority pages are incomplete or invalid")
 		}
 	}
-	backupAuthority = inheritedBackupAuthority(backupAuthority)
-	backupRoot, rollbackBackup, err := stagePoolBackupAuthorityActivation(s, backupAuthority, replica.Generation)
+	var backupRoot string
+	var rollbackBackup func()
+	if replica.BackupManifest != nil && replica.BackupManifest.Version == 2 {
+		backupRoot, rollbackBackup, err = stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
+	} else {
+		backupAuthority = inheritedBackupAuthority(backupAuthority)
+		backupRoot, rollbackBackup, err = stagePoolBackupAuthorityActivation(s, backupAuthority, replica.Generation)
+	}
 	if err != nil {
 		poolVMMu.Lock()
 		_ = savePoolVMs(s, vmSnapshot)
@@ -843,7 +849,8 @@ func adoptPoolAuthorityFromReplica(s *Store, replica protocol.PoolAuthorityRepli
 				state.MasterURL = self.PeerOrigin
 			}
 			record.Stage = "repoint"
-			if backupAuthority != nil && len(backupAuthority.Catalog) == 0 && len(backupAuthority.Repositories) > 0 {
+			if backupAuthority != nil && len(backupAuthority.Catalog) == 0 && len(backupAuthority.Repositories) > 0 ||
+				replica.BackupManifest != nil && replica.BackupManifest.Version == 2 && replica.BackupManifest.Catalog == 0 && replica.BackupManifest.Repositories > 0 {
 				record.Stage = "catalog-rebuild"
 			}
 			record.UpdatedAt = time.Now().UTC()
@@ -2058,6 +2065,21 @@ func AdvancePoolAuthorityTransfer(ctx context.Context, s *Store, timeout time.Du
 		return
 	}
 	advancePoolTransfer(ctx, s, record, timeout)
+}
+
+// The transfer runs on a probe goroutine; reconcile its command receipt on Run's
+// journal-owning loop after the same durable operation reaches done.
+func reconcilePoolPromotionJournal(s *Store) {
+	record, err := loadPoolTransfer(s)
+	if err != nil || record == nil || record.Action != "promote" || record.Role != "candidate" || record.Stage != "done" {
+		return
+	}
+	entry, ok := s.State.Journal[record.OperationID]
+	if !ok || entry.Command == nil || entry.Command.Kind != "pool-promote" || entry.Status != "needs_attention" {
+		return
+	}
+	entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", record.UpdatedAt, false
+	s.State.Journal[record.OperationID] = entry
 }
 
 // convergePoolAuthorityFrom asks the transfer's target where authority actually is. A host

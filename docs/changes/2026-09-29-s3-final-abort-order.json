@@ -1,0 +1,36 @@
+{
+  "summary": "Fence the S3 final key before recording incomplete-upload abort so a winning published point remains adoptable. API impact: existing contract.",
+  "paths": [
+    "internal/agent/backup_repository_s3.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/plans/2026-09-28-backup-repository-destinations-handover.md",
+    "docs/qa/2026-09-28-backup-repository-destinations.md",
+    "docs/changes/2026-09-29-s3-final-abort-order.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "S3 remains a gated candidate; supported operator steps do not change.",
+    "pages": []
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The existing exact attention and catalog result can settle a winning final manifest; no route, schema or permission changes.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Corrects the current destination publication safety gate.",
+    "pages": []
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable record. Core already owns the repository intent, abort marker, same-key tombstones and run/catalog; Controller adopts the master's authenticated result."
+  },
+  "verification": {
+    "method": "An adversarial fake-S3 test delayed final PUT until the tombstone request, failed red because an abort marker blocked the valid point, and passed after ordering the final-key fence first. Existing abort-wins, delayed artifact and partial-retry tests plus focused race passed. Independent read-only correction review found no concrete issue. Matched two-Core native S3Proxy operations proved final-first HTTP 200/412 with one readable catalog point and same-ID success, and tombstone-first HTTP 200/412 with one terminal failed run, no new point and exact failed replay.",
+    "evidence": ["internal/agent/backup_repository_s3_test.go", "docs/BUG_LEDGER.md", "docs/qa/2026-09-28-backup-repository-destinations.md"],
+    "limits": "The matched two-Core S3Proxy lab forced both provider orders and preserved prior catalog/protected/source hashes. This is a single-process provider with a fixture-only transport gate, without abrupt-crash or multi-process provider proof. Forge CI remains open."
+  }
+}

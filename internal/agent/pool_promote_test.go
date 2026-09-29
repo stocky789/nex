@@ -624,6 +624,42 @@ func TestPoolPromotionResumesFromEveryStage(t *testing.T) {
 	}
 }
 
+func TestPoolPromotionJournalRecoversAfterDurableCompletion(t *testing.T) {
+	lab := promotionLab(t, 1)
+	master, candidate := lab.host("master-1"), lab.host("member-1")
+	pushReplicas(t, master)
+	lab.powerOff("master-1")
+	operationID := "op-recovered-receipt"
+	command := promoteCommand(operationID, candidate.State.HostID)
+	attempts := 0
+	fakeFence(t, func(hostID, operationID, digest string, generation uint64) (protocol.StorageClusterFenceStatus, error) {
+		attempts++
+		if attempts == 1 {
+			return protocol.StorageClusterFenceStatus{}, errors.New("temporary fencer failure")
+		}
+		return observedPowerOff(0)(hostID, operationID, digest, generation)
+	})
+	if result := ExecutePoolPromotion(context.Background(), candidate, command); result.Status != "needs_attention" {
+		t.Fatalf("first promotion = %+v", result)
+	}
+	candidate.State.Journal[operationID] = JournalEntry{Command: &command, Status: "needs_attention", Error: "temporary fencer failure", Acknowledged: true}
+	completeJournal(candidate, nil, time.Second)
+	if entry := candidate.State.Journal[operationID]; entry.Status != "needs_attention" || !entry.Acknowledged {
+		t.Fatalf("unproved promotion was reconciled: %+v", entry)
+	}
+	AdvancePoolAuthorityTransfer(context.Background(), candidate, 5*time.Second)
+	if status := PoolPromotionReport(candidate); status == nil || status.Status != "succeeded" {
+		t.Fatalf("durable promotion = %+v", status)
+	}
+	completeJournal(candidate, nil, time.Second)
+	if entry := candidate.State.Journal[operationID]; entry.Status != "succeeded" || entry.Error != "" || entry.Acknowledged {
+		t.Fatalf("recovered promotion receipt = %+v", entry)
+	}
+	if result := ExecutePoolPromotion(context.Background(), candidate, command); result.Status != "succeeded" {
+		t.Fatalf("exact replay = %+v", result)
+	}
+}
+
 // An interrupted promotion must not treat an old power-off observation as permanent
 // evidence. Once it expires, the same durable operation goes back to fencing and replaces
 // the proof before it can activate authority.

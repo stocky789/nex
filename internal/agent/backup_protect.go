@@ -210,16 +210,13 @@ func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequ
 	if err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
-	if repo.MountPath == "" {
-		return protocol.BackupRecoveryPoint{}, errors.New("backup repository mount path is missing")
+	backend, err := openBackupRepositoryStorage(s, repo)
+	if err != nil {
+		return protocol.BackupRecoveryPoint{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := verifyBackupRepository(ctx, repo); err != nil {
-		return protocol.BackupRecoveryPoint{}, err
-	}
-	pointDir := filepath.Join(repo.MountPath, req.RecoveryPointID)
-	manifest, digest, err := vmhost.ReadBackupManifest(pointDir)
+	manifest, digest, err := backend.ReadPoint(ctx, req.RecoveryPointID)
 	if err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
@@ -251,7 +248,7 @@ func SetPoolBackupPointProtected(s *Store, req protocol.ProtectRecoveryPointRequ
 	if err := checkBackupCatalogPointCapacity(s, point); err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
-	if err := vmhost.WriteBackupProtectMarker(pointDir, req.Protected); err != nil {
+	if err := backend.SetProtected(ctx, req.RecoveryPointID, req.Protected); err != nil {
 		return protocol.BackupRecoveryPoint{}, err
 	}
 	if err := savePoolBackupCatalogEntry(s, point); err != nil {

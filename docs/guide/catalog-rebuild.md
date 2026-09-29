@@ -3,8 +3,9 @@
 ## Status
 
 Development Phase 6 / S7. Core rebuilds the recovery-point catalog from validated repository
-manifests after catalog loss. Protection markers and restore pins survive. Incomplete or
-corrupt points are skipped.
+manifests after catalog loss. Protection markers and restore pins survive. Core
+refuses unreadable published points and unresolved delete records rather than
+discarding their catalog evidence.
 
 ## Prerequisites
 
@@ -28,7 +29,11 @@ corrupt points are skipped.
    Prints JSON with `imported` count and imported points. Exit nonzero on failure.
 4. **Authenticated local API:**
    `POST /api/local/v1/pool/backup-catalog/rebuild` or `.../import` with
-   `{operation_id,repository_id}`.
+   `{operation_id,repository_id}`. A `202/pending` response means Core accepted
+   the scan. Poll `GET /api/local/v1/pool/backup-operations/{operation_id}`
+   until it settles, then check `GET /api/local/v1/pool/backup-catalog`.
+   Keep the same operation ID and body for an exact retry after a lost reply
+   or Core restart.
 
 ## Expected result
 
@@ -41,8 +46,18 @@ protection. Active restore pins on the same master remain and block prune.
 - Empty import: check repository mount, owner marker, and that point directories contain
   complete `manifest.json` plus matching disk digests.
 - Missing keys / incomplete manifests: refused; fix the repository payload, then rebuild again.
+- A pending operation with an error retains the last transient scan failure.
+  Restore repository access, then retry the same operation ID and body. An
+  unresolved delete intent requires the original backup's exact prune retry
+  before rebuild, including on NFS and SMB3. Do not erase the intent just to
+  make the scan pass.
 
 ## Verification
 
-Unit tests cover import of validated manifests and refusal of incomplete ones. Full
-Controller-absent lab rebuild remains **unexecuted**.
+Unit tests cover import of validated manifests, refusal of incomplete ones,
+and exact retry of a pending rebuild. Bounded Controller-absent NFS and SMB3
+catalog rebuilds passed in a disposable lab. A pending S3 rebuild resumed
+after a Core restart and settled. Later, with all pool members online, fresh
+missing-index S3 and clean-repository SFTP rebuilds each restored one selected
+point. A separate older SFTP repository correctly refused unresolved delete
+records. Full destination and interruption acceptance remains open.
