@@ -10864,3 +10864,66 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: a `failed` (not `needs_attention`) `storage-register` releases its receipt unless another journal entry still references it; `storage-credential-retire` remains for other cases.
 - Regression: `TestFailedStorageRegistrationReleasesCredential` (fails without the fix): `go test ./internal/vmhost -count=1`. Not re-run against the lab.
 - Avoid: Leaving secret cleanup to a client call.
+
+## BUG-0777 — A member that could not serve one repository blocked every backup in the pool
+
+- Date: 2026-09-30
+- Symptom: a test restore stuck on a member blocked a run-now for another repository for 10+ minutes; registering and forgetting the affected repository was refused; recovery needed a Core restart.
+- Root cause: the direct dispatch worker retried every non-permanent member error every 2 s while holding the pool's single backup slot, so nothing else could start; member-refusal backoff also grew to one hour and was never reset.
+- Fix: `waitPeerBackupTerminal` returns on any error so the run loop frees the slot and redispatches after backoff; backoff is capped at 5 minutes; a run the member never started (member has no record, failure before the start request) settles `failed` with the member's reason after 10 minutes.
+- Regression: `TestUnservableMemberReleasesBackupSlotAndSettlesNeverStartedRun` (fails without the fix): `go test ./internal/agent -count=1`. In-process hosts; not re-run in the lab.
+- Avoid: Retrying inside a goroutine that owns a pool-wide exclusive slot; unbounded waits on a member's answer.
+
+## BUG-0778 — Reusing a credential request ID after key loss answered only "cannot be decrypted"
+
+- Date: 2026-09-30
+- Symptom: `503 not redeemed: backup credential receipt cannot be decrypted` with nothing the operator could act on.
+- Root cause: the replay check opened the stored receipt, which was sealed under a lost key; a lost key and a tampered file are indistinguishable, so it must stay refused.
+- Fix: the refusal now says to send the credential again with a new request ID.
+- Regression: `TestBackupCredentialRequestAfterKeyLossSaysToUseNewRequestID` (fails without the fix): `go test ./internal/agent -count=1`.
+- Avoid: Overwriting a receipt that fails authentication to make a retry succeed.
+
+## BUG-0779 — Members kept the old repository name and credential reference after a same-ID re-registration
+
+- Date: 2026-09-30
+- Symptom: after re-registering repositories with the same IDs, members stayed `readable=false` for 6+ minutes even though the new credential files had arrived (fixes BUG-0774's incomplete lab result).
+- Root cause: BUG-0774 fixed the credential import and `adoptPeerBackupRepository`, but the periodic member access probe compared the master's record with the member's, found a different `credential_ref`, and failed as a conflict; nothing else refreshed the member record. The BUG-0774 test called the adopt function directly, so it never ran the probe path.
+- Fix: `probePeerBackupRepository` adopts the master's name and credential reference when only those differ for the same destination, retiring the superseded credential.
+- Regression: `TestBackupMemberProbeFollowsMastersReplacedRegistration` (fails without the fix) drives the real probe: `go test ./internal/agent -count=1`.
+- Avoid: Testing the helper a path should call instead of the path the lab exercises.
+
+## BUG-0780 — Replacing a readable backup credential was refused with "backup state is unavailable on this host"
+
+- Date: 2026-09-30
+- Symptom: re-registering a repository with a new credential while the old one was readable gave the generic unavailable error.
+- Root cause: `unsafeBackupRepositoryReplacement` returned a bool and both callers mapped it to `ErrBackupUnavailable`.
+- Fix: `backupReplacementError` returns `ErrBackupCredentialInUse` with the action to take (forget the repository first); the refusal itself is unchanged.
+- Regression: `TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced` now asserts the specific error: `go test ./internal/agent -count=1`.
+- Avoid: One generic error for distinct refusals.
+
+## BUG-0781 — Core's credential refusal never reached the operator
+
+- Date: 2026-09-30
+- Symptom: after key loss, `POST /api/v1/storage/credentials` answered `503 ... retry with the same request_id` although Core had refused the request permanently (BUG-0778's message was only in Core's log).
+- Root cause: the Controller's credential broker only knew "acknowledged" or "not acknowledged"; Core logged a refused offer and never told the Controller.
+- Fix: Core posts a `failed` receipt with its reason to the offer's acknowledgement route; the broker settles the waiting request with it and the API returns `409` with Core's reason. A refused request ID may be offered again.
+- Regression: `TestCredentialBrokerReportsCoreRefusalAndAllowsResend` (fails without the fix): `go test ./internal/controller -count=1`. Not re-run against a real Core in the lab yet.
+- Avoid: Mapping every missing acknowledgement to a retryable timeout.
+
+## BUG-0782 — Forget refusal did not name the holder; cleanup of a failed test restore failed
+
+- Date: 2026-09-30
+- Symptom: forgetting a repository said only "in use by an unfinished restore or test restore"; `backup-test-cleanup` for a test restore that never started failed with "backup operation not found".
+- Root cause: the refusal dropped the pin's operation; cleanup matched only `succeeded` test restore runs.
+- Fix: the refusal names the operation and test VM (id and name); cleanup also matches a `failed` test restore, whose absent VM the cleanup already tolerates, and releases its pin. When the member never started the run, the master settles its own record instead of waiting on a member that has nothing (found in the lab: delegating it looped forever).
+- Regression: `TestForgetBackupRepository` (operation and test VM in the refusal) and `TestCleanupOfFailedTestRestoreReleasesPin` (fail without the fix): `go test ./internal/agent -count=1`.
+- Avoid: Refusals that make the operator hunt for the blocking object.
+
+## BUG-0783 — Members kept records of repositories the master no longer holds
+
+- Date: 2026-09-30
+- Symptom: after a forget or removal, members' `pool-backup-repositories.json` still held the repository (`labs3`).
+- Root cause: the master only told members to forget at forget time, best effort; nothing later reconciled a member that missed it.
+- Fix: at the end of each repository probe pass the master sends its held repository IDs to each ready member (`POST /api/v1/pool/backup/retain`), which drops the rest with the existing member forget.
+- Regression: `TestMasterDropsMemberRecordsItNoLongerHolds` (fails without the fix): `go test ./internal/agent -count=1`.
+- Avoid: One-shot best-effort cleanup with no later reconciliation.

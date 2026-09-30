@@ -443,6 +443,57 @@ func TestControllerForgetBackupRepositoryRoute(t *testing.T) {
 	t.Fatal("forget command was not delivered to the pool master")
 }
 
+func TestControllerOrphanedBackupCleanupRoute(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
+		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
+		Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
+	})
+	base := "/api/v1/pools/" + pool + "/backup-repositories/repo-1/"
+	path := base + "orphan-cleanups"
+	confirmation := protocol.OrphanCleanupConfirmation(3, 1, true)
+	body := map[string]any{"request_id": "orphans-1", "vm_ids": []string{"vm-gone"}, "include_protected": true,
+		"confirmation": confirmation, "recovery_points": 3, "protected_points": 1}
+	csrf, cookie := a.csrf, a.cookie
+	a.csrf = ""
+	a.call("POST", path, body, nil, 403)
+	a.csrf, a.cookie = csrf, nil
+	a.call("POST", path, body, nil, 401)
+	a.call("GET", base+"orphans", nil, nil, 401)
+	a.call("GET", base+"orphan-cleanups/orphans-1", nil, nil, 401)
+	a.cookie = cookie
+	a.call("GET", "/api/v1/pools/"+pool+"/backup-repositories/bad%20id/orphans", nil, nil, 400)
+	for name, bad := range map[string]map[string]any{
+		"request id is the repository": {"request_id": "repo-1", "vm_ids": []string{"vm-gone"}, "recovery_points": 3},
+		"no VMs":                       {"request_id": "orphans-2", "recovery_points": 3},
+		"repeated VM":                  {"request_id": "orphans-3", "vm_ids": []string{"a", "a"}, "recovery_points": 3},
+		"no points":                    {"request_id": "orphans-4", "vm_ids": []string{"a"}},
+		"protected above points":       {"request_id": "orphans-5", "vm_ids": []string{"a"}, "recovery_points": 1, "protected_points": 2},
+	} {
+		t.Run(name, func(t *testing.T) { a.call("POST", path, bad, nil, 400) })
+	}
+
+	var queued struct {
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, a.call("POST", path, body, nil, 202), &queued)
+	if queued.Operation.ID != "orphans-1" || queued.Operation.Kind != "backup-orphan-cleanup" {
+		t.Fatalf("queued cleanup %+v", queued.Operation)
+	}
+	a.call("POST", path, body, nil, 200)
+	body["include_protected"] = false
+	a.call("POST", path, body, nil, 409)
+	for _, command := range a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}}).Commands {
+		if req := command.OrphanCleanup; command.Kind == "backup-orphan-cleanup" && req != nil && req.RepositoryID == "repo-1" && req.IncludeProtected &&
+			req.Confirmation == confirmation && req.RecoveryPoints == 3 && req.ProtectedPoints == 1 && len(req.VMIDs) == 1 && req.VMIDs[0] == "vm-gone" {
+			return
+		}
+	}
+	t.Fatal("cleanup command was not delivered to the pool master")
+}
+
 func TestBackupMasterActionsReturnOperationAndReplay(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))

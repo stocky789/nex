@@ -27,8 +27,10 @@ export const date = (value?: string | null) =>
   value && !value.startsWith("0001-")
     ? new Date(value).toLocaleString()
     : "Not observed";
-export const size = (value: number) =>
-  `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB`;
+export const size = (value: number) => {
+  const [unit, name]: [number, string] = value > 0 && value < 1024 ** 2 ? [1024, "KiB"] : value > 0 && value < 1024 ** 3 ? [1024 ** 2, "MiB"] : [1024 ** 3, "GiB"];
+  return `${(value / unit).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${name}`;
+};
 
 // The inventory load error and its Retry. The page shows it above the screen, and an open panel
 // shows it in its body instead, since the panel covers the page's alert.

@@ -93,6 +93,38 @@ func TestBackupMemberProbeAdoptsRemoteCredentialBeforeCheckingAccess(t *testing.
 	}
 }
 
+// Regression for BUG-0779. After a same-ID re-registration the member already holds the old record; the probe
+// must bring its name and credential reference up to the master's, not fail on them.
+func TestBackupMemberProbeFollowsMastersReplacedRegistration(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
+	repo := testPeerS3Repository(t, master)
+	projection, err := exportPeerBackupCredential(master, repo, member.State.HostID)
+	if err != nil || importPeerBackupCredential(member, projection) != nil {
+		t.Fatalf("member credential delivery: %v", err)
+	}
+	if access := probePeerBackupRepository(context.Background(), member, repo); !access.Readable {
+		t.Fatalf("initial member access = %+v", access)
+	}
+	replaced := repo
+	replaced.Name = "Renamed"
+	replaced.CredentialRef = peerTestBackupCredential(t, master, "credential-2", "register-2", "new-example-secret")
+	projection, err = exportPeerBackupCredential(master, replaced, member.State.HostID)
+	if err != nil || importPeerBackupCredential(member, projection) != nil {
+		t.Fatalf("replacement delivery: %v", err)
+	}
+	if access := probePeerBackupRepository(context.Background(), member, replaced); !access.Readable || !access.Writable {
+		t.Fatalf("member did not follow the re-registration: %+v", access)
+	}
+	local, err := GetPoolBackupRepository(member, repo.ID)
+	if err != nil || local.Name != replaced.Name || local.CredentialRef != replaced.CredentialRef {
+		t.Fatalf("member record = %q %q, %v", local.Name, local.CredentialRef, err)
+	}
+	if _, err := ResolveBackupCredential(member, repo); err == nil {
+		t.Fatal("superseded credential still readable on the member")
+	}
+}
+
 func TestBackupMemberProbeUsesStableSMBIdentity(t *testing.T) {
 	expected := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Kind: protocol.BackupRepoKindSMB3,
 		SMBSource:   &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"},

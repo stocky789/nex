@@ -52,6 +52,8 @@ time when the catalog is available. Closing the browser does not cancel accepted
   destinations. Check the current authority and member access before retrying.
 - Request refused or stuck: inspect the task and host operation before retrying. Reuse
   a request ID only for the identical request after the host reports a safe retry state.
+  A member that cannot serve the repository does not hold back backups of other repositories; if it never
+  started the run, Core marks it failed with the member's reason after 10 minutes.
 - Backup interrupted while publishing, for example by a Core restart: Core does not
   capture the VM again. It settles a point that finished publishing, or removes the
   partial point and fails the run with "backup publication was interrupted". Start

@@ -72,6 +72,9 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 		case r.URL.Path == poolBackupPeerPath+"/forget":
 			handlePeerForgetRepository(s, w, r)
 			return
+		case r.URL.Path == poolBackupPeerPath+"/retain":
+			handlePeerRetainRepositories(s, w, r)
+			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/access":
 			var repo protocol.BackupRepository
 			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
@@ -234,7 +237,8 @@ type BackupRequest struct {
 	ReserveOnly          bool
 	PeerStatus           bool
 	OperationID          string
-	List                 string // repositories | catalog | runs | policies
+	List                 string // repositories | catalog | runs | policies | orphans | orphan-cleanup
+	RepositoryID         string // orphans
 	PolicyID             string
 	Pause                *bool
 	RunNowVMID           string
@@ -250,6 +254,8 @@ type BackupResponse struct {
 	Policies     []protocol.BackupPolicy
 	Repository   *protocol.BackupRepository
 	Policy       *protocol.BackupPolicy
+	Orphans      *protocol.BackupOrphanQuery
+	Cleanup      *protocol.BackupOrphanCleanup
 	Err          error
 }
 
@@ -269,7 +275,7 @@ func backupCommand(kind string) bool {
 
 func backupMetadataCommand(kind string) bool {
 	switch kind {
-	case "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-policy-upsert", "backup-policy-pause",
+	case "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause",
 		"backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild",
 		"backup-test-verify", "backup-test-cleanup":
 		return true
@@ -514,7 +520,7 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 		}
 		poolBackupAuthorityMu.Unlock()
 		if receipt.Status == "pending" && !request.ReserveOnly &&
-			isBackupCatalogKind(cmd.Kind) {
+			(isBackupCatalogKind(cmd.Kind) || cmd.Kind == "backup-orphan-cleanup") {
 			return finishBackupMetadataRequest(ctx, s, request, receipt)
 		}
 		if receipt.Status == "pending" && (request.PreparedCleanup != nil || request.PreparedVerification != nil) && !request.ReserveOnly {
@@ -522,7 +528,7 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 		}
 		if receipt.Status == "pending" && cmd.Kind == "backup-test-cleanup" && request.PeerRepository == nil && !request.ReserveOnly {
 			if _, queued := s.State.Journal[cmd.OperationID]; !queued {
-				if run, runErr := matchingTestRestoreRun(s, *cmd.TestRestoreClean); runErr == nil && run.HostID != "" && run.HostID != s.State.HostID {
+				if run, runErr := matchingTestRestoreRun(s, *cmd.TestRestoreClean); runErr == nil && run.HostID != "" && run.HostID != s.State.HostID && !testRestoreNeverStarted(run) {
 					return finishBackupMetadataRequest(ctx, s, request, receipt)
 				}
 			}
@@ -695,6 +701,15 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 				return BackupResponse{Err: err}
 			}
 			return BackupResponse{Policies: policies}
+		case "orphans":
+			orphans, err := queryBackupOrphans(ctx, s, request.RepositoryID)
+			return BackupResponse{Orphans: &orphans, Err: err}
+		case "orphan-cleanup":
+			cleanup, err := loadOrphanCleanup(s, request.OperationID)
+			if errors.Is(err, os.ErrNotExist) {
+				err = ErrBackupNotFound
+			}
+			return BackupResponse{Cleanup: &cleanup, Err: err}
 		case "":
 			if request.OperationID == "" {
 				return BackupResponse{Err: ErrBackupInvalid}
@@ -861,11 +876,27 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 		}
 		result := protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
 		if err := forgetPoolBackupRepository(ctx, s, *cmd.ForgetRepository); err != nil {
-			var refusal forgetRefusal
+			var refusal backupRefusal
 			if !errors.As(err, &refusal) {
 				return BackupResponse{Err: err}
 			}
 			result.Status, result.Error = "failed", err.Error()
+		}
+		return BackupResponse{Result: &result}
+	case "backup-orphan-cleanup":
+		if cmd.OrphanCleanup == nil || cmd.OrphanCleanup.Valid() != nil {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
+		result := protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
+		cleanup, err := cleanupBackupOrphans(ctx, s, cmd.OperationID, *cmd.OrphanCleanup)
+		var refusal backupRefusal
+		switch {
+		case errors.As(err, &refusal):
+			result.Status, result.Error = "failed", err.Error()
+		case err != nil:
+			return BackupResponse{Err: err}
+		case cleanup.Status == "failed":
+			result.Status, result.Error = "failed", cleanup.Error
 		}
 		return BackupResponse{Result: &result}
 	case "backup-policy-upsert":
@@ -971,7 +1002,7 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			if err != nil {
 				return BackupResponse{Err: err}
 			}
-			if run.HostID != "" && run.HostID != s.State.HostID {
+			if run.HostID != "" && run.HostID != s.State.HostID && !testRestoreNeverStarted(run) {
 				poolVMMu.Lock()
 				_, ownerErr := testRestoreOwner(s, run)
 				poolVMMu.Unlock()

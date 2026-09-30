@@ -270,6 +270,7 @@ type Command struct {
 	CatalogImport     *CatalogImportRequest           `json:"catalog_import,omitempty"`
 	BackupRepository  *BackupRepository               `json:"backup_repository,omitempty"`
 	ForgetRepository  *ForgetRepositoryRequest        `json:"forget_repository,omitempty"`
+	OrphanCleanup     *OrphanCleanupRequest           `json:"orphan_cleanup,omitempty"`
 	BackupPolicy      *BackupPolicy                   `json:"backup_policy,omitempty"`
 	Power             *VMPowerRequest                 `json:"power,omitempty"`
 	Delete            *VMDeleteRequest                `json:"delete,omitempty"`

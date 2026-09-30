@@ -2747,6 +2747,58 @@
         }
       }
     },
+    "/api/v1/pool/backup/retain": {
+      "post": {
+        "operationId": "peerRetainBackupRepositories",
+        "summary": "Drop a member's backup repositories the pool no longer holds",
+        "description": "The authenticated current pool master sends the IDs of every backup repository it holds; the ready member drops its record, sealed credential and mount for any other repository, such as one whose forget it missed. Body is {\"repository_ids\"}, at most 256 IDs, limited to 64 KiB. Idempotent. The master sends this at the end of each repository probe pass.",
+        "security": [
+          {
+            "PoolMasterCertificate": []
+          }
+        ],
+        "x-introduced-version": "development",
+        "x-audience": "Core peer: current pool master to ready member",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "repository_ids"
+                ],
+                "properties": {
+                  "repository_ids": {
+                    "type": "array",
+                    "maxItems": 256,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The member now holds only the listed repositories."
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Caller is not the authenticated current pool master."
+          },
+          "409": {
+            "description": "The host is not a pool member, or a mount or credential could not be removed; retry."
+          }
+        }
+      }
+    },
     "/api/v1/pool/backup/access": {
       "post": {
         "operationId": "peerProbeBackupRepositoryAccess",

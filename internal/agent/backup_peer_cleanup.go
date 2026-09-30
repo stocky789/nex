@@ -32,7 +32,7 @@ func memberCleanupWork(s *Store, cmd protocol.Command) (peerCleanupWork, bool, e
 	}
 	var target protocol.BackupRun
 	for _, run := range runs {
-		if run.Kind == protocol.BackupKindTestRestore && run.Status == "succeeded" &&
+		if testRestoreCleanable(run) &&
 			run.NewVMID == cmd.TestRestoreClean.TestVMID && run.RepositoryID == cmd.TestRestoreClean.RepositoryID &&
 			run.RecoveryPointID == cmd.TestRestoreClean.RecoveryPointID {
 			if target.OperationID != "" {
@@ -44,7 +44,7 @@ func memberCleanupWork(s *Store, cmd protocol.Command) (peerCleanupWork, bool, e
 	if target.OperationID == "" {
 		return peerCleanupWork{}, false, ErrBackupNotFound
 	}
-	if target.HostID == s.State.HostID {
+	if target.HostID == s.State.HostID || testRestoreNeverStarted(target) {
 		return peerCleanupWork{}, false, nil
 	}
 	membership, err := Membership(s)

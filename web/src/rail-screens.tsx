@@ -102,6 +102,7 @@ export function resubmitLink(o: Operation, data: Pick<Data, "hosts" | "vms" | "s
   if (data.storage.some(r => r.operation_id === o.id)) return { href: "#/storage", label: "Open Storage" };
   if (data.networks.some(r => r.operation_id === o.id)) return { href: "#/networks", label: "Open Networks" };
   if (data.media.some(r => r.operation_id === o.id)) return { href: "#/storage", label: "Open the ISO library" };
+  if (o.kind.startsWith("backup-repository-") || o.kind === "backup-orphan-cleanup") return { href: "#/settings/backups", label: "Open Backup repositories" };
   return { href: `#/hosts/${encodeURIComponent(o.host_id)}`, label: `Open ${data.hosts.find(h => h.id === o.host_id)?.hostname || o.host_id}` };
 }
 export function Tasks({ data, upload, onCancelUpload }: { data: Data; upload: Upload | null; onCancelUpload: () => void }) {

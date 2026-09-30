@@ -20,11 +20,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A backup repository can now be forgotten from Settings. Nex removes the repository, its
   recovery-point list, its run history and its saved credentials from the pool; nothing is
   deleted from the destination, and registering it again brings its recovery points back.
+- Backups of VMs that were deleted from the pool can now be cleaned up from a backup
+  repository's **Orphaned backups** panel. Nex lists only VMs that are truly gone from the pool,
+  frees their space on the destination, and skips protected or in-use backups unless told otherwise.
 
 ### Bug Fixes
 
 - After a host reboot, Core no longer stays stuck with unknown host and VM state when the
   Controller appliance gets its DHCP address before its management service is listening.
+- When Core refuses a backup credential, Nex now shows Core's reason instead of telling you to retry
+  the same request.
+- Forgetting a repository now names the restore operation and test VM that hold it, cleaning up a
+  test restore that failed or never started now succeeds, and members drop repository records the
+  pool master no longer holds.
 
 ## [0.4.17] — 2026-09-28
 

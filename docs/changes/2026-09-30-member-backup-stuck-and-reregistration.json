@@ -1,0 +1,49 @@
+{
+  "summary": "Member backup dispatch no longer holds the pool's backup slot, members follow a re-registered repository's name and credential reference, and two credential refusals say what to do.",
+  "paths": [
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup_credentials.go",
+    "internal/agent/backup_peer_reconcile_test.go",
+    "internal/agent/backup_member_access_test.go",
+    "internal/agent/backup_credentials_test.go",
+    "internal/agent/backup_repository_s3_test.go",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/backup-now.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-member-backup-stuck-and-reregistration.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators see the new refusal texts, member convergence and the 10 minute never-started failure.",
+    "pages": [
+      "docs/guide/backup-repositories.md",
+      "docs/guide/backup-now.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "POST /api/v1/pools/{id}/backup-repositories keeps its shape; only a refusal text, member probe behaviour and the failure of a never-started member run changed. No new field or endpoint.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-repositories.json on each host (master authoritative) and the pool backup run records on the master.",
+    "reason": "No new state. A member's repository record is refreshed from the master by the existing access probe; a fresh Controller reads the same inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent with in-process hosts and an S3 fake; each new test was run against the unfixed code and failed. No lab run.",
+    "evidence": [
+      "internal/agent/backup_peer_reconcile_test.go",
+      "internal/agent/backup_member_access_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

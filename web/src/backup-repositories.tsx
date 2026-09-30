@@ -4,6 +4,7 @@ import type { API, Host } from "./types";
 import { AccessLights, Badge, MiniBar, Section, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
 import { confirmMatches } from "./managed";
+import { OrphanedBackups } from "./backup-orphans";
 import {
   backupKinds, backupOpID, loadRecoveryPoints, repositoryTarget, repositoryHealth, rid,
   type BackupKind, type BackupMemberAccess, type BackupRecoveryPoint, type BackupRepository,
@@ -141,8 +142,11 @@ function ForgetRepository({ api, poolID, repo, onClose, onDone }: {
   // A changed confirmation or catalog is a different request; an unchanged retry replays.
   useEffect(() => { requestID.current = rid("bforget"); }, [typed, points]);
   useEffect(() => {
+    // Unmounting removes the dialog without closing it, so return focus to the opener ourselves.
+    const opener = document.activeElement as HTMLElement | null;
     dialog.current?.showModal();
     loadRecoveryPoints(api, poolID, { repository_id: repo.id }).then(setPoints, e => setError(e instanceof Error ? e.message : String(e)));
+    return () => opener?.focus();
   }, []);
   const protectedCount = points?.filter(p => p.protected).length ?? 0;
   const submit = async () => {
@@ -178,6 +182,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const [working, setWorking] = useState("");
   const [createUncertain, setCreateUncertain] = useState(false);
   const [forgetting, setForgetting] = useState<BackupRepository | null>(null);
+  const [orphans, setOrphans] = useState<BackupRepository | null>(null);
   const requests = useRef<Record<string, string>>({});
   const createID = useRef("");
   const credentialReceipt = useRef("");
@@ -212,6 +217,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     setError("");
     setForm(false);
     setForgetting(null);
+    setOrphans(null);
     setCreateUncertain(false);
     requests.current = {};
     createID.current = "";
@@ -404,12 +410,14 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
             <button type="button" className="sm" disabled={blocked || Boolean(working)} onClick={() => void onImport(repo)}>
               {working === `import-${repo.id}` ? "Importing…" : "Import points"}
             </button>
+            <button type="button" className="sm" disabled={blocked || Boolean(working)} onClick={() => setOrphans(repo)}>Orphaned backups</button>
             <button type="button" className="sm danger" disabled={blocked || Boolean(working)} onClick={() => setForgetting(repo)}>Forget</button>
           </td>
         </tr>)}
       </tbody>
     </table></div> : null}
     {/* Forget is queued (202), so the first refetch usually still lists the repository; refetch again once Core has had time to drop it. */}
+    {orphans && <OrphanedBackups api={api} poolID={poolID} repo={orphans} onClose={() => setOrphans(null)} />}
     {forgetting && <ForgetRepository api={api} poolID={poolID} repo={forgetting} onClose={() => setForgetting(null)}
       onDone={operationID => { onNotice(`${forgetting.name}: forget requested`, operationID); setForgetting(null); void load(); window.setTimeout(() => void load(), 3000); }} />}
   </Section>;

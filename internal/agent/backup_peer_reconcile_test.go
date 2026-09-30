@@ -440,8 +440,8 @@ func TestPeerBackoffDoublesToCapAndResetsWhenAnswerChanges(t *testing.T) {
 	for range 10 {
 		b.observed("op", "refused", now)
 	}
-	if got := b["op"].next.Sub(now); got != time.Hour {
-		t.Fatalf("delay = %v, want the 1h cap", got)
+	if got := b["op"].next.Sub(now); got != peerBackupRetryMax {
+		t.Fatalf("delay = %v, want the cap", got)
 	}
 	b.observed("op", "different refusal", now)
 	if got := b["op"].next.Sub(now); got != peerBackupRetry {
@@ -477,7 +477,7 @@ func TestNeedsAttentionMemberRunIsReobservedOnlyAfterBackoff(t *testing.T) {
 }
 
 // Regression for BUG-0751: transport errors differ in ports and timings on every attempt,
-// so they back off as one class, and only to the short unreachable cap.
+// so they back off as one class.
 func TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass(t *testing.T) {
 	first := peerBackupAnswer(peerBackupCompletion{err: errors.New("read tcp 192.0.2.1:43122->192.0.2.2:9443: i/o timeout")})
 	second := peerBackupAnswer(peerBackupCompletion{err: errors.New("read tcp 192.0.2.1:50001->192.0.2.2:9443: i/o timeout")})
@@ -488,8 +488,8 @@ func TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass(t *testing.T) {
 	for range 12 {
 		b.observed("op", first, now)
 	}
-	if got := b["op"].next.Sub(now); got != peerBackupUnreachableMax {
-		t.Fatalf("unreachable delay = %v, want %v", got, peerBackupUnreachableMax)
+	if got := b["op"].next.Sub(now); got != peerBackupRetryMax {
+		t.Fatalf("unreachable delay = %v, want %v", got, peerBackupRetryMax)
 	}
 	permanent := peerBackupAnswer(peerBackupCompletion{err: permanentPeerBackupError{errors.New("member refused")}})
 	if permanent != "member refused" {
@@ -518,5 +518,53 @@ func TestPeerBackupRefusalKeepsMemberReason(t *testing.T) {
 	completion := callPeerBackup(context.Background(), work)
 	if !peerBackupNotStarted(completion.err) || !strings.Contains(completion.err.Error(), "online backup requires a running VM") {
 		t.Fatalf("member refusal reason was dropped: %v", completion.err)
+	}
+}
+
+// Regression for BUG-0777: a member that cannot serve one repository must not hold the
+// pool's single backup slot (the wait loop retried it forever), and a run the member
+// never started settles failed with the reason instead of holding its repository.
+func TestUnservableMemberReleasesBackupSlotAndSettlesNeverStartedRun(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
+	repo := testPeerS3Repository(t, master)
+	if err := savePoolBackupRepositories(master, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
+		t.Fatal(err)
+	}
+	vm := *poolVMTestSpec("vm-1", member.State.HostID)
+	run := protocol.BackupRun{OperationID: "op-1", PoolID: master.State.PoolID, HostID: member.State.HostID,
+		RepositoryID: repo.ID, Kind: protocol.BackupKindBackupNow, VMID: vm.ID, CreatedAt: time.Now()}
+	cmd := protocol.Command{OperationID: run.OperationID, Kind: protocol.BackupKindBackupNow, VM: &vm,
+		Backup: &protocol.BackupNowRequest{RepositoryID: repo.ID}}
+	work, err := peerBackupWorkForCommand(master, cmd, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab.drop(member.State.HostID, "POST:"+poolBackupPeerPath+"/capability/s3")
+	queue := make(chan BackupRequest)
+	peerBackupRequests.Store(member, queue)
+	defer peerBackupRequests.Delete(member)
+	go func() {
+		for request := range queue {
+			request.Reply <- BackupResponse{Err: ErrBackupNotFound} // the member has no record of the run
+		}
+	}()
+	defer close(queue)
+
+	waited := make(chan peerBackupCompletion, 1)
+	go func() { waited <- waitPeerBackupTerminal(context.Background(), work) }()
+	select {
+	case completion := <-waited:
+		if completion.err == nil || peerBackupNotStarted(completion.err) {
+			t.Fatalf("a fresh run must stay retryable: %v", completion.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait loop kept the backup slot while the member could not serve the repository")
+	}
+
+	work.run.CreatedAt = time.Now().Add(-peerBackupStartLimit - time.Minute)
+	completion := callPeerBackup(context.Background(), work)
+	if !peerBackupNotStarted(completion.err) || !strings.Contains(completion.err.Error(), "S3 backup capability") {
+		t.Fatalf("stale never-started run did not settle with its reason: %v", completion.err)
 	}
 }

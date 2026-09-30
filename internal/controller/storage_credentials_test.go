@@ -57,6 +57,28 @@ func TestCredentialBrokerScopesAndAcknowledgesCoreReceipt(t *testing.T) {
 	}
 }
 
+func TestCredentialBrokerReportsCoreRefusalAndAllowsResend(t *testing.T) {
+	b := newCredentialBroker()
+	v := testStorageCredentialRequest()
+	offer, err := b.offer(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.redeem(offer.Handle, v.HostID); err != nil {
+		t.Fatal(err)
+	}
+	refusal := protocol.StorageCredentialReceipt{RequestID: v.RequestID, RegistrationRequestID: v.RegistrationRequestID, PoolID: v.PoolID, HostID: v.HostID, Status: "failed", Error: "send it again with a new request id"}
+	if err = b.acknowledge(offer.Handle, v.HostID, refusal); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := b.wait(v.RequestID); ok || got.Error != refusal.Error {
+		t.Fatalf("wait %#v %v", got, ok)
+	}
+	if next, err := b.offer(v); err != nil || next.Handle == offer.Handle {
+		t.Fatalf("refused request id not offered afresh: %#v %v", next, err)
+	}
+}
+
 func TestCredentialOfferTravelsThroughAuthenticatedReportAndAck(t *testing.T) {
 	a := newClient(t)
 	host := a.enroll(a.token(a.site(), ""), csr(t))

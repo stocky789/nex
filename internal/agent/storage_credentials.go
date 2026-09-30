@@ -65,11 +65,17 @@ func redeemStorageCredential(ctx context.Context, s *Store, offer protocol.Stora
 	if err != nil || handoff.Offer != offer {
 		return errors.New("invalid storage credential handoff")
 	}
+	ackPath := path + "/ack"
 	receipt, err := saveCredentialHandoff(s, handoff)
 	if err != nil {
+		// Tell the waiting operator why; the offer is spent, so only the log would otherwise know.
+		refusal := protocol.StorageCredentialReceipt{RequestID: offer.RequestID, PoolID: offer.PoolID, HostID: offer.HostID, RepositoryID: offer.RepositoryID, RegistrationRequestID: offer.RegistrationRequestID, Status: "failed", Error: err.Error()}
+		if c, cerr := client(s.State, true); cerr == nil {
+			_ = post(ctx, c, s.State.Controller, ackPath, refusal, &protocol.StorageCredentialReceipt{})
+			c.CloseIdleConnections()
+		}
 		return fmt.Errorf("storage credential persistence failed: %w", err)
 	}
-	ackPath := path + "/ack"
 	c, err = client(s.State, true)
 	if err != nil {
 		return err

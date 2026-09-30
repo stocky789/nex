@@ -114,7 +114,15 @@ func TestForgetBackupRepository(t *testing.T) {
 		Kind: protocol.BackupPinKindNew, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
+	if err := savePoolBackupRun(master, protocol.BackupRun{OperationID: "restore-1", Kind: protocol.BackupKindTestRestore, PoolID: "pool-1",
+		RepositoryID: "repo-1", RecoveryPointID: "point-2", NewVMID: vm.ID, Stage: "registered", Status: "succeeded", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	refused("forget-pinned", "Repo repo-1", 2, 1, "in use by an unfinished restore")
+	refused("forget-pinned-names", "Repo repo-1", 2, 1, "operation restore-1, test VM vm-1 (Shared guest)")
+	if err := os.Remove(filepath.Join(poolBackupRunsPath(master), "restore-1.json")); err != nil {
+		t.Fatal(err)
+	}
 	if err := clearBackupRestorePin(master, "point-2", "restore-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +165,40 @@ func TestForgetBackupRepository(t *testing.T) {
 	// The recorded refusal is replayed too, not re-evaluated.
 	if result := forget("forget-name", "wrong", 2, 1); result.Status != "failed" {
 		t.Fatalf("refusal replay: %+v", result)
+	}
+}
+
+func TestMasterDropsMemberRecordsItNoLongerHolds(t *testing.T) {
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(context.Context, protocol.BackupRepository) error { return nil }
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
+	held := map[string]protocol.BackupRepository{}
+	for _, id := range []string{"repo-kept", "repo-stale"} {
+		repo := protocol.BackupRepository{ID: id, PoolID: "pool-1", Name: id, Kind: protocol.BackupRepoKindNFS,
+			Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/" + id}, MountPath: t.TempDir()}
+		held[id] = repo
+		if id == "repo-kept" {
+			if _, err := upsertTestBackupRepository(master, repo); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: held}); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainBackupRepositoryOnMembers(context.Background(), master, membership)
+	if _, err := GetPoolBackupRepository(member, "repo-stale"); err == nil {
+		t.Fatal("member kept a repository the master does not hold")
+	}
+	if _, err := GetPoolBackupRepository(member, "repo-kept"); err != nil {
+		t.Fatalf("member lost a repository the master holds: %v", err)
 	}
 }
 

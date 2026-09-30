@@ -41,13 +41,15 @@ type peerBackupCompletion struct {
 type permanentPeerBackupError struct{ error }
 
 // peerBackupRetry spaces repeated observations of one member run. While the member
-// keeps giving the same answer the spacing doubles up to peerBackupRetryMax, or to
-// peerBackupUnreachableMax while the member cannot be reached at all.
+// keeps giving the same answer the spacing doubles up to peerBackupRetryMax. The cap stays
+// short so a member that becomes able to serve the run again is noticed within minutes.
+// A run the member never started settles failed once peerBackupStartLimit has passed,
+// so a member that cannot serve a repository cannot hold it indefinitely.
 const (
-	peerBackupRetry          = 30 * time.Second
-	peerBackupRetryMax       = time.Hour
-	peerBackupUnreachableMax = 5 * time.Minute
-	peerBackupUnreachable    = "member unreachable"
+	peerBackupRetry       = 30 * time.Second
+	peerBackupRetryMax    = 5 * time.Minute
+	peerBackupStartLimit  = 10 * time.Minute
+	peerBackupUnreachable = "member unreachable"
 )
 
 // peerBackoff holds each run's next observation time in memory. Losing it on
@@ -66,14 +68,10 @@ func (b peerBackoff) waiting(id string, now time.Time) bool { return now.Before(
 // from the last, restarts the spacing at peerBackupRetry.
 func (b peerBackoff) observed(id, answer string, now time.Time) {
 	e := b[id]
-	limit := peerBackupRetryMax
-	if answer == peerBackupUnreachable {
-		limit = peerBackupUnreachableMax
-	}
 	if answer == "" || answer != e.answer || e.delay == 0 {
 		e.delay = peerBackupRetry
 	} else {
-		e.delay = min(2*e.delay, limit)
+		e.delay = min(2*e.delay, peerBackupRetryMax)
 	}
 	e.answer, e.next = answer, now.Add(e.delay)
 	b[id] = e
@@ -593,11 +591,9 @@ func preflightPeerSMBRepository(ctx context.Context, work pendingPeerBackup) err
 func waitPeerBackupTerminal(ctx context.Context, work pendingPeerBackup) peerBackupCompletion {
 	for {
 		result := callPeerBackup(ctx, work)
-		var permanent permanentPeerBackupError
-		if errors.As(result.err, &permanent) {
-			return result
-		}
-		if result.err == nil && (result.reply.Result.Status == "succeeded" || result.reply.Result.Status == "failed" || result.reply.Result.Status == "needs_attention") {
+		// Any error returns: the run stays pending and the Run loop redispatches it after
+		// its backoff. Waiting here would hold the pool's one backup slot for other repositories.
+		if status := result.reply.Result.Status; result.err != nil || status == "succeeded" || status == "failed" || status == "needs_attention" {
 			return result
 		}
 		select {
@@ -731,6 +727,10 @@ func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompl
 		var permanent permanentPeerBackupError
 		if status == http.StatusNotFound && errors.As(err, &permanent) {
 			return permanentPeerBackupError{fmt.Errorf("%w: %v", errPeerBackupNotStarted, permanent.error)}
+		}
+		// Only failures before the start request reach here as retryable errors.
+		if status == http.StatusNotFound && time.Since(work.run.CreatedAt) > peerBackupStartLimit {
+			return permanentPeerBackupError{fmt.Errorf("%w for %v: %v", errPeerBackupNotStarted, peerBackupStartLimit, err)}
 		}
 		return err
 	}

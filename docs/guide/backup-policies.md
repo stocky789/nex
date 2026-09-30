@@ -81,7 +81,9 @@ through Core's authenticated paged API.
   that policy on each point and in the point's stored manifest. A catalog rebuild
   from the repository reads the policy back from the manifest, so rebuilt points
   are still pruned by their policy; manual points have none and are never removed
-  automatically.
+  automatically. When a VM is deleted from the pool, its remaining points are no longer
+  pruned; free their space with **Orphaned backups** in
+  [Backup repositories](backup-repositories.md#delete-orphaned-backups).
 - Retention keeps the newest points by capture time, and never removes the point
   its backup just published, even when the capturing host's clock is behind; such
   a point is removed by a later backup if it is not among the newest. If retention cannot remove an expired point,

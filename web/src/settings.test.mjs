@@ -10,11 +10,13 @@ const { resubmitLink, Events, movedSection, sections } = await import(bundleTest
 
 const data = { sites: [], pools: [], audit: [], operations: [], hosts: [{ id: "h1", hostname: "node-1" }],
   vms: [{ id: "vm-1", name: "web-01", operation_id: "op-vm" }], storage: [{ operation_id: "op-st" }], networks: [{ operation_id: "op-net" }], media: [{ operation_id: "op-iso" }] };
-const op = (id) => ({ id, host_id: "h1" });
+const op = (id) => ({ id, host_id: "h1", kind: "vm-start" });
 assert.deepEqual(resubmitLink(op("op-vm"), data), { href: "#/vms/vm-1", label: "Open web-01" });
 assert.deepEqual(resubmitLink(op("op-st"), data), { href: "#/storage", label: "Open Storage" });
 assert.deepEqual(resubmitLink(op("op-net"), data), { href: "#/networks", label: "Open Networks" });
 assert.deepEqual(resubmitLink(op("op-iso"), data), { href: "#/storage", label: "Open the ISO library" });
+assert.deepEqual(resubmitLink({ ...op("op-b"), kind: "backup-orphan-cleanup" }, data), { href: "#/settings/backups", label: "Open Backup repositories" });
+assert.deepEqual(resubmitLink({ ...op("op-b"), kind: "backup-repository-forget" }, data).href, "#/settings/backups");
 assert.deepEqual(resubmitLink(op("op-other"), data), { href: "#/hosts/h1", label: "Open node-1" }, "anything else is resubmitted from its host");
 
 const events = (conditions) => renderToStaticMarkup(createElement(Events, { entries: [], data, conditions }));

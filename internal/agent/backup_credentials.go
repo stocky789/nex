@@ -52,6 +52,8 @@ var errBackupCredentialUnencrypted = errors.New("backup credential receipt is no
 
 var errBackupCredentialKeyMissing = errors.New("backup credential key is missing")
 
+var errBackupCredentialUndecryptable = errors.New("backup credential receipt cannot be decrypted")
+
 // backupCredentialKeyName is the systemd credential name the receipt key is sealed under.
 const backupCredentialKeyName = "nex-backup-key"
 
@@ -153,7 +155,7 @@ func openBackupCredential(s *Store, raw []byte) (storedBackupCredential, error) 
 	}
 	plain, err := aead.Open(nil, sealed.Nonce, sealed.Ciphertext, backupCredentialAAD(sealed.PoolID, sealed.HostID, sealed.Reference))
 	if err != nil {
-		return stored, errors.New("backup credential receipt cannot be decrypted")
+		return stored, errBackupCredentialUndecryptable
 	}
 	if json.Unmarshal(plain, &stored) != nil {
 		return storedBackupCredential{}, errors.New("backup credential receipt is damaged")
@@ -372,6 +374,10 @@ func saveBackupCredential(s *Store, h protocol.StorageCredentialHandoff) (protoc
 	}
 	if b, err := readClusterSecret(path); err == nil {
 		old, err := openBackupCredential(s, b)
+		if errors.Is(err, errBackupCredentialUndecryptable) {
+			// A lost key and a tampered file look the same, so the receipt is never replaced.
+			return empty, errors.New("this credential request was stored under a key this host no longer accepts; send the credential again with a new request id")
+		}
 		if err != nil {
 			return empty, err
 		}

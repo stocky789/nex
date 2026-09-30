@@ -436,6 +436,33 @@ func TestTestRestoreCleanupReconcilesLostNativeDeleteReply(t *testing.T) {
 	}
 }
 
+func TestCleanupOfFailedTestRestoreReleasesPin(t *testing.T) {
+	s := seedBackupMaster(t)
+	run := protocol.BackupRun{OperationID: "test-restore-op", Kind: protocol.BackupKindTestRestore, PoolID: "pool-1",
+		HostID: "member-1", RepositoryID: "repo-1", RecoveryPointID: "point-1", NewVMID: "never-created-vm",
+		Stage: "failed", Status: "failed", Error: "member never started this operation for 10m0s: member unreachable", CreatedAt: time.Now().UTC()}
+	if err := savePoolBackupRun(s, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := putBackupRestorePin(s, protocol.BackupRestorePin{RecoveryPointID: "point-1", OperationID: run.OperationID,
+		Kind: protocol.BackupPinKindTest, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := prepareTestRestoreCleanup(s, protocol.TestRestoreCleanupRequest{RepositoryID: "repo-1", RecoveryPointID: "point-1", TestVMID: run.NewVMID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executeTestRestoreCleanupNative(context.Background(), s.dir, plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishTestRestoreCleanup(s, plan); err != nil {
+		t.Fatal(err)
+	}
+	if pins, err := ActiveBackupRestorePins(s); err != nil || pins["point-1"] {
+		t.Fatalf("pin remained: %v %v", pins, err)
+	}
+}
+
 func TestTestRestoreCleanupRefusesReusedPoolVMAtSettlement(t *testing.T) {
 	s := seedBackupMaster(t)
 	vm := *poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)

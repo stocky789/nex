@@ -1088,7 +1088,7 @@ func snapshotOutcomeKind(kind string) bool {
 func backupOutcomeKind(kind string) bool {
 	return kind == "backup-now" || kind == "backup-restore-as-new" ||
 		kind == "backup-restore-replace" || kind == "backup-test-restore" ||
-		kind == "backup-repository-register" || kind == "backup-repository-test" || kind == "backup-repository-forget" ||
+		kind == "backup-repository-register" || kind == "backup-repository-test" || kind == "backup-repository-forget" || kind == "backup-orphan-cleanup" ||
 		kind == "backup-policy-upsert" || kind == "backup-policy-pause" || kind == "backup-policy-run-now" ||
 		kind == "backup-protect" || kind == "backup-catalog-import" || kind == "backup-catalog-rebuild" ||
 		kind == "backup-test-verify" || kind == "backup-test-cleanup"
@@ -1167,7 +1167,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

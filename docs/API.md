@@ -372,6 +372,9 @@ restore-as-new from local copies. Authenticated host-local routes:
 | `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; Core accepts validated NFS, SMB3, S3 and SFTP sources; same-ID NFS source or observed filesystem identity replacement is refused to preserve retained points; a failed first NFS/SMB3 mount start cleans its new unit so a fresh operation may retry that ID after service recovery, while exact replay retains the failure; `200` with the saved repository or retained `Result` on replay |
 | `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; Core checks the selected registered backend's exact identity, access and ownership prerequisites |
 | `POST /api/local/v1/pool/backup-repositories/{id}/forget` | `{operation_id,confirmation,recovery_points,protected_points}`; forgets the repository (see the Controller relay row for semantics); `200` with the recorded Result, `failed` carrying a refusal |
+| `GET /api/local/v1/pool/backup-repositories/{id}/orphans` | Read-only orphaned-backup query (see the Controller relay row); `409` when the master's VM inventory is unavailable |
+| `POST /api/local/v1/pool/backup-repositories/{id}/orphan-cleanups` | `{operation_id,vm_ids,include_protected?,confirmation,recovery_points,protected_points}`; deletes the chosen missing VMs' recovery points (see the Controller relay row); `200` with the recorded Result, `failed` carrying a refusal or the count of points that could not be deleted |
+| `GET /api/local/v1/pool/backup-orphan-cleanups/{operation_id}` | The master's record of one cleanup: `status` (`running`, `succeeded`, `failed`) and every planned point's `deleted`, `skipped` (with reason), `failed` or `pending` outcome; `404` until the cleanup has been planned |
 
 | `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
 | `GET /api/local/v1/pool/backup-runs` | Retained run records from `pool-backup-runs/` |
@@ -505,9 +508,12 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | Method and route | Request and result |
 |---|---|
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
-| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; a same-ID SMB3/S3/SFTP registration with the same destination replaces the credential only when the master cannot read the old one (repository health reports `offline` until then); `202` acknowledges queueing, not Core acceptance |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; a same-ID SMB3/S3/SFTP registration with the same destination replaces the credential only when the master cannot read the old one (repository health reports `offline` until then; otherwise the operation fails with "this repository already has a working credential; forget the repository before registering it with a different one"); members adopt the master's name and credential reference on their next access probe; `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget` | `{request_id,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`, `confirmation` is the repository name and the counts are what the operator was shown; queues `backup-repository-forget` on the master; `202`, exact replay `200`, changed payload for the same `request_id` `409`. Core drops the repository, its recovery-point records and its run history, then each host's mount and sealed credential; it never deletes destination data, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles `failed` with the reason, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts differ from the master's current ones. An unknown repository succeeds (a repeat sweep of the members). Protected recovery points are dropped once the counts are confirmed |
+| `GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphans` | Read-only. Recovery points in the repository whose VM id is not in the pool master's durable VM inventory, grouped per VM: `vm_id`, last known `vm_name`, `recovery_points`, `protected_points`, `size_bytes` (from destination manifests; `size_unknown_points` counts points it could not size), `oldest`, `newest`, `in_use`; plus `warnings` for backup jobs that still list a missing VM. A VM on an offline host is still in the inventory and is never an orphan. `409` with the reason when the master cannot establish its inventory (or is not the writable authority), `503` when the master is unreachable |
+| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups` | `{request_id,vm_ids,include_protected?,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`; `vm_ids` are chosen explicitly (no wildcard); counts are the totals shown for those VMs; `confirmation` is `delete N recovery points`, or `delete N recovery points including P protected` with `include_protected`; queues `backup-orphan-cleanup` on the master; `202`, exact replay `200`, changed payload `409`. Core re-checks the orphan status and counts at execution and fails the command, deleting nothing, when they differ. It then deletes each planned point's destination data and catalog entry through the retention delete (data first). Protected points are skipped unless `include_protected`; points pinned by an unfinished restore or test restore, or named by a pending run, are always skipped, and a VM that exists again is skipped. The plan and per-point results are durable on the master, so a repeated or interrupted command continues from the plan |
+| `GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}` | Read-only relay of the master's cleanup record (`status`, `error`, per-point `recovery_point_id`, `vm_id`, `status`, `reason`); `404` until planned |
 | `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page |
 | `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page |
 | `GET /api/v1/pools/{id}/backup-policies` | Master's policies; `503` when `backup_policies_reported` is false |
@@ -528,7 +534,7 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 **Paged backup inventory:** Core keeps the full run history and catalog on
 the pool master and never reports them in bulk. The administrator-only Controller GETs
 above choose the fresh current master and relay read-only `GET /backup-runs`
-or `GET /backup-catalog` over that host's enrolled mutual-TLS reverse channel.
+`GET /backup-catalog`, `GET /backup-orphans?repository_id=` or `GET /backup-orphans?request_id=` over that host's enrolled mutual-TLS reverse channel.
 The host must still be the local pool master. Controller validates each page's
 pool scope, item validity, uniqueness, cursor and size, and keeps no
 authoritative copy. A fresh Controller recovers the pool assignment from the
@@ -607,6 +613,9 @@ After forgetting a repository the master calls `POST /api/v1/pool/backup/forget`
 (`{repository_id}`) on each ready member, best effort, so the member drops its record,
 mount and sealed credential; the call is idempotent and is repeated when the master is
 asked to forget the same ID again.
+At the end of each repository probe pass the master also calls `POST /api/v1/pool/backup/retain`
+(`{repository_ids}`, every repository it holds) on each ready member, which drops its record,
+mount and sealed credential for any other repository, such as one whose forget it missed.
 For SMB3, the master also calls authenticated
 `POST /api/v1/pool/backup/capability/smb3` with a source-only repository and
 `expected_identity` before dispatch. The ready member resolves its private
@@ -768,7 +777,7 @@ re-points members, so that import is not held for member confirmation. A
 refused preflight does not create that metadata record. Inspect retained runs and member replica status before retrying.
 
 Durable master state: `pool-backup-repositories.json`, `pool-backup-catalog/`,
-`pool-backup-runs/`, `pool-backup-policies.json`, `pool-backup-pins.json`, plus
+`pool-backup-runs/`, `pool-backup-orphan-cleanups/`, `pool-backup-policies.json`, `pool-backup-pins.json`, plus
 repository `.nex-protected` markers beside recovery-point payloads. Inventory reports
 `backup_repositories` and `backup_policies` with matching `*_reported` flags
 only after a complete master read. Core serves the catalog and runs through
@@ -4234,7 +4243,7 @@ carries the destination to validate.
 An unknown pool is `404`. Controller retains the bytes only for the 15-second
 bounded delivery window. The addressed authenticated Core redeems an opaque report offer,
 persists its secret locally, then acknowledges a durable receipt; only then does the endpoint
-return `201`. `503` means delivery is uncertain: retry the same request ID. Ordinary commands,
+return `201`. `503` means delivery is uncertain: retry the same request ID. `409` with Core's reason means Core refused the credential (for example a request ID stored under a key the host no longer accepts: send it again with a new request ID). Ordinary commands,
 inventory, operations, diagnostics and Controller persistence contain only opaque receipts or
 the redacted `credential_present` state. Older Cores remain protocol v1; an upgraded Core first
 receives the `storage_repositories` v2 acknowledgement in its report response, persists that

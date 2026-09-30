@@ -3831,7 +3831,7 @@
             "description": "Origin or CSRF rejected."
           },
           "409": {
-            "description": "Replay conflict, offer capacity, or unsupported Core."
+            "description": "Replay conflict, offer capacity, unsupported Core, or Core refused the credential; the body carries Core's reason, for example to send it again with a new request ID."
           },
           "503": {
             "description": "Core did not acknowledge before offer expiry; delivery is unknown and must be reconciled with the same request ID."
@@ -11434,6 +11434,360 @@
           }
         }
       }
+    },
+    "/api/v1/pools/{id}/backup-repositories/{repo_id}/orphans": {
+      "get": {
+        "operationId": "listOrphanedBackups",
+        "summary": "List a repository's orphaned recovery points",
+        "description": "Read-only. Controller relays the fresh current pool master's query over the enrolled reverse channel and keeps nothing. Groups the repository's recovery points whose VM id is not in the master's durable VM inventory; a VM on an unreachable host is still in that inventory and is never an orphan. Returns 409 with the reason when the master cannot establish its inventory or is not the writable authority.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.18",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "repo_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Backup repository ID."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupOrphanQuery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool or repository not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Inventory not established.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Pool master unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups": {
+      "post": {
+        "operationId": "cleanupOrphanedBackups",
+        "summary": "Delete orphaned recovery points",
+        "description": "Queues backup-orphan-cleanup on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, explicit vm_ids, the counts shown for them and the confirmation text (which states the protected count with include_protected). Core deletes the destination data and catalog entries of those VMs' points still absent from the VM inventory; protected, in-use and re-created-VM points are skipped and reported in the cleanup record. Replaying the request_id returns the recorded outcome; a changed payload is 409.",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.18",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "repo_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Backup repository ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request_id",
+                  "vm_ids",
+                  "confirmation",
+                  "recovery_points",
+                  "protected_points"
+                ],
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "vm_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "description": "VMs chosen explicitly; there is no wildcard."
+                  },
+                  "include_protected": {
+                    "type": "boolean",
+                    "description": "Also delete protected points; otherwise they are skipped."
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "description": "'delete N recovery points', or 'delete N recovery points including P protected' with include_protected."
+                  },
+                  "recovery_points": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Recovery points of the chosen VMs the operator was shown."
+                  },
+                  "protected_points": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "How many of them are protected."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Exact replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization, origin, or CSRF validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}": {
+      "get": {
+        "operationId": "getOrphanCleanup",
+        "summary": "Read an orphaned-backup cleanup",
+        "description": "Read-only relay of the pool master's durable cleanup record. 404 until the master has planned the cleanup (a refused cleanup has no record; read its operation).",
+        "tags": [
+          "Client \u2192 Controller"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.18",
+        "x-audience": "client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pool ID."
+          },
+          {
+            "name": "repo_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Backup repository ID."
+          },
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            },
+            "description": "The cleanup's request_id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleanup record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupOrphanCleanup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Pool master unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12157,6 +12511,7 @@
               "backup-repository-register",
               "backup-repository-test",
               "backup-repository-forget",
+              "backup-orphan-cleanup",
               "backup-now",
               "backup-restore-as-new",
               "backup-restore-replace",
@@ -12439,6 +12794,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/ForgetRepositoryRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orphan_cleanup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrphanCleanupRequest"
               },
               {
                 "type": "null"
@@ -13576,6 +13941,7 @@
               "backup-repository-register",
               "backup-repository-test",
               "backup-repository-forget",
+              "backup-orphan-cleanup",
               "backup-now",
               "backup-restore-as-new",
               "backup-restore-replace",
@@ -25387,6 +25753,206 @@
           "backup_days_14"
         ],
         "additionalProperties": false
+      },
+      "OrphanCleanupRequest": {
+        "type": "object",
+        "description": "Deletes the recovery points of the chosen VMs, which are not in the pool's VM inventory, from a repository's destination and catalog.",
+        "x-go-type": "protocol.OrphanCleanupRequest",
+        "additionalProperties": false,
+        "required": [
+          "repository_id",
+          "vm_ids",
+          "confirmation",
+          "recovery_points",
+          "protected_points"
+        ],
+        "properties": {
+          "repository_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "vm_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "VMs chosen explicitly; there is no wildcard."
+          },
+          "include_protected": {
+            "type": "boolean",
+            "description": "Also delete protected points; otherwise they are skipped."
+          },
+          "confirmation": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "'delete N recovery points', or 'delete N recovery points including P protected' with include_protected."
+          },
+          "recovery_points": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Recovery points of the chosen VMs the operator was shown."
+          },
+          "protected_points": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many of them are protected."
+          }
+        }
+      },
+      "BackupOrphanGroup": {
+        "type": "object",
+        "description": "One missing VM's recovery points in a repository.",
+        "x-go-type": "protocol.BackupOrphanGroup",
+        "additionalProperties": false,
+        "required": [
+          "vm_id",
+          "recovery_points",
+          "protected_points",
+          "size_bytes",
+          "oldest",
+          "newest"
+        ],
+        "properties": {
+          "vm_id": {
+            "type": "string"
+          },
+          "vm_name": {
+            "type": "string",
+            "description": "Name recorded by the newest point."
+          },
+          "recovery_points": {
+            "type": "integer"
+          },
+          "protected_points": {
+            "type": "integer"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "description": "Sum of the sized points' disk and firmware artifacts."
+          },
+          "size_unknown_points": {
+            "type": "integer",
+            "description": "Points the destination could not size within the query's budget."
+          },
+          "oldest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "newest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "in_use": {
+            "type": "boolean",
+            "description": "A point is pinned by an unfinished restore or test restore, or a pending backup run names the VM; cleanup skips those points."
+          }
+        }
+      },
+      "BackupOrphanQuery": {
+        "type": "object",
+        "description": "A repository's recovery points whose VM id is not in the pool master's durable VM inventory.",
+        "x-go-type": "protocol.BackupOrphanQuery",
+        "additionalProperties": false,
+        "required": [
+          "repository_id",
+          "groups"
+        ],
+        "properties": {
+          "repository_id": {
+            "type": "string"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupOrphanGroup"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Backup jobs that still list a VM missing from the pool."
+          }
+        }
+      },
+      "BackupOrphanPointResult": {
+        "type": "object",
+        "description": "One recovery point's cleanup outcome.",
+        "x-go-type": "protocol.BackupOrphanPointResult",
+        "additionalProperties": false,
+        "required": [
+          "recovery_point_id",
+          "vm_id",
+          "status"
+        ],
+        "properties": {
+          "recovery_point_id": {
+            "type": "string"
+          },
+          "vm_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "deleted",
+              "skipped",
+              "failed"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupOrphanCleanup": {
+        "type": "object",
+        "description": "The pool master's durable record of one orphaned-backup cleanup: the planned points and each one's outcome.",
+        "x-go-type": "protocol.BackupOrphanCleanup",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "request",
+          "status",
+          "points",
+          "updated_at"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/OrphanCleanupRequest"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupOrphanPointResult"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       }
     }
   },
@@ -25903,6 +26469,16 @@
         "$ref": "#/components/schemas/BackupPolicy"
       },
       "semantics": "Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes."
+    },
+    "backup-orphan-cleanup": {
+      "transport": "POST /api/v1/agent/report response.commands",
+      "payload": {
+        "$ref": "#/components/schemas/OrphanCleanupRequest"
+      },
+      "result": {
+        "$ref": "#/components/schemas/Result"
+      },
+      "semantics": "Controller queues deletion of chosen missing VMs' recovery points from a repository on the pool master. Core re-checks at execution that each VM is still absent from its durable VM inventory and that the point counts match the confirmed ones, else fails the Result deleting nothing. It records the plan and per-point outcomes on the master, then deletes each point's destination data and catalog entry through the retention delete. Protected points are skipped unless include_protected; points pinned by an unfinished restore or test restore, named by a pending run, or whose VM exists again are skipped. A repeated or interrupted command continues from the recorded plan; replays by request_id return the recorded Result."
     }
   }
 }

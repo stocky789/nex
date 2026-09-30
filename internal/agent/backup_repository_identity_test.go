@@ -61,7 +61,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				}
 				prepared := requested
 				prepared.RemoteIdentity = existing.RemoteIdentity
-				if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared); !errors.Is(err, ErrBackupUnavailable) {
+				if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("same-ID replacement committed: %v", err)
 				}
 				saved, err := GetPoolBackupRepository(s, existing.ID)
@@ -71,7 +71,7 @@ func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 				if retained, err := getCatalogPoint(s, existing.ID, point.ID); err != nil || retained.ID != point.ID {
 					t.Fatalf("retained point lost: %+v, %v", retained, err)
 				}
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("same-ID replacement reached remote preparation: %v", err)
 				}
 			})
@@ -99,7 +99,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 			requested.Identity, requested.MountPath = nil, ""
 			if change == "source" {
 				requested.Source.Server = "other.example.test"
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("source replacement reached mount preparation: %v", err)
 				}
 			} else {
@@ -111,7 +111,7 @@ func TestNFSRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 					}
 					return protocol.BackupRepository{}, ErrBackupUnavailable
 				}
-				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) {
+				if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) && !errors.Is(err, ErrBackupCredentialInUse) {
 					t.Fatalf("changed filesystem reached owner claim: %v", err)
 				}
 			}

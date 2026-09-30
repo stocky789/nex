@@ -48,6 +48,7 @@
 <li><a href="#peerSubmitCatalogBoundRestore">POST /api/v1/pool/backup/restore</a></li>
 <li><a href="#peerDeliverBackupCredential">POST /api/v1/pool/backup/credential</a></li>
 <li><a href="#peerForgetBackupRepository">POST /api/v1/pool/backup/forget</a></li>
+<li><a href="#peerRetainBackupRepositories">POST /api/v1/pool/backup/retain</a></li>
 <li><a href="#peerProbeBackupRepositoryAccess">POST /api/v1/pool/backup/access</a></li>
 <li><a href="#peerPullBackupCredentials">GET /api/v1/pool/backup/credentials</a></li>
 <li><a href="#peerCheckS3BackupCapability">POST /api/v1/pool/backup/capability/s3</a></li>
@@ -2835,6 +2836,59 @@
     },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;The host is not a pool member, or its mount or credential could not be removed; retry.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerRetainBackupRepositories"><h2>POST <code>/api/v1/pool/backup/retain</code></h2>
+<p>Drop a member&#x27;s backup repositories the pool no longer holds</p><p>The authenticated current pool master sends the IDs of every backup repository it holds; the ready member drops its record, sealed credential and mount for any other repository, such as one whose forget it missed. Body is {&quot;repository_ids&quot;}, at most 256 IDs, limited to 64 KiB. Idempotent. The master sends this at the end of each repository probe pass.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerRetainBackupRepositories&quot;,
+  &quot;summary&quot;: &quot;Drop a member&#x27;s backup repositories the pool no longer holds&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master sends the IDs of every backup repository it holds; the ready member drops its record, sealed credential and mount for any other repository, such as one whose forget it missed. Body is {\&quot;repository_ids\&quot;}, at most 256 IDs, limited to 64 KiB. Idempotent. The master sends this at the end of each repository probe pass.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;development&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;repository_ids&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;repository_ids&quot;: {
+              &quot;type&quot;: &quot;array&quot;,
+              &quot;maxItems&quot;: 256,
+              &quot;items&quot;: {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;The member now holds only the listed repositories.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The host is not a pool member, or a mount or credential could not be removed; retry.&quot;
     }
   }
 }</pre></details></section>

@@ -534,7 +534,7 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
         const registeredPool = s.kind === "zfs" && !s.zfs_host_access?.length ? s.access?.zfs_pool : undefined;
         const checked = s.access?.observed_at && storageChecked(s.access.observed_at) !== "Not checked" ? s.access.observed_at : "";
         return <tr key={s.id || `op:${s.operation_id}`} data-storage-id={s.id}>
-          <td><span className={`dot ${badgeTone(status)}`} aria-hidden="true" /><strong>{s.name}</strong><small className="mono">{storageSource(s)}</small></td>
+          <td><span className={`dot ${badgeTone(status)}`} aria-hidden="true" /><strong>{s.name}</strong><small className="mono">{storageSource(s)}</small>{storageScope(s) === "One host" && <small>{hosts.find(h => h.id === s.host_id)?.hostname || s.host_id}</small>}</td>
           <td>{labels[(s.kind || "local") as Kind] || s.kind || "Local directory"}</td>
           <td>{storageScope(s)}</td>
           <td>{total && available !== undefined ? <><MiniBar percent={(1 - available / total) * 100} /><small>{ownerFresh ? "" : "Last reported "}{size(total - available)} used · {size(available)} free</small></> : <span className="muted">Not reported</span>}</td>

@@ -26,6 +26,15 @@ type forgetBackupRepositoryRequest struct {
 	ProtectedPoints int    `json:"protected_points"`
 }
 
+type orphanCleanupRequest struct {
+	OperationID      string   `json:"operation_id"`
+	VMIDs            []string `json:"vm_ids"`
+	IncludeProtected bool     `json:"include_protected"`
+	Confirmation     string   `json:"confirmation"`
+	RecoveryPoints   int      `json:"recovery_points"`
+	ProtectedPoints  int      `json:"protected_points"`
+}
+
 type backupNowRequest struct {
 	OperationID  string `json:"operation_id"`
 	RepositoryID string `json:"repository_id"`
@@ -143,6 +152,55 @@ func (s *Service) forgetBackupRepository(w http.ResponseWriter, r *http.Request)
 	}
 	if response.Err != nil {
 		writeBackupError(w, response.Err)
+		return
+	}
+	reply(w, http.StatusOK, response.Result)
+}
+
+func (s *Service) listBackupOrphans(w http.ResponseWriter, r *http.Request) {
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{List: "orphans", RepositoryID: r.PathValue("id")})
+	if err == nil {
+		err = response.Err
+	}
+	if err != nil {
+		writeBackupError(w, err)
+		return
+	}
+	reply(w, http.StatusOK, response.Orphans)
+}
+
+func (s *Service) orphanCleanupResult(w http.ResponseWriter, r *http.Request) {
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{List: "orphan-cleanup", OperationID: r.PathValue("operation_id")})
+	if err == nil {
+		err = response.Err
+	}
+	if err != nil {
+		writeBackupError(w, err)
+		return
+	}
+	reply(w, http.StatusOK, response.Cleanup)
+}
+
+func (s *Service) cleanupOrphanedBackups(w http.ResponseWriter, r *http.Request) {
+	var body orphanCleanupRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.OrphanCleanupRequest{
+		RepositoryID: r.PathValue("id"), VMIDs: body.VMIDs, IncludeProtected: body.IncludeProtected,
+		Confirmation: body.Confirmation, RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	if !protocol.ValidSnapshotOperationID(body.OperationID) || req.Valid() != nil {
+		fail(w, http.StatusBadRequest, "invalid orphaned backup cleanup request")
+		return
+	}
+	request := protocol.Command{OperationID: body.OperationID, Kind: "backup-orphan-cleanup", OrphanCleanup: &req}
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{Command: &request})
+	if err == nil {
+		err = response.Err
+	}
+	if err != nil {
+		writeBackupError(w, err)
 		return
 	}
 	reply(w, http.StatusOK, response.Result)

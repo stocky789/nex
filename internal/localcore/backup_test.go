@@ -227,3 +227,49 @@ func TestBackupRestoreRejectsUnsafeVMID(t *testing.T) {
 		t.Fatalf("unsafe restore ID: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestOrphanedBackupRoutes(t *testing.T) {
+	s, _ := testService(t)
+	requests := backupIngressChannel(t, s)
+	base := "/api/local/v1/pool/backup-repositories/repo-1/"
+	body := map[string]any{"operation_id": "orphans-1", "vm_ids": []string{"vm-gone"}, "confirmation": "delete 2 recovery points", "recovery_points": 2}
+	for _, path := range []string{base + "orphans", "/api/local/v1/pool/backup-orphan-cleanups/orphans-1"} {
+		if w := callLocal(s, http.MethodGet, path, nil, "", "", "https://core.test"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated %s = %d", path, w.Code)
+		}
+	}
+	cookie, csrf := loginLocal(t, s)
+	if w := callLocal(s, http.MethodPost, base+"orphan-cleanups", body, cookie, "", "https://core.test"); w.Code != http.StatusForbidden {
+		t.Fatalf("cleanup without csrf = %d", w.Code)
+	}
+	if w := callLocal(s, http.MethodPost, base+"orphan-cleanups", map[string]any{"operation_id": "orphans-1", "recovery_points": 2}, cookie, csrf, "https://core.test"); w.Code != http.StatusBadRequest {
+		t.Fatalf("cleanup without VMs = %d", w.Code)
+	}
+	seen := make(chan agent.BackupRequest, 3)
+	go func() {
+		for i := 0; i < 3; i++ {
+			request := <-requests
+			seen <- request
+			request.Reply <- agent.BackupResponse{Result: &protocol.Result{OperationID: "orphans-1", Status: "succeeded"},
+				Orphans: &protocol.BackupOrphanQuery{RepositoryID: "repo-1"}, Cleanup: &protocol.BackupOrphanCleanup{OperationID: "orphans-1", Status: "succeeded"}}
+		}
+	}()
+	if w := callLocal(s, http.MethodPost, base+"orphan-cleanups", body, cookie, csrf, "https://core.test"); w.Code != http.StatusOK {
+		t.Fatalf("cleanup = %d %s", w.Code, w.Body.String())
+	}
+	if request := <-seen; request.Command.Kind != "backup-orphan-cleanup" || request.Command.OrphanCleanup.RepositoryID != "repo-1" || request.Command.OrphanCleanup.VMIDs[0] != "vm-gone" {
+		t.Fatalf("cleanup command %+v", request.Command)
+	}
+	if w := callLocal(s, http.MethodGet, base+"orphans", nil, cookie, "", "https://core.test"); w.Code != http.StatusOK {
+		t.Fatalf("orphans = %d %s", w.Code, w.Body.String())
+	}
+	if request := <-seen; request.List != "orphans" || request.RepositoryID != "repo-1" {
+		t.Fatalf("orphans request %+v", request)
+	}
+	if w := callLocal(s, http.MethodGet, "/api/local/v1/pool/backup-orphan-cleanups/orphans-1", nil, cookie, "", "https://core.test"); w.Code != http.StatusOK {
+		t.Fatalf("cleanup result = %d %s", w.Code, w.Body.String())
+	}
+	if request := <-seen; request.List != "orphan-cleanup" || request.OperationID != "orphans-1" {
+		t.Fatalf("result request %+v", request)
+	}
+}

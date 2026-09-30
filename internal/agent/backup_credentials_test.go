@@ -320,3 +320,27 @@ func TestBackupCredentialKeyIsSealedAtRest(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 }
+
+// Regression for BUG-0778: retrying a credential request whose stored receipt was sealed
+// under a lost key answered "cannot be decrypted" with nothing the operator could act on.
+func TestBackupCredentialRequestAfterKeyLossSaysToUseNewRequestID(t *testing.T) {
+	s := seedBackupMaster(t)
+	handoff := func(requestID string) protocol.StorageCredentialHandoff {
+		return protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{RequestID: requestID,
+			RegistrationRequestID: "backup-credential:s3:register-1", PoolID: s.State.PoolID, HostID: s.State.HostID,
+			RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+			Credentials: protocol.StorageCredentials{Username: "example-key", Secret: "example-secret"}}
+	}
+	if _, err := saveBackupCredential(s, handoff("credential-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.dir, "backup-credential-key", "key.cred")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveBackupCredential(s, handoff("credential-2")); err != nil { // seals a new key
+		t.Fatal(err)
+	}
+	if _, err := saveBackupCredential(s, handoff("credential-1")); err == nil || !strings.Contains(err.Error(), "new request id") {
+		t.Fatalf("reused request id after key loss = %v", err)
+	}
+}

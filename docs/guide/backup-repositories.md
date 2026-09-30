@@ -90,9 +90,38 @@ point is forgotten too, once you have confirmed the counts shown. Core refuses, 
 nothing, while a backup job uses the repository, a backup, restore, test restore or catalog
 operation on it is running, a recovery point of it is held by an unfinished restore or test
 restore, the name is wrong, or the recovery points changed since the dialog counted them;
-the task shows the reason. Sending the same request again returns the same outcome. To use
+the task shows the reason, and for an unfinished restore it names the operation and the test VM so you can finish or clean it up. Members also drop any repository record the pool master no longer holds. Sending the same request again returns the same outcome. To use
 the destination again, register it again as a new repository, then select **Import
 points** to bring its recovery points back.
+
+### Delete orphaned backups
+
+Backups of a VM that was deleted from the pool stay in the repository and keep using its
+space. Retention does not remove them once no backup job covers the VM.
+
+1. On the repository row, select **Orphaned backups**. Core lists the VMs that have recovery
+   points in this repository but are not in the pool's VM inventory: the VM's last known name,
+   its recovery points, how many are protected, their size, and the newest and oldest. A VM
+   on an offline host is still in the inventory, so it is never listed. If Core cannot read
+   its VM inventory it says so and lists nothing; nothing can be deleted then.
+2. Read any warning about a backup job that still lists a missing VM, and change that job.
+3. Select the VMs to clean up. Tick **Include protected recovery points** only if their
+   protected points must go too; otherwise protected points are kept.
+4. Type the text shown, such as `delete 5 recovery points`. With protected points included
+   it states how many are protected, such as `delete 5 recovery points including 2 protected`.
+   Select **Delete recovery points**.
+5. The panel follows Core's record: each recovery point ends deleted, skipped with the reason,
+   or failed. Skipped points stay in the repository and the catalog.
+
+Deleting removes each recovery point's data from the destination and then its catalog entry, the
+same way retention does; this cannot be undone. Core skips protected points unless included, points
+held by an unfinished restore or test restore or named by a running backup, and the points of a VM
+that exists again. Core checks the VMs and counts again when it runs and refuses, deleting
+nothing, if they changed since the panel counted them; open the panel again and review. Sending
+the same request again returns the same outcome, and a run that was interrupted continues from
+its recorded plan. A point the destination could not delete is shown as failed; fix the
+destination and run the cleanup again. The list is read from the pool master, so a new
+Controller shows the same list and history of cleanups.
 
 ## Expected result
 
@@ -154,8 +183,9 @@ and test restore read every artifact and verify its digest.
   with the **same repository ID and the same destination**. Core replaces
   the credential only because it cannot read the old one, keeps the ID, recovery points and history,
   and refuses a different destination. Registering again while Core can still read the
-  credential is refused. Members receive the new credential from the master on their next
-  health pass; until then the member's access shows why delivery failed. Only S3 has been exercised for this. If the destination is gone
+  credential is refused with "this repository already has a working credential; forget the repository before registering it with a different one".
+  Members receive the new credential, the new credential reference and the repository name from the master on their next
+  health pass; until then the member's access shows why delivery failed. If a credential request ID is reused after the key was lost, the credential request is refused with that reason (send the credential again with a new request ID). Only S3 has been exercised for this. If the destination is gone
   or its identity changed, [forget the repository](#forget-a-repository) and register the
   destination as a new one.
 - A member that was unreachable when a repository was forgotten keeps an unused record

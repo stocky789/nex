@@ -160,7 +160,8 @@ func (b *credentialBroker) offer(v storageCredentialRequest) (protocol.StorageCr
 			delete(b.entries, id)
 		}
 	}
-	if old := b.entries[v.RequestID]; old != nil {
+	// A refused offer is spent: the operator may resend the request id and get a fresh offer.
+	if old := b.entries[v.RequestID]; old != nil && old.receipt.Status != "failed" {
 		if old.offer.PoolID != v.PoolID || old.offer.HostID != v.HostID || old.offer.RepositoryID != v.RepositoryID || old.offer.RegistrationRequestID != v.RegistrationRequestID || (old.receipt.Receipt == "" && old.credentials != v.Credentials) || (old.receipt.Receipt != "" && !hmac.Equal(old.proof, b.proof(v))) {
 			return protocol.StorageCredentialOffer{}, errors.New("request_id already used with another credential payload")
 		}
@@ -224,10 +225,12 @@ func (b *credentialBroker) acknowledge(handle, host string, receipt protocol.Sto
 		if entry.offer.Handle != handle {
 			continue
 		}
-		if entry.offer.HostID != host || receipt.RequestID != entry.offer.RequestID || receipt.PoolID != entry.offer.PoolID || receipt.HostID != entry.offer.HostID || receipt.RepositoryID != entry.offer.RepositoryID || receipt.RegistrationRequestID != entry.offer.RegistrationRequestID || receipt.Receipt == "" || receipt.Status != "ready" {
+		if entry.offer.HostID != host || receipt.RequestID != entry.offer.RequestID || receipt.PoolID != entry.offer.PoolID || receipt.HostID != entry.offer.HostID || receipt.RepositoryID != entry.offer.RepositoryID || receipt.RegistrationRequestID != entry.offer.RegistrationRequestID ||
+			(receipt.Status != "ready" || receipt.Receipt == "") && (receipt.Status != "failed" || receipt.Error == "") {
 			return errors.New("credential receipt does not match offer")
 		}
-		if entry.receipt.Receipt == "" {
+		// A failed receipt is Core refusing the offer; it carries the reason and no receipt.
+		if entry.receipt.Status == "" {
 			entry.receipt = receipt
 			entry.credentials = protocol.StorageCredentials{}
 			close(entry.done)
@@ -246,7 +249,7 @@ func (b *credentialBroker) wait(requestID string) (protocol.StorageCredentialRec
 	}
 	select {
 	case <-entry.done:
-		return entry.receipt, true
+		return entry.receipt, entry.receipt.Status == "ready"
 	case <-time.After(time.Until(entry.offer.ExpiresAt)):
 		return protocol.StorageCredentialReceipt{}, false
 	}
@@ -317,6 +320,10 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	receipt, ok := c.credentials.wait(v.RequestID)
+	if !ok && receipt.Error != "" {
+		fail(w, 409, receipt.Error)
+		return
+	}
 	if !ok {
 		fail(w, 503, "Core did not acknowledge credential delivery; retry with the same request_id")
 		return

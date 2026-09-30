@@ -1543,7 +1543,7 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 	// Replacing a credential this host can still read stays refused.
 	swapped := good
 	swapped.CredentialRef = "someone-elses-receipt"
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3"); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3"); !errors.Is(err, ErrBackupCredentialInUse) {
 		t.Fatalf("readable credential was replaced: %v", err)
 	}
 	recovered := register("a-broken", "one", "register-4")

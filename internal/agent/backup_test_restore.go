@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -271,6 +272,8 @@ type testRestoreCleanupPlan struct {
 	Request protocol.TestRestoreCleanupRequest
 	RunID   string
 	VM      protocol.VMCreateSpec
+	// NeverStarted: the member never ran it, so there is no VM or disk to delete.
+	NeverStarted bool
 }
 
 func matchingTestRestoreRun(s *Store, req protocol.TestRestoreCleanupRequest) (protocol.BackupRun, error) {
@@ -281,10 +284,22 @@ func matchingTestRestoreRun(s *Store, req protocol.TestRestoreCleanupRequest) (p
 	return matchingTestRestoreRunIn(runs, req)
 }
 
+// A test restore that failed, or never started, may have left a pin or partial VM; cleaning
+// it up settles cleanly even when nothing was created.
+func testRestoreCleanable(run protocol.BackupRun) bool {
+	return run.Kind == protocol.BackupKindTestRestore && (run.Status == "succeeded" || run.Status == "failed")
+}
+
+// A member that never started a test restore holds nothing to clean, so the master settles
+// its own record of the run.
+func testRestoreNeverStarted(run protocol.BackupRun) bool {
+	return run.Status == "failed" && strings.Contains(run.Error, errPeerBackupNotStarted.Error())
+}
+
 func matchingTestRestoreRunIn(runs []protocol.BackupRun, req protocol.TestRestoreCleanupRequest) (protocol.BackupRun, error) {
 	var match protocol.BackupRun
 	for _, run := range runs {
-		if run.Kind == protocol.BackupKindTestRestore && run.Status == "succeeded" && run.NewVMID == req.TestVMID &&
+		if testRestoreCleanable(run) && run.NewVMID == req.TestVMID &&
 			run.RecoveryPointID == req.RecoveryPointID && run.RepositoryID == req.RepositoryID {
 			if match.OperationID != "" {
 				return protocol.BackupRun{}, ErrBackupConflict
@@ -392,6 +407,10 @@ func prepareTestRestoreCleanup(s *Store, req protocol.TestRestoreCleanupRequest,
 	if err != nil {
 		return testRestoreCleanupPlan{}, err
 	}
+	if testRestoreNeverStarted(run) {
+		return testRestoreCleanupPlan{Request: req, RunID: run.OperationID, NeverStarted: true,
+			VM: protocol.VMCreateSpec{ID: req.TestVMID, PoolID: s.State.PoolID, HostID: run.HostID}}, nil
+	}
 	if run.HostID != s.State.HostID {
 		return testRestoreCleanupPlan{}, ErrBackupConflict
 	}
@@ -431,6 +450,9 @@ func prepareTestRestoreCleanup(s *Store, req protocol.TestRestoreCleanupRequest,
 }
 
 func executeTestRestoreCleanupNative(ctx context.Context, dir string, plan testRestoreCleanupPlan) error {
+	if plan.NeverStarted {
+		return nil
+	}
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
 	sum := sha256.Sum256([]byte(plan.RunID))
 	deleteID := "test-clean-" + hex.EncodeToString(sum[:16])
