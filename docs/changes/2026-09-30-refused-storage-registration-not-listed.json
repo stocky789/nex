@@ -1,0 +1,45 @@
+{
+  "summary": "Do not list a storage registration Core refused; remove the storage discard route, Controller helper and UI button.",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/storage.go",
+    "internal/controller/controller.go",
+    "internal/controller/failed_registration_discard_test.go",
+    "web/src/storage.tsx",
+    "web/src/storage.test.mjs",
+    "web/src/managed.test.mjs",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "docs/guide/storage-repositories.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-refused-storage-registration-not-listed.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The Discard failed registration step for storage no longer exists; the guide now says a refused registration is not listed and its reason is in Tasks.",
+    "pages": ["docs/guide/storage-repositories.md", "docs/guide/remove-pool-network-or-iso.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Client-facing Controller API only: DELETE /api/v1/storage/{id} removed and GET /api/v1/storage omits a failed pending-storage row; no Controller-Core command changes.",
+    "pages": ["docs/API.md", "docs/api/openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Owner decision on an existing workflow; no milestone changes."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "Adds no state. The remaining pending-storage row is the existing request_id replay record, not a pool resource; a fresh Controller adopts repositories from the pool master."
+  },
+  "verification": {
+    "method": "Focused Go and web tests; no browser walkthrough or real host.",
+    "evidence": [
+      "internal/controller/failed_registration_discard_test.go",
+      "web/src/storage.test.mjs",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

@@ -164,6 +164,7 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 	switch {
 	case cmd.Storage != nil:
 		v := *cmd.Storage
+		v.CredentialReceipt, v.CredentialRequestID = "", ""
 		v.Status = op.Status
 		v.Error = op.Error
 		return v
@@ -253,20 +254,6 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 	}
 }
 
-// resourceRowResponse projects a stored registration, filling in the Controller's own row key
-// for one that failed without a Core-allocated ID. A typed repository's identity is Core's to
-// mint, so a registration still in flight is honestly answered with an empty id — but a
-// registration the host refused will never get one, and with an empty id it could not be
-// addressed at all, not even to discard it.
-func resourceRowResponse(rowID string, cmd protocol.Command, op protocol.Operation) any {
-	if op.Status == "failed" && cmd.Storage != nil && cmd.Storage.ID == "" {
-		s := *cmd.Storage
-		s.ID = rowID
-		cmd.Storage = &s
-	}
-	return resourceResponse(cmd, op)
-}
-
 // registrationApplied reports whether a stored registration command is the mirror of
 // something a host has reported as applied. The mirroring passes rewrite the command's
 // status, so this is the Controller's own evidence that the resource exists on a host —
@@ -350,7 +337,12 @@ func (c *Controller) listResources(w http.ResponseWriter, kind string) {
 			fail(w, 500, "resource decode failed")
 			return
 		}
-		out = append(out, resourceRowResponse(rowID, cmd, op))
+		// A refused typed registration is only this Controller's replay record; the failure stays in
+		// the operation history, so it is not listed as a repository.
+		if op.Status == "failed" && strings.HasPrefix(rowID, "pending-storage-") && !registrationApplied(raw) {
+			continue
+		}
+		out = append(out, resourceResponse(cmd, op))
 	}
 	if rows.Err() != nil {
 		fail(w, 500, "resource read failed")
@@ -1009,7 +1001,7 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	for _, o := range m.Outcomes {
 		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
 	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata','backup-now','backup-restore-as-new','backup-restore-replace','backup-test-restore','backup-repository-register','backup-repository-test','backup-policy-upsert','backup-policy-pause','backup-policy-run-now','backup-protect','backup-catalog-import','backup-catalog-rebuild','backup-test-verify','backup-test-cleanup') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata','backup-now','backup-restore-as-new','backup-restore-replace','backup-test-restore','backup-repository-register','backup-repository-test','backup-repository-forget','backup-policy-upsert','backup-policy-pause','backup-policy-run-now','backup-protect','backup-catalog-import','backup-catalog-rebuild','backup-test-verify','backup-test-cleanup') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
 		return err
 	}
 	for _, o := range m.Outcomes {
@@ -1096,7 +1088,7 @@ func snapshotOutcomeKind(kind string) bool {
 func backupOutcomeKind(kind string) bool {
 	return kind == "backup-now" || kind == "backup-restore-as-new" ||
 		kind == "backup-restore-replace" || kind == "backup-test-restore" ||
-		kind == "backup-repository-register" || kind == "backup-repository-test" ||
+		kind == "backup-repository-register" || kind == "backup-repository-test" || kind == "backup-repository-forget" ||
 		kind == "backup-policy-upsert" || kind == "backup-policy-pause" || kind == "backup-policy-run-now" ||
 		kind == "backup-protect" || kind == "backup-catalog-import" || kind == "backup-catalog-rebuild" ||
 		kind == "backup-test-verify" || kind == "backup-test-cleanup"
@@ -1175,7 +1167,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

@@ -52,12 +52,10 @@ Limits in this build:
 
 ### Discard a registration the pool master refused
 
-A pool VLAN network or a storage repository the pool master **refused** to register was never
-created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
+A pool VLAN network the pool master **refused** to register was never created on any host. It is only Nex Controller's record of the request, so it is not removed — it is
 **discarded**, exactly as a failed ISO import already was.
 
-1. With the pool chosen in the scope menu, select **Networks** (for a network) or **Storage** (for
-   a repository) in the rail and
+1. With the pool chosen in the scope menu, select **Networks** in the rail and
    find the row whose task shows **failed**.
 2. Its only action is **Discard failed registration**. Rename, Remove, Recheck, Update and Detach
    are not offered on a failed row, because there is nothing on a host to act on.
@@ -67,7 +65,7 @@ created on any host. It is only Nex Controller's record of the request, so it is
 If a host has since reported that registration as applied, the discard is refused with *a host
 reports this registration as applied, so it is not a failed request record; remove it on the host
 instead of discarding it* — and the row stays. That is the guard that stops a discard deleting a
-live pool resource's row. A repository a host does hold is removed with **Detach**, never with a
+live pool resource's row. A refused storage registration is not listed at all; its reason is in **Tasks**. A repository a host does hold is removed with **Detach**, never with a
 discard.
 
 ### Remove a pool VLAN network

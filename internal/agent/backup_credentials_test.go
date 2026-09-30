@@ -301,10 +301,8 @@ func TestBackupCredentialRotationRetiresOldReceipt(t *testing.T) {
 	}
 }
 
-// The receipt key is sealed by systemd-creds (the fake runner here); no plaintext key file
-// exists, and a service that was handed the credential reads it from $CREDENTIALS_DIRECTORY
-// without decrypting anything.
-func TestBackupCredentialKeyIsSealedAndLoadedFromServiceCredential(t *testing.T) {
+// The receipt key is sealed by systemd-creds (the fake runner here); no plaintext key file exists.
+func TestBackupCredentialKeyIsSealedAtRest(t *testing.T) {
 	s := seedBackupMaster(t)
 	key, err := backupCredentialKey(s, true)
 	if err != nil || len(key) != 32 {
@@ -320,14 +318,5 @@ func TestBackupCredentialKeyIsSealedAndLoadedFromServiceCredential(t *testing.T)
 	}
 	if again, err := backupCredentialKey(s, false); err != nil || !bytes.Equal(again, key) {
 		t.Fatalf("reopen: %v", err)
-	}
-	creds := t.TempDir()
-	served := bytes.Repeat([]byte{7}, 32)
-	if err := os.WriteFile(filepath.Join(creds, backupCredentialKeyName), served, 0400); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CREDENTIALS_DIRECTORY", creds)
-	if got, err := backupCredentialKey(s, false); err != nil || !bytes.Equal(got, served) {
-		t.Fatalf("service credential not used: %v", err)
 	}
 }

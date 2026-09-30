@@ -287,8 +287,8 @@ func TestPrepareBackupRepositorySMBSealsCredentialFile(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("credential mode: %v, %v", info, err)
 		}
-		if data, err := os.ReadFile(credential); err != nil || string(data) != "sealed:username=backup\npassword=private-example-secret\ndomain=EXAMPLE\n" {
-			t.Fatalf("sealed credential body: %q, %v", data, err)
+		if data, err := os.ReadFile(credential); err != nil || string(data) != "username=backup\npassword=private-example-secret\ndomain=EXAMPLE\n" {
+			t.Fatalf("credential body: %q, %v", data, err)
 		}
 		seen = credential
 		return storageAccess{Path: root, Observed: protocol.StorageIdentity{SMB: &protocol.SMBStorageIdentity{
@@ -345,21 +345,21 @@ func TestPrepareBackupRepositorySMBKeepsSealedFileOfMountedRepository(t *testing
 		t.Fatal(err)
 	}
 	sealed := filepath.Join(credentialRoot, repo.CredentialRef)
-	unit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs", smbMountOptions("1000", "1000"), sealed)
+	unit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs", smbMountOptions("1000", "1000", sealed))
 	if err := os.WriteFile(unitPath, unit, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(credentialRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sealed, []byte("already sealed"), 0600); err != nil {
+	if err := os.WriteFile(sealed, []byte("already written"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := PrepareBackupRepositorySMB(context.Background(), repo, protocol.StorageCredentials{Username: "backup", Secret: "private-example-secret"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(sealed); err != nil || string(got) != "already sealed" {
-		t.Fatalf("prepare resealed the file: %q %v", got, err)
+	if got, err := os.ReadFile(sealed); err != nil || string(got) != "already written" {
+		t.Fatalf("prepare rewrote the file: %q %v", got, err)
 	}
 }
 
@@ -379,7 +379,7 @@ func TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMateria
 		t.Fatal(err)
 	}
 	oldUnit := remoteUnit("//smb.example.test/backups", remoteMountPath(registration), "cifs",
-		smbMountOptions("1000", "1000"), filepath.Join(credentialRoot, "old-receipt"))
+		smbMountOptions("1000", "1000", filepath.Join(credentialRoot, "old-receipt")))
 	if err := os.WriteFile(unitPath, oldUnit, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -74,6 +74,8 @@ export type BackupRun = {
   operation_id: string;
   kind: string;
   recovery_point_id?: string;
+  policy_id?: string;
+  vm_id?: string;
   repository_id: string;
   new_vm_id?: string;
   host_id?: string;

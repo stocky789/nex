@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { bundleTestModule } from "./test-helpers.mjs";
 
 const { repositoryHealth, repositoryTarget } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "repository-health"));
-const { backupSource, hostAccess, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
+const { backupSource, forgetBody, hostAccess, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: "2026-09-28T09:59:00Z" } }), "online");
 assert.equal(repositoryHealth({ health: { status: "offline", observed_at: "2026-09-28T09:59:00Z" } }), "offline");
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: new Date(Date.now() + 3_600_000).toISOString() } }), "online", "a master clock ahead of the browser does not hide Core's health");
@@ -67,3 +67,10 @@ assert.ok(create.indexOf("resetForm();") > create.indexOf("await api<"), "succes
 assert.ok(source.includes("if (working || createUncertain) return;"), "uncertain registration cannot be closed and retried with a different body");
 assert.ok(source.includes("const fieldsDisabled = Boolean(working) || createUncertain;"), "all destination and secret fields share the uncertain-retry freeze");
 assert.ok(!source.includes("localStorage"), "credentials are not persisted in browser storage");
+
+// Forgetting a repository confirms the name and the counts the operator was shown.
+assert.deepEqual(forgetBody("bforget-1", "Primary", [{ id: "a", protected: true }, { id: "b" }, { id: "c", protected: false }]),
+  { request_id: "bforget-1", confirmation: "Primary", recovery_points: 3, protected_points: 1 });
+assert.ok(source.includes("disabled={busy || !points || !confirmMatches(typed, repo.name)}"), "forget stays disabled until the counts load and the name is typed");
+assert.ok(source.includes("useEffect(() => { requestID.current = rid(\"bforget\"); }, [typed, points]);"), "a changed confirmation is a new request");
+assert.ok(source.includes("Nothing is deleted from the destination itself"), "the dialog says destination data is untouched");

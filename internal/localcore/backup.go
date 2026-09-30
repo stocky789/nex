@@ -19,6 +19,13 @@ type testBackupRepositoryRequest struct {
 	OperationID string `json:"operation_id"`
 }
 
+type forgetBackupRepositoryRequest struct {
+	OperationID     string `json:"operation_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
 type backupNowRequest struct {
 	OperationID  string `json:"operation_id"`
 	RepositoryID string `json:"repository_id"`
@@ -113,6 +120,32 @@ func (s *Service) testBackupRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, http.StatusOK, response.Repository)
+}
+
+func (s *Service) forgetBackupRepository(w http.ResponseWriter, r *http.Request) {
+	var body forgetBackupRepositoryRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.ForgetRepositoryRequest{
+		RepositoryID: r.PathValue("id"), Confirmation: body.Confirmation,
+		RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	if !protocol.ValidSnapshotOperationID(body.OperationID) || req.Valid() != nil {
+		fail(w, http.StatusBadRequest, "invalid forget backup repository request")
+		return
+	}
+	request := protocol.Command{OperationID: body.OperationID, Kind: "backup-repository-forget", ForgetRepository: &req}
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{Command: &request})
+	if err != nil {
+		writeBackupError(w, err)
+		return
+	}
+	if response.Err != nil {
+		writeBackupError(w, response.Err)
+		return
+	}
+	reply(w, http.StatusOK, response.Result)
 }
 
 func (s *Service) listBackupCatalog(w http.ResponseWriter, r *http.Request) {

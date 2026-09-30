@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -771,7 +772,7 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 	joinPeerMember(t, master, member)
 	storages := []protocol.StorageRegistration{
 		{ID: "first", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/first"}}},
-		{ID: "later", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/later"}}},
+		{ID: "later", PoolID: "pool-1", HostID: "master-1", Kind: protocol.StorageKindNFS, Generation: 1, Capabilities: protocol.StorageCapabilities{EligibleHostIDs: []string{"master-1"}}, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/later"}}},
 	}
 	dir := filepath.Join(master.dir, "managed-vms")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -860,6 +861,12 @@ func TestMemberReconcilePostsLaterAccessAfterEarlierDeadline(t *testing.T) {
 	reported = PoolStorageMemberAccess(master, storages)
 	if len(reported[1].MemberAccess) != 1 || reported[1].MemberAccess[0].Identity != "fresh-healthy" || reported[1].MemberAccess[0].Error != "" {
 		t.Fatalf("new authenticated access was not projected after repair: %#v", reported[1].MemberAccess)
+	}
+	if caps := reported[1].Capabilities; !caps.Shared || !slices.Equal(caps.EligibleHostIDs, []string{reported[1].HostID, member.State.HostID}) {
+		t.Fatalf("verified member access did not make the repository shared and eligible: %#v", caps)
+	}
+	if reported[0].Capabilities.Shared {
+		t.Fatalf("repository without verified member access reported shared: %#v", reported[0].Capabilities)
 	}
 }
 

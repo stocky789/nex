@@ -84,6 +84,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [repos, setRepos] = useState<BackupRepository[] | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[] | null>(null);
+  const [jobRuns, setJobRuns] = useState<BackupRun[] | null>(null);
   const [pointRuns, setPointRuns] = useState<BackupRun[] | null>(null);
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
@@ -98,7 +99,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [selectedID, setSelectedID] = useState("");
   const [backupOpen, setBackupOpen] = useState(flow === "backup-now");
   const [policyOpen, setPolicyOpen] = useState(flow === "create-policy");
-  const [tab, setTab] = useState<"points" | "policies">(flow === "create-policy" ? "policies" : "points");
   const [backupStep, setBackupStep] = useState<BackupNowStep>(1);
   const [backupVM, setBackupVM] = useState(vmFilter);
   const [backupRepo, setBackupRepo] = useState("");
@@ -198,15 +198,20 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       return;
     }
     const { signal, stale } = inventoryLoad.begin();
-    const [repositories, policyList] = await Promise.allSettled([
+    const runsBase = `pools/${encodeURIComponent(poolID)}/backup-runs`;
+    const [repositories, policyList, runList] = await Promise.allSettled([
         api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, signal),
         api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, signal),
+        // Backup jobs show Failed from the latest run of each VM, so they read the whole run history.
+        api<BackupRunPage>(runsBase, "GET", undefined, undefined, undefined, signal).then(first =>
+          collectBackupPageItems(first, (cursor, generation) => api<BackupRunPage>(`${runsBase}?cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal))),
       ]);
     if (stale()) return;
+    setJobRuns(runList.status === "fulfilled" ? runList.value : null);
     setRepos(repositories.status === "fulfilled" ? repositories.value : null);
     setPolicies(policyList.status === "fulfilled" ? policyList.value : null);
     setRepositoryError(repositories.status === "rejected" ? `Repository inventory unavailable: ${String(repositories.reason)}` : "");
-    setPolicyError(policyList.status === "rejected" ? `Policies unavailable: ${String(policyList.reason)}` : "");
+    setPolicyError(policyList.status === "rejected" ? `Backup jobs unavailable: ${String(policyList.reason)}` : "");
   };
   const refresh = async () => { await Promise.all([load(), loadCatalog(), loadRuns()]); };
 
@@ -239,7 +244,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setFilterVM(vmFilter);
     setBackupVM(vmFilter);
     if (flow === "backup-now") setBackupOpen(true);
-    if (flow === "create-policy") { setTab("policies"); setPolicyOpen(true); }
+    if (flow === "create-policy") setPolicyOpen(true);
   }, [vmFilter, flow]);
 
   useEffect(() => {
@@ -247,6 +252,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setRepos(null);
     setPolicies(null);
     setPointRuns(null);
+    setJobRuns(null);
     setError("");
     setCatalogError("");
     setRepositoryError("");
@@ -259,7 +265,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setBackupUncertain(false);
     setBackupOpen(flow === "backup-now");
     setPolicyOpen(flow === "create-policy");
-    setTab(flow === "create-policy" ? "policies" : "points");
     setBackupStep(1);
     requests.current = {};
     pendingBackup.current = {};
@@ -304,6 +309,13 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const filtered = useMemo(() => [...(points || [])]
     .sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
   const pointTotal = catalogPage?.total ?? filtered.length;
+
+  // View points filters the list below to one VM and brings it into view.
+  const viewPoints = (vmID: string) => {
+    setFilterVM(vmID);
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    document.getElementById("recovery-points")?.scrollIntoView({ behavior, block: "start" });
+  };
 
   const openRestore = (point: BackupRecoveryPoint, mode: RestoreMode = "new") => {
     if (working) return;
@@ -515,46 +527,41 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
 
   return <>
     <h1 className="sr-only">Backups</h1>
-    <div className="vm-fields" style={{ marginBottom: 8 }}>
-      <button type="button" className={tab === "points" ? "sm primary" : "sm"} onClick={() => setTab("points")}>Recovery points</button>
-      <button type="button" className={tab === "policies" ? "sm primary" : "sm"} onClick={() => setTab("policies")}>Policies</button>
-    </div>
-    <BackupPolicies key={pool.id} active={tab === "policies"}
-      api={api} data={data} pool={pool} repos={repos || []} policies={policies} error={error || policyError}
+    <BackupPolicies key={pool.id} onViewPoints={viewPoints}
+      api={api} data={data} pool={pool} repos={repos || []} policies={policies} runs={jobRuns} error={error || policyError}
       busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
       onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
       requestID={requestID} clearRequest={clearRequest}
       openCreate={policyOpen} onOpenCreate={() => setPolicyOpen(true)} onCloseCreate={() => setPolicyOpen(false)}
     />
-    {tab === "points" ? <Section icon="backup" title="Recovery points" count={pointTotal} actions={<>
+    <div id="recovery-points"><Section icon="backup" title="Recovery points" count={pointTotal} actions={<>
       <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={() => { setBackupOpen(true); setBackupStep(1); }}>
         <Icon kind="backup" />Back up now
       </button>
-      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working)} onClick={() => { setTab("policies"); setPolicyOpen(true); }}>Create policy</button>
-      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working) || !selected || pointRuns === null} onClick={() => selected && openRestore(selected, "test")}>Test restore</button>
+      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working) || !selected || pointRuns === null} title={selected ? undefined : "Select a recovery point first"} onClick={() => selected && openRestore(selected, "test")}>Test restore</button>
       <button type="button" className="sm" onClick={() => { location.hash = "/settings/backups"; }}>Repositories</button>
     </>}>
       {(error || catalogError || repositoryError) && <p className="why" role="alert">{error || catalogError || repositoryError}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
       {selected && pointRuns === null && !runError && <p className="muted" role="status">Loading complete test restore history…</p>}
       {pageNotice && <p className="why" role="status">{pageNotice}</p>}
-      <div className="vm-fields" style={{ marginBottom: 8 }}>
-        <label>Search<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="VM, repository or ID" /></label>
-        <label>VM<select value={filterVM} onChange={e => setFilterVM(e.target.value)}>
+      <div className="toolbar">
+        <input type="search" aria-label="Search recovery points" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search VM, repository or ID" />
+        <select aria-label="VM" value={filterVM} onChange={e => setFilterVM(e.target.value)}>
           <option value="">All VMs</option>
           {poolVMs.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
           {(points || []).filter((p, i, all) => !poolVMs.some(v => v.id === p.source_vm_id) && all.findIndex(x => x.source_vm_id === p.source_vm_id) === i).map(p =>
             <option key={p.source_vm_id} value={p.source_vm_id}>{p.source_vm_name || p.source_vm_id} (unavailable)</option>)}
-        </select></label>
-        <label>Repository<select value={filterRepo} onChange={e => setFilterRepo(e.target.value)}>
+        </select>
+        <select aria-label="Repository" value={filterRepo} onChange={e => setFilterRepo(e.target.value)}>
           <option value="">All repositories</option>
           {(repos || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select></label>
+        </select>
       </div>
       {points === null && !catalogError ? <p className="muted">Loading…</p> : null}
       {points && filtered.length === 0 ? <p className="empty">{filterVM || filterRepo || query.trim() ? "No recovery points match." : repos?.length ? "No recovery points yet. Back up a VM to create one." : "No backup repositories. Create a destination in Settings first."}</p> : null}
       {filtered.length > 0 ? <div className="table-scroll"><table className="records">
-        <thead><tr><th>VM</th><th>Captured</th><th>Repository</th><th>Consistency</th><th>Protect</th><th>Test</th><th><span className="sr-only">Actions</span></th></tr></thead>
+        <thead><tr><th>VM</th><th>Captured</th><th>Repository</th><th>Consistency</th><th>Protected</th><th>Last test</th><th><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {filtered.map(p => {
             const repo = repoByID.get(p.repository_id);
@@ -566,23 +573,23 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
               </td>
               <td><span className="muted">{date(p.captured_at)}</span></td>
               <td>{repo?.name || <span className="mono">{p.repository_id}</span>}</td>
-              <td><Badge value={p.consistency} /></td>
-              <td>{p.protected ? <Badge value="protected" /> : <span className="muted">—</span>}</td>
+              <td><Badge value={p.consistency} tone={p.consistency === "crash" ? "warn" : "ok"} /></td>
+              <td>{p.protected ? <Badge value="protected" tone="info" /> : <span className="muted">—</span>}</td>
               <td>{p.last_test_result ? <Badge value={p.last_test_result} /> : <span className="muted">—</span>}</td>
-              <td className="row-actions">
+              <td><div className="row-actions inline">
                 <button type="button" className="sm" disabled={Boolean(working)} onClick={e => { e.stopPropagation(); openRestore(p, "new"); }}>Restore as new</button>
                 {live && <button type="button" className="sm" disabled={Boolean(working)} onClick={e => { e.stopPropagation(); openRestore(p, "replace"); }}>Replace</button>}
                 <button type="button" className="sm" disabled={Boolean(working) || busy || unavailable} onClick={e => { e.stopPropagation(); void toggleProtect(p); }}>
                   {working === `protect-${p.id}` ? "…" : pendingProtect.current[`protect-${p.id}`] ? "Retry request" : p.protected ? "Unprotect" : "Protect"}
                 </button>
-              </td>
+              </div></td>
             </tr>;
           })}
         </tbody>
       </table></div> : null}
       {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {pointTotal} recovery points.</p>}
       {catalogPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreCatalog()}>{loadingMore === "catalog" ? "Loading…" : "Load more recovery points"}</button>}
-    </Section> : null}
+    </Section></div>
 
     {backupOpen && <section className="panel form-panel" aria-label="Back up now">
       <div className="section-heading">
@@ -590,7 +597,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
         <button type="button" disabled={Boolean(working)} onClick={closeBackup}>Close</button>
       </div>
       {backupUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same backup request.</p>}
-      {backupStep === 1 && <form className="vm-fields" onSubmit={e => { e.preventDefault(); if (backupVM && backupRepo) setBackupStep(2); }}>
+      {backupStep === 1 && <form className="stack" onSubmit={e => { e.preventDefault(); if (backupVM && backupRepo) setBackupStep(2); }}>
         <label>Virtual machine<select required value={backupVM} disabled={Boolean(working) || backupUncertain} onChange={e => { setBackupVM(e.target.value); setBackupMode("stopped"); clearRequest("backup-now"); }}>
           <option value="">Select VM</option>
           {poolVMs.filter(v => !v.protected).map(v => <option key={v.id} value={v.id}>{v.name}{v.state !== "shut off" ? ` · ${v.state}` : ""}</option>)}
@@ -608,7 +615,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           <button type="button" disabled={Boolean(working)} onClick={closeBackup}>Cancel</button>
         </div>
       </form>}
-      {backupStep === 2 && <div className="vm-fields">
+      {backupStep === 2 && <div className="stack">
         <dl className="details">
           <dt>VM</dt><dd>{backupTarget?.name || backupVM}</dd>
           <dt>Repository</dt><dd>{repoByID.get(backupRepo)?.name || backupRepo}</dd>
@@ -621,7 +628,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           <button type="button" disabled={Boolean(working)} onClick={() => setBackupStep(1)}>Back</button>
         </div>
       </div>}
-      {backupStep === 3 && <div className="vm-fields">
+      {backupStep === 3 && <div className="stack">
         <p>Submit a {backupConsistency === "stopped" ? "stopped" : "online"} full backup of <strong>{backupTarget?.name}</strong> to <strong>{repoByID.get(backupRepo)?.name || backupRepo}</strong>.</p>
         {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}
         <div className="actions">
@@ -633,7 +640,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       </div>}
     </section>}
 
-    {selected && <Panel icon="backup" title={selected.source_vm_name || selected.source_vm_id} badge={<Badge value={selected.consistency} />}
+    {selected && <Panel icon="backup" title={selected.source_vm_name || selected.source_vm_id} badge={<Badge value={selected.consistency} tone={selected.consistency === "crash" ? "warn" : "ok"} />}
       onClose={() => { if (!working) setSelectedID(""); }}
       sub={<>Captured {date(selected.captured_at)} · {repoByID.get(selected.repository_id)?.name || selected.repository_id}</>}
       actions={<>
@@ -653,14 +660,14 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           <dt>Source VM</dt><dd className="mono">{selected.source_vm_id}</dd>
           <dt>Repository</dt><dd>{repoByID.get(selected.repository_id)?.name || selected.repository_id}</dd>
           <dt>Captured</dt><dd>{date(selected.captured_at)}</dd>
-          <dt>Consistency</dt><dd><Badge value={selected.consistency} /></dd>
+          <dt>Consistency</dt><dd><Badge value={selected.consistency} tone={selected.consistency === "crash" ? "warn" : "ok"} /></dd>
           <dt>Protected</dt><dd>{selected.protected ? "Yes" : "No"}</dd>
           <dt>Last test</dt><dd>{selected.last_test_result || "—"}</dd>
         </dl>
       </section>
       <section className="tile" aria-label="Restore">
         <h2>{restoreMode === "replace" ? "Restore replace" : restoreMode === "test" ? "Test restore" : "Restore as new"} · step {restoreStep} of 3</h2>
-        {restoreStep === 1 && <form className="vm-fields" onSubmit={(e: FormEvent) => { e.preventDefault(); if (!restoreBlocker) setRestoreStep(2); }}>
+        {restoreStep === 1 && <form className="stack" onSubmit={(e: FormEvent) => { e.preventDefault(); if (!restoreBlocker) setRestoreStep(2); }}>
           {restoreMode !== "replace" && <label>New VM name<input required maxLength={100} value={restoreName} disabled={Boolean(working) || uncertainRestore} onChange={e => setRestoreName(e.target.value)} /></label>}
           {restoreMode === "replace" && restoreOriginal && <p className="note">Replaces <strong>{restoreOriginal.name}</strong> ({selected.source_vm_id}). Original disks retained until exclusive cutover. Guest must be shut off.</p>}
           {restoreMode === "replace" && restoreOriginal && <label>Type original VM name to confirm<input required value={replaceConfirm} disabled={Boolean(working) || uncertainRestore} onChange={e => setReplaceConfirm(e.target.value)} /></label>}
@@ -678,7 +685,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
             <button type="submit" className="primary" disabled={Boolean(restoreBlocker) || Boolean(working)}>Next</button>
           </div>
         </form>}
-        {restoreStep === 2 && <div className="vm-fields">
+        {restoreStep === 2 && <div className="stack">
           <dl className="details">
             {restoreMode === "replace" ? <><dt>Original VM</dt><dd>{restoreOriginal?.name || selected.source_vm_id} · {selected.source_vm_id}</dd></> : <><dt>New name</dt><dd>{restoreName}</dd><dt>New VM ID</dt><dd className="mono">{restoreVMID}</dd></>}
             <dt>Host</dt><dd>{data.hosts.find(h => h.id === restoreHost)?.hostname || restoreHost}</dd>
@@ -690,7 +697,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
             <button type="button" disabled={Boolean(working)} onClick={() => setRestoreStep(1)}>Back</button>
           </div>
         </div>}
-        {restoreStep === 3 && <div className="vm-fields">
+        {restoreStep === 3 && <div className="stack">
           {uncertainRestore && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same request with these selections.</p>}
           {restoreBlocker && <p className="why" role="status">{restoreBlocker}</p>}
           <div className="actions">

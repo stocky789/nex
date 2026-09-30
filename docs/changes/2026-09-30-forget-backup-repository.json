@@ -1,0 +1,58 @@
+{
+  "summary": "An administrator can forget a backup repository: Core drops its record, recovery-point list, run history, mounts and sealed credentials on the pool master and members, and never touches the destination.",
+  "paths": [
+    "internal/protocol/backup_dr.go",
+    "internal/protocol/protocol.go",
+    "internal/agent/backup_forget.go",
+    "internal/agent/backup_forget_test.go",
+    "internal/agent/backup.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/controller/backups.go",
+    "internal/controller/controller.go",
+    "internal/controller/managed.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/service.go",
+    "web/src/backup-repositories.tsx",
+    "web/src/backup-repositories.test.mjs",
+    "web/src/labels.ts",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/peer-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/api/peer.html",
+    "docs/guide/backup-repositories.md",
+    "CHANGELOG.md",
+    "docs/changes/2026-09-30-forget-backup-repository.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators get the Forget workflow, its refusals, and the recovery path for a repository whose destination is gone or changed.",
+    "pages": ["docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New Controller route POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget, Core command backup-repository-forget, Core-local route POST /api/local/v1/pool/backup-repositories/{id}/forget and peer route POST /api/v1/pool/backup/forget. Administrator session, Origin and CSRF; the command is validated and receipted on the master, so a request_id replays its recorded outcome.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/local-openapi.json", "docs/api/peer-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Completes the repository lifecycle inside the current backup slice; no milestone or acceptance gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "pool-backup-repositories.json, pool-backup-catalog/, pool-backup-runs/ and the sealed backup credential receipts on the pool master; the same repository record, mount and credential on each member.",
+    "reason": "Forgetting removes Core-owned state and the metadata receipt records the outcome; the Controller keeps only the operation row and adopts the smaller inventory from the master, so a fresh Controller sees the repository as gone."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent (real master and member in the transfer lab, stubbed unmount) covering each refusal, success, member removal, replay, an already-forgotten repository, untouched destination data and credential retirement; a mutation of the pinned-point refusal made the test fail. Controller route test for CSRF, authentication, validation, queueing, replay and conflict. Web unit test and tsc. No browser walkthrough, real NFS/SMB/S3/SFTP destination, or multi-host lab was run.",
+    "evidence": [
+      "internal/agent/backup_forget_test.go",
+      "internal/controller/backup_adoption_test.go",
+      "web/src/backup-repositories.test.mjs"
+    ]
+  }
+}

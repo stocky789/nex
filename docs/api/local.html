@@ -38,6 +38,7 @@
 <li><a href="#listBackupRepositoriesLocal">GET /api/local/v1/pool/backup-repositories</a></li>
 <li><a href="#registerBackupRepositoryLocal">POST /api/local/v1/pool/backup-repositories</a></li>
 <li><a href="#testBackupRepositoryLocal">POST /api/local/v1/pool/backup-repositories/{id}/test</a></li>
+<li><a href="#forgetBackupRepositoryLocal">POST /api/local/v1/pool/backup-repositories/{id}/forget</a></li>
 <li><a href="#listBackupCatalogLocal">GET /api/local/v1/pool/backup-catalog</a></li>
 <li><a href="#listBackupRunsLocal">GET /api/local/v1/pool/backup-runs</a></li>
 <li><a href="#getBackupOperationLocal">GET /api/local/v1/pool/backup-operations/{operation_id}</a></li>
@@ -2648,6 +2649,119 @@
                 &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
               }
             ]
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid input.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Repository not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="forgetBackupRepositoryLocal"><h2>POST <code>/api/local/v1/pool/backup-repositories/{id}/forget</code></h2>
+<p>Forget a backup repository</p><p>Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;forgetBackupRepositoryLocal&quot;,
+  &quot;summary&quot;: &quot;Forget a backup repository&quot;,
+  &quot;description&quot;: &quot;Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;,
+        &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+      }
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;operation_id&quot;,
+            &quot;confirmation&quot;,
+            &quot;recovery_points&quot;,
+            &quot;protected_points&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;operation_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;confirmation&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;maxLength&quot;: 256
+            },
+            &quot;recovery_points&quot;: {
+              &quot;type&quot;: &quot;integer&quot;,
+              &quot;minimum&quot;: 0
+            },
+            &quot;protected_points&quot;: {
+              &quot;type&quot;: &quot;integer&quot;,
+              &quot;minimum&quot;: 0
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Recorded Result; status failed carries the refusal.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
           }
         }
       }

@@ -10738,3 +10738,129 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes; if it still fails, Resume starts the enrolled agent on its last known endpoint.
 - Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify and passes with retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bound: `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1`
 - Avoid: Treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback.
+
+## BUG-0755 — `systemd-creds --no-ask-password` rejected on Debian 13; credential delivery failed with 503
+
+- Date: 2026-09-30
+- Symptom: `POST /api/v1/storage/credentials` returned 503 and Core logged `systemd-creds: unrecognized option '--no-ask-password'`; no SMB, S3, SFTP or iSCSI credential could be registered.
+- Root cause: systemd 257 has no such option, and the test fake hard-coded the flag, so tests could not notice.
+- Fix: `SealCredential` and `OpenCredential` call plain `systemd-creds encrypt|decrypt`; the fake now rejects any other leading argument.
+- Regression: `TestSealCredentialUsesOnlyOptionsSystemd257Accepts`: `go test ./internal/vmhost/ -count=1`; real systemd-creds not run on a Debian 13 host.
+- Avoid: A test double that accepts every flag the code passes instead of the flags the real tool supports.
+
+## BUG-0756 — `nex-core-local.service` failed `status=243/CREDENTIALS` on a fresh host
+
+- Date: 2026-09-30
+- Symptom: With no `backup-credential-key/key.cred`, every start failed at step CREDENTIALS and looped.
+- Root cause: `LoadCredentialEncrypted=` is resolved before any `ExecStartPre`, including the one that creates the file. Core already opens or creates the sealed key itself.
+- Fix: Removed the `LoadCredentialEncrypted=` and the creating `ExecStartPre` from `nex-core-local.service` and `nex-core-agent.service`, and the unused `$CREDENTIALS_DIRECTORY` branch of `backupCredentialKey`.
+- Regression: `TestBackupCredentialKeyIsSealedAtRest` (Core creates and reopens the key without a service credential): `go test ./internal/agent/ -count=1`; unit start on a fresh Debian 13 host not run.
+- Avoid: Loading a credential in the unit that only a step inside the same unit can create.
+
+## BUG-0757 — SMB storage mount failed on Debian 13: no credentials directory for `.mount` units
+
+- Date: 2026-09-30
+- Symptom: SMB VM storage and SMB backup repositories ended `failed` with an opaque `Job failed`; the journal showed `error 2 opening credential file /run/credentials/<unit>.mount/nex-smb`.
+- Root cause: The mount unit used `LoadCredentialEncrypted=` with `credentials=%d/nex-smb`; systemd 257 creates no credentials directory for the mount helper.
+- Fix: Core writes a root-only `mount.cifs` credentials file per receipt and the unit uses `credentials=<file>`; `remoteUnit` and `prepareRemote` lose the sealed-credential parameter.
+- Regression: `TestStorageCredentialIsRootOnlyFileNamedByMountUnit` and the updated unit checks in `storage_mounts_test.go`: `go test ./internal/vmhost/ -count=1`; real Debian 13 CIFS mount and reboot remount not run. The failure text is still the systemctl message.
+- Avoid: Relying on unit credentials for anything a mount helper reads.
+
+## BUG-0758 — Storage registration response echoed the write-only `credential_receipt`
+
+- Date: 2026-09-30
+- Symptom: `POST /api/v1/storage` returned `credential_receipt` and `credential_request_id` despite the write-only schema.
+- Root cause: `resourceResponse` returned the stored command's registration unchanged.
+- Fix: `resourceResponse` blanks both fields for storage.
+- Regression: `TestStorageRegistrationResponseOmitsCredentialReceipt`: `go test ./internal/controller/ -count=1`
+- Avoid: Returning a stored command as a response body without dropping write-only fields.
+
+## BUG-0759 — Core retried a delivered credential offer every report with HTTP 404
+
+- Date: 2026-09-30
+- Symptom: After a failed credential persistence, Core logged `credential handoff rejected (HTTP 404)` about once per second until the offer expired.
+- Root cause: `credentialBroker.offers` kept listing an offer that `redeem` had already handed out, and `redeem` refuses a delivered offer.
+- Fix: `offers` skips delivered entries; a retry gets a new offer after the 15 s expiry, as the agent comment already described.
+- Regression: `TestDeliveredCredentialOfferIsNotOfferedAgain`: `go test ./internal/controller/ -count=1`
+- Avoid: Advertising work the redeeming side will refuse.
+
+## BUG-0760 — Failed SMB/NFS registration reported only `systemctl failed: Job failed`
+
+- Date: 2026-09-30
+- Symptom: A failed remote-mount registration showed the opaque systemctl message; the mount helper's error was only in the host journal.
+- Root cause: `prepareRemote` returned the `systemctl enable --now` error unchanged.
+- Fix: `withMountJournal` appends the last five journal lines of the mount unit to that error. The failed row is no longer listed (BUG-0772); the error stays in the task history.
+- Regression: `TestFailedRemoteMountReportsMountHelperMessage`: `go test ./internal/vmhost/ -count=1`
+- Avoid: Surfacing a service-manager exit code without the unit's own output.
+
+## BUG-0761 — NFS/SMB storage never reported `capabilities.shared` or member eligibility
+
+- Date: 2026-09-30
+- Symptom: SMB VM storage with healthy member access still showed `shared: false` and only the master in `eligible_host_ids`.
+- Root cause: `storageCapabilities` sets both only for clustered iSCSI and nothing updated them from per-host member access.
+- Fix: `PoolStorageMemberAccess` marks the repository shared and lists each member whose current observation is fully healthy.
+- Regression: shared/eligible assertions in `TestMemberReconcilePostsLaterAccessAfterEarlierDeadline`: `go test ./internal/agent/ -run PoolStorage`
+- Avoid: Deriving pool-level sharing from the registration instead of verified per-host access.
+
+## BUG-0770 — New backup repository reported health `unknown` for up to a minute
+
+- Date: 2026-09-30
+- Symptom: Right after registering an S3 (any) backup repository, `health.status` was `unknown` until the next periodic pass.
+- Root cause: `upsertPoolBackupRepositoryPrepared` saved the repository with an empty health and access; only the 1-minute probe loop recorded them.
+- Fix: registration probes once after saving and records health and access; `checkBackupRepositoryAccessForStore` now sets health too, so a repository test also refreshes it.
+- Regression: health assertion in `TestS3CoreRegistrationAndTestUsePrivateReceipt`: `go test ./internal/agent/ -count=1`; real S3 endpoint not re-run. Member access still shows `awaiting member probe` until the next periodic pass.
+- Avoid: Leaving state empty at creation when the same call already contacted the destination.
+
+## BUG-0771 — Task history showed the pool master as the host of a member's backup restore
+
+- Date: 2026-09-30
+- Symptom: `GET /api/v1/operations` listed restore-as-new (and other backup requests) for a member's VM with the pool master's `host_id`.
+- Root cause: backup requests are queued on the master, which dispatches to the target host; the row's routing host was returned as the executing host. Core's run records already carried the target host.
+- Fix: `operations` returns the command's target host for `backup-*` kinds; routing and the queued row are unchanged.
+- Regression: task-history assertion in `TestBackupMemberOperationsRouteThroughMaster`: `go test ./internal/controller/ -count=1`
+- Avoid: Using the routing host of a relayed operation as the actor host.
+
+## BUG-0772 — A refused storage registration left a `pending-storage-*` row the operator had to discard
+
+- Date: 2026-09-30
+- Symptom: After Core refused a NFS/SMB registration, the Storage list kept a failed `pending-storage-<operation>` row with a **Discard failed registration** button.
+- Root cause: `listResources` listed every `storage-register` row, including the Controller's replay record for a request Core refused; only `DELETE /api/v1/storage/{id}` removed it from view.
+- Fix: project owner decision: `listResources` skips a failed, never-applied `pending-storage-*` row. The row remains only as the `request_id` replay record (a replay returns the same failed result and sends no command) and the error stays in `GET /api/v1/operations`. `discardFailedStorage`, its route, `resourceRowResponse`, the UI button and the storage guide text were deleted; the network discard is unchanged. A late host report that applies the repository renames the row to Core's ID and lists it. No Controller-owned state: the row is not a pool resource.
+- Regression: `TestRefusedStorageRegistrationIsNotListed`: `go test ./internal/controller/ -count=1`; `web/src/storage.test.mjs`, `web/src/managed.test.mjs`. Not run against a real host or browser.
+- Avoid: Keeping a Controller-side failure record as the operator's only view of an error the task history already holds.
+
+## BUG-0773 — One unreadable backup credential stopped probing of every repository and could not be replaced
+
+- Date: 2026-09-30
+- Symptom: After a backup credential key was lost and regenerated, one repository's sealed receipt could not be opened. The health pass aborted for all repositories (a new one stayed `unknown`), every operation on the old one failed `backup state is unavailable on this host`, and registering the same ID again was refused.
+- Root cause: `probePoolBackupRepositories` returned `ErrBackupUnavailable` on the first repository whose credential could not be read; `unsafeBackupRepositoryReplacement` refused any credential change, so an unreadable credential could never be replaced.
+- Fix: the pass marks only that repository `offline` with a visible re-register message and continues; a same-ID, same-destination registration may replace the credential when the master cannot read the old one. A readable credential is still never replaced, and an S3 identity mismatch is a conflict. There is still no repository delete.
+- Regression: `TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced`: `go test ./internal/agent/ -count=1`; fails without either half of the fix. SMB3/SFTP and a real lab are not re-run.
+- Avoid: Returning from a per-repository loop on one item's error, and refusing every credential change instead of only the ones that would discard a working secret.
+
+## BUG-0774 — Members never received a replaced backup credential after a same-ID re-registration
+
+- Date: 2026-09-30
+- Symptom: After the master's credential key was lost and the repositories were registered again, the master recovered but members stayed `readable=false` for minutes and could not back up or restore. Nothing was logged.
+- Root cause: a member refused the master's new `credential_ref` for a repository it already held (`importPeerBackupCredential` and `adoptPeerBackupRepository` treated any change as a conflict), and `projectBackupCredentialToMembers` errors were discarded.
+- Fix: the master is authoritative for the credential reference; a member accepts a replacement for the same repository ID, kind and destination and retires its superseded receipt. Delivery failures are logged and shown as the member's access error until delivery succeeds; the health pass retries them.
+- Regression: `TestMemberConvergesOnReplacedBackupCredential` (fails without the fix): `go test ./internal/agent -count=1`. Two in-process hosts; no real lab rerun.
+- Avoid: `_ =` on a delivery whose failure leaves a member unusable, and refusing a change the pool master is the authority for.
+
+## BUG-0775 — A crash-consistent backup of a shut-off member VM failed with only "member never started this operation"
+
+- Date: 2026-09-30
+- Symptom: `POST /vms/{id}/backup` with `consistency=crash` on a shut-off VM hosted on a member failed after about a minute with a message that hid the reason.
+- Root cause: the member's refusal reason was replaced by a fixed HTTP body and the master discarded the body; the later observation reported only "never started". The refusal itself (crash mode needs a running VM) is the existing contract.
+- Fix: the member returns its refusal text, `doPeerBackup` keeps it, and a refused POST after an absent member record settles as not started with that reason.
+- Regression: `TestPeerBackupRefusalKeepsMemberReason` (fails without the fix): `go test ./internal/agent -count=1`. Not re-run against the lab.
+- Avoid: Constant error bodies on peer refusals.
+
+## BUG-0776 — A refused storage registration left its plaintext credential on the host
+
+- Date: 2026-09-30
+- Symptom: after wrong-password, duplicate-source or mount failures the credential file stayed on the host with receipt status `ready` until a client retired it.
+- Root cause: Core released credentials only on detach or update, not when a registration failed.
+- Fix: a `failed` (not `needs_attention`) `storage-register` releases its receipt unless another journal entry still references it; `storage-credential-retire` remains for other cases.
+- Regression: `TestFailedStorageRegistrationReleasesCredential` (fails without the fix): `go test ./internal/vmhost -count=1`. Not re-run against the lab.
+- Avoid: Leaving secret cleanup to a client call.

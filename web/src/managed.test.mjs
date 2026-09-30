@@ -538,12 +538,8 @@ console.log("managed.test.mjs: pool resource removal ok");
   assert.match(managedSource, /await api\(`networks\/\$\{encodeURIComponent\(n\.id\)\}`, "DELETE"\);\s*\n\s*await reload\(\);/);
   assert.match(managedSource, /setNotice\(`Discarded the failed registration for \$\{n\.name\}/);
 
-  // Storage: the same model, and a failed row's pending-storage id is never treated as a Core
-  // repository id — no recheck, update or detach is offered on it.
+  // Storage: a refused registration is not listed by the Controller, so no discard is offered.
   const repository = { id: "repo-1", pool_id: "pool-1", host_id: "host-1", name: "lab-nfs", operation_id: "op-s1", status: "succeeded", kind: "nfs", path: "", generation: 2, source: { nfs: { server: "nfs.example.test", export: "/vms" } }, access: { status: "healthy", readable: true, writable: true }, capabilities: { vm_disk: true } };
-  const failedStorage = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Storage", storage: [{ ...repository, id: "pending-storage-op-s2", status: "failed", error: "export /vms is not exported to this host" }] }));
-  assert.match(failedStorage, />Discard failed registration</);
-  for (const action of ["Recheck", "Update", "Detach"]) assert.doesNotMatch(failedStorage, new RegExp(`>${action}`), `a failed storage registration offers no ${action}`);
   const heldStorage = renderToStaticMarkup(createElement(ManagedVMs, { ...base, tab: "Storage", storage: [repository] }));
   assert.doesNotMatch(heldStorage, />Discard failed registration</);
   assert.match(heldStorage, />Recheck</);

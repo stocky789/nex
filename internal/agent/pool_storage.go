@@ -442,6 +442,12 @@ func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) [
 		}
 		for _, access := range accesses[out[i].ID] {
 			out[i].MemberAccess = append(out[i].MemberAccess, access)
+			// Shared and eligibility follow verified per-host access. Clustered iSCSI
+			// already names its hosts in the registration.
+			if protocol.IsPoolSharedStorage(out[i]) && !protocol.IsClusteredISCSI(out[i]) && access.Generation == out[i].Generation && access.Identity != "" && access.Error == "" && access.Readable && access.Writable && access.QEMUWritable && access.Locking && !slices.Contains(out[i].Capabilities.EligibleHostIDs, access.HostID) {
+				out[i].Capabilities.EligibleHostIDs = append(slices.Clone(out[i].Capabilities.EligibleHostIDs), access.HostID)
+				out[i].Capabilities.Shared = true
+			}
 		}
 	}
 	return out

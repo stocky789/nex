@@ -85,7 +85,6 @@
 <li><a href="#promotePoolMaster">POST /api/v1/pools/{id}/master/promote</a></li>
 <li><a href="#setPoolFenceProfile">POST /api/v1/pools/{id}/members/{host_id}/fence-profile</a></li>
 <li><a href="#probePoolBMC">POST /api/v1/pools/{id}/members/{host_id}/bmc-probe</a></li>
-<li><a href="#discardFailedStorageRegistration">DELETE /api/v1/storage/{id}</a></li>
 <li><a href="#hostHardware">GET /api/v1/hosts/{id}/hardware</a></li>
 <li><a href="#setPoolBMCProvisioning">POST /api/v1/pools/{id}/members/{host_id}/bmc-provisioning</a></li>
 <li><a href="#setPoolHostFencing">POST /api/v1/pools/{id}/host-fencing</a></li>
@@ -98,6 +97,7 @@
 <li><a href="#listBackupRepositories">GET /api/v1/pools/{id}/backup-repositories</a></li>
 <li><a href="#createBackupRepository">POST /api/v1/pools/{id}/backup-repositories</a></li>
 <li><a href="#testBackupRepository">POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test</a></li>
+<li><a href="#forgetBackupRepository">POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget</a></li>
 <li><a href="#listBackupCatalog">GET /api/v1/pools/{id}/backup-catalog</a></li>
 <li><a href="#listBackupRuns">GET /api/v1/pools/{id}/backup-runs</a></li>
 <li><a href="#restoreBackupAsNew">POST /api/v1/pools/{id}/backup-restore</a></li>
@@ -487,6 +487,16 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Controller queues a mount/access check for a registered backup repository on the pool master. Core updates observed access; Controller only relays.&quot;
+}</pre></section>
+<section><h2>backup-repository-forget</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/ForgetRepositoryRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues removal of a backup repository from the pool on the master. Core drops the repository, its recovery-point records and run history, and each host&#x27;s sealed credential and mount; it never deletes destination data. It refuses with a failed Result while a backup job uses the repository, an operation on it is running, a recovery point of it is in use by an unfinished restore, the typed name is wrong or the recovery point counts differ from the confirmed ones. Replays by request_id return the recorded Result; a repository that is already forgotten succeeds.&quot;
 }</pre></section>
 <section><h2>backup-now</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -3442,12 +3452,12 @@
   }
 }</pre></details></section>
 <section id="listStorageRegistration"><h2>GET <code>/api/v1/storage</code></h2>
-<p>List local storage registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation. A typed registration the host refused carries id set to this Controller&#x27;s own request-row key, pending-storage-&lt;operation_id&gt;, which is the handle DELETE /api/v1/storage/{id} takes to discard the failed request record. A registration still queued or dispatched answers id &quot;&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.</p>
+<p>List local storage registrations</p><p>Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation. A typed registration the host refused is not listed: its error stays in GET /api/v1/operations and a replay of the same request_id returns the failed result. A registration still queued or dispatched answers id &quot;&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listStorageRegistration&quot;,
   &quot;summary&quot;: &quot;List local storage registrations&quot;,
-  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation. A typed registration the host refused carries id set to this Controller&#x27;s own request-row key, pending-storage-&lt;operation_id&gt;, which is the handle DELETE /api/v1/storage/{id} takes to discard the failed request record. A registration still queued or dispatched answers id \&quot;\&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.&quot;,
+  &quot;description&quot;: &quot;Administrator inventory of pool registrations with explicit host access and durable operation statuses; read-only and safe to retry. Includes the automatically created default ISO storage (/var/lib/libvirt/images) and storage adopted from Inventory.managed, distinguishable by actor system on their operation. A typed registration the host refused is not listed: its error stays in GET /api/v1/operations and a replay of the same request_id returns the failed result. A registration still queued or dispatched answers id \&quot;\&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -3498,12 +3508,12 @@
   }
 }</pre></details></section>
 <section id="createStorageRegistration"><h2>POST <code>/api/v1/storage</code></h2>
-<p>Register local storage</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first. A typed registration the host refused carries id set to this Controller&#x27;s own request-row key, pending-storage-&lt;operation_id&gt;, which is the handle DELETE /api/v1/storage/{id} takes to discard the failed request record. A registration still queued or dispatched answers id &quot;&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.</p>
+<p>Register local storage</p><p>Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first. A typed registration the host refused is not listed: its error stays in GET /api/v1/operations and a replay of the same request_id returns the failed result. A registration still queued or dispatched answers id &quot;&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createStorageRegistration&quot;,
   &quot;summary&quot;: &quot;Register local storage&quot;,
-  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first. A typed registration the host refused carries id set to this Controller&#x27;s own request-row key, pending-storage-&lt;operation_id&gt;, which is the handle DELETE /api/v1/storage/{id} takes to discard the failed request record. A registration still queued or dispatched answers id \&quot;\&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.&quot;,
+  &quot;description&quot;: &quot;Administrator session required. Mutations require same HTTPS Origin and X-CSRF-Token; JSON rejects unknown fields and bodies over 1 MiB. Persist request_id before sending. Identical payload replays return the same resource/operation; changed payload conflicts. New work requires a fresh active host in the selected pool advertising managed-vm-v1. Poll resource lists and operations for terminal results. HTTP acceptance is not host completion. No disk formatting or live network configuration. Definite failed registrations can be revalidated using a new request_id; queued, dispatched and needs_attention reservations must be reconciled first. A typed registration the host refused is not listed: its error stays in GET /api/v1/operations and a replay of the same request_id returns the failed result. A registration still queued or dispatched answers id \&quot;\&quot;: Core allocates repository IDs and this Controller never mints one, and on success the row keeps Core&#x27;s allocated ID.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -8374,121 +8384,6 @@
     }
   }
 }</pre></details></section>
-<section id="discardFailedStorageRegistration"><h2>DELETE <code>/api/v1/storage/{id}</code></h2>
-<p>Discard a storage registration the pool master refused</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. The storage twin of the failed ISO import&#x27;s discard. A registration a host refused published nothing anywhere: it is this Controller&#x27;s own request history, not pool state, so discarding it deletes only the Controller&#x27;s managed_resources row, relays nothing to any host, takes no body and keeps the operation and its audit history. It audits storage.discard. The guard is narrow on purpose: a row whose command a host has since reported as applied is refused, so this can never delete the projection of a live repository. A repository a host does hold is removed by relaying a detach, never by this route. Implemented in development product 0.3.5.</p>
-<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
-<pre>{
-  &quot;tags&quot;: [
-    &quot;Client \u2192 Controller&quot;
-  ],
-  &quot;security&quot;: [
-    {
-      &quot;AdminSession&quot;: []
-    }
-  ],
-  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
-  &quot;x-audience&quot;: &quot;client&quot;,
-  &quot;operationId&quot;: &quot;discardFailedStorageRegistration&quot;,
-  &quot;summary&quot;: &quot;Discard a storage registration the pool master refused&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. The storage twin of the failed ISO import&#x27;s discard. A registration a host refused published nothing anywhere: it is this Controller&#x27;s own request history, not pool state, so discarding it deletes only the Controller&#x27;s managed_resources row, relays nothing to any host, takes no body and keeps the operation and its audit history. It audits storage.discard. The guard is narrow on purpose: a row whose command a host has since reported as applied is refused, so this can never delete the projection of a live repository. A repository a host does hold is removed by relaying a detach, never by this route. Implemented in development product 0.3.5.&quot;,
-  &quot;parameters&quot;: [
-    {
-      &quot;name&quot;: &quot;id&quot;,
-      &quot;in&quot;: &quot;path&quot;,
-      &quot;required&quot;: true,
-      &quot;schema&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      },
-      &quot;description&quot;: &quot;The failed registration&#x27;s handle, which is this Controller&#x27;s own request-row key pending-storage-&lt;operation_id&gt; as GET /api/v1/storage reports it. Core allocates repository IDs and this Controller never mints one.&quot;
-    },
-    {
-      &quot;name&quot;: &quot;X-CSRF-Token&quot;,
-      &quot;in&quot;: &quot;header&quot;,
-      &quot;required&quot;: true,
-      &quot;schema&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      }
-    }
-  ],
-  &quot;responses&quot;: {
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;The failed request record was discarded.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;type&quot;: &quot;object&quot;,
-            &quot;properties&quot;: {
-              &quot;id&quot;: {
-                &quot;type&quot;: &quot;string&quot;
-              },
-              &quot;deleted&quot;: {
-                &quot;type&quot;: &quot;boolean&quot;
-              }
-            },
-            &quot;required&quot;: [
-              &quot;id&quot;,
-              &quot;deleted&quot;
-            ]
-          },
-          &quot;example&quot;: {
-            &quot;id&quot;: &quot;pending-storage-1f2e&quot;,
-            &quot;deleted&quot;: true
-          }
-        }
-      }
-    },
-    &quot;401&quot;: {
-      &quot;description&quot;: &quot;Administrator session required.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;403&quot;: {
-      &quot;description&quot;: &quot;Origin or CSRF rejected (\&quot;CSRF token required\&quot;).&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;404&quot;: {
-      &quot;description&quot;: &quot;\&quot;no failed storage registration with this ID; an adopted repository is removed with detach\&quot;.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;409&quot;: {
-      &quot;description&quot;: &quot;\&quot;a host reports this registration as applied, so it is not a failed request record; remove it on the host instead of discarding it\&quot;.&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    },
-    &quot;500&quot;: {
-      &quot;description&quot;: &quot;Controller storage failure (\&quot;storage unavailable\&quot;, \&quot;discarding the failed registration failed\&quot;).&quot;,
-      &quot;content&quot;: {
-        &quot;application/json&quot;: {
-          &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
-          }
-        }
-      }
-    }
-  }
-}</pre></details></section>
 <section id="hostHardware"><h2>GET <code>/api/v1/hosts/{id}/hardware</code></h2>
 <p>Read a host&#x27;s hardware</p><p>Administrator session; read-only and safe to retry. Relays one live observation to the host over the same stats channel the host dials out, as GET /hardware. The host reads its system, CPU, memory modules, disks, PCI devices and temperature sensors on request and stores none of it; the Controller stores none of it either, so a replacement Controller sees the same report. A section whose source is missing or fails is returned unavailable with a reason and the rest of the report still returns. Serial numbers are returned to authenticated administrators only and are never logged. Requires the host to be fresh, not revoked and to report host-hardware-v1.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -9950,6 +9845,142 @@
             }
           },
           &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="forgetBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/forget</code></h2>
+<p>Forget a backup repository</p><p>Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id returns the recorded outcome.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;forgetBackupRepository&quot;,
+  &quot;summary&quot;: &quot;Forget a backup repository&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id returns the recorded outcome.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;repo_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Backup repository ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;confirmation&quot;,
+            &quot;recovery_points&quot;,
+            &quot;protected_points&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;confirmation&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;maxLength&quot;: 256
+            },
+            &quot;recovery_points&quot;: {
+              &quot;type&quot;: &quot;integer&quot;,
+              &quot;minimum&quot;: 0
+            },
+            &quot;protected_points&quot;: {
+              &quot;type&quot;: &quot;integer&quot;,
+              &quot;minimum&quot;: 0
+            }
+          }
         }
       }
     }
@@ -12876,6 +12907,7 @@
         &quot;snapshot-metadata&quot;,
         &quot;backup-repository-register&quot;,
         &quot;backup-repository-test&quot;,
+        &quot;backup-repository-forget&quot;,
         &quot;backup-now&quot;,
         &quot;backup-restore-as-new&quot;,
         &quot;backup-restore-replace&quot;,
@@ -13148,6 +13180,16 @@
       &quot;anyOf&quot;: [
         {
           &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;forget_repository&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/ForgetRepositoryRequest&quot;
         },
         {
           &quot;type&quot;: &quot;null&quot;
@@ -14284,6 +14326,7 @@
         &quot;snapshot-metadata&quot;,
         &quot;backup-repository-register&quot;,
         &quot;backup-repository-test&quot;,
+        &quot;backup-repository-forget&quot;,
         &quot;backup-now&quot;,
         &quot;backup-restore-as-new&quot;,
         &quot;backup-restore-replace&quot;,
@@ -25339,6 +25382,39 @@
     &quot;repository_id&quot;
   ],
   &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ForgetRepositoryRequest"><summary>ForgetRepositoryRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Forgets one backup repository and its recovery-point and run records; destination data is never touched.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.ForgetRepositoryRequest&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [
+    &quot;repository_id&quot;,
+    &quot;confirmation&quot;,
+    &quot;recovery_points&quot;,
+    &quot;protected_points&quot;
+  ],
+  &quot;properties&quot;: {
+    &quot;repository_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 256,
+      &quot;description&quot;: &quot;The repository name.&quot;
+    },
+    &quot;recovery_points&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Recovery points of this repository the operator was shown.&quot;
+    },
+    &quot;protected_points&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;How many of them are protected.&quot;
+    }
+  }
 }</pre></details>
 <details id="BackupRestorePin"><summary>BackupRestorePin</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,

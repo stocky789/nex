@@ -1621,7 +1621,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 							}
 						}()
 					}
-				} else if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" ||
+				} else if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" || cmd.Kind == "backup-repository-forget" ||
 					cmd.Kind == "backup-policy-upsert" || cmd.Kind == "backup-policy-pause" || cmd.Kind == "backup-policy-run-now" ||
 					cmd.Kind == "backup-protect" || isBackupCatalogKind(cmd.Kind) ||
 					cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-test-cleanup" {
@@ -2627,6 +2627,8 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 			outcome.ID, outcome.Name = cmd.Media.ID, cmd.Media.Name
 		case cmd.BackupRepository != nil:
 			outcome.ID, outcome.Name = cmd.BackupRepository.ID, cmd.BackupRepository.Name
+		case cmd.ForgetRepository != nil:
+			outcome.ID = cmd.ForgetRepository.RepositoryID
 		case cmd.BackupPolicy != nil:
 			outcome.ID, outcome.Name = cmd.BackupPolicy.ID, cmd.BackupPolicy.Name
 		case cmd.BackupProtect != nil:

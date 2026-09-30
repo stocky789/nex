@@ -1164,6 +1164,10 @@ func (e *ManagedEngine) execute(ctx context.Context, c protocol.Command, fetch f
 			j.Result.Status = "needs_attention"
 		}
 		j.Result.Error = err.Error()
+		// A refused registration never used its credential; a new attempt hands off a new one.
+		if j.Result.Status == "failed" && c.Kind == "storage-register" && c.Storage.CredentialReceipt != "" && !storageCredentialAttached(js, c.Storage.CredentialReceipt) {
+			_ = releaseStorageCredential(filepath.Dir(e.stateDir), *c.Storage)
+		}
 	}
 	return j.Result, e.save(j)
 }

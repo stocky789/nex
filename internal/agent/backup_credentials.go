@@ -52,28 +52,16 @@ var errBackupCredentialUnencrypted = errors.New("backup credential receipt is no
 
 var errBackupCredentialKeyMissing = errors.New("backup credential key is missing")
 
-// backupCredentialKeyName is the systemd credential name of the receipt key. The unit
-// loads the sealed file with LoadCredentialEncrypted=, so a running Core finds the
-// decrypted key in $CREDENTIALS_DIRECTORY.
+// backupCredentialKeyName is the systemd credential name the receipt key is sealed under.
 const backupCredentialKeyName = "nex-backup-key"
 
 // backupCredentialKey returns the AES key, sealed at rest by systemd-creds (host key or
-// TPM2) in its own root-only directory apart from the receipts it protects. Order: the
-// credential systemd handed the service; else decrypt the sealed file (a key created after
-// the service started, so the credential was not there to load); else, only when writing a
-// receipt, create and seal a new key. A key lost while receipts remain is reported, not
+// TPM2) in its own root-only directory apart from the receipts it protects. Order: decrypt the
+// sealed file; else, only when writing a receipt, create and seal a new key. A key lost while receipts remain is reported, not
 // replaced by one that would leave every receipt unreadable. The caller holds clusterSecretMu.
 func backupCredentialKey(s *Store, create bool) ([]byte, error) {
 	if s == nil || !filepath.IsAbs(s.dir) || filepath.Clean(s.dir) != s.dir {
 		return nil, errors.New("invalid backup credential key directory")
-	}
-	if dir := os.Getenv("CREDENTIALS_DIRECTORY"); dir != "" {
-		if key, err := os.ReadFile(filepath.Join(dir, backupCredentialKeyName)); err == nil {
-			if len(key) != 32 {
-				return nil, errors.New("backup credential key is invalid")
-			}
-			return key, nil
-		}
 	}
 	dir := filepath.Join(s.dir, "backup-credential-key")
 	path := filepath.Join(dir, "key.cred")

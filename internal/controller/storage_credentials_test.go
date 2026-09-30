@@ -147,3 +147,29 @@ func TestCredentialReceiptMirrorBoundIsPerHostAndKeepsLiveReceipts(t *testing.T)
 		t.Fatal("another host's report evicted this host's receipts")
 	}
 }
+
+// The credential receipt is write-only: a registration response must not echo it.
+func TestStorageRegistrationResponseOmitsCredentialReceipt(t *testing.T) {
+	s := protocol.StorageRegistration{CredentialReceipt: "receipt-1", CredentialRequestID: "request-1"}
+	b, err := json.Marshal(resourceResponse(protocol.Command{Storage: &s}, protocol.Operation{Status: "queued"}))
+	if err != nil || strings.Contains(string(b), "credential_") {
+		t.Fatalf("response echoes the receipt: %s, %v", b, err)
+	}
+}
+
+func TestDeliveredCredentialOfferIsNotOfferedAgain(t *testing.T) {
+	b := newCredentialBroker()
+	offer, err := b.offer(storageCredentialRequest{RequestID: "req-1", RegistrationRequestID: "reg-1", PoolID: "pool", HostID: "host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.offers("host"); len(got) != 1 {
+		t.Fatalf("fresh offer not listed: %v", got)
+	}
+	if _, err := b.redeem(offer.Handle, "host"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.offers("host"); len(got) != 0 {
+		t.Fatalf("redeemed offer listed again, so an unacknowledged handoff is retried and refused every report: %v", got)
+	}
+}

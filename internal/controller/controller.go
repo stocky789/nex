@@ -311,7 +311,6 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("POST /api/v1/storage/{id}/update", c.admin(c.updateStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/recheck", c.admin(c.recheckStorage))
 	m.HandleFunc("POST /api/v1/storage/{id}/detach", c.admin(c.detachStorage))
-	m.HandleFunc("DELETE /api/v1/storage/{id}", c.admin(c.discardFailedStorage))
 	m.HandleFunc("POST /api/v1/storage/credentials", c.admin(c.storageCredentials))
 	m.HandleFunc("GET /api/v1/storage/credentials", c.admin(c.storageCredentialReceipts))
 	m.HandleFunc("GET /api/v1/storage/credentials/{request_id}", c.admin(c.storageCredentialStatus))
@@ -337,6 +336,7 @@ func (c *Controller) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-repositories", c.admin(c.listBackupRepositories))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories", c.admin(c.createBackupRepository))
 	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test", c.admin(c.testBackupRepository))
+	m.HandleFunc("POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget", c.admin(c.forgetBackupRepository))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-catalog", c.admin(c.listBackupCatalog))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-runs", c.admin(c.listBackupRuns))
 	m.HandleFunc("GET /api/v1/pools/{id}/backup-policies", c.admin(c.listBackupPolicies))
@@ -749,7 +749,13 @@ func (c *Controller) operation(w http.ResponseWriter, r *http.Request, user, csr
 }
 
 func (c *Controller) operations(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	rows, err := c.db.Query("SELECT * FROM operations ORDER BY created_at DESC LIMIT 1000")
+	// Backup requests queue on the pool master, which dispatches them to the executing host.
+	rows, err := c.db.Query(`SELECT o.id, CASE WHEN o.kind LIKE 'backup-%' THEN coalesce(
+		(SELECT coalesce(json_extract(command,'$.restore.host_id'), json_extract(command,'$.restore_replace.host_id'),
+			json_extract(command,'$.test_restore.host_id'), json_extract(command,'$.vm.host_id'))
+		 FROM managed_resources WHERE operation_id=o.id LIMIT 1), o.host_id) ELSE o.host_id END,
+		o.kind, o.request_id, o.status, o.error, o.created_at, o.updated_at, o.actor
+		FROM operations o ORDER BY o.created_at DESC LIMIT 1000`)
 	if err != nil {
 		fail(w, 500, "operation lookup failed")
 		return

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -493,5 +494,29 @@ func TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass(t *testing.T) {
 	permanent := peerBackupAnswer(peerBackupCompletion{err: permanentPeerBackupError{errors.New("member refused")}})
 	if permanent != "member refused" {
 		t.Fatalf("permanent answer = %q", permanent)
+	}
+}
+
+// A member that refuses a backup before journaling it (for example a crash-consistent
+// backup of a shut-off VM) must have its real reason reach the run, not just "never started".
+func TestPeerBackupRefusalKeepsMemberReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Error(w, "backup operation not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "invalid backup request: online backup requires a running VM", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	vm := *poolVMTestSpec("vm-1", "member-1")
+	work := pendingPeerBackup{
+		run:     protocol.BackupRun{OperationID: "crash-off"},
+		command: protocol.Command{OperationID: "crash-off", Kind: protocol.BackupKindBackupNow, VM: &vm},
+		repo:    protocol.BackupRepository{Kind: protocol.BackupRepoKindNFS},
+		member:  protocol.PoolMember{HostID: "member-1", PeerOrigin: server.URL}, client: server.Client(),
+	}
+	completion := callPeerBackup(context.Background(), work)
+	if !peerBackupNotStarted(completion.err) || !strings.Contains(completion.err.Error(), "online backup requires a running VM") {
+		t.Fatalf("member refusal reason was dropped: %v", completion.err)
 	}
 }

@@ -12,13 +12,31 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
+func readableRemoteCredential(t *testing.T, s *Store, kind string) string {
+	t.Helper()
+	creds := protocol.StorageCredentials{Username: "example-user", Secret: "example-secret"}
+	if kind == protocol.BackupRepoKindSFTP {
+		creds = protocol.StorageCredentials{Username: "example-user", SSHPrivateKey: "example-key"}
+	}
+	receipt, err := saveBackupCredential(s, protocol.StorageCredentialHandoff{
+		Offer: protocol.StorageCredentialOffer{RequestID: "old", RegistrationRequestID: "backup-credential:" + kind + ":register-old",
+			PoolID: s.State.PoolID, HostID: s.State.HostID, RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+		Credentials: creds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt.Receipt
+}
+
 func TestRemoteRepositoryReplacementPreservesRetainedPoints(t *testing.T) {
 	for _, kind := range []string{protocol.BackupRepoKindS3, protocol.BackupRepoKindSFTP} {
 		for _, change := range []string{"source", "credential"} {
 			t.Run(kind+"/"+change, func(t *testing.T) {
 				s := seedBackupMaster(t)
+				// A readable credential is kept; only an unreadable one may be replaced (BUG-0773).
 				existing := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: kind,
-					CredentialRef: "old-receipt", RemoteIdentity: &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}}
+					CredentialRef: readableRemoteCredential(t, s, kind), RemoteIdentity: &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}}
 				if kind == protocol.BackupRepoKindS3 {
 					existing.S3Source = &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups", Prefix: "old"}
 				} else {

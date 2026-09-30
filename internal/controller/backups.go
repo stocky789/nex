@@ -33,6 +33,13 @@ type testBackupRepositoryRequest struct {
 	RequestID string `json:"request_id"`
 }
 
+type forgetBackupRepositoryRequest struct {
+	RequestID       string `json:"request_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
 type backupNowAPIRequest struct {
 	RequestID    string `json:"request_id"`
 	RepositoryID string `json:"repository_id"`
@@ -268,6 +275,25 @@ func (c *Controller) testBackupRepository(w http.ResponseWriter, r *http.Request
 	}
 	repo := protocol.BackupRepository{ID: repoID, PoolID: pool}
 	c.enqueueBackupRepository(w, pool, user, body.RequestID, "backup-repository-test", &repo, body)
+}
+
+func (c *Controller) forgetBackupRepository(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, repoID := r.PathValue("id"), r.PathValue("repo_id")
+	var body forgetBackupRepositoryRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.ForgetRepositoryRequest{
+		RepositoryID: repoID, Confirmation: body.Confirmation,
+		RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || body.RequestID == repoID || req.Valid() != nil {
+		fail(w, 400, "stable request_id distinct from repository id, the repository name and the recovery point counts required")
+		return
+	}
+	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-repository-forget", protocol.Command{
+		OperationID: body.RequestID, Kind: "backup-repository-forget", ForgetRepository: &req,
+	}, body, repoID)
 }
 
 func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, requestID, kind string, repo *protocol.BackupRepository, payload any) {

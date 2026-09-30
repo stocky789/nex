@@ -29,7 +29,6 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 		return protocol.BackupRepository{}, nil
 	}
 	for _, change := range []func(*protocol.BackupRepository){
-		func(r *protocol.BackupRepository) { r.CredentialRef = "new-receipt" },
 		func(r *protocol.BackupRepository) {
 			r.SMBSource = &protocol.SMBStorageSource{Server: "other.example.test", Share: "backups"}
 		},

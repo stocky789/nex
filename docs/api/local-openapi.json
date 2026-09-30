@@ -2488,6 +2488,118 @@
         }
       }
     },
+    "/api/local/v1/pool/backup-repositories/{id}/forget": {
+      "post": {
+        "operationId": "forgetBackupRepositoryLocal",
+        "summary": "Forget a backup repository",
+        "description": "Forgets the repository, its recovery-point and run-history records and each host's mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.",
+        "security": [
+          {
+            "LocalSession": []
+          }
+        ],
+        "x-introduced-version": "0.4.18",
+        "x-audience": "host-local client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operation_id",
+                  "confirmation",
+                  "recovery_points",
+                  "protected_points"
+                ],
+                "properties": {
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "recovery_points": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "protected_points": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded Result; status failed carries the refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid local session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/local/v1/pool/backup-catalog": {
       "get": {
         "operationId": "listBackupCatalogLocal",

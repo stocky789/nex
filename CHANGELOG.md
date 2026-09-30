@@ -15,6 +15,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.18] — 2026-09-28
 
+### Minor Feature
+
+- A backup repository can now be forgotten from Settings. Nex removes the repository, its
+  recovery-point list, its run history and its saved credentials from the pool; nothing is
+  deleted from the destination, and registering it again brings its recovery points back.
+
 ### Bug Fixes
 
 - After a host reboot, Core no longer stays stuck with unknown host and VM state when the

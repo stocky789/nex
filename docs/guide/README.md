@@ -78,8 +78,8 @@ verification limits that apply to its workflow.
    (recovery point → new stopped guest with new UUID/MACs and disconnected NICs).
 29. [Test a backup restore](test-restore.md)
    (inspect an isolated test VM, record passed or failed, then confirm cleanup).
-30. [Set up backup policies and schedules](backup-policies.md)
-   (Backups → Policies; coverage, schedule/time zone, retention, Pause, Run now).
+30. [Set up backup jobs and schedules](backup-policies.md)
+   (Backups → Backup jobs; coverage, schedule/time zone, retention, Pause, Run now).
 31. [Restore a backup over an existing VM](restore-replace.md)
    (explicit replace; retained originals; refuses unsafe in-place overwrite).
 32. [Rebuild the backup catalog](catalog-rebuild.md)

@@ -371,6 +371,7 @@ restore-as-new from local copies. Authenticated host-local routes:
 | `GET /api/local/v1/pool/backup-repositories` | Master's durable repository list; NFS, SMB3, S3 and SFTP are advertised on current Core |
 | `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; Core accepts validated NFS, SMB3, S3 and SFTP sources; same-ID NFS source or observed filesystem identity replacement is refused to preserve retained points; a failed first NFS/SMB3 mount start cleans its new unit so a fresh operation may retry that ID after service recovery, while exact replay retains the failure; `200` with the saved repository or retained `Result` on replay |
 | `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; Core checks the selected registered backend's exact identity, access and ownership prerequisites |
+| `POST /api/local/v1/pool/backup-repositories/{id}/forget` | `{operation_id,confirmation,recovery_points,protected_points}`; forgets the repository (see the Controller relay row for semantics); `200` with the recorded Result, `failed` carrying a refusal |
 
 | `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
 | `GET /api/local/v1/pool/backup-runs` | Retained run records from `pool-backup-runs/` |
@@ -504,8 +505,9 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | Method and route | Request and result |
 |---|---|
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
-| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; a same-ID SMB3/S3/SFTP registration with the same destination replaces the credential only when the master cannot read the old one (repository health reports `offline` until then); `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
+| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget` | `{request_id,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`, `confirmation` is the repository name and the counts are what the operator was shown; queues `backup-repository-forget` on the master; `202`, exact replay `200`, changed payload for the same `request_id` `409`. Core drops the repository, its recovery-point records and its run history, then each host's mount and sealed credential; it never deletes destination data, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles `failed` with the reason, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts differ from the master's current ones. An unknown repository succeeds (a repeat sweep of the members). Protected recovery points are dropped once the counts are confirmed |
 | `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page |
 | `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page |
 | `GET /api/v1/pools/{id}/backup-policies` | Master's policies; `503` when `backup_policies_reported` is false |
@@ -514,7 +516,7 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 | `POST /api/v1/vms/{id}/backup` | `{request_id,repository_id,consistency?}`; queues `backup-now` on the pool master with the VM owner host in the command; `202` |
-| `POST /api/v1/pools/{id}/backup-restore` | `{request_id,host_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; queues `backup-restore-as-new` on the master, which dispatches to `host_id`; `202` |
+| `POST /api/v1/pools/{id}/backup-restore` | `{request_id,host_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; queues `backup-restore-as-new` on the master, which dispatches to `host_id`; `202`. `GET /api/v1/operations` reports `host_id` as that executing host for `backup-*` requests |
 | `POST /api/v1/pools/{id}/backup-restore-replace` | `{request_id,host_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace}`; queues `backup-restore-replace` on the master, which dispatches to `host_id`; `202` |
 | `POST /api/v1/pools/{id}/backup-protect` | `{request_id,repository_id,recovery_point_id,protected}`; `202` `{operation}` |
 | `POST /api/v1/pools/{id}/backup-test-restore` | `{request_id,host_id,...}`; queues `backup-test-restore` on the master, which dispatches to `host_id`; `202` |
@@ -601,6 +603,10 @@ or changed material is refused. A registration keeps its credential reference
 for life, so a different receipt for an existing repository ID is refused; a
 credential change registers a new repository ID and switches policies to it. Controller neither stores nor relays this peer
 secret.
+After forgetting a repository the master calls `POST /api/v1/pool/backup/forget`
+(`{repository_id}`) on each ready member, best effort, so the member drops its record,
+mount and sealed credential; the call is idempotent and is repeated when the master is
+asked to forget the same ID again.
 For SMB3, the master also calls authenticated
 `POST /api/v1/pool/backup/capability/smb3` with a source-only repository and
 `expected_identity` before dispatch. The ready member resolves its private
@@ -637,14 +643,15 @@ the member can use a credential-bearing destination. The member reads at most
 Joining another pool or being ejected erases the former pool's backup receipts.
 Backup credential receipts are encrypted at rest on every Core (AES-256-GCM under a random
 per-host key sealed by `systemd-creds` (`backup-credential-key/key.cred` in the Core state
-directory, loaded by the service unit as a credential, root-only) and apart from the receipts in `storage-cluster/secrets/backup/`; the pool, host and receipt
+directory, root-only, opened by Core itself) and apart from the receipts in `storage-cluster/secrets/backup/`; the pool, host and receipt
 reference are authenticated data). Only writing a receipt creates the key: a key that is
 missing while receipts remain is reported as such, never replaced. Core refuses a plaintext,
 tampered or other-key receipt and reports the `backup-credentials` check as failed while it
-keeps serving the others. The SMB3 mount password is sealed with `systemd-creds` into
-`backup-smb-credentials/<reference>` and loaded by the mount unit, so the share remounts
-after a reboot; retiring or abandoning a receipt deletes that file. There is no plaintext
-copy on disk, in logs, diagnostics or the replicated authority.
+keeps serving the others. The SMB3 mount password is written to a root-only `mount.cifs` credentials file,
+`backup-smb-credentials/<reference>`, that the mount unit names with `credentials=` (systemd
+257 cannot pass a credential to a mount helper), so the share remounts after a reboot;
+retiring or abandoning a receipt deletes that file. The password is not in logs, diagnostics
+or the replicated authority.
 Restore-as-new, replace and test-restore use
 `POST /api/v1/pool/backup/restore` with
 `{command,repository,catalog_point,smb_identity?}`. SMB3 work requires the
@@ -1553,21 +1560,17 @@ locally, exactly as a failed ISO import already was.
   answers `200 {"id": "<id>", "deleted": true}`. The relayed pool-VLAN removal is unchanged for a
   registration the master reports as applied, and `PATCH /api/v1/networks/{id}` is unchanged: a
   failed request record cannot be renamed.
-- `DELETE /api/v1/storage/{id}` is the storage twin and is **new**. Same shape, audit
-  `storage.discard`; `404 no failed storage registration with this ID; an adopted repository is
-  removed with detach` otherwise. A repository a host holds is removed with
-  `POST /api/v1/storage/{id}/detach`, which is unchanged.
-- Both refuse a row whose command a host has since reported as applied, with `409 a host reports this
+- The network discard refuses a row whose command a host has since reported as applied, with `409 a host reports this
   registration as applied, so it is not a failed request record; remove it on the host instead of
   discarding it`. That guard reads the *mirrored command's* status rather than the operation's,
   because a failed operation's row can legitimately become the mirror of a host-reported resource.
-- `GET /api/v1/storage` and `POST /api/v1/storage`: a typed registration that has **failed** now
-  carries `id` set to the Controller's own request-row key `pending-storage-<operation_id>`
-  (previously `""`), which is the handle the discard takes. One that is still queued or dispatched
-  still answers `id: ""` — Core allocates repository IDs and the Controller never mints one — and on
-  success the row keeps Core's allocated ID exactly as before.
-- Audit gains two actions: `network.discard` and `storage.discard`, each with the discarded
-  registration's ID as `resource_id`.
+- `GET /api/v1/storage`: a typed registration the host refused (`failed`) is **not listed**; it is
+  only the Controller's `request_id` replay record. Its error stays in `GET /api/v1/operations`, and
+  a replay of the same `request_id` and body answers the same failed result without a new command.
+  One still queued or dispatched answers `id: ""`; on success the row keeps Core's allocated ID.
+  A late host report that applies the repository lists it under Core's ID. (Superseded 2026-09-30:
+  `DELETE /api/v1/storage/{id}` and the `pending-storage-*` id on failed rows were removed.)
+- Audit gains the action `network.discard`, with the discarded registration's ID as `resource_id`.
 
 **Advisory placement warnings.** `POST /api/v1/vms` may answer its `202` with an optional `warnings`
 array of strings, omitted entirely when empty, and `GET /api/v1/operations` may carry the same array
@@ -4155,7 +4158,9 @@ pool mTLS. A `503` acknowledgement timeout leaves delivery unknown: retry the sa
 filesystem_uuid,exclusive_target}`. Core allocates the repository ID and chooses the iSCSI
 mount path under `/var/lib/nex-storage/<repository-id>`; client input must not supply it. It verifies the
 source as its real QEMU identity, and reports canonical identity, capacity, access, capabilities
-and generation. NFS uses a Core-owned hard NFSv4 mount; ZFS only recognizes an imported mounted
+and generation. For NFS and SMB, the pool master adds each member to `capabilities.eligible_host_ids`
+and sets `capabilities.shared` once that member's verified `member_access` is current, readable, writable,
+QEMU-writable and locking. NFS uses a Core-owned hard NFSv4 mount; ZFS only recognizes an imported mounted
 dataset and its GUID/health, then exposes its original `source.zfs.mount_path` through a
 Core-owned bind alias at `/var/lib/nex-storage/<repository-id>` recorded as `StorageRegistration.path`.
 VM disk references use that alias. Existing-dataset registration never changes ZFS properties and detach removes only the

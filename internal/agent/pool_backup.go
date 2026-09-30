@@ -210,7 +210,7 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
 	if existing, err := GetPoolBackupRepository(s, repo.ID); err == nil {
-		if unsafeBackupRepositoryReplacement(existing, repo) {
+		if unsafeBackupRepositoryReplacement(s, existing, repo) {
 			return protocol.BackupRepository{}, ErrBackupUnavailable
 		}
 		if repo.Kind == protocol.BackupRepoKindNFS {
@@ -323,12 +323,15 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	if existing, ok := state.Repositories[repo.ID]; ok && (unsafeBackupRepositoryReplacement(existing, repo) ||
+	if existing, ok := state.Repositories[repo.ID]; ok && (unsafeBackupRepositoryReplacement(s, existing, repo) ||
 		repo.Kind == protocol.BackupRepoKindNFS && !reflect.DeepEqual(existing.Identity, repo.Identity)) {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
 	if existing, ok := state.Repositories[repo.ID]; ok && repo.Kind == protocol.BackupRepoKindSMB3 &&
 		!samePeerSMBIdentity(existing.SMBIdentity, repo.SMBIdentity) {
+		return protocol.BackupRepository{}, ErrBackupConflict
+	}
+	if existing, ok := state.Repositories[repo.ID]; ok && existing.RemoteIdentity != nil && !reflect.DeepEqual(existing.RemoteIdentity, repo.RemoteIdentity) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	now := time.Now().UTC()
@@ -360,36 +363,53 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 		// A member that misses it is retried by the health loop.
 		poolBackupAuthorityMu.Unlock()
 		locked = false
-		_ = projectBackupCredentialToMembers(context.Background(), s, membership, repo)
+		projectBackupCredentialToMembers(context.Background(), s, membership, repo)
 	}
-	return repo, nil
+	if locked {
+		poolBackupAuthorityMu.Unlock()
+		locked = false
+	}
+	// Record real health now instead of "unknown" until the next periodic pass.
+	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repo = checkBackupRepositoryAccessForStore(probeCtx, s, repo)
+	return repo, savePoolBackupRepositoryAccess(s, repo)
 }
 
-func unsafeBackupRepositoryReplacement(existing, requested protocol.BackupRepository) bool {
-	return existing.Kind != requested.Kind || existing.CredentialRef != requested.CredentialRef ||
+// A repository keeps its credential unless this host can no longer read it (for example the
+// sealing key was lost); then registering the same destination again supplies a new one.
+func unsafeBackupRepositoryReplacement(s *Store, existing, requested protocol.BackupRepository) bool {
+	if existing.CredentialRef != requested.CredentialRef && (!backupCredentialKind(existing.Kind) || credentialReadable(s, existing)) {
+		return true
+	}
+	return existing.Kind != requested.Kind ||
 		!reflect.DeepEqual(existing.Source, requested.Source) ||
 		!reflect.DeepEqual(existing.SMBSource, requested.SMBSource) || !reflect.DeepEqual(existing.S3Source, requested.S3Source) ||
 		!reflect.DeepEqual(existing.SFTPSource, requested.SFTPSource)
 }
 
-func projectBackupCredentialToMembers(ctx context.Context, s *Store, membership protocol.PoolMembership, repo protocol.BackupRepository) error {
-	unavailable := false
+func credentialReadable(s *Store, repo protocol.BackupRepository) bool {
+	_, err := localBackupCredential(s, repo)
+	return err == nil
+}
+
+// projectBackupCredentialToMembers returns the members that did not receive the credential.
+func projectBackupCredentialToMembers(ctx context.Context, s *Store, membership protocol.PoolMembership, repo protocol.BackupRepository) map[string]error {
+	failed := map[string]error{}
 	for _, member := range membership.Members {
 		if member.HostID == s.State.HostID || member.Status != "ready" {
 			continue
 		}
-		if member.PeerOrigin == "" {
-			unavailable = true
-			continue
+		err := ErrBackupUnavailable
+		if member.PeerOrigin != "" {
+			err = deliverPeerBackupCredential(ctx, s, member, repo)
 		}
-		if err := deliverPeerBackupCredential(ctx, s, member, repo); err != nil {
-			unavailable = true
+		if err != nil {
+			log.Printf("backup repository %s credential not delivered to member %s: %v", repo.ID, member.HostID, err)
+			failed[member.HostID] = err
 		}
 	}
-	if unavailable {
-		return ErrBackupUnavailable
-	}
-	return nil
+	return failed
 }
 
 func retireSupersededBackupCredentials(s *Store, repo protocol.BackupRepository) error {
@@ -642,11 +662,12 @@ func TestPoolBackupRepositoryAccess(s *Store, id string) (protocol.BackupReposit
 }
 
 func checkBackupRepositoryAccessForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) protocol.BackupRepository {
-	repo.Health = protocol.BackupRepositoryHealth{}
+	now := time.Now().UTC()
+	repo.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
+	repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
 	if err := probeBackupRepositoryForStore(ctx, s, repo); err != nil {
-		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: time.Now().UTC()}
-	} else {
-		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}
+		repo.Health.Status, repo.Health.Error = "offline", "backup repository health probe failed"
+		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: now}
 	}
 	return repo
 }
@@ -677,11 +698,20 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		var undelivered map[string]error
 		if backupCredentialKind(repo.Kind) && requirePoolAuthorityWritable(s) == nil {
 			if err := retireSupersededBackupCredentials(s, repo); err != nil {
-				return ErrBackupUnavailable
+				// Only this repository is unusable; keep probing the others.
+				now := time.Now().UTC()
+				repo.Health = protocol.BackupRepositoryHealth{Status: "offline", ObservedAt: now,
+					Error: "backup credential is unreadable on this host; register the repository again with its credentials"}
+				repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
+				if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
+					return err
+				}
+				continue
 			}
-			_ = projectBackupCredentialToMembers(ctx, s, membership, repo)
+			undelivered = projectBackupCredentialToMembers(ctx, s, membership, repo)
 		}
 		// Each pass replaces the repository's rows, so ejected members drop out.
 		rows := map[string]protocol.PoolStorageAccess{}
@@ -689,7 +719,11 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			rows[member.HostID] = probeBackupMember(ctx, s, repo, member, timeout)
+			row := probeBackupMember(ctx, s, repo, member, timeout)
+			if err := undelivered[member.HostID]; err != nil && !row.Readable {
+				row.Error = "backup credential not delivered: " + err.Error()
+			}
+			rows[member.HostID] = row
 		}
 		backupMemberAccessMu.Lock()
 		if backupMemberAccess[s.dir] == nil {

@@ -209,7 +209,7 @@ func (b *credentialBroker) offers(host string) []protocol.StorageCredentialOffer
 			delete(b.entries, id)
 			continue
 		}
-		if entry.offer.HostID == host && entry.receipt.Receipt == "" {
+		if entry.offer.HostID == host && entry.receipt.Receipt == "" && !entry.delivered {
 			out = append(out, entry.offer)
 		}
 	}

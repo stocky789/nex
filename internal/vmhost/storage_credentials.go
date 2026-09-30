@@ -20,7 +20,7 @@ import (
 
 const credentialDirectory = "storage-credentials"
 
-// The receipt file holds metadata only; the secret lives solely in the sealed file.
+// The receipt file holds metadata only; the secret lives solely in the private credentials file.
 type storedCredential = protocol.StorageCredentialReceipt
 
 func credentialPath(stateDir, requestID string) string {
@@ -92,37 +92,29 @@ func parseSMBAuthFile(body string) (c protocol.StorageCredentials) {
 	return c
 }
 
-// mountCredentialName binds a sealed credential to the mount units that load it.
-const mountCredentialName = "nex-smb"
-
-// sealMountCredential encrypts a mount.cifs credentials body with systemd-creds (TPM2 when
-// the host has one, the host key otherwise). The plaintext only travels over stdin, and the
-// mount unit decrypts the file itself with LoadCredentialEncrypted=, boot included.
-func sealMountCredential(ctx context.Context, path, body string) error {
-	return SealCredential(ctx, mountCredentialName, path, []byte(body))
-}
-
-// SealCredential writes data to path encrypted by systemd-creds under the credential name.
+// SealCredential writes data to path encrypted by systemd-creds (TPM2 when the host has one,
+// the host key otherwise) under the credential name. The plaintext only travels over stdin.
 func SealCredential(ctx context.Context, name, path string, data []byte) error {
-	sealed, err := runSystemdCreds(ctx, data, "systemd-creds", "--no-ask-password", "encrypt", "--name="+name, "-", "-")
+	sealed, err := runSystemdCreds(ctx, data, "systemd-creds", "encrypt", "--name="+name, "-", "-")
 	if err != nil {
 		return err
 	}
 	return atomicWrite(path, sealed)
 }
 
-func openMountCredential(ctx context.Context, path string) (string, error) {
-	out, err := OpenCredential(ctx, mountCredentialName, path)
-	return string(out), err
-}
-
 // OpenCredential decrypts a file written by SealCredential.
 func OpenCredential(ctx context.Context, name, path string) ([]byte, error) {
-	return runSystemdCreds(ctx, nil, "systemd-creds", "--no-ask-password", "decrypt", "--name="+name, path, "-")
+	return runSystemdCreds(ctx, nil, "systemd-creds", "decrypt", "--name="+name, path, "-")
 }
 
-// materializeMountCredential seals the credential once per receipt. The file is addressed by
-// the receipt; an existing one must decrypt to the same credential, which is how a replayed
+func openMountCredential(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	return string(b), err
+}
+
+// materializeMountCredential writes the mount.cifs credentials file once per receipt: root-only
+// in the private credential directory, because systemd 257 cannot hand a credential to a .mount
+// unit's helper. The file is addressed by the receipt; an existing one must decrypt to the same credential, which is how a replayed
 // handoff with a different secret is refused.
 func materializeMountCredential(stateDir, receipt string, c protocol.StorageCredentials) error {
 	if !storageID.MatchString(receipt) {
@@ -138,16 +130,16 @@ func materializeMountCredential(stateDir, receipt string, c protocol.StorageCred
 	}
 	path := filepath.Join(root, receipt)
 	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0600 {
-		// A file that decrypts to a different credential is a conflicting replay; anything
-		// unreadable is damage, repaired below by sealing again.
-		if sealed, err := openMountCredential(context.Background(), path); err == nil && parseSMBAuthFile(sealed).Secret != "" {
-			if subtle.ConstantTimeCompare([]byte(sealed), []byte(body)) != 1 {
+		// A file holding a different credential is a conflicting replay; anything
+		// unreadable is damage, repaired below by writing again.
+		if existing, err := openMountCredential(path); err == nil && parseSMBAuthFile(existing).Secret != "" {
+			if subtle.ConstantTimeCompare([]byte(existing), []byte(body)) != 1 {
 				return errors.New("storage credential replay conflicts with existing receipt")
 			}
 			return nil
 		}
 	}
-	return sealMountCredential(context.Background(), path, body)
+	return atomicWrite(path, []byte(body))
 }
 
 // SaveStorageCredential is the only path that persists an offered credential. The receipt is
@@ -192,8 +184,8 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 	if err != nil {
 		return empty, err
 	}
-	// The sealed secret lands first: a crash before the receipt leaves only an orphaned
-	// ciphertext, never a receipt without its credential.
+	// The secret lands first: a crash before the receipt leaves only an orphaned
+	// credentials file, never a receipt without its credential.
 	if err = materializeMountCredential(stateDir, id, h.Credentials); err != nil {
 		return empty, err
 	}

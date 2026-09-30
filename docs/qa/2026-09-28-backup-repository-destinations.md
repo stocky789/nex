@@ -120,8 +120,8 @@ prepares it again.
 3. Abrupt crash-durability proof for SFTP and S3 prune, publication and marker writes
    (only in-process fakes and graceful or SIGKILL-at-service checks exist), and
    online-capture cleanup after an interrupted upload.
-4. Real-host boot verification of systemd-creds sealed SMB3 mount credentials (TPM2 and
-   host-key hosts, reboot remount).
+4. Real-host reboot remount of SMB3 mounts using the root-only credentials file, and Core
+   start on a fresh host with the receipt key created on first write.
 5. Mixed-version and Controller-replacement-through-an-active-switch checks are out of
    scope under the no-legacy decision; a same-version replacement remains to be repeated.
 6. Final enabled-build walkthrough of the guide, and live browser review of loading,

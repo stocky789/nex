@@ -71,18 +71,52 @@ func TestPeerBackupCredentialScopeAndPromotion(t *testing.T) {
 		t.Fatal("promotion accepted missing private receipt")
 	}
 
-	// A registration keeps its credential for life; rotation registers a new repository ID.
+	// The master is authoritative: a replacement credential for the same repository is accepted.
 	changed := repo
 	changed.CredentialRef = peerTestBackupCredential(t, master, "credential-2", "register-2", "changed-example-secret")
 	changedProjection, err := exportPeerBackupCredential(master, changed, member.State.HostID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := importPeerBackupCredential(member, changedProjection); !errors.Is(err, ErrBackupConflict) {
+	if err := importPeerBackupCredential(member, changedProjection); err != nil {
 		t.Fatalf("same-ID credential change: %v", err)
 	}
-	if got, err := ResolveBackupCredential(member, repo); err != nil || got.Secret != "private-example-secret" {
-		t.Fatalf("refused change disturbed the registered credential: %v", err)
+}
+
+// After the master loses its sealing key and re-registers the repository, members converge
+// on the new credential and their stale one is retired.
+func TestMemberConvergesOnReplacedBackupCredential(t *testing.T) {
+	lab := newTransferLab(t, 1)
+	master, member := lab.host("master-1"), lab.host("member-1")
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: master.State.PoolID, Name: "Backup",
+		Kind: protocol.BackupRepoKindS3, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backup"}}
+	repo.CredentialRef = peerTestBackupCredential(t, master, "credential-1", "register-1", "old-example-secret")
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed := projectBackupCredentialToMembers(context.Background(), master, membership, repo); len(failed) != 0 {
+		t.Fatal(failed)
+	}
+	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
+		t.Fatal(err)
+	}
+	replaced := repo
+	replaced.CredentialRef = peerTestBackupCredential(t, master, "credential-2", "register-2", "new-example-secret")
+	if failed := projectBackupCredentialToMembers(context.Background(), master, membership, replaced); len(failed) != 0 {
+		t.Fatalf("member refused the replacement: %v", failed)
+	}
+	poolBackupAuthorityMu.Lock()
+	err = adoptPeerBackupRepository(member, BackupRequest{}, replaced, replaced)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		t.Fatalf("member kept the old registration: %v", err)
+	}
+	if got, err := ResolveBackupCredential(member, replaced); err != nil || got.Secret != "new-example-secret" {
+		t.Fatalf("member cannot read the replacement: %v", err)
+	}
+	if _, err := ResolveBackupCredential(member, repo); err == nil {
+		t.Fatal("stale credential was not retired")
 	}
 }
 
@@ -174,8 +208,8 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projectBackupCredentialToMembers(context.Background(), master, membership, saved); err != nil {
-		t.Fatalf("reconnected member did not receive credential: %v", err)
+	if failed := projectBackupCredentialToMembers(context.Background(), master, membership, saved); len(failed) != 0 {
+		t.Fatalf("reconnected member did not receive credential: %v", failed)
 	}
 	if got, err := localBackupCredential(offline, saved); err != nil || got.Credentials.Secret != "private-example-secret" {
 		t.Fatalf("reconnected member lost credential: %v", err)

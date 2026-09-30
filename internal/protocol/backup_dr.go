@@ -55,6 +55,24 @@ func (r ProtectRecoveryPointRequest) Valid() error {
 	return nil
 }
 
+// ForgetRepositoryRequest drops a repository and its recovery-point and run records from the
+// pool; the destination's data is never touched. Confirmation is the repository name and the
+// counts are what the operator was shown, so a catalog that changed since is refused.
+type ForgetRepositoryRequest struct {
+	RepositoryID    string `json:"repository_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
+func (r ForgetRepositoryRequest) Valid() error {
+	if !ValidSnapshotOperationID(r.RepositoryID) || len(r.Confirmation) > 256 ||
+		r.RecoveryPoints < 0 || r.ProtectedPoints < 0 || r.ProtectedPoints > r.RecoveryPoints {
+		return errors.New("forget backup repository request is invalid")
+	}
+	return nil
+}
+
 // TestRestoreRequest restores as a new VM marked for verification and later cleanup.
 type TestRestoreRequest struct {
 	HostID          string `json:"host_id,omitempty"`

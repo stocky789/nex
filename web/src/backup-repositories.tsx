@@ -3,9 +3,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { API, Host } from "./types";
 import { AccessLights, Badge, MiniBar, Section, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
+import { confirmMatches } from "./managed";
 import {
-  backupKinds, backupOpID, repositoryTarget, repositoryHealth, rid,
-  type BackupKind, type BackupMemberAccess, type BackupRepository,
+  backupKinds, backupOpID, loadRecoveryPoints, repositoryTarget, repositoryHealth, rid,
+  type BackupKind, type BackupMemberAccess, type BackupRecoveryPoint, type BackupRepository,
 } from "./backup-types";
 import "./settings.css";
 
@@ -123,6 +124,51 @@ function healthSummary(repo: BackupRepository) {
   </>;
 }
 
+// forgetBody carries the counts the operator was shown; Core refuses if the catalog changed since.
+export const forgetBody = (requestID: string, typed: string, points: BackupRecoveryPoint[]) => ({
+  request_id: requestID, confirmation: typed, recovery_points: points.length, protected_points: points.filter(p => p.protected).length,
+});
+
+function ForgetRepository({ api, poolID, repo, onClose, onDone }: {
+  api: API; poolID: string; repo: BackupRepository; onClose: () => void; onDone: (operationID?: string) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const requestID = useRef("");
+  const [points, setPoints] = useState<BackupRecoveryPoint[] | null>(null);
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  // A changed confirmation or catalog is a different request; an unchanged retry replays.
+  useEffect(() => { requestID.current = rid("bforget"); }, [typed, points]);
+  useEffect(() => {
+    dialog.current?.showModal();
+    loadRecoveryPoints(api, poolID, { repository_id: repo.id }).then(setPoints, e => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+  const protectedCount = points?.filter(p => p.protected).length ?? 0;
+  const submit = async () => {
+    if (!points) return;
+    setBusy(true); setError("");
+    try {
+      const reply = await api<{ operation?: { id?: string } }>(
+        `pools/${encodeURIComponent(poolID)}/backup-repositories/${encodeURIComponent(repo.id)}/forget`, "POST", forgetBody(requestID.current, typed, points));
+      onDone(backupOpID(reply));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="forget-repository-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
+    <div className="section-heading"><h2 id="forget-repository-title">Forget {repo.name}</h2><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
+    <p className="warning">Nex forgets this repository, its recovery points and its run history, and removes its mounts and saved credentials from every host. Nothing is deleted from the destination itself. Register the same destination again and import its recovery points to bring them back.</p>
+    {error && <p className="alert" role="alert">{error}</p>}
+    {!points && !error && <p role="status">Counting recovery points…</p>}
+    {points && <p role="status">{points.length} recovery point{points.length === 1 ? "" : "s"} will be forgotten{protectedCount > 0 ? `, ${protectedCount} of them protected` : ""}.</p>}
+    <label>Type the repository name to confirm<input required autoComplete="off" value={typed} disabled={busy} onChange={e => setTyped(e.target.value)} /><span className="mono">{repo.name}</span></label>
+    <div className="actions">
+      <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+      <button type="button" className="danger" disabled={busy || !points || !confirmMatches(typed, repo.name)} onClick={() => void submit()}>{busy ? "Forgetting…" : "Forget repository"}</button>
+    </div>
+  </dialog>;
+}
+
 export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, unavailable, onNotice }: Props) {
   const [rows, setRows] = useState<BackupRepository[] | null>(null);
   const [error, setError] = useState("");
@@ -131,6 +177,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const [remote, setRemote] = useState(blankRemote);
   const [working, setWorking] = useState("");
   const [createUncertain, setCreateUncertain] = useState(false);
+  const [forgetting, setForgetting] = useState<BackupRepository | null>(null);
   const requests = useRef<Record<string, string>>({});
   const createID = useRef("");
   const credentialReceipt = useRef("");
@@ -164,6 +211,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     setRows(null);
     setError("");
     setForm(false);
+    setForgetting(null);
     setCreateUncertain(false);
     requests.current = {};
     createID.current = "";
@@ -293,7 +341,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     <button type="button" className="sm primary" disabled={blocked || form || Boolean(working)} title={createWhy || undefined} onClick={() => setForm(true)}>
       <Icon kind="backup" />Create
     </button>
-    <button type="button" className="sm" onClick={() => { location.hash = "/backups?flow=create-policy"; }}>Policies</button>
+    <button type="button" className="sm" onClick={() => { location.hash = "/backups?flow=create-policy"; }}>Backup jobs</button>
   </>}>
     {error && <p className="why" role="alert">{error}</p>}
     {form && <section className="panel form-panel" aria-label="Create backup repository">
@@ -356,9 +404,13 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
             <button type="button" className="sm" disabled={blocked || Boolean(working)} onClick={() => void onImport(repo)}>
               {working === `import-${repo.id}` ? "Importing…" : "Import points"}
             </button>
+            <button type="button" className="sm danger" disabled={blocked || Boolean(working)} onClick={() => setForgetting(repo)}>Forget</button>
           </td>
         </tr>)}
       </tbody>
     </table></div> : null}
+    {/* Forget is queued (202), so the first refetch usually still lists the repository; refetch again once Core has had time to drop it. */}
+    {forgetting && <ForgetRepository api={api} poolID={poolID} repo={forgetting} onClose={() => setForgetting(null)}
+      onDone={operationID => { onNotice(`${forgetting.name}: forget requested`, operationID); setForgetting(null); void load(); window.setTimeout(() => void load(), 3000); }} />}
   </Section>;
 }

@@ -14,13 +14,13 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// backupSMBCredentialRoot holds one systemd-creds encrypted file per credential reference. The
+// backupSMBCredentialRoot holds one root-only mount.cifs credentials file per credential reference. The
 // mount unit decrypts it itself, so the repository remounts after a reboot without Core.
 var backupSMBCredentialRoot = "/var/lib/nex-core-agent/backup-smb-credentials"
 
 var backupSMBPrepareMu sync.Mutex
 
-// RemoveBackupSMBCredential deletes the sealed mount credential of a credential reference.
+// RemoveBackupSMBCredential deletes the mount credentials file of a credential reference.
 func RemoveBackupSMBCredential(reference string) error {
 	if !protocol.ValidSnapshotOperationID(reference) {
 		return nil
@@ -31,8 +31,8 @@ func RemoveBackupSMBCredential(reference string) error {
 	return nil
 }
 
-// PrepareBackupRepositorySMB seals the Core-resolved credential with systemd-creds before the
-// CIFS mount unit that loads it is made; the plaintext never reaches disk.
+// PrepareBackupRepositorySMB writes the Core-resolved credential to a root-only file before the
+// CIFS mount unit that names it is made.
 func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupRepository, credentials protocol.StorageCredentials) (protocol.BackupRepository, error) {
 	if repo.Kind != protocol.BackupRepoKindSMB3 || repo.Valid() != nil || repo.CredentialRef == "" || !protocol.ValidSnapshotOperationID(repo.CredentialRef) ||
 		credentials.Username == "" || credentials.Secret == "" || !protocol.ValidSMBDomain(credentials.Domain) || strings.ContainsAny(credentials.Username+credentials.Secret, "\x00\r\n") {
@@ -68,7 +68,7 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 	}
 	// A reference never changes its secret, so a mount already using the file keeps it.
 	if _, err := os.Lstat(path); !mounted || err != nil {
-		if err := sealMountCredential(ctx, path, body); err != nil {
+		if err := atomicWrite(path, []byte(body)); err != nil {
 			return protocol.BackupRepository{}, err
 		}
 	}
@@ -76,7 +76,7 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 }
 
 func unitHasSMBCredential(unit []byte, credentialPath string) bool {
-	return strings.Contains(string(unit), "\nLoadCredentialEncrypted="+mountCredentialName+":"+credentialPath+"\n")
+	return strings.Contains(string(unit), ",credentials="+credentialPath+",")
 }
 
 // probeBackupFilesystemPublication refuses SMB mounts that cannot perform the

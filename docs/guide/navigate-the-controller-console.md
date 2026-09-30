@@ -43,7 +43,7 @@ flows are available in matching development builds.
      **Host access**, **VMs**, **Status** and **Actions**. The **VMs** count links to the VM list
      filtered to that network (`#/vms?network=<name>`).
    - **Backups** (`#/backups`) — recovery points with VM/repository filters, **Back up now**,
-     **Restore as new**, **Replace**, **Protect**, **Test restore**, and **Policies**.
+     **Restore as new**, **Replace**, **Protect**, **Test restore** and **Repositories**; **Backup jobs** sit above them on the same page, each expanding to its VMs.
      covers schedules and retention; test-restore recording remains gated. Register destinations under
      **Settings** → **Backup repositories**.
    - Pinned at the bottom: **Tasks** (`#/tasks`), **Events** (`#/events`) and **Settings**

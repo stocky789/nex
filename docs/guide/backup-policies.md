@@ -1,4 +1,4 @@
-# Set up backup policies and schedules
+# Set up backup jobs and schedules
 
 ## Status
 
@@ -23,8 +23,8 @@ before relying on a policy.
 ## Steps
 
 1. Choose the pool in the top-bar scope menu.
-2. Open **Backups** → **Policies**, or select **Create policy** from Recovery points.
-3. **Coverage:** name the policy, choose the repository and the VMs to include.
+2. Open **Backups** → **Backup jobs** and select **Create backup job**. (Older wording called these "policies"; the API and Core still do.)
+3. **Coverage:** name the backup job, choose the repository and the VMs to include.
    If Core reports the repository offline or its health is unknown, review the
    warning and correct access before relying on a scheduled run. Saving does not
    select another destination.
@@ -35,13 +35,13 @@ before relying on a policy.
    Keep-latest counts only points that are not protected, restoring or newer than the
    age window, so protected, in-use and recent points stay in addition to the newest
    keep-latest. There is no retention preview, because a new policy has created no points yet.
-5. **Review:** confirm coverage, schedule and retention, then **Save policy**.
+5. **Review:** confirm coverage, schedule and retention, then **Save backup job**.
 6. Use **Pause** / **Resume** on a row to stop or allow future dispatches without deleting
    the policy. **Run now** starts one identified run for a listed VM without changing the
    next scheduled occurrence.
 7. To move a policy to another registered repository, select **Change repository**
    on its row. Choose **New repository**, review the old and new repository names
-   and health, check **I confirm this policy should use ...**, then select
+   and health, check **I confirm this backup job should use ...**, then select
    **Save repository change**. Verify the updated policy before starting a new
    backup. New one-off jobs require their own repository selection; existing
    jobs are not switched automatically. The update uses the policy revision
@@ -49,7 +49,7 @@ before relying on a policy.
 
 ## Expected result
 
-The Policies table shows name, VM count, schedule, next dispatch and enabled/paused.
+Backups is one page: **Backup jobs** on top, **Recovery points** below. Select a job (or its arrow) to expand the VMs inside it; each VM shows its last result and last successful backup, with **Run now** and **View points** (filters Recovery points to that VM). Jobs with a failed VM open automatically, and the Failing and Paused chips filter the list. The Backup jobs table shows name, VM count, schedule, next run and status: green **Enabled**, orange **Paused**, and a red **Failed · N VMs** badge whenever the latest run of any VM in the job failed, was missed or needs attention (a later successful run clears it). Time zone is a list that starts on this browser's zone; start time uses the browser's time picker.
 Core records the policy under `pool-backup-policies.json` with a stable schedule ID and
 revision. Due occurrences get a unique occurrence ID before dispatch; missed slots after
 scheduler downtime are recorded without a catch-up storm. A fresh Controller adopts the

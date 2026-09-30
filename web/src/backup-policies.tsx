@@ -2,7 +2,8 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import type { API, Data, Operation, Pool } from "./types";
 import { Panel, Section, Badge, date } from "./ui";
-import { backupOpID, repositoryHealth, stableBody, type BackupRepository } from "./backup-types";
+import { Icon } from "./icons";
+import { backupOpID, repositoryHealth, stableBody, type BackupRepository, type BackupRun } from "./backup-types";
 
 export type BackupPolicy = {
   id: string;
@@ -25,12 +26,12 @@ export type BackupPolicy = {
 };
 
 type Props = {
-  active: boolean;
   api: API;
   data: Data;
   pool: Pool;
   repos: BackupRepository[];
   policies: BackupPolicy[] | null;
+  runs: BackupRun[] | null;
   busy: boolean;
   unavailable: boolean;
   working: string;
@@ -41,6 +42,7 @@ type Props = {
   reload: () => Promise<void>;
   requestID: (key: string, prefix: string) => string;
   clearRequest: (key: string) => void;
+  onViewPoints: (vmID: string) => void;
   openCreate: boolean;
   onOpenCreate: () => void;
   onCloseCreate: () => void;
@@ -49,6 +51,8 @@ type Props = {
 type Step = 1 | 2 | 3;
 type SwitchDraft = { policy: BackupPolicy; target: string; targetRepo: BackupRepository | null; confirmed: boolean; uncertain: boolean; taskStatus: string };
 
+// The browser's own zone list; UTC is added because some browsers omit it.
+const timeZones = (() => { const zones = Intl.supportedValuesOf("timeZone"); return zones.includes("UTC") ? zones : ["UTC", ...zones]; })();
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function repositoryChangeBody(policy: BackupPolicy, repositoryID: string, requestID: string) {
@@ -74,8 +78,29 @@ export function requestRepositoryChange(api: API, poolID: string, policyID: stri
   return api<{ operation?: { id?: string; status?: string } }>(`pools/${encodeURIComponent(poolID)}/backup-policies/${encodeURIComponent(policyID)}`, "PUT", body);
 }
 
+const failedStatuses = ["failed", "missed", "needs_attention"];
+export type VMResult = { last: BackupRun; lastSuccess?: BackupRun };
+// jobVMResults keys each VM of one job to its latest run and its latest successful run.
+export function jobVMResults(policyID: string, runs: BackupRun[] | null) {
+  const results = new Map<string, VMResult>();
+  for (const run of runs || []) {
+    if (!run.vm_id || run.policy_id !== policyID) continue;
+    const cur = results.get(run.vm_id);
+    const last = !cur || run.updated_at > cur.last.updated_at ? run : cur.last;
+    const lastSuccess = run.status === "succeeded" && (!cur?.lastSuccess || run.updated_at > cur.lastSuccess.updated_at) ? run : cur?.lastSuccess;
+    results.set(run.vm_id, { last, lastSuccess });
+  }
+  return results;
+}
+// failedVMs lists the VMs whose latest run for this job failed, was missed or needs attention;
+// a later successful run clears it.
+export function failedVMs(policy: { id: string; vm_ids: string[] }, runs: BackupRun[] | null) {
+  const results = jobVMResults(policy.id, runs);
+  return (policy.vm_ids || []).filter(vmID => failedStatuses.includes(results.get(vmID)?.last.status ?? ""));
+}
+
 export function BackupPolicies({
-  active, api, data, pool, repos, policies, busy, unavailable, working, setWorking, error,
+  api, data, pool, repos, policies, runs, onViewPoints, busy, unavailable, working, setWorking, error,
   onNotice, onError, reload, requestID, clearRequest, openCreate, onOpenCreate, onCloseCreate,
 }: Props) {
   const [step, setStep] = useState<Step>(1);
@@ -88,7 +113,8 @@ export function BackupPolicies({
   const [frequency, setFrequency] = useState<"daily" | "weekly">("daily");
   const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [keepLatest, setKeepLatest] = useState(7);
-  const [runVM, setRunVM] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [jobFilter, setJobFilter] = useState<"all" | "failing" | "paused">("all");
   const [uncertain, setUncertain] = useState(false);
   const [switchDraft, setSwitchDraft] = useState<SwitchDraft | null>(null);
   const patchSwitch = (values: Partial<SwitchDraft>) => setSwitchDraft(cur => cur && { ...cur, ...values });
@@ -152,7 +178,7 @@ export function BackupPolicies({
       });
       clearRequest(key);
       setUncertain(false);
-      onNotice(`${name.trim()}: policy save requested`, backupOpID(reply));
+      onNotice(`${name.trim()}: backup job save requested`, backupOpID(reply));
       setStep(1);
       onCloseCreate();
       await reload().catch(err => onError(err instanceof Error ? err.message : String(err)));
@@ -220,7 +246,7 @@ export function BackupPolicies({
     if (!switching || !newSwitchRepo || newSwitchRepo.id === switching.repository_id || !switchConfirmed || working || unavailable || busy) return;
     const current = policies?.find(p => p.id === switching.id);
     if (!switchUncertain && (!current || current.revision !== switching.revision || current.repository_id !== switching.repository_id)) {
-      onError("This policy changed since you opened it. Close and reopen the change to review its current settings.");
+      onError("This backup job changed since you opened it. Close and reopen the change to review its current settings.");
       return;
     }
     const key = `repository-${switching.id}`;
@@ -268,7 +294,7 @@ export function BackupPolicies({
         clearRequest(key);
         delete pendingSwitch.current[key];
         setSwitchDraft(null);
-        onError(task.error || "Policy change failed. Reload the policy before trying again.");
+        onError(task.error || "Backup job change failed. Reload the backup job before trying again.");
         await reload();
       } else patchSwitch({ taskStatus: `Task ${task.status}. Keep this panel open or retry the exact request.` });
     } catch (err) {
@@ -294,44 +320,85 @@ export function BackupPolicies({
     setWeekdays(cur => cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d].sort());
   };
 
-  if (!active) return null;
+  const failingCount = (policies || []).filter(p => failedVMs(p, runs).length > 0).length;
+  const pausedCount = (policies || []).filter(p => p.paused).length;
+  const shown = (policies || []).filter(p => jobFilter === "all" || (jobFilter === "failing" ? failedVMs(p, runs).length > 0 : p.paused));
 
   return <>
-    <Section icon="backup" title="Policies" count={policies?.length ?? 0} actions={<>
-      <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={onOpenCreate}>Create policy</button>
+    <Section icon="backup" title="Backup jobs" count={policies?.length ?? 0} actions={<>
+      <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={onOpenCreate}>Create backup job</button>
     </>}>
       {error && <p className="why" role="alert">{error}</p>}
       {policies === null && !error ? <p className="muted">Loading…</p> : null}
-      {policies && policies.length === 0 ? <p className="empty">No backup policies.</p> : null}
-      {policies && policies.length > 0 ? <div className="table-scroll"><table className="records">
-        <thead><tr><th>Name</th><th>VMs</th><th>Schedule</th><th>Next</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
-        <tbody>
-          {policies.map(p => {
+      {policies && policies.length === 0 ? <div className="empty-state">
+        <strong>No backup jobs yet</strong>
+        <p>A backup job picks VMs, a repository and a schedule, then keeps the newest recovery points for you.</p>
+        <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={onOpenCreate}>Create backup job</button>
+      </div> : null}
+      {policies && policies.length > 0 ? <>
+        <div className="job-toolbar">
+          <div className="chips" role="group" aria-label="Filter backup jobs">
+            {([["all", "All", policies.length], ["failing", "Failing", failingCount], ["paused", "Paused", pausedCount]] as const).map(([key, label, n]) =>
+              <button key={key} type="button" className="chip" aria-pressed={jobFilter === key} disabled={key !== "all" && n === 0} onClick={() => setJobFilter(key)}>{label}<span className="count">{n}</span></button>)}
+          </div>
+          <span className="job-toolbar-end">
+            <button type="button" className="link" onClick={() => setExpanded(Object.fromEntries(policies.map(p => [p.id, true])))}>Expand all</button>
+            <button type="button" className="link" onClick={() => setExpanded(Object.fromEntries(policies.map(p => [p.id, false])))}>Collapse all</button>
+          </span>
+        </div>
+        {shown.length === 0 ? <p className="empty">No {jobFilter} backup jobs.</p> : <div className="table-scroll"><table className="records jobs">
+          <thead><tr><th>Name</th><th>Schedule</th><th>Next run</th><th>Last result</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          {shown.map(p => {
             const policyRepository = repos.find(r => r.id === p.repository_id);
             const repoName = policyRepository?.name || p.repository_id;
             const health = policyRepository ? repositoryHealth(policyRepository) : "unknown";
-            return <tr key={p.id}>
-              <td><strong>{p.name}</strong><small className="muted">{repoName} · {p.capture_mode}</small>{health !== "online" && <small><Badge value={health} label={`Repository ${health}`} /> · Last check: {date(policyRepository?.health?.observed_at)}{health === "offline" && policyRepository?.health?.error ? ` · ${policyRepository.health.error}` : ""}</small>}</td>
-              <td>{p.vm_ids?.length || 0}</td>
-              <td className="muted">{p.rule?.frequency} {String(p.rule?.hour).padStart(2, "0")}:{String(p.rule?.minute).padStart(2, "0")} {p.time_zone}</td>
-              <td className="muted">{p.next_dispatch_at ? date(p.next_dispatch_at) : "—"}</td>
-              <td>{p.paused ? <Badge value="paused" /> : p.enabled ? <Badge value="enabled" /> : <Badge value="disabled" />}</td>
-              <td className="row-actions">
-                <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy || !p.revision || !repos.some(r => r.id !== p.repository_id)} onClick={() => { setSwitchDraft({ policy: p, target: "", targetRepo: null, confirmed: false, uncertain: false, taskStatus: "" }); onError(""); }}>Change repository</button>
-                <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => pause(p, !p.paused)}>
-                  {pendingPause.current[`pause-${p.id}`] ? "Retry request" : p.paused ? "Resume" : "Pause"}
-                </button>
-                {(p.vm_ids || []).length > 0 && <>
-                  <select aria-label={`VM for ${p.name} Run now`} value={p.vm_ids.includes(runVM[p.id]) ? runVM[p.id] : p.vm_ids[0]} onChange={e => setRunVM(cur => ({ ...cur, [p.id]: e.target.value }))} disabled={Boolean(working) || unavailable || busy}>
-                    {p.vm_ids.map(vmID => <option key={vmID} value={vmID}>{data.vms.find(v => v.id === vmID)?.name || vmID}</option>)}
-                  </select>
-                  <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => runNow(p, p.vm_ids.includes(runVM[p.id]) ? runVM[p.id] : p.vm_ids[0])}>Run now</button>
-                </>}
-              </td>
-            </tr>;
+            const results = jobVMResults(p.id, runs);
+            const failed = failedVMs(p, runs);
+            const open = expanded[p.id] ?? failed.length > 0;
+            const vmIDs = p.vm_ids || [];
+            const ran = vmIDs.filter(id => results.has(id)).length;
+            const toggle = () => setExpanded(cur => ({ ...cur, [p.id]: !open }));
+            return <tbody key={p.id} className={`job${open ? " open" : ""}`}>
+              <tr className="job-row" onClick={toggle}>
+                <td>
+                  <div className="job-name">
+                    <button type="button" className="twisty" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${p.name}`} onClick={e => { e.stopPropagation(); toggle(); }}><Icon kind="chevron" size={16} /></button>
+                    <span><strong>{p.name}</strong><small className="muted">{vmIDs.length} VM{vmIDs.length === 1 ? "" : "s"} · {repoName} · {p.capture_mode}</small>
+                      {health !== "online" && <small><Badge value={health} label={`Repository ${health}`} /> · Last check: {date(policyRepository?.health?.observed_at)}{health === "offline" && policyRepository?.health?.error ? ` · ${policyRepository.health.error}` : ""}</small>}</span>
+                  </div>
+                </td>
+                <td className="muted">{p.rule?.frequency} {String(p.rule?.hour).padStart(2, "0")}:{String(p.rule?.minute).padStart(2, "0")} {p.time_zone}</td>
+                <td className="muted">{p.next_dispatch_at ? date(p.next_dispatch_at) : "—"}</td>
+                <td className="muted">{runs === null ? "Unknown" : ran ? `${vmIDs.filter(id => results.get(id)?.last.status === "succeeded").length} of ${vmIDs.length} succeeded` : "No runs yet"}</td>
+                <td>{p.paused ? <Badge value="paused" /> : p.enabled ? <Badge value="enabled" /> : <Badge value="disabled" />}{failed.length > 0 && <>{" "}<Badge value="failed" label={`Failed · ${failed.length} VM${failed.length === 1 ? "" : "s"}`} /></>}</td>
+                <td><div className="row-actions inline">
+                  <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy || !p.revision || !repos.some(r => r.id !== p.repository_id)} onClick={e => { e.stopPropagation(); setSwitchDraft({ policy: p, target: "", targetRepo: null, confirmed: false, uncertain: false, taskStatus: "" }); onError(""); }}>Change repository</button>
+                  <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={e => { e.stopPropagation(); void pause(p, !p.paused); }}>
+                    {pendingPause.current[`pause-${p.id}`] ? "Retry request" : p.paused ? "Resume" : "Pause"}
+                  </button>
+                </div></td>
+              </tr>
+              {open && vmIDs.map(vmID => {
+                const result = results.get(vmID);
+                const vm = data.vms.find(v => v.id === vmID);
+                return <tr key={vmID} className="job-vm">
+                  <td><div className="job-vm-name">
+                    {vm ? <a href={`#/vms/${encodeURIComponent(vmID)}`}>{vm.name}</a> : <span className="muted">VM {vmID.slice(0, 8)}</span>}
+                  </div></td>
+                  <td className="muted" colSpan={2}>{result?.lastSuccess ? `Last backup ${date(result.lastSuccess.updated_at)}` : "Never backed up by this job"}</td>
+                  <td>{result ? <Badge value={failedStatuses.includes(result.last.status) ? "failed" : result.last.status} label={failedStatuses.includes(result.last.status) ? "Failed" : undefined} /> : <span className="muted">No runs yet</span>}
+                    {result && failedStatuses.includes(result.last.status) && result.last.error ? <small className="muted job-error">{result.last.error}</small> : null}</td>
+                  <td />
+                  <td><div className="row-actions inline">
+                    <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => void runNow(p, vmID)}>{working === `run-${p.id}-${vmID}` ? "Starting…" : "Run now"}</button>
+                    <button type="button" className="sm" onClick={() => onViewPoints(vmID)}>View points</button>
+                  </div></td>
+                </tr>;
+              })}
+            </tbody>;
           })}
-        </tbody>
-      </table></div> : null}
+        </table></div>}
+      </> : null}
     </Section>
 
     {switching && <Panel icon="backup" title="Change repository" onClose={closeSwitch}>
@@ -340,7 +407,7 @@ export function BackupPolicies({
         {switchUncertain && <><p className="why" role="status">The previous reply was uncertain. Keep this panel open to check its task or retry the exact request.</p><button type="button" className="sm" disabled={Boolean(working)} onClick={() => void checkSwitchTask()}>Check task status</button></>}
         {switchTaskStatus && <p className="why" role="status">{switchTaskStatus}</p>}
         <dl className="kv">
-          <dt>Policy</dt><dd>{switching.name}</dd>
+          <dt>Backup job</dt><dd>{switching.name}</dd>
           <dt>Current repository</dt><dd>{oldSwitchRepo?.name || switching.repository_id} · {oldSwitchRepo ? repositoryHealth(oldSwitchRepo) : "unknown"} · Last check: {date(oldSwitchRepo?.health?.observed_at)}</dd>
           <dt>New repository</dt><dd>{newSwitchRepo ? `${newSwitchRepo.name} · ${repositoryHealth(newSwitchRepo)} · Last check: ${date(newSwitchRepo.health?.observed_at)}` : "Select a repository"}</dd>
         </dl>
@@ -349,7 +416,7 @@ export function BackupPolicies({
           {repos.filter(r => r.id !== switching.repository_id).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select></label>
         {newSwitchRepo && repositoryHealth(newSwitchRepo) !== "online" && <p className="why" role="status">{newSwitchRepo.name} is {repositoryHealth(newSwitchRepo) === "offline" ? "offline" : "not confirmed online"}. Core will check access before a backup runs.</p>}
-        <label className="check" style={{ justifyContent: "flex-start" }}><input type="checkbox" required checked={switchConfirmed} disabled={!newSwitchRepo || switchUncertain} onChange={e => patchSwitch({ confirmed: e.target.checked })} />I confirm this policy should use {newSwitchRepo?.name || "the selected repository"}</label>
+        <label className="check" style={{ justifyContent: "flex-start" }}><input type="checkbox" required checked={switchConfirmed} disabled={!newSwitchRepo || switchUncertain} onChange={e => patchSwitch({ confirmed: e.target.checked })} />I confirm this backup job should use {newSwitchRepo?.name || "the selected repository"}</label>
         <div className="actions">
           <button type="submit" className="sm primary" disabled={!newSwitchRepo || !switchConfirmed || Boolean(working) || unavailable || busy}>Save repository change</button>
           <button type="button" className="sm" disabled={Boolean(working)} onClick={closeSwitch}>Cancel</button>
@@ -357,10 +424,10 @@ export function BackupPolicies({
       </form>
     </Panel>}
 
-    {openCreate ? <Panel icon="backup" title="Create policy" onClose={close} wide>
+    {openCreate ? <Panel icon="backup" title="Create backup job" onClose={close} wide>
       <form className="stack" onSubmit={submit}>
         {error && <p className="why" role="alert">{error}</p>}
-        {uncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact policy request.</p>}
+        {uncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact backup job request.</p>}
         <p className="muted">Step {step} of 3</p>
         {step === 1 ? <>
           <label>Name<input value={name} disabled={uncertain} onChange={e => change(() => setName(e.target.value))} required /></label>
@@ -370,14 +437,16 @@ export function BackupPolicies({
           </select></label>
           <fieldset>
             <legend>VMs</legend>
-            {poolVMs.map(v => <label key={v.id} className="check">
+            {poolVMs.map(v => <label key={v.id} className="check" style={{ justifyContent: "flex-start", alignItems: "center" }}>
               <input type="checkbox" checked={vms.includes(v.id)} disabled={uncertain} onChange={() => change(() => toggleVM(v.id))} />{v.name}
             </label>)}
             {!poolVMs.length ? <p className="muted">No VMs in this pool.</p> : null}
           </fieldset>
         </> : null}
         {step === 2 ? <>
-          <label>Time zone<input value={tz} disabled={uncertain} onChange={e => change(() => setTZ(e.target.value))} required /></label>
+          <label>Time zone<select value={tz} disabled={uncertain} onChange={e => change(() => setTZ(e.target.value))} required>
+            {(timeZones.includes(tz) ? timeZones : [tz, ...timeZones]).map(z => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
+          </select></label>
           <label>Frequency<select value={frequency} disabled={uncertain} onChange={e => change(() => setFrequency(e.target.value as "daily" | "weekly"))}>
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
@@ -389,11 +458,13 @@ export function BackupPolicies({
             </label>)}
           </fieldset> : null}
           <div className="vm-fields">
-            <label>Hour<input type="number" min={0} max={23} value={hour} disabled={uncertain} onChange={e => change(() => setHour(Number(e.target.value)))} /></label>
-            <label>Minute<input type="number" min={0} max={59} value={minute} disabled={uncertain} onChange={e => change(() => setMinute(Number(e.target.value)))} /></label>
+            <label>Start time<input type="time" required value={`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`} disabled={uncertain} onChange={e => change(() => {
+              const [h, m] = e.target.value.split(":").map(Number);
+              if (Number.isInteger(h) && Number.isInteger(m)) { setHour(h); setMinute(m); }
+            })} /></label>
             <label>Keep latest<input type="number" min={1} max={365} value={keepLatest} disabled={uncertain} onChange={e => change(() => setKeepLatest(Number(e.target.value)))} /></label>
           </div>
-          <p className="muted">Each backup keeps this policy's newest {keepLatest} recovery points per VM and removes its older ones. Only points this policy created are ever removed; manual backups and other policies' points are never pruned. Recovery points are also kept if they are protected, restoring, or newer than the age window; those do not count toward the {keepLatest}.</p>
+          <p className="muted">Each backup keeps this backup job's newest {keepLatest} recovery points per VM and removes its older ones. Only points this backup job created are ever removed; manual backups and other backup jobs' points are never pruned. Recovery points are also kept if they are protected, restoring, or newer than the age window; those do not count toward the {keepLatest}.</p>
           {frequency === "weekly" && !weekdays.length ? <p className="why" role="alert">Select at least one weekday.</p> : null}
         </> : null}
         {step === 3 ? <>
@@ -407,11 +478,11 @@ export function BackupPolicies({
           </dl>
           {blocker ? <p className="why" role="alert">{blocker}</p> : null}
         </> : null}
-        {(step === 1 || step === 3) && selectedRepository && selectedHealth !== "online" ? <p className="why" role="status">{selectedRepository.name} is {selectedHealth === "offline" ? "offline" : "not confirmed online"}. Last check: {date(selectedRepository.health?.observed_at)}. Core will check it before a backup runs; this policy will keep the selected repository.</p> : null}
-        <div className="row-actions">
+        {(step === 1 || step === 3) && selectedRepository && selectedHealth !== "online" ? <p className="why" role="status">{selectedRepository.name} is {selectedHealth === "offline" ? "offline" : "not confirmed online"}. Last check: {date(selectedRepository.health?.observed_at)}. Core will check it before a backup runs; this backup job will keep the selected repository.</p> : null}
+        <div className="actions">
           {step > 1 ? <button type="button" className="sm" disabled={Boolean(working)} onClick={() => setStep(s => (s - 1) as Step)}>Back</button> : null}
           {step < 3 ? <button type="button" className="sm primary" disabled={(step === 1 && (!name.trim() || !vms.length || !repo)) || (step === 2 && Boolean(blocker))} onClick={() => setStep(s => (s + 1) as Step)}>Next</button> : null}
-          {step === 3 ? <button type="submit" className="sm primary" disabled={Boolean(blocker) || Boolean(working)}>Save policy</button> : null}
+          {step === 3 ? <button type="submit" className="sm primary" disabled={Boolean(blocker) || Boolean(working)}>Save backup job</button> : null}
           <button type="button" className="sm" disabled={Boolean(working)} onClick={close}>Cancel</button>
         </div>
       </form>

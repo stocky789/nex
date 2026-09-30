@@ -47,6 +47,7 @@
 <li><a href="#peerObserveZFSAccess">GET /api/v1/pool/zfs-provision/{repository_id}/access</a></li>
 <li><a href="#peerSubmitCatalogBoundRestore">POST /api/v1/pool/backup/restore</a></li>
 <li><a href="#peerDeliverBackupCredential">POST /api/v1/pool/backup/credential</a></li>
+<li><a href="#peerForgetBackupRepository">POST /api/v1/pool/backup/forget</a></li>
 <li><a href="#peerProbeBackupRepositoryAccess">POST /api/v1/pool/backup/access</a></li>
 <li><a href="#peerPullBackupCredentials">GET /api/v1/pool/backup/credentials</a></li>
 <li><a href="#peerCheckS3BackupCapability">POST /api/v1/pool/backup/capability/s3</a></li>
@@ -2785,6 +2786,55 @@
     },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;Invalid scope, unavailable local state or conflicting receipt/material.&quot;
+    }
+  }
+}</pre></details></section>
+<section id="peerForgetBackupRepository"><h2>POST <code>/api/v1/pool/backup/forget</code></h2>
+<p>Forget a backup repository on a member</p><p>The authenticated current pool master tells a ready member to drop its record, sealed credential and mount for a repository the pool has forgotten. Body is {&quot;repository_id&quot;}, limited to 4 KiB. Idempotent: an unknown repository succeeds. The master sends this best effort after it has forgotten the repository and sends it again whenever it is asked to forget an already-forgotten repository ID.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;peerForgetBackupRepository&quot;,
+  &quot;summary&quot;: &quot;Forget a backup repository on a member&quot;,
+  &quot;description&quot;: &quot;The authenticated current pool master tells a ready member to drop its record, sealed credential and mount for a repository the pool has forgotten. Body is {\&quot;repository_id\&quot;}, limited to 4 KiB. Idempotent: an unknown repository succeeds. The master sends this best effort after it has forgotten the repository and sends it again whenever it is asked to forget an already-forgotten repository ID.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;PoolMasterCertificate&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;repository_id&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;repository_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;204&quot;: {
+      &quot;description&quot;: &quot;Repository forgotten on the member, or unknown to it.&quot;
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Caller is not the authenticated current pool master.&quot;
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The host is not a pool member, or its mount or credential could not be removed; retry.&quot;
     }
   }
 }</pre></details></section>

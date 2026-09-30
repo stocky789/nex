@@ -501,6 +501,9 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	if err != nil || saved.RemoteIdentity == nil || saved.MountPath != "" {
 		t.Fatalf("save: %#v %v", saved, err)
 	}
+	if listed, err := ListPoolBackupRepositories(s); err != nil || len(listed) != 1 || listed[0].Health.Status != "online" {
+		t.Fatalf("health right after registration: %#v %v", listed, err)
+	}
 	backend, err := openBackupRepositoryStorage(s, saved)
 	if err != nil || backend.Verify(context.Background()) != nil {
 		t.Fatalf("open: %v", err)
@@ -1478,5 +1481,79 @@ func TestS3ProtectsMaximumLengthPointID(t *testing.T) {
 	}
 	if protected, err := b.Protected(ctx, manifest.RecoveryPointID); err != nil || !protected {
 		t.Fatalf("maximum-length marker unreadable: %t %v", protected, err)
+	}
+}
+
+// A repository whose credential cannot be read (the sealing key was lost) is reported on its
+// own, the others keep being probed, and registering the same repository again recovers it.
+func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *testing.T) {
+	s := seedBackupMaster(t)
+	server := httptest.NewTLSServer(&fakeS3{objects: map[string][]byte{}})
+	t.Cleanup(server.Close)
+	previous := newBackupS3Client
+	newBackupS3Client = func(options s3.Options) *s3.Client {
+		options.HTTPClient = server.Client()
+		return s3.New(options)
+	}
+	t.Cleanup(func() { newBackupS3Client = previous })
+	register := func(id, prefix, request string) protocol.BackupRepository {
+		t.Helper()
+		receipt, err := saveCredentialHandoff(s, protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{
+			RequestID: "cred-" + request, RegistrationRequestID: "backup-credential:s3:" + request,
+			PoolID: s.State.PoolID, HostID: s.State.HostID, RepositoryID: id, ExpiresAt: time.Now().Add(time.Minute),
+		}, Credentials: protocol.StorageCredentials{Username: "key", Secret: "secret"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := protocol.BackupRepository{ID: id, PoolID: s.State.PoolID, Name: id, Kind: protocol.BackupRepoKindS3,
+			S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: prefix}, CredentialRef: receipt.Receipt}
+		prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, request)
+		if err != nil {
+			t.Fatalf("prepare %s: %v", id, err)
+		}
+		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+		if err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+		return saved
+	}
+	broken := register("a-broken", "one", "register-1")
+	// Losing the key makes the sealed receipt unreadable; the next receipt gets a new key.
+	if err := os.Remove(filepath.Join(s.dir, "backup-credential-key", "key.cred")); err != nil {
+		t.Fatal(err)
+	}
+	good := register("b-good", "two", "register-2")
+	health := func(id string) protocol.BackupRepositoryHealth {
+		t.Helper()
+		repo, err := GetPoolBackupRepository(s, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repo.Health
+	}
+	if err := probePoolBackupRepositories(context.Background(), s, time.Second); err != nil {
+		t.Fatalf("one unreadable credential aborted the probe pass: %v", err)
+	}
+	if h := health("a-broken"); h.Status != "offline" || !strings.Contains(h.Error, "register the repository again") {
+		t.Fatalf("unreadable repository health = %+v", h)
+	}
+	if h := health("b-good"); h.Status != "online" || !h.ObservedAt.After(good.Health.ObservedAt) {
+		t.Fatalf("other repository was not probed: %+v", h)
+	}
+	// Replacing a credential this host can still read stays refused.
+	swapped := good
+	swapped.CredentialRef = "someone-elses-receipt"
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3"); !errors.Is(err, ErrBackupUnavailable) {
+		t.Fatalf("readable credential was replaced: %v", err)
+	}
+	recovered := register("a-broken", "one", "register-4")
+	if recovered.CredentialRef == broken.CredentialRef || *recovered.RemoteIdentity != *broken.RemoteIdentity || !recovered.CreatedAt.Equal(broken.CreatedAt) {
+		t.Fatalf("recovery changed identity: %+v", recovered)
+	}
+	if err := probePoolBackupRepositories(context.Background(), s, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if h := health("a-broken"); h.Status != "online" {
+		t.Fatalf("recovered repository health = %+v", h)
 	}
 }

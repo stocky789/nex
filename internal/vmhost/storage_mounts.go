@@ -99,7 +99,7 @@ func prepareNFS(ctx context.Context, s protocol.StorageRegistration, extraOption
 	source := v.Server + ":" + v.Export
 	_, unitPath := remoteUnitPath(s)
 	_, unitAlreadyPresent := os.Lstat(unitPath)
-	path, err := prepareRemote(ctx, s, source, "nfs4", "vers=4,hard,_netdev"+extraOptions, "")
+	path, err := prepareRemote(ctx, s, source, "nfs4", "vers=4,hard,_netdev"+extraOptions)
 	if err != nil {
 		return storageAccess{}, err
 	}
@@ -168,7 +168,7 @@ func prepareSMBWithAdmission(ctx context.Context, s protocol.StorageRegistration
 	}
 	// Map all server files to the account that libvirt runs QEMU as. This also makes disks
 	// created by Core visible to QEMU without widening the share to every local account.
-	options := smbMountOptions(uid, gid) + extraOptions
+	options := smbMountOptions(uid, gid, credential) + extraOptions
 	unit, unitPath := remoteUnitPath(s)
 	oldUnit, oldUnitErr := os.ReadFile(unitPath)
 	_, unitAlreadyPresent := os.Lstat(unitPath)
@@ -197,7 +197,7 @@ func prepareSMBWithAdmission(ctx context.Context, s protocol.StorageRegistration
 			retErr = errors.Join(retErr, fmt.Errorf("%w: restore previous SMB mount after failed update: %v", ErrStorageRollbackUncertain, rollbackErr))
 		}
 	}()
-	path, err := prepareRemote(ctx, s, source, "cifs", options, credential)
+	path, err := prepareRemote(ctx, s, source, "cifs", options)
 	if err != nil {
 		return storageAccess{}, err
 	}
@@ -280,12 +280,8 @@ func inspectSMB(ctx context.Context, s protocol.StorageRegistration) (storageAcc
 	return access, nil
 }
 
-// smbCredentialOption reads the password from the credentials directory systemd fills from the
-// unit's LoadCredentialEncrypted=, so no plaintext file exists on disk, before or after a reboot.
-const smbCredentialOption = "credentials=%d/" + mountCredentialName
-
-func smbMountOptions(uid, gid string) string {
-	return "vers=3.1.1,seal,cache=strict," + smbCredentialOption + ",uid=" + uid + ",gid=" + gid + ",file_mode=0600,dir_mode=0700,_netdev"
+func smbMountOptions(uid, gid, credential string) string {
+	return "vers=3.1.1,seal,cache=strict,credentials=" + credential + ",uid=" + uid + ",gid=" + gid + ",file_mode=0600,dir_mode=0700,_netdev"
 }
 
 func smbRequiredMountOptions(uid, gid string) []string {
@@ -513,7 +509,7 @@ func smbIdentity(s protocol.StorageRegistration, v *protocol.SMBStorageSource, p
 	return a, nil
 }
 
-func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, fstype, options, credential string) (path string, retErr error) {
+func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, fstype, options string) (path string, retErr error) {
 	if !storageID.MatchString(s.ID) || source == "" || strings.ContainsAny(source, "%\x00\r\n") {
 		return "", errors.New("invalid remote storage source")
 	}
@@ -525,7 +521,7 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", err
 	}
 	unit, unitPath := remoteUnitPath(s)
-	content := remoteUnit(source, path, fstype, options, credential)
+	content := remoteUnit(source, path, fstype, options)
 	allowed, _ := ctx.Value(storageRemountAllowedKey{}).(bool)
 	old, created, err := replaceManagedMountUnit(unitPath, content, allowed)
 	changed := old != nil
@@ -554,7 +550,7 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 	}
 	if !changed {
 		if _, err := nativeRun(ctx, "systemctl", "enable", "--now", unit); err != nil {
-			return "", err
+			return "", withMountJournal(ctx, unit, err)
 		}
 		return path, nil
 	}
@@ -571,6 +567,16 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", err
 	}
 	return path, nil
+}
+
+// withMountJournal adds the mount helper's own message to a failed unit start; systemctl
+// itself only says "Job failed".
+func withMountJournal(ctx context.Context, unit string, err error) error {
+	out, _ := nativeRun(ctx, "journalctl", "-u", unit, "-n", "5", "--no-pager", "-o", "cat")
+	if tail := strings.TrimSpace(string(out)); tail != "" {
+		return fmt.Errorf("%w: %s", err, tail)
+	}
+	return err
 }
 
 // ensureStorageMountRoot repairs only Nex's configured local mount-root. It never chmods a
@@ -630,14 +636,9 @@ func restoreManagedMountUnit(ctx context.Context, path string, old []byte, unit 
 	return nil
 }
 
-// remoteUnit renders a mount unit. A non-empty sealedCredential is a systemd-creds file the
-// unit decrypts for the mount helper each time it starts.
-func remoteUnit(source, path, fstype, options, sealedCredential string) []byte {
-	load := ""
-	if sealedCredential != "" {
-		load = "LoadCredentialEncrypted=" + mountCredentialName + ":" + sealedCredential + "\n"
-	}
-	return []byte(nexMountMarker + "[Unit]\nAfter=network-online.target\nWants=network-online.target\nBefore=libvirtd.service\n\n[Mount]\nWhat=" + source + "\nWhere=" + path + "\nType=" + fstype + "\nOptions=" + options + "\n" + load + "\n[Install]\nWantedBy=multi-user.target\n")
+// remoteUnit renders a mount unit.
+func remoteUnit(source, path, fstype, options string) []byte {
+	return []byte(nexMountMarker + "[Unit]\nAfter=network-online.target\nWants=network-online.target\nBefore=libvirtd.service\n\n[Mount]\nWhat=" + source + "\nWhere=" + path + "\nType=" + fstype + "\nOptions=" + options + "\n\n[Install]\nWantedBy=multi-user.target\n")
 }
 
 // writeManagedMountUnit never adopts an administrator unit. An exact prior Nex unit is safe to

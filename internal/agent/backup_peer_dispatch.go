@@ -193,7 +193,7 @@ func importPeerBackupCredential(s *Store, projection peerBackupCredential) error
 		return ErrBackupUnavailable
 	}
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || repo.Kind == protocol.BackupRepoKindS3 &&
+	if err == nil && (current.Kind != repo.Kind || repo.Kind == protocol.BackupRepoKindS3 &&
 		(!reflect.DeepEqual(current.S3Source, repo.S3Source) || !reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity))) {
 		return ErrBackupConflict
 	}
@@ -777,9 +777,10 @@ func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompl
 		return result
 	}
 	post.Header.Set("Content-Type", "application/json")
-	result.reply, status, result.err = doPeerBackup(work.client, post)
-	if result.err != nil && permanentPeerStatus(status) {
-		result.err = permanentPeerBackupError{result.err}
+	var postStatus int
+	result.reply, postStatus, result.err = doPeerBackup(work.client, post)
+	if result.err != nil && permanentPeerStatus(postStatus) {
+		result.err = notStarted(permanentPeerBackupError{result.err})
 	}
 	if result.err == nil {
 		result.err = validatePeerBackupReply(ctx, work, result.reply)
@@ -887,7 +888,8 @@ func doPeerBackup(client *http.Client, request *http.Request) (poolBackupPeerRes
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return poolBackupPeerResponse{}, response.StatusCode, errors.New("member backup peer refused the request")
+		reason, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		return poolBackupPeerResponse{}, response.StatusCode, fmt.Errorf("member backup peer refused the request: %s", bytes.TrimSpace(reason))
 	}
 	var reply poolBackupPeerResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&reply); err != nil {

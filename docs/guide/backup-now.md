@@ -36,6 +36,7 @@ time when the catalog is available. Closing the browser does not cancel accepted
 
 - **Stop the VM first** / shut-off required: use stopped mode; this flow does not
   power off automatically.
+- **Online backup requires a running VM**: the VM is shut off, so choose stopped mode.
 - UEFI online refused: shut down and use stopped backup, or wait for a later slice.
 - Quiesced refused: use Crash-consistent for running guests.
 - No repositories: register one under **Settings** → **Backup repositories**.

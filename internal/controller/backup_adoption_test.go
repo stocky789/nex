@@ -323,6 +323,13 @@ func TestBackupMemberOperationsRouteThroughMaster(t *testing.T) {
 		if target != member.HostID {
 			t.Fatalf("%s target host = %q", tc.kind, target)
 		}
+		var listed []protocol.Operation
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &listed)
+		for _, op := range listed {
+			if op.RequestID == tc.body["request_id"] && op.HostID != member.HostID {
+				t.Fatalf("%s task history shows host %q, want executing host %q", tc.kind, op.HostID, member.HostID)
+			}
+		}
 	}
 	commands := a.report(masterCert, protocol.ReportRequest{Version: 1, Sequence: 3, Capabilities: caps,
 		Inventory: &protocol.Inventory{Hostname: "master", Managed: masterState}}).Commands
@@ -396,6 +403,44 @@ func TestControllerBackupRepositoryRelay(t *testing.T) {
 	if op["kind"] != "backup-repository-test" {
 		t.Fatalf("queued test %#v", queued)
 	}
+}
+
+func TestControllerForgetBackupRepositoryRoute(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
+		Version: 1, Sequence: 1, Capabilities: []string{protocol.ManagedVMCapability},
+		Inventory: &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
+	})
+	path := "/api/v1/pools/" + pool + "/backup-repositories/repo-1/forget"
+	body := map[string]any{"request_id": "forget-1", "confirmation": "Primary NFS", "recovery_points": 3, "protected_points": 1}
+	csrf, cookie := a.csrf, a.cookie
+	a.csrf = ""
+	a.call("POST", path, body, nil, 403)
+	a.csrf, a.cookie = csrf, nil
+	a.call("POST", path, body, nil, 401)
+	a.cookie = cookie
+	a.call("POST", path, map[string]any{"request_id": "repo-1", "confirmation": "Primary NFS"}, nil, 400)
+	a.call("POST", path, map[string]any{"request_id": "forget-neg", "recovery_points": -1}, nil, 400)
+
+	var queued struct {
+		Operation protocol.Operation `json:"operation"`
+	}
+	read(t, a.call("POST", path, body, nil, 202), &queued)
+	if queued.Operation.ID != "forget-1" || queued.Operation.Kind != "backup-repository-forget" {
+		t.Fatalf("queued forget %+v", queued.Operation)
+	}
+	a.call("POST", path, body, nil, 200)
+	body["recovery_points"] = 4
+	a.call("POST", path, body, nil, 409)
+	for _, command := range a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{Version: 1, Sequence: 2, Capabilities: []string{protocol.ManagedVMCapability}}).Commands {
+		if command.Kind == "backup-repository-forget" && command.ForgetRepository != nil && command.ForgetRepository.RepositoryID == "repo-1" &&
+			command.ForgetRepository.Confirmation == "Primary NFS" && command.ForgetRepository.RecoveryPoints == 3 && command.ForgetRepository.ProtectedPoints == 1 {
+			return
+		}
+	}
+	t.Fatal("forget command was not delivered to the pool master")
 }
 
 func TestBackupMasterActionsReturnOperationAndReplay(t *testing.T) {

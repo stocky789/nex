@@ -1905,7 +1905,7 @@ func (m PoolMembership) Valid() error {
 		if member.HostID == "" || seen[member.HostID] || len(member.CertificateSHA256) != 64 || hexErr != nil || member.Generation != m.Generation || (member.Status != "ready" && member.Status != "pending" && member.Status != "failed" && member.Status != "ejected") {
 			return errors.New("invalid pool member record")
 		}
-		if !ValidPoolHostname(member.Hostname) {
+		if member.Hostname != "" && !ValidPoolHostname(member.Hostname) {
 			return errors.New("invalid pool member hostname")
 		}
 		if member.SanlockHostID > PoolSanlockMaxHostID || member.SanlockHostID != 0 && leaseIDs[member.SanlockHostID] ||

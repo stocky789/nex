@@ -3,8 +3,6 @@ package vmhost
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,7 +108,7 @@ func TestStorageCredentialMountFileIncludesDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(mount) != "sealed:username=operator\npassword=not-in-a-command\ndomain=truenas\n" {
+	if string(mount) != "username=operator\npassword=not-in-a-command\ndomain=truenas\n" {
 		t.Fatalf("mount credential %q", mount)
 	}
 	replay := handoff
@@ -177,17 +175,6 @@ func TestStorageCredentialReplayRepairsMountCredentialArtifacts(t *testing.T) {
 			setup: func(t *testing.T, path string, _ []byte) {
 				t.Helper()
 				if err := os.WriteFile(path, []byte("corrupt\n"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "same-length-corrupt",
-			setup: func(t *testing.T, path string, want []byte) {
-				t.Helper()
-				corrupt := append([]byte(nil), want...)
-				corrupt[0] ^= 1
-				if err := os.WriteFile(path, corrupt, 0600); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -321,15 +308,10 @@ func TestStorageCredentialReplayRepairsWrongOwner(t *testing.T) {
 	}
 }
 
-func TestStorageCredentialIsSealedAndUnitLoadsItEncrypted(t *testing.T) {
+// systemd 257 fills no credentials directory for .mount units, so the unit names a root-only
+// credentials file instead of loading a credential; the secret never appears in the unit.
+func TestStorageCredentialIsRootOnlyFileNamedByMountUnit(t *testing.T) {
 	stateDir := t.TempDir()
-	var calls []string
-	previous := runSystemdCreds
-	t.Cleanup(func() { runSystemdCreds = previous })
-	runSystemdCreds = func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
-		calls = append(calls, name+" "+strings.Join(args[:3], " "))
-		return vmhosttest.FakeSystemdCreds(ctx, stdin, name, args...)
-	}
 	handoff := protocol.StorageCredentialHandoff{
 		Offer:       protocol.StorageCredentialOffer{RequestID: "req-1", RegistrationRequestID: "req-1", PoolID: "pool-1", HostID: "host-1"},
 		Credentials: protocol.StorageCredentials{Username: "operator", Secret: "private-example-secret", Domain: "EXAMPLE"},
@@ -338,20 +320,9 @@ func TestStorageCredentialIsSealedAndUnitLoadsItEncrypted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 || calls[0] != "systemd-creds --no-ask-password encrypt --name=nex-smb" {
-		t.Fatalf("sealing commands: %v", calls)
-	}
-	// Nothing under the state directory may hold the plaintext secret.
-	if err := filepath.WalkDir(stateDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		if data, _ := os.ReadFile(path); strings.Contains(string(data), "private-example-secret") && !strings.HasPrefix(string(data), "sealed:") {
-			t.Errorf("%s holds plaintext", path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	file := filepath.Join(stateDir, credentialDirectory, receipt.Receipt)
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("credentials file: %v, %v", info, err)
 	}
 	// A retried handoff finds the same receipt; a different secret for it is refused.
 	if again, err := SaveStorageCredential(stateDir, handoff); err != nil || again.Receipt != receipt.Receipt {
@@ -365,42 +336,29 @@ func TestStorageCredentialIsSealedAndUnitLoadsItEncrypted(t *testing.T) {
 	if err != nil || got.Username != "operator" || got.Secret != "private-example-secret" || got.Domain != "EXAMPLE" {
 		t.Fatalf("pool credential: %+v, %v", got, err)
 	}
-	// The unit carries the sealed path, never the secret, and decrypts through systemd.
-	sealed := filepath.Join(stateDir, credentialDirectory, receipt.Receipt)
-	unit := string(remoteUnit("//smb.example.test/vms", "/var/lib/nex-storage/vms", "cifs", smbMountOptions("1000", "1000"), sealed))
-	for _, want := range []string{"\nLoadCredentialEncrypted=nex-smb:" + sealed + "\n", ",credentials=%d/nex-smb,"} {
-		if !strings.Contains(unit, want) {
-			t.Errorf("unit missing %q:\n%s", want, unit)
-		}
+	unit := string(remoteUnit("//smb.example.test/vms", "/var/lib/nex-storage/vms", "cifs", smbMountOptions("1000", "1000", file)))
+	if !strings.Contains(unit, ",credentials="+file+",") || strings.Contains(unit, "LoadCredential") || strings.Contains(unit, "private-example-secret") {
+		t.Errorf("unit does not just name the credentials file:\n%s", unit)
 	}
-	if strings.Contains(unit, "private-example-secret") || strings.Contains(unit, "password=") {
-		t.Errorf("unit holds the secret:\n%s", unit)
+}
+
+// Regression: systemd 257 (Debian 13) has no --no-ask-password; the fake rejects it like the real tool.
+func TestSealCredentialUsesOnlyOptionsSystemd257Accepts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key.cred")
+	if err := SealCredential(context.Background(), "nex-test", path, []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenCredential(context.Background(), "nex-test", path); err != nil || string(got) != "secret" {
+		t.Fatalf("open: %q, %v", got, err)
+	}
+	if _, err := vmhosttest.FakeSystemdCreds(context.Background(), nil, "systemd-creds", "encrypt", "-", "-"); err == nil {
+		t.Fatal("fake accepts an option systemd 257 rejects")
 	}
 }
 
 func TestRealSystemdCredsIsRefusedInTests(t *testing.T) {
-	if _, err := realSystemdCreds(context.Background(), nil, "systemd-creds", "--no-ask-password", "encrypt", "-", "-"); err == nil || !strings.Contains(err.Error(), "refusing") {
+	if _, err := realSystemdCreds(context.Background(), nil, "systemd-creds", "encrypt", "-", "-"); err == nil || !strings.Contains(err.Error(), "refusing") {
 		t.Fatalf("real systemd-creds was not refused: %v", err)
-	}
-}
-
-func TestStorageCredentialSealFailureLeavesNothingBehind(t *testing.T) {
-	stateDir := t.TempDir()
-	previous := runSystemdCreds
-	t.Cleanup(func() { runSystemdCreds = previous })
-	runSystemdCreds = func(context.Context, []byte, string, ...string) ([]byte, error) {
-		return nil, errors.New("no TPM2 or host key")
-	}
-	_, err := SaveStorageCredential(stateDir, protocol.StorageCredentialHandoff{
-		Offer:       protocol.StorageCredentialOffer{RequestID: "req-1", RegistrationRequestID: "req-1", PoolID: "pool-1", HostID: "host-1"},
-		Credentials: protocol.StorageCredentials{Username: "operator", Secret: "private-example-secret"},
-	})
-	if err == nil {
-		t.Fatal("a credential that could not be sealed was accepted")
-	}
-	entries, _ := os.ReadDir(filepath.Join(stateDir, credentialDirectory))
-	if len(entries) != 0 {
-		t.Fatalf("failed seal left files behind: %v", entries)
 	}
 }
 

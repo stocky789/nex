@@ -366,3 +366,27 @@ func err2s(err error) string {
 	}
 	return err.Error()
 }
+
+// A refused registration must not leave its plaintext credential behind until a client retires it.
+func TestFailedStorageRegistrationReleasesCredential(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	e := NewManaged(filepath.Join(state, "managed"))
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := lifecycleLocalStorage("repo-1", e.stateDir)
+	s.CredentialReceipt, s.CredentialRequestID = receipt.Receipt, handoff.Offer.RegistrationRequestID
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.Execute(context.Background(), protocol.Command{OperationID: "register-1", Kind: "storage-register", Storage: &s}, nil)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("registration = %+v, %v", result, err)
+	}
+	if _, err = os.Stat(filepath.Join(state, credentialDirectory, receipt.Receipt)); !os.IsNotExist(err) {
+		t.Fatalf("credential remains after a failed registration: %v", err)
+	}
+}

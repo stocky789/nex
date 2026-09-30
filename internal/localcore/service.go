@@ -185,6 +185,7 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("GET /api/local/v1/pool/backup-repositories", s.auth(s.listBackupRepositories))
 	m.HandleFunc("POST /api/local/v1/pool/backup-repositories", s.auth(s.registerBackupRepository))
 	m.HandleFunc("POST /api/local/v1/pool/backup-repositories/{id}/test", s.auth(s.testBackupRepository))
+	m.HandleFunc("POST /api/local/v1/pool/backup-repositories/{id}/forget", s.auth(s.forgetBackupRepository))
 	m.HandleFunc("GET /api/local/v1/pool/backup-catalog", s.auth(s.listBackupCatalog))
 	m.HandleFunc("GET /api/local/v1/pool/backup-runs", s.auth(s.listBackupRuns))
 	m.HandleFunc("GET /api/local/v1/pool/backup-policies", s.auth(s.listBackupPolicies))

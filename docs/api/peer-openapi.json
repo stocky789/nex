@@ -2699,6 +2699,54 @@
         }
       }
     },
+    "/api/v1/pool/backup/forget": {
+      "post": {
+        "operationId": "peerForgetBackupRepository",
+        "summary": "Forget a backup repository on a member",
+        "description": "The authenticated current pool master tells a ready member to drop its record, sealed credential and mount for a repository the pool has forgotten. Body is {\"repository_id\"}, limited to 4 KiB. Idempotent: an unknown repository succeeds. The master sends this best effort after it has forgotten the repository and sends it again whenever it is asked to forget an already-forgotten repository ID.",
+        "security": [
+          {
+            "PoolMasterCertificate": []
+          }
+        ],
+        "x-introduced-version": "0.4.18",
+        "x-audience": "Core peer: current pool master to ready member",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "repository_id"
+                ],
+                "properties": {
+                  "repository_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Repository forgotten on the member, or unknown to it."
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Caller is not the authenticated current pool master."
+          },
+          "409": {
+            "description": "The host is not a pool member, or its mount or credential could not be removed; retry."
+          }
+        }
+      }
+    },
     "/api/v1/pool/backup/access": {
       "post": {
         "operationId": "peerProbeBackupRepositoryAccess",

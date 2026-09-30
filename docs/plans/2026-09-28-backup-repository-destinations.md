@@ -364,18 +364,18 @@ smoke, fault injection and native product results separately. Re-run the
 current Phase 6 interrupted-restore and authority-transfer gates on the changed
 candidate before acceptance; older NFS evidence cannot certify it.
 
-## 2026-09-30 decision: SMB mount credentials sealed with systemd-creds
+## 2026-09-30 decision: SMB mount credentials are root-only files
 
-Backup SMB3 and VM-storage SMB share one path. Core seals the `mount.cifs` credentials with
-`systemd-creds encrypt` (TPM2 when the host has one, otherwise the host key created by
-`systemd-creds setup` in the agent unit) into a private file addressed by receipt or credential
-reference. The generated mount unit carries `LoadCredentialEncrypted=nex-smb:<file>` and mounts
-with `credentials=%d/nex-smb`, so systemd decrypts at mount time, boot included, and no plaintext
-credential file exists at rest. Core's own agent receipt store keeps its AES-256-GCM sealing
-(BUG-0747): Core must read the secret to hand it to member Cores and re-prepare mounts, and the
-host-key threat model equals systemd-creds' host key. Sealed files are host-bound, so a rebuilt
-host needs the credential redelivered. Calls pass `--no-ask-password`; test binaries refuse the
-real tool. **Needs real-host boot verification** (TPM2 and host-key hosts, reboot remount).
+Backup SMB3 and VM-storage SMB share one path. Core writes the `mount.cifs` credentials to a
+root-only file (mode 0600, private directory) addressed by receipt or credential reference, and
+the generated mount unit names it with `credentials=<file>`. This supersedes an earlier design
+that sealed the file with `systemd-creds` and used `LoadCredentialEncrypted=` in the `.mount`
+unit: systemd 257 (Debian 13) creates no credentials directory for mount units, so every SMB
+mount failed. Only Core's backup receipt key stays sealed with `systemd-creds`, and Core opens
+it itself (the service unit no longer loads it, which failed a fresh host before the key
+existed). Core's agent receipt store keeps its AES-256-GCM sealing (BUG-0747). Calls to
+`systemd-creds` use no `--no-ask-password` (unsupported on systemd 257); test binaries refuse
+the real tool.
 
 ## Decisions and remaining work
 

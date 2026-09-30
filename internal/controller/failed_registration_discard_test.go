@@ -26,32 +26,15 @@ func refusedVLAN(l *managedLab, request, name string, vlan int) protocol.Network
 	return n
 }
 
-// failedStorageID is the ID the storage list gives a refused registration, which is the only
-// handle an operator has for it.
-func failedStorageID(l *managedLab, name string) string {
-	l.t.Helper()
-	for _, row := range storageRows(l) {
-		if row.Name == name && row.Status == "failed" {
-			if row.ID == "" {
-				l.t.Fatalf("a refused repository is listed with an empty id and cannot be addressed: %+v", row)
-			}
-			return row.ID
-		}
-	}
-	l.t.Fatalf("no failed registration named %q: %+v", name, storageRows(l))
-	return ""
-}
-
 // refusedNFS registers a typed repository Core allocates the ID for and then refuses. The
-// registration row keeps the Controller's own pending ID, which must still address the row.
-func refusedNFS(l *managedLab, request, name, export string) protocol.StorageRegistration {
+// registration is left as the Controller's pending-storage replay row.
+func refusedNFS(l *managedLab, request, name, export string) (storageRegisterRequest, protocol.StorageRegistration) {
 	l.t.Helper()
 	var s protocol.StorageRegistration
-	read(l.t, l.a.call("POST", "/api/v1/storage", storageRegisterRequest{RequestID: request, PoolID: l.pool, HostID: l.host.HostID, Name: name,
+	body := storageRegisterRequest{RequestID: request, PoolID: l.pool, HostID: l.host.HostID, Name: name,
 		Kind:   protocol.StorageKindNFS,
-		Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: export}}}, nil, 201), &s)
-	// Core allocates a repository ID, so a registration still in flight has none. That is
-	// the shipped contract and stays; what must not survive is a *failed* row with none.
+		Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: export}}}
+	read(l.t, l.a.call("POST", "/api/v1/storage", body, nil, 201), &s)
 	if s.ID != "" {
 		l.t.Fatalf("the Controller allocated a repository identity: %+v", s)
 	}
@@ -61,8 +44,7 @@ func refusedNFS(l *managedLab, request, name, export string) protocol.StorageReg
 	}
 	reportCurrent(l, nil, protocol.Result{OperationID: cmds[0].OperationID, Status: "failed", Error: "storage source is already registered on this host"})
 	s.OperationID = cmds[0].OperationID
-	s.ID = failedStorageID(l, name)
-	return s
+	return body, s
 }
 
 // reportCurrent is reportManaged at the current protocol version, which a host must speak
@@ -155,30 +137,38 @@ func TestFailedNetworkRegistrationIsDiscardable(t *testing.T) {
 	}
 }
 
-// TestFailedStorageRegistrationIsAddressableAndDiscardable: the same for a repository whose
-// durable ID Core never allocated, which additionally has to be addressable at all.
-func TestFailedStorageRegistrationIsAddressableAndDiscardable(t *testing.T) {
+// TestRefusedStorageRegistrationIsNotListed: a registration Core refused leaves no repository
+// row, keeps its error in the operation history, and replays as the same failed result.
+func TestRefusedStorageRegistrationIsNotListed(t *testing.T) {
 	l := newManagedLab(t, protocol.ManagedVMCapability, protocol.StorageRepositoryCapability)
-	s := refusedNFS(l, "nfs-refused", "Refused NFS", "/refused")
+	body, s := refusedNFS(l, "nfs-refused", "Refused NFS", "/refused")
 
-	var discarded map[string]any
-	read(t, l.a.call("DELETE", "/api/v1/storage/"+s.ID, nil, nil, 200), &discarded)
-	if discarded["deleted"] != true {
-		t.Fatalf("discard response: %+v", discarded)
+	for _, row := range storageRows(l) {
+		if row.Name == "Refused NFS" {
+			t.Fatalf("the refused registration is listed: %+v", row)
+		}
 	}
-	if hasStorage(l, s.ID) {
-		t.Fatalf("the refused registration survived its discard: %+v", storageRows(l))
+	var ops []protocol.Operation
+	read(t, l.a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+	found := false
+	for _, op := range ops {
+		found = found || op.ID == s.OperationID && op.Status == "failed" && op.Error == "storage source is already registered on this host"
+	}
+	if !found {
+		t.Fatalf("the failure is not in the operation history: %+v", ops)
+	}
+	var replay protocol.StorageRegistration
+	read(t, l.a.call("POST", "/api/v1/storage", body, nil, 200), &replay)
+	if replay.OperationID != s.OperationID || replay.Status != "failed" {
+		t.Fatalf("replay did not return the failed result: %+v", replay)
 	}
 	if cmds := reportCurrent(l, nil).Commands; len(cmds) != 0 {
-		t.Fatalf("a local discard asked a host to do something: %+v", cmds)
-	}
-	if audits := audited(l, "storage.discard"); audits != 1 {
-		t.Fatalf("discard audit entries: %d", audits)
+		t.Fatalf("replay dispatched a new command: %+v", cmds)
 	}
 
-	// The guard, for the storage shape of it: Core answered the refused operation late and
-	// the row is now the mirror of a repository the host holds under Core's own ID.
-	applied := refusedNFS(l, "nfs-applied", "Applied NFS", "/applied")
+	// Core answered the refused operation late: the row now mirrors a repository the host
+	// holds under Core's own ID and must stay listed.
+	_, applied := refusedNFS(l, "nfs-applied", "Applied NFS", "/applied")
 	reportCurrent(l, func(m *protocol.ManagedState) {
 		m.Storage = append(m.Storage, protocol.StorageRegistration{ID: "core-allocated-nfs", PoolID: l.pool, HostID: l.host.HostID,
 			Name: "Applied NFS", Kind: protocol.StorageKindNFS, Generation: 1, OperationID: applied.OperationID,
@@ -187,13 +177,5 @@ func TestFailedStorageRegistrationIsAddressableAndDiscardable(t *testing.T) {
 	if !hasStorage(l, "core-allocated-nfs") {
 		t.Fatalf("the host-reported repository was not mirrored: %+v", storageRows(l))
 	}
-	l.a.call("DELETE", "/api/v1/storage/core-allocated-nfs", nil, nil, 409)
-	if !hasStorage(l, "core-allocated-nfs") {
-		t.Fatalf("a host-reported repository was discarded as a failed request: %+v", storageRows(l))
-	}
-	// An adopted repository is removed by relaying a detach, never by a local discard.
 	l.a.call("DELETE", "/api/v1/storage/"+l.storage, nil, nil, 404)
-	if !hasStorage(l, l.storage) {
-		t.Fatalf("an adopted repository was discarded: %+v", storageRows(l))
-	}
 }

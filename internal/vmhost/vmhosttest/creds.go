@@ -14,10 +14,9 @@ import (
 // FakeSystemdCreds seals with a visible prefix so tests can tell sealed files from plaintext.
 // A file without the prefix is read as-is: some tests place a credentials file directly.
 func FakeSystemdCreds(_ context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
-	if name != "systemd-creds" || len(args) < 5 || args[0] != "--no-ask-password" {
+	if name != "systemd-creds" || len(args) < 4 {
 		return nil, fmt.Errorf("unexpected command %s %v", name, args)
 	}
-	args = args[1:]
 	switch args[0] {
 	case "encrypt":
 		return append([]byte("sealed:"), stdin...), nil

@@ -69,6 +69,9 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 		case r.URL.Path == poolBackupPeerPath+"/credential":
 			handlePeerBackupCredential(s, w, r)
 			return
+		case r.URL.Path == poolBackupPeerPath+"/forget":
+			handlePeerForgetRepository(s, w, r)
+			return
 		case r.Method == http.MethodPost && r.URL.Path == poolBackupPeerPath+"/access":
 			var repo protocol.BackupRepository
 			decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
@@ -195,7 +198,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				return
 			}
 			if errors.Is(response.Err, ErrBackupConflict) || errors.Is(response.Err, ErrBackupInvalid) {
-				http.Error(w, "backup request conflicts with retained work", http.StatusBadRequest)
+				http.Error(w, response.Err.Error(), http.StatusBadRequest)
 				return
 			}
 			http.Error(w, "backup request unavailable", http.StatusConflict)
@@ -266,7 +269,7 @@ func backupCommand(kind string) bool {
 
 func backupMetadataCommand(kind string) bool {
 	switch kind {
-	case "backup-repository-register", "backup-repository-test", "backup-policy-upsert", "backup-policy-pause",
+	case "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-policy-upsert", "backup-policy-pause",
 		"backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild",
 		"backup-test-verify", "backup-test-cleanup":
 		return true
@@ -852,6 +855,19 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			Result:     &protocol.Result{OperationID: cmd.OperationID, Status: status, Error: errText, ObservedAt: now},
 			Repository: &repo,
 		}
+	case "backup-repository-forget":
+		if cmd.ForgetRepository == nil || cmd.ForgetRepository.Valid() != nil {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
+		result := protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
+		if err := forgetPoolBackupRepository(ctx, s, *cmd.ForgetRepository); err != nil {
+			var refusal forgetRefusal
+			if !errors.As(err, &refusal) {
+				return BackupResponse{Err: err}
+			}
+			result.Status, result.Error = "failed", err.Error()
+		}
+		return BackupResponse{Result: &result}
 	case "backup-policy-upsert":
 		if cmd.BackupPolicy == nil {
 			return BackupResponse{Err: ErrBackupInvalid}
@@ -1920,15 +1936,15 @@ func backupFileDigest(path string) (string, int64, error) {
 }
 
 // adoptPeerBackupRepository saves the master's registration on this member.
-// A registration keeps its source and credential reference for life, so a
-// different one under the same ID is a conflict. Caller holds poolBackupAuthorityMu.
+// A registration keeps its source for life, so a different one under the same ID is a
+// conflict; the master may replace the credential reference (re-registration after loss). Caller holds poolBackupAuthorityMu.
 func adoptPeerBackupRepository(s *Store, request BackupRequest, repo, prepared protocol.BackupRepository) error {
 	state, err := loadPoolBackupRepositories(s)
 	if err != nil {
 		return err
 	}
 	oldRepo, hadOldRepo := state.Repositories[repo.ID]
-	if hadOldRepo && (oldRepo.Kind != repo.Kind || oldRepo.CredentialRef != repo.CredentialRef ||
+	if hadOldRepo && (oldRepo.Kind != repo.Kind ||
 		!reflect.DeepEqual(oldRepo.Source, repo.Source) || !reflect.DeepEqual(oldRepo.Identity, repo.Identity) ||
 		!reflect.DeepEqual(oldRepo.SMBSource, repo.SMBSource) || !reflect.DeepEqual(oldRepo.S3Source, repo.S3Source) ||
 		!reflect.DeepEqual(oldRepo.SFTPSource, repo.SFTPSource) || !reflect.DeepEqual(oldRepo.RemoteIdentity, repo.RemoteIdentity) ||
@@ -1936,5 +1952,11 @@ func adoptPeerBackupRepository(s *Store, request BackupRequest, repo, prepared p
 		return ErrBackupConflict
 	}
 	state.Repositories[repo.ID] = prepared
-	return savePoolBackupRepositories(s, state)
+	if err := savePoolBackupRepositories(s, state); err != nil {
+		return err
+	}
+	if hadOldRepo && oldRepo.CredentialRef != repo.CredentialRef {
+		return retireSupersededBackupCredentials(s, prepared)
+	}
+	return nil
 }

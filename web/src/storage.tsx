@@ -22,10 +22,8 @@ type ZFSOutcome = { repository_id: string; pool_id: string; name: string; scope:
 
 // A registration the pool master refused is only this Controller's record of a failed request:
 // no host holds the resource, so discarding the row asks no host to do anything. This is the
-// failed-ISO-import model applied to network and storage registrations. A failed typed storage
-// registration answers its Controller row key (`pending-storage-<operation id>`) as its id, which
-// is the handle the discard route takes; it is never a Core repository id, so no repository
-// action is offered on such a row. Lives here because managed.tsx already imports from storage.
+// failed-ISO-import model applied to network registrations. Lives here because managed.tsx
+// already imports from storage.
 export const registrationDiscardable = (r: { id: string; status: string }) => r.status === "failed" && Boolean(r.id);
 export const discardConfirmText = (kind: string, name: string) =>
   `Discard the failed ${kind} registration ${name}? This removes only Nex Controller's record of the failed request and asks no host to do anything. The task and audit history are kept.`;
@@ -510,17 +508,6 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
   function beginEdit(s: Storage) { const kind = (Object.hasOwn(labels, s.kind || "") ? s.kind : "local") as Kind; const values: Partial<Draft> = kind === "nfs" ? s.source?.nfs || {} : kind === "zfs" ? { ...s.source?.zfs, path: s.path || s.source?.zfs?.mount_path } : kind === "smb" ? s.source?.smb || {} : kind === "iscsi" ? { ...s.source?.iscsi, lun: String(s.source?.iscsi?.lun ?? "") } : { path: s.path }; setEdit(s); setForm(true); setError(""); setDraft({ ...blank, name: s.name, host_id: s.host_id, kind, ...values }); }
   async function recheck(s: Storage) { if (!storageOwnerFresh(s, currentHosts.current)) { setError("Assigned Core is not freshly connected. Reconnect it before changing this repository."); return; } setBusy(true); setError(""); try { await api(`storage/${encodeURIComponent(s.id)}/recheck`, "POST", { request_id: crypto.randomUUID(), pool_id: poolID, host_id: s.host_id, expected_generation: s.generation }); await reload(); onNotice(`Access recheck submitted for ${s.name}.`); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   async function detachStorage() { if (!remove) return; if (!storageOwnerFresh(remove, currentHosts.current)) { const message = "Assigned Core is not freshly connected. Reconnect it before changing this repository."; setError(message); setDetachError(message); return; } setBusy(true); setError(""); setDetachError(""); try { await api(`storage/${encodeURIComponent(remove.id)}/detach`, "POST", { request_id: crypto.randomUUID(), pool_id: poolID, host_id: remove.host_id, expected_generation: remove.generation }); await reload(); onNotice(`Detach request submitted for ${remove.name}. Nex never erases storage data.`); detach.current?.close(); setRemove(null); } catch (e) { const message = (e as Error).message; setError(message); setDetachError(message); } finally { setBusy(false); } }
-  // Deletes only the Controller's failed-request row. A 409 (a host reports the registration as
-  // applied) is shown exactly as the Controller worded it; nothing is retried or reconciled here.
-  async function discardStorage(s: Storage) {
-    if (!confirm(discardConfirmText("storage", s.name))) return;
-    setBusy(true); setError("");
-    try {
-      await api(`storage/${encodeURIComponent(s.id)}`, "DELETE");
-      await reload();
-      onNotice(`Discarded the failed registration for ${s.name}. Register the storage again to retry.`);
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
-  }
   // Per-host ZFS outcomes as each Core reports them; the Controller keeps no record of its own.
   const zfsOutcomes = hosts.flatMap(host => ((host.inventory as { managed?: { zfs_provisions?: ZFSOutcome[] } } | null)?.managed?.zfs_provisions || []).filter(result => result.pool_id === poolID));
   return <>
@@ -555,10 +542,9 @@ export function StorageRepositories({ poolID, masterHostID, hosts, storage, api,
           <td><AccessLights items={storageHostAccess(s, hosts)} /></td>
           <td className="muted">{checked ? <time dateTime={checked} title={new Date(checked).toLocaleString()}>{relativeTime(checked)}</time> : "Not checked"}</td>
           <td><div className="actions row-actions">
-            {registrationDiscardable(s) ? <button type="button" className="sm" title="Remove this Controller record of a registration the pool master refused." disabled={busy || unavailable} onClick={() => void discardStorage(s)}>Discard failed registration</button> : <>
             <button type="button" className="sm" title={lifecycleTitle} disabled={busy || unavailable || !ownerFresh || !lifecycleReady} onClick={() => void recheck(s)}>Recheck</button>
             <button type="button" className="sm" title={lifecycleTitle} disabled={busy || unavailable || !ownerFresh || s.tombstone || !lifecycleReady || coordinatedLifecycleUnavailable} onClick={() => beginEdit(s)}>Update{needsCredential((s.kind || "local") as Kind) ? " / rotate credentials" : ""}</button>
-            <button type="button" className="sm danger" title={defaultLocalStorage(s) ? "Default host storage cannot be detached from Controller." : lifecycleTitle} disabled={busy || unavailable || !ownerFresh || s.tombstone || !lifecycleReady || coordinatedLifecycleUnavailable || defaultLocalStorage(s)} onClick={() => { setRemove(s); setDetachError(""); detach.current?.showModal(); }}>Detach</button>{defaultLocalStorage(s) && <small className="muted">Host default; cannot detach</small>}</>}
+            <button type="button" className="sm danger" title={defaultLocalStorage(s) ? "Default host storage cannot be detached from Controller." : lifecycleTitle} disabled={busy || unavailable || !ownerFresh || s.tombstone || !lifecycleReady || coordinatedLifecycleUnavailable || defaultLocalStorage(s)} onClick={() => { setRemove(s); setDetachError(""); detach.current?.showModal(); }}>Detach</button>{defaultLocalStorage(s) && <small className="muted">Host default; cannot detach</small>}
           </div></td>
         </tr>;
       })}</tbody></table></div> : <p className="empty">No storage repositories reported. Register an existing local directory, NFS export, ZFS dataset, SMB share or iSCSI filesystem.</p>}

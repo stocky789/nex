@@ -71,6 +71,29 @@ when Core must rediscover retained points.
 5. Open **Policies** to select the repository for a schedule, or use **Backups** →
    **Back up now** for one VM. Core keeps the selected repository ID on each job.
 
+### Forget a repository
+
+Forget a repository when its destination is gone or has changed identity, or when you no
+longer use it. Forgetting never deletes anything from the destination.
+
+1. Move every backup job that uses the repository to another one with **Change repository**
+   on the policy, and let running backups, restores and test restores that use it finish.
+   Clean up its test restore VMs.
+2. On the repository row, select **Forget**. The dialog counts the repository's recovery
+   points and how many are protected.
+3. Type the repository name and select **Forget repository**. Follow the task until Core
+   reports success or refusal.
+
+Core forgets the repository, its recovery points and its run history, and removes its
+mount and saved credential from the pool master and each member. A protected recovery
+point is forgotten too, once you have confirmed the counts shown. Core refuses, changing
+nothing, while a backup job uses the repository, a backup, restore, test restore or catalog
+operation on it is running, a recovery point of it is held by an unfinished restore or test
+restore, the name is wrong, or the recovery points changed since the dialog counted them;
+the task shows the reason. Sending the same request again returns the same outcome. To use
+the destination again, register it again as a new repository, then select **Import
+points** to bring its recovery points back.
+
 ## Expected result
 
 The repository row shows its type and target. **Health** shows Core's latest online
@@ -117,12 +140,28 @@ and test restore read every artifact and verify its digest.
 - To move a target or rotate SMB3/S3/SFTP credentials, create and test a **new
   repository ID** at a separate directory, prefix or root. Use **Change repository**
   on each policy and select the new ID for new jobs. Verify a new backup and restore.
-  Keep the old target and credentials for its retained points; Core refuses
-  same-ID source or credential replacement. External credential revocation can
+  Keep the old target and credentials for its retained points, then forget the old
+  repository when you no longer need them; Core refuses
+  same-ID source replacement, and credential replacement while it can still read the old one. External credential revocation can
   make old points unavailable once existing sessions end.
 - The host check **backup-credentials** says a receipt is unreadable: Core still
   uses and reports every other credential. Recreate the credential for the
   affected repository if a registration or backup reports it unavailable.
+- A repository shows **offline** with "backup credential is unreadable on this
+  host; register the repository again with its credentials" when the pool master can no longer
+  open its credential (for example the sealing key was lost). Other repositories are
+  unaffected. To recover, create a new credential and register the repository again
+  with the **same repository ID and the same destination**. Core replaces
+  the credential only because it cannot read the old one, keeps the ID, recovery points and history,
+  and refuses a different destination. Registering again while Core can still read the
+  credential is refused. Members receive the new credential from the master on their next
+  health pass; until then the member's access shows why delivery failed. Only S3 has been exercised for this. If the destination is gone
+  or its identity changed, [forget the repository](#forget-a-repository) and register the
+  destination as a new one.
+- A member that was unreachable when a repository was forgotten keeps an unused record
+  and mount until the master is asked to forget that repository ID again; the request
+  succeeds when the repository is already gone. A conflict on registering a changed
+  destination under that ID means a member still holds the old record.
 - A host that joins another pool or is ejected unmounts and forgets the backup
   repositories of the pool it left and erases their backup credentials; its new
   pool delivers its own. Data on the share stays.
