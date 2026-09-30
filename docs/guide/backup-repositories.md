@@ -2,8 +2,8 @@
 
 ## Status
 
-Development Phase 6 / S4. A current pool master advertises NFS, SMB3, S3-compatible
-and SFTP destinations to matching Controller builds. Core owns repository identity,
+Development Phase 6 / S4. A current pool master supports NFS, SMB3, S3-compatible
+and SFTP destinations. Core owns repository identity,
 credentials, health, access observations and recovery points. Controller submits
 requests and shows Core results. The four kinds passed bounded disposable backup
 and restore checks; the final enabled-build browser and timed scheduler gates remain

@@ -858,10 +858,10 @@ func TestBackupRestoreRefusesManifestPointAlias(t *testing.T) {
 }
 
 func TestRestoreReplaceRefusesUnsafeInPlace(t *testing.T) {
-	if err := SimulateInPlaceOverwriteRequest("/var/lib/nex/vm/vda.qcow2", "/var/lib/nex/vm"); err == nil {
+	if err := refuseInPlaceOverwrite("/var/lib/nex/vm/vda.qcow2", "/var/lib/nex/vm"); err == nil {
 		t.Fatal("in-place overwrite must be refused")
 	}
-	if err := SimulateInPlaceOverwriteRequest("/var/lib/nex/vm/vda.qcow2", "/var/lib/nex/backup-restore/op-1"); err != nil {
+	if err := refuseInPlaceOverwrite("/var/lib/nex/vm/vda.qcow2", "/var/lib/nex/backup-restore/op-1"); err != nil {
 		t.Fatalf("distinct restore dir must be allowed: %v", err)
 	}
 	req := protocol.RestoreReplaceRequest{

@@ -345,9 +345,7 @@ func deliverPeerBackupCredential(ctx context.Context, s *Store, member protocol.
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
-		if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusUnauthorized ||
-			response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound ||
-			response.StatusCode == http.StatusMethodNotAllowed {
+		if permanentPeerStatus(response.StatusCode) {
 			return permanentPeerBackupError{errors.New("member backup credential delivery refused")}
 		}
 		return errors.New("member backup credential delivery refused")
@@ -416,20 +414,49 @@ func portablePeerRepository(repo protocol.BackupRepository) protocol.BackupRepos
 	return repo
 }
 
+// permanentPeerStatus reports whether a member's refusal will not change on retry.
+func permanentPeerStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+		return true
+	}
+	return false
+}
+
 // repo.Valid checks the remote identity fingerprint format.
+func validPeerRemoteIdentity(repo protocol.BackupRepository) bool {
+	return repo.Valid() == nil && repo.CredentialRef != "" && repo.MountPath == "" && repo.RemoteIdentity != nil
+}
+
 func validPeerSFTPIdentity(repo protocol.BackupRepository) bool {
-	return repo.Kind == protocol.BackupRepoKindSFTP && repo.Valid() == nil && repo.CredentialRef != "" &&
-		repo.SFTPSource != nil && repo.MountPath == "" && repo.RemoteIdentity != nil
+	return repo.Kind == protocol.BackupRepoKindSFTP && repo.SFTPSource != nil && validPeerRemoteIdentity(repo)
 }
 
-// repo.Valid checks the remote identity fingerprint format.
 func validPeerS3Identity(repo protocol.BackupRepository) bool {
-	return repo.Kind == protocol.BackupRepoKindS3 && repo.Valid() == nil && repo.CredentialRef != "" &&
-		repo.S3Source != nil && repo.MountPath == "" && repo.RemoteIdentity != nil
+	return repo.Kind == protocol.BackupRepoKindS3 && repo.S3Source != nil && validPeerRemoteIdentity(repo)
 }
 
-func preparePeerS3Repository(ctx context.Context, s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
-	if !validPeerS3Identity(repo) {
+// samePeerRepository reports whether two records name the same remote destination and identity.
+func samePeerRepository(a, b protocol.BackupRepository) bool {
+	return a.Kind == b.Kind && a.CredentialRef == b.CredentialRef && reflect.DeepEqual(a.S3Source, b.S3Source) &&
+		reflect.DeepEqual(a.SFTPSource, b.SFTPSource) && reflect.DeepEqual(a.SMBSource, b.SMBSource) &&
+		reflect.DeepEqual(a.RemoteIdentity, b.RemoteIdentity) &&
+		(a.SMBIdentity == nil && b.SMBIdentity == nil || samePeerSMBIdentity(a.SMBIdentity, b.SMBIdentity))
+}
+
+// preparePeerRepository adopts a credentialed destination the pool master shares
+// with this member; identity is the SMB share's, nil for other kinds.
+func preparePeerRepository(ctx context.Context, s *Store, repo protocol.BackupRepository, identity *protocol.SMBStorageIdentity) (protocol.BackupRepository, error) {
+	valid := false
+	switch repo.Kind {
+	case protocol.BackupRepoKindS3:
+		valid = validPeerS3Identity(repo) && identity == nil
+	case protocol.BackupRepoKindSFTP:
+		valid = validPeerSFTPIdentity(repo) && identity == nil
+	case protocol.BackupRepoKindSMB3:
+		valid = validPeerSMBIdentity(repo, identity)
+	}
+	if !valid {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
 	membership, err := Membership(s)
@@ -440,130 +467,97 @@ func preparePeerS3Repository(ctx context.Context, s *Store, repo protocol.Backup
 	if !ok || self.Status != "ready" {
 		return protocol.BackupRepository{}, ErrBackupUnavailable
 	}
+	adopt := repo
+	adopt.SMBIdentity = identity
 	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.S3Source, repo.S3Source) ||
-		!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity)) {
+	if err == nil && !samePeerRepository(current, adopt) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
 		return protocol.BackupRepository{}, err
 	}
-	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, repo)
+	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, adopt)
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	if !preparedBackupRepositoryMatches(repo, prepared) || !reflect.DeepEqual(prepared.RemoteIdentity, repo.RemoteIdentity) {
+	if !preparedBackupRepositoryMatches(repo, prepared) || !samePeerRepository(adopt, prepared) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	return prepared, nil
 }
 
-func preflightPeerS3Repository(ctx context.Context, work pendingPeerBackup) error {
+// preflightPeerSource refuses a run whose destination changed since it was reserved.
+func preflightPeerSource(work pendingPeerBackup) error {
 	if err := requirePoolAuthorityWritable(work.store); err != nil {
 		return permanentPeerBackupError{ErrBackupUnavailable}
 	}
 	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
-		!reflect.DeepEqual(current.S3Source, work.localRepo.S3Source) || !reflect.DeepEqual(current.RemoteIdentity, work.localRepo.RemoteIdentity) {
+	if err != nil || !samePeerRepository(current, work.localRepo) {
 		return permanentPeerBackupError{ErrBackupConflict}
-	}
-	body, err := json.Marshal(work.repo)
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.member.PeerOrigin, "/")+poolBackupPeerPath+"/capability/s3", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := work.client.Do(request)
-	if err != nil {
-		return errors.New("member S3 backup capability unavailable")
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusBadRequest ||
-		response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return permanentPeerBackupError{errors.New("member S3 backup capability is unsupported or refused")}
-	}
-	if response.StatusCode != http.StatusOK {
-		return errors.New("member S3 backup capability unavailable")
-	}
-	var reply peerS3CapabilityResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
-		work.localRepo.RemoteIdentity == nil || reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
-		return permanentPeerBackupError{errors.New("member S3 backup capability identity changed")}
 	}
 	return nil
 }
 
-func preparePeerSFTPRepository(ctx context.Context, s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
-	if !validPeerSFTPIdentity(repo) {
-		return protocol.BackupRepository{}, ErrBackupInvalid
-	}
-	membership, err := Membership(s)
-	if err != nil || membership.MasterHostID == s.State.HostID {
-		return protocol.BackupRepository{}, ErrBackupUnavailable
-	}
-	self, ok := poolMemberByID(membership, s.State.HostID)
-	if !ok || self.Status != "ready" {
-		return protocol.BackupRepository{}, ErrBackupUnavailable
-	}
-	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SFTPSource, repo.SFTPSource) ||
-		!reflect.DeepEqual(current.RemoteIdentity, repo.RemoteIdentity)) {
-		return protocol.BackupRepository{}, ErrBackupConflict
-	}
-	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
-		return protocol.BackupRepository{}, err
-	}
-	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, repo)
-	if err != nil {
-		return protocol.BackupRepository{}, err
-	}
-	if !preparedBackupRepositoryMatches(repo, prepared) || !reflect.DeepEqual(prepared.RemoteIdentity, repo.RemoteIdentity) {
-		return protocol.BackupRepository{}, ErrBackupConflict
-	}
-	return prepared, nil
-}
-
-func preflightPeerSFTPRepository(ctx context.Context, work pendingPeerBackup) error {
-	if err := requirePoolAuthorityWritable(work.store); err != nil {
-		return permanentPeerBackupError{ErrBackupUnavailable}
-	}
-	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
-		!reflect.DeepEqual(current.SFTPSource, work.localRepo.SFTPSource) || !reflect.DeepEqual(current.RemoteIdentity, work.localRepo.RemoteIdentity) {
-		return permanentPeerBackupError{ErrBackupConflict}
-	}
-	body, err := json.Marshal(work.repo)
+// postPeerCapability asks the member to prepare the destination and decodes its reply.
+func postPeerCapability(ctx context.Context, work pendingPeerBackup, name, route string, payload, reply any) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.member.PeerOrigin, "/")+poolBackupPeerPath+"/capability/sftp", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.member.PeerOrigin, "/")+poolBackupPeerPath+route, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := work.client.Do(request)
 	if err != nil {
-		return errors.New("member SFTP backup capability unavailable")
+		return fmt.Errorf("member %s backup capability unavailable", name)
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusBadRequest ||
-		response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return permanentPeerBackupError{errors.New("member SFTP backup capability is unsupported or refused")}
+	if permanentPeerStatus(response.StatusCode) {
+		return permanentPeerBackupError{fmt.Errorf("member %s backup capability is unsupported or refused", name)}
 	}
 	if response.StatusCode != http.StatusOK {
-		return errors.New("member SFTP backup capability unavailable")
+		return fmt.Errorf("member %s backup capability unavailable", name)
 	}
-	var reply peerSFTPCapabilityResponse
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
-		work.localRepo.RemoteIdentity == nil || reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
-		return permanentPeerBackupError{errors.New("member SFTP backup capability identity changed")}
+	if decoder.Decode(reply) != nil {
+		return peerCapabilityChanged(name)
+	}
+	return nil
+}
+
+func peerCapabilityChanged(name string) error {
+	return permanentPeerBackupError{fmt.Errorf("member %s backup capability identity changed", name)}
+}
+
+func preflightPeerS3Repository(ctx context.Context, work pendingPeerBackup) error {
+	if err := preflightPeerSource(work); err != nil {
+		return err
+	}
+	var reply peerS3CapabilityResponse
+	if err := postPeerCapability(ctx, work, "S3", "/capability/s3", work.repo, &reply); err != nil {
+		return err
+	}
+	if reply.CredentialRef != work.repo.CredentialRef || work.localRepo.RemoteIdentity == nil ||
+		reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
+		return peerCapabilityChanged("S3")
+	}
+	return nil
+}
+
+func preflightPeerSFTPRepository(ctx context.Context, work pendingPeerBackup) error {
+	if err := preflightPeerSource(work); err != nil {
+		return err
+	}
+	var reply peerSFTPCapabilityResponse
+	if err := postPeerCapability(ctx, work, "SFTP", "/capability/sftp", work.repo, &reply); err != nil {
+		return err
+	}
+	if reply.CredentialRef != work.repo.CredentialRef || work.localRepo.RemoteIdentity == nil ||
+		reply.Fingerprint != work.localRepo.RemoteIdentity.Fingerprint {
+		return peerCapabilityChanged("SFTP")
 	}
 	return nil
 }
@@ -582,75 +576,16 @@ func samePeerSMBIdentity(a, b *protocol.SMBStorageIdentity) bool {
 	return a != nil && b != nil && a.Server == b.Server && a.Share == b.Share && a.MarkerID == b.MarkerID
 }
 
-func preparePeerSMBRepository(ctx context.Context, s *Store, repo protocol.BackupRepository, identity *protocol.SMBStorageIdentity) (protocol.BackupRepository, error) {
-	if !validPeerSMBIdentity(repo, identity) {
-		return protocol.BackupRepository{}, ErrBackupInvalid
-	}
-	membership, err := Membership(s)
-	if err != nil || membership.MasterHostID == s.State.HostID {
-		return protocol.BackupRepository{}, ErrBackupUnavailable
-	}
-	self, ok := poolMemberByID(membership, s.State.HostID)
-	if !ok || self.Status != "ready" {
-		return protocol.BackupRepository{}, ErrBackupUnavailable
-	}
-	current, err := GetPoolBackupRepository(s, repo.ID)
-	if err == nil && (current.Kind != repo.Kind || current.CredentialRef != repo.CredentialRef || !reflect.DeepEqual(current.SMBSource, repo.SMBSource) ||
-		!samePeerSMBIdentity(identity, current.SMBIdentity)) {
-		return protocol.BackupRepository{}, ErrBackupConflict
-	}
-	if err != nil && !errors.Is(err, ErrBackupRepoNotFound) {
-		return protocol.BackupRepository{}, err
-	}
-	adopt := repo
-	adopt.SMBIdentity = identity
-	prepared, err := prepareBackupRepositoryForAdoption(ctx, s, adopt)
-	if err != nil {
-		return protocol.BackupRepository{}, err
-	}
-	if !preparedBackupRepositoryMatches(repo, prepared) || !samePeerSMBIdentity(identity, prepared.SMBIdentity) {
-		return protocol.BackupRepository{}, ErrBackupConflict
-	}
-	return prepared, nil
-}
-
 func preflightPeerSMBRepository(ctx context.Context, work pendingPeerBackup) error {
-	if err := requirePoolAuthorityWritable(work.store); err != nil {
-		return permanentPeerBackupError{ErrBackupUnavailable}
-	}
-	current, err := GetPoolBackupRepository(work.store, work.localRepo.ID)
-	if err != nil || current.CredentialRef != work.localRepo.CredentialRef ||
-		!samePeerSMBIdentity(current.SMBIdentity, work.localRepo.SMBIdentity) ||
-		!reflect.DeepEqual(current.SMBSource, work.localRepo.SMBSource) {
-		return permanentPeerBackupError{ErrBackupConflict}
-	}
-	requestBody, err := json.Marshal(peerSMBCapabilityRequest{Repository: work.repo, ExpectedIdentity: *work.localRepo.SMBIdentity})
-	if err != nil {
+	if err := preflightPeerSource(work); err != nil {
 		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.member.PeerOrigin, "/")+poolBackupPeerPath+"/capability/smb3", bytes.NewReader(requestBody))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := work.client.Do(request)
-	if err != nil {
-		return errors.New("member SMB backup capability unavailable")
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusBadRequest ||
-		response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return permanentPeerBackupError{errors.New("member SMB backup capability is unsupported or refused")}
-	}
-	if response.StatusCode != http.StatusOK {
-		return errors.New("member SMB backup capability unavailable")
 	}
 	var reply peerSMBCapabilityResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&reply) != nil || reply.CredentialRef != work.repo.CredentialRef ||
-		!samePeerSMBIdentity(&reply.Identity, work.localRepo.SMBIdentity) {
-		return permanentPeerBackupError{errors.New("member SMB backup capability identity changed")}
+	if err := postPeerCapability(ctx, work, "SMB", "/capability/smb3", peerSMBCapabilityRequest{Repository: work.repo, ExpectedIdentity: *work.localRepo.SMBIdentity}, &reply); err != nil {
+		return err
+	}
+	if reply.CredentialRef != work.repo.CredentialRef || !samePeerSMBIdentity(&reply.Identity, work.localRepo.SMBIdentity) {
+		return peerCapabilityChanged("SMB")
 	}
 	return nil
 }
@@ -843,8 +778,7 @@ func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompl
 	}
 	post.Header.Set("Content-Type", "application/json")
 	result.reply, status, result.err = doPeerBackup(work.client, post)
-	if result.err != nil && (status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden ||
-		status == http.StatusNotFound || status == http.StatusMethodNotAllowed) {
+	if result.err != nil && permanentPeerStatus(status) {
 		result.err = permanentPeerBackupError{result.err}
 	}
 	if result.err == nil {

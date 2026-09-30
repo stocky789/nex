@@ -3,7 +3,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -292,44 +291,26 @@ func TestJoinBackupCredentialSyncRetryAndLegacyNFS(t *testing.T) {
 			}
 			err = JoinPoolPeer(context.Background(), member, server.URL, ca, offer)
 			pending := peerState(t, member).PendingRehome
+			if err == nil || pending == nil || gets.Load() != 1 {
+				t.Fatalf("missing durable sync retry: pending=%+v gets=%d err=%v", pending, gets.Load(), err)
+			}
+			blocked.Store(false)
+			// The cluster worker must never rehome: it does not own the Store.
+			if err := RetryPoolPeerOrigin(context.Background(), member); err != nil || peerState(t, member).PendingRehome == nil {
+				t.Fatalf("cluster worker resumed the pending rehome: err=%v", err)
+			}
+			// The Run loop's pool-join resumption finishes it on the owning goroutine.
+			if err := ResumePoolRehome(context.Background(), member); err != nil {
+				t.Fatal(err)
+			}
+			if peerState(t, member).PendingRehome != nil {
+				t.Fatal("completed sync remained pending")
+			}
 			if withSecret {
-				if err == nil || pending == nil || !pending.BackupCredentialSync || gets.Load() != 1 {
-					t.Fatalf("missing durable sync retry: pending=%+v gets=%d err=%v", pending, gets.Load(), err)
-				}
-				blocked.Store(false)
-				// The cluster worker must never rehome: it does not own the Store.
-				if err := RetryPoolPeerOrigin(context.Background(), member); err != nil || peerState(t, member).PendingRehome == nil {
-					t.Fatalf("cluster worker resumed the pending rehome: err=%v", err)
-				}
-				// The Run loop's pool-join resumption finishes it on the owning goroutine.
-				if err := ResumePoolRehome(context.Background(), member); err != nil {
-					t.Fatal(err)
-				}
-				if peerState(t, member).PendingRehome != nil {
-					t.Fatal("completed sync remained pending")
-				}
 				if _, err := localBackupCredential(member, repo); err != nil {
 					t.Fatalf("retry lost credential: %v", err)
 				}
-			} else if err != nil || pending != nil || gets.Load() != 0 {
-				t.Fatalf("NFS-only join called new route: pending=%+v gets=%d err=%v", pending, gets.Load(), err)
 			}
 		})
-	}
-}
-
-func TestPendingBackupCredentialSyncPersistence(t *testing.T) {
-	s := seedBackupMaster(t)
-	state := peerState(t, s)
-	state.PendingRehome = &poolRehome{PoolID: "pool-1", PoolName: "Pool", BackupCredentialSync: true}
-	if err := savePoolPeer(s, state); err != nil {
-		t.Fatal(err)
-	}
-	if loaded := peerState(t, s).PendingRehome; loaded == nil || !loaded.BackupCredentialSync {
-		t.Fatal("pending sync did not survive reload")
-	}
-	var legacy poolRehome
-	if err := json.Unmarshal([]byte(`{"PoolID":"pool-1","PoolName":"Pool"}`), &legacy); err != nil || legacy.BackupCredentialSync {
-		t.Fatalf("legacy rehome did not default to no sync: %+v %v", legacy, err)
 	}
 }

@@ -109,12 +109,12 @@ func TestBackupAuthorityPushSendsSignedReplicaOncePerSession(t *testing.T) {
 func TestBackupAuthorityPushSessionRefusesForgedStaleAndExpired(t *testing.T) {
 	lab := promotionLab(t, 1)
 	master := lab.host("master-1")
-	seedLargeBackupRuns(t, master, 300) // about 1.3 MiB: version-0 pages
+	seedLargeBackupRuns(t, master, 300)
 	posts := recordPagePosts(lab)
 	pushReplicas(t, master)
 	replica, _, err := buildPoolAuthorityReplica(master)
 	manifest := replica.BackupManifest
-	if err != nil || manifest == nil || manifest.Version != 0 || len(posts.opens) != 1 {
+	if err != nil || manifest == nil || len(posts.opens) != 1 {
 		t.Fatalf("manifest = %#v opens = %d %v", manifest, len(posts.opens), err)
 	}
 	page, err := readPoolBackupPage(master, manifest, 0)
@@ -127,10 +127,8 @@ func TestBackupAuthorityPushSessionRefusesForgedStaleAndExpired(t *testing.T) {
 	if code := send(manifest.SHA256, page); code != http.StatusNoContent {
 		t.Fatalf("page of the open session = %d", code)
 	}
-	forged := append([]byte(nil), page...)
-	forged[0] ^= 1
-	if code := send(manifest.SHA256, forged); code != http.StatusBadRequest {
-		t.Fatalf("page whose hash the manifest does not list = %d", code)
+	if code := postPage(t, master, lab, poolBackupPageUpload{ManifestSHA256: manifest.SHA256, Index: 0, ReuseSHA256: "not-a-digest"}); code != http.StatusBadRequest {
+		t.Fatalf("page reuse of an invalid digest = %d", code)
 	}
 	if code := send(strings.Repeat("a", 64), page); code != http.StatusConflict {
 		t.Fatalf("page of a manifest that was never verified = %d", code)

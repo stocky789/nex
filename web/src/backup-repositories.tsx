@@ -4,7 +4,7 @@ import type { API, Host } from "./types";
 import { AccessLights, Badge, MiniBar, Section, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
 import {
-  availableBackupKinds, backupOpID, repositoryTarget, repositoryHealth, rid,
+  backupKinds, backupOpID, repositoryTarget, repositoryHealth, rid,
   type BackupKind, type BackupMemberAccess, type BackupRepository,
 } from "./backup-types";
 import "./settings.css";
@@ -19,7 +19,7 @@ type Props = {
   onNotice: (text: string, operationID?: string) => void;
 };
 
-const blankRemote = { kind: "nfs" as BackupKind, share: "", endpoint: "", bucket: "", prefix: "", region: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "", domain: "" };
+const blankRemote = { kind: "nfs" as BackupKind, server: "", exportPath: "", directory: "", share: "", endpoint: "", bucket: "", prefix: "", region: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "", domain: "" };
 
 const validHost = (value: string) => value !== "" && !/[\s/\\@]/.test(value);
 const validComponent = (value: string) => value !== "" && value !== "." && value !== ".." && !/[/\\]/.test(value);
@@ -28,11 +28,9 @@ const validRelative = (path: string) => path.split("/").every(validComponent);
 // validSMBDomain mirrors Core: an optional plain domain or workgroup name.
 export const validSMBDomain = (value: string) => value.length <= 253 && !/[\s\p{Cc}/\\=,;'"`$&|<>()]/u.test(value);
 
-type DestinationFields = typeof blankRemote & { server: string; exportPath: string; directory: string };
-
 // backupSource builds the registration source, or null when Core's validator would refuse it,
 // so the credential is never delivered for a destination that cannot be registered.
-export function backupSource(f: DestinationFields) {
+export function backupSource(f: typeof blankRemote) {
   const server = f.server.trim(), directory = f.directory.trim();
   if (f.kind === "nfs") {
     const exportPath = f.exportPath.trim();
@@ -130,9 +128,6 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const [error, setError] = useState("");
   const [form, setForm] = useState(false);
   const [name, setName] = useState("");
-  const [server, setServer] = useState("");
-  const [exportPath, setExportPath] = useState("");
-  const [directory, setDirectory] = useState("");
   const [remote, setRemote] = useState(blankRemote);
   const [working, setWorking] = useState("");
   const [createUncertain, setCreateUncertain] = useState(false);
@@ -143,13 +138,10 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const loadAbort = useRef<AbortController | null>(null);
   const createKey = "create";
   const credentialKey = "credential";
-  const master = hosts.find(h => h.id === masterHostID);
-  const availableKinds = availableBackupKinds(master?.connection, master?.capabilities);
-  const remoteAvailable = remote.kind === "nfs" || availableKinds.includes(remote.kind);
-  const source = backupSource({ ...remote, server, exportPath, directory });
+  const source = backupSource(remote);
   const credentialReady = remote.kind === "nfs" || Boolean(remote.username.trim() && !(remote.kind === "smb3" && (remote.username.includes("=") || !validSMBDomain(remote.domain.trim()))) &&
     (credentialReceipt.current || (remote.kind === "sftp" ? remote.sshKey.trim() : remote.secret)));
-  const canCreate = Boolean(name.trim() && source && credentialReady && remoteAvailable && !unavailable && !busy);
+  const canCreate = Boolean(name.trim() && source && credentialReady && !unavailable && !busy);
 
   const load = async () => {
     loadAbort.current?.abort();
@@ -194,9 +186,6 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     setCreateUncertain(false);
     setForm(false);
     setName("");
-    setServer("");
-    setExportPath("");
-    setDirectory("");
     setRemote(blankRemote);
   };
   const change = (update: () => void) => {
@@ -315,21 +304,19 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
       <form className="vm-fields" onSubmit={onCreate}>
         {createUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact registration.</p>}
         <label>Name<input required maxLength={100} value={name} autoFocus disabled={fieldsDisabled} onChange={e => change(() => setName(e.target.value))} /></label>
-        {(availableKinds.length > 1 || remote.kind !== "nfs") && <label>Destination type<select value={remote.kind} disabled={fieldsDisabled} onChange={e => patchRemote({ ...blankRemote, kind: e.target.value as BackupKind })}>
-          {availableKinds.map(kind => <option key={kind} value={kind}>{kind === "smb3" ? "SMB3" : kind === "s3" ? "S3 compatible" : kind === "sftp" ? "SFTP" : "NFS"}</option>)}
-          {!remoteAvailable && <option value={remote.kind} disabled>{remote.kind.toUpperCase()} unavailable</option>}
-        </select></label>}
-        {!remoteAvailable && <p className="why" role="status">This destination type is no longer available from the pool master. Reconnect or select NFS.</p>}
+        <label>Destination type<select value={remote.kind} disabled={fieldsDisabled} onChange={e => patchRemote({ ...blankRemote, kind: e.target.value as BackupKind, server: remote.server, exportPath: remote.exportPath, directory: remote.directory })}>
+          {backupKinds.map(kind => <option key={kind} value={kind}>{kind === "smb3" ? "SMB3" : kind === "s3" ? "S3 compatible" : kind === "sftp" ? "SFTP" : "NFS"}</option>)}
+        </select></label>
         {remote.kind === "s3" ? <>
           <label>HTTPS endpoint<input required type="url" value={remote.endpoint} disabled={fieldsDisabled} placeholder="https://objects.example.test" onChange={e => patchRemote({ endpoint: e.target.value })} /></label>
           <label>Bucket<input required value={remote.bucket} disabled={fieldsDisabled} onChange={e => patchRemote({ bucket: e.target.value })} /></label>
           <label>Prefix<input value={remote.prefix} disabled={fieldsDisabled} placeholder="Optional" onChange={e => patchRemote({ prefix: e.target.value })} /></label>
           <label>Region<input value={remote.region} disabled={fieldsDisabled} placeholder="us-east-1" pattern="[a-z0-9\-]{0,32}" onChange={e => patchRemote({ region: e.target.value })} /></label>
         </> : <>
-          <label>{remote.kind === "nfs" ? "NFS server" : remote.kind === "smb3" ? "SMB server" : "Server"}<input required value={server} disabled={fieldsDisabled} placeholder="backup.example.test" onChange={e => change(() => setServer(e.target.value))} /></label>
-          {remote.kind === "nfs" && <label>Export path<input required value={exportPath} disabled={fieldsDisabled} placeholder="/exports/backups" pattern="/.*" onChange={e => change(() => setExportPath(e.target.value))} /></label>}
+          <label>{remote.kind === "nfs" ? "NFS server" : remote.kind === "smb3" ? "SMB server" : "Server"}<input required value={remote.server} disabled={fieldsDisabled} placeholder="backup.example.test" onChange={e => patchRemote({ server: e.target.value })} /></label>
+          {remote.kind === "nfs" && <label>Export path<input required value={remote.exportPath} disabled={fieldsDisabled} placeholder="/exports/backups" pattern="/.*" onChange={e => patchRemote({ exportPath: e.target.value })} /></label>}
           {remote.kind === "smb3" && <label>Share<input required value={remote.share} disabled={fieldsDisabled} onChange={e => patchRemote({ share: e.target.value })} /></label>}
-          {(remote.kind === "nfs" || remote.kind === "smb3") && <label>Directory within {remote.kind === "nfs" ? "export" : "share"}<input value={directory} disabled={fieldsDisabled} placeholder="Optional" onChange={e => change(() => setDirectory(e.target.value))} /></label>}
+          {(remote.kind === "nfs" || remote.kind === "smb3") && <label>Directory within {remote.kind === "nfs" ? "export" : "share"}<input value={remote.directory} disabled={fieldsDisabled} placeholder="Optional" onChange={e => patchRemote({ directory: e.target.value })} /></label>}
           {remote.kind === "sftp" && <>
             <label>Port<input type="number" min="1" max="65535" value={remote.port} disabled={fieldsDisabled} placeholder="22" onChange={e => patchRemote({ port: e.target.value })} /></label>
             <label>Repository root<input required value={remote.root} disabled={fieldsDisabled} placeholder="/backups" pattern="/.*" onChange={e => patchRemote({ root: e.target.value })} /></label>

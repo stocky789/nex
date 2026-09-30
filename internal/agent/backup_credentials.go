@@ -294,19 +294,32 @@ func readBackupCredentials(s *Store, dir string) (files []backupCredentialFile, 
 	return files, damaged, nil
 }
 
+// loadBackupCredentials reads every receipt, or none when no receipt was ever
+// saved. The caller holds clusterSecretMu.
+func loadBackupCredentials(s *Store) (files []backupCredentialFile, damaged int, err error) {
+	if _, err := os.Lstat(filepath.Join(s.dir, clusterSecretDirectory, "backup")); os.IsNotExist(err) {
+		return nil, 0, nil
+	}
+	dir, err := backupCredentialDir(s)
+	if err != nil {
+		return nil, 0, err
+	}
+	return readBackupCredentials(s, dir)
+}
+
+// valid reports whether the receipt's kind and identifiers are well formed.
+func (r backupCredentialReceipt) valid() bool {
+	return backupCredentialKind(r.Kind) && protocol.ValidSnapshotOperationID(r.Reference) &&
+		protocol.ValidSnapshotOperationID(r.RequestID) && protocol.ValidSnapshotOperationID(r.RepositoryID) &&
+		protocol.ValidSnapshotOperationID(r.OperationID)
+}
+
 // eraseForeignBackupCredentials removes every receipt, retired or not, that belongs to a pool or host this Core no longer is. Call it after a pool
 // change: a host that joined another pool or was ejected keeps no old pool's secret.
 func eraseForeignBackupCredentials(s *Store) error {
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	if _, err := os.Lstat(filepath.Join(s.dir, clusterSecretDirectory, "backup")); os.IsNotExist(err) {
-		return nil
-	}
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return err
-	}
-	files, _, err := readBackupCredentials(s, dir)
+	files, _, err := loadBackupCredentials(s)
 	if err != nil {
 		return err
 	}
@@ -448,11 +461,7 @@ func resolveBackupCredential(s *Store, repo protocol.BackupRepository, operation
 	}
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return empty, err
-	}
-	files, _, err := readBackupCredentials(s, dir)
+	files, _, err := loadBackupCredentials(s)
 	if err != nil {
 		return empty, err
 	}
@@ -464,7 +473,7 @@ func resolveBackupCredential(s *Store, repo protocol.BackupRepository, operation
 		}
 		if r.PoolID != repo.PoolID || r.HostID != s.State.HostID || r.RepositoryID != repo.ID || r.Kind != repo.Kind ||
 			(operationID != "" && r.OperationID != operationID) ||
-			!r.RetiredAt.IsZero() || !protocol.ValidSnapshotOperationID(r.RequestID) || !protocol.ValidSnapshotOperationID(r.OperationID) {
+			!r.RetiredAt.IsZero() || !r.valid() {
 			return empty, errors.New("backup credential receipt scope is invalid")
 		}
 		return stored.Credentials, nil
@@ -525,11 +534,7 @@ func BackupCredentialReceipts(s *Store) ([]protocol.StorageCredentialReceipt, er
 	defer backupCredentialPreparationMu.Unlock()
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return nil, err
-	}
-	files, damaged, err := readBackupCredentials(s, dir)
+	files, damaged, err := loadBackupCredentials(s)
 	if err != nil {
 		return nil, err
 	}
@@ -540,9 +545,7 @@ func BackupCredentialReceipts(s *Store) ([]protocol.StorageCredentialReceipt, er
 		if r.PoolID != s.State.PoolID || r.HostID != s.State.HostID {
 			continue // a former pool's receipt; eraseForeignBackupCredentials removes it
 		}
-		if !backupCredentialKind(r.Kind) ||
-			!protocol.ValidSnapshotOperationID(r.Reference) || !protocol.ValidSnapshotOperationID(r.RequestID) ||
-			!protocol.ValidSnapshotOperationID(r.RepositoryID) || !protocol.ValidSnapshotOperationID(r.OperationID) {
+		if !r.valid() {
 			damaged++
 			continue
 		}
@@ -639,16 +642,7 @@ func retireBackupCredentialFile(s *Store, path string, stored storedBackupCreden
 // findBackupCredential returns the backup receipt with reference, or nil when there is
 // none. The caller holds clusterSecretMu.
 func findBackupCredential(s *Store, reference string) (*backupCredentialFile, error) {
-	if _, err := os.Lstat(filepath.Join(s.dir, clusterSecretDirectory, "backup")); os.IsNotExist(err) {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return nil, err
-	}
-	files, _, err := readBackupCredentials(s, dir)
+	files, _, err := loadBackupCredentials(s)
 	if err != nil {
 		return nil, err
 	}
@@ -680,11 +674,7 @@ func RetireBackupCredential(s *Store, oldRepo, newRepo protocol.BackupRepository
 	}
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	dir, err := backupCredentialDir(s)
-	if err != nil {
-		return err
-	}
-	files, _, err := readBackupCredentials(s, dir)
+	files, _, err := loadBackupCredentials(s)
 	if err != nil {
 		return err
 	}

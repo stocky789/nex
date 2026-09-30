@@ -43,11 +43,6 @@ func TestBackupDestinationRelayFailsClosedWithoutCoreSupport(t *testing.T) {
 	a.cookie = cookie
 
 	a.call("POST", path, map[string]any{
-		"request_id": "repo-register-2", "id": "repo-2", "name": "Remote", "kind": "s3",
-		"credential_ref": "opaque-ref", "credential_request_id": "credential-2",
-		"s3_source": map[string]string{"endpoint": "https://objects.example.test", "bucket": "backups"},
-	}, nil, 409)
-	a.call("POST", path, map[string]any{
 		"request_id": "repo-register-3", "id": "repo-3", "name": "Unknown", "kind": "unknown",
 	}, nil, 400)
 
@@ -59,7 +54,7 @@ func TestBackupDestinationRelayFailsClosedWithoutCoreSupport(t *testing.T) {
 		t.Fatal("Controller persisted rejected credential material")
 	}
 	var count int
-	if err := a.c.db.QueryRow("SELECT count(*) FROM managed_resources WHERE request_id IN ('repo-register-2','repo-register-3')").Scan(&count); err != nil || count != 0 {
+	if err := a.c.db.QueryRow("SELECT count(*) FROM managed_resources WHERE request_id='repo-register-3'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("unsupported destination was queued: %d, %v", count, err)
 	}
 }
@@ -70,7 +65,7 @@ func TestBackupCredentialHandoffAndRegistrationKeepSecretOutOfDatabase(t *testin
 	pool := a.poolOf(master.HostID)
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
 		Version: 1, Sequence: 1,
-		Capabilities: []string{protocol.ManagedVMCapability, "backup-destination-s3-v1"},
+		Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory:    &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
 	})
 	const registrationID = "repo-reg-remote"
@@ -230,7 +225,7 @@ func TestBackupCredentialHandoffDomainValidation(t *testing.T) {
 	pool := a.poolOf(master.HostID)
 	a.report(certificate(t, master.CertificatePEM), protocol.ReportRequest{
 		Version: 1, Sequence: 1,
-		Capabilities: []string{protocol.ManagedVMCapability, "backup-destination-smb3-v1"},
+		Capabilities: []string{protocol.ManagedVMCapability},
 		Inventory:    &protocol.Inventory{Hostname: "core", Managed: hostDefaults(master.HostID)},
 	})
 	smb := &backupCredentialRepository{Name: "Share", SMBSource: &protocol.SMBStorageSource{Server: "smb.example.test", Share: "backups"}}

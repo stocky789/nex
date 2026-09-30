@@ -1197,14 +1197,12 @@ type PoolAuthorityReplica struct {
 	FenceCredentials []PoolWrappedFenceCredential `json:"fence_credentials,omitempty"`
 	// WitnessCredentials contains a separately sealed native PKCS#12 bundle for each member.
 	WitnessCredentials []PoolWrappedWitnessCredential `json:"witness_credentials,omitempty"`
-	// BackupAuthority carries durable backup repositories, policy/schedule definitions,
-	// retained run history and catalog index entries for master takeover. Full NFS
-	// recovery-point payloads are never embedded. Covered by ContentDigest and signature;
-	// not a PoolReplicaSections entry so older section layout stays compatible when empty.
-	BackupAuthority *PoolBackupAuthority `json:"backup_authority,omitempty"`
-	BackupManifest  *PoolBackupManifest  `json:"backup_manifest,omitempty"`
-	Sections        []PoolReplicaSection `json:"sections"`
-	Signature       string               `json:"signature,omitempty"`
+	// BackupManifest binds the paged backup authority (repositories, policy/schedule
+	// definitions, retained runs, catalog index) for master takeover. Full NFS
+	// recovery-point payloads are never embedded. Covered by ContentDigest and signature.
+	BackupManifest *PoolBackupManifest  `json:"backup_manifest,omitempty"`
+	Sections       []PoolReplicaSection `json:"sections"`
+	Signature      string               `json:"signature,omitempty"`
 }
 
 // SigningBytes is everything but the signature: the per-member fields are deliberately
@@ -1297,12 +1295,8 @@ func (r PoolAuthorityReplica) Valid() error {
 	if err := ValidatePoolResourceMutations(r.ResourceMutations); err != nil {
 		return err
 	}
-	if r.BackupManifest != nil {
-		if r.BackupAuthority != nil || r.BackupManifest.Valid() != nil {
-			return errors.New("pool authority replica backup manifest is invalid")
-		}
-	} else if r.BackupAuthority != nil && r.BackupAuthority.Valid() != nil {
-		return errors.New("pool authority replica backup authority is invalid")
+	if r.BackupManifest != nil && r.BackupManifest.Valid() != nil {
+		return errors.New("pool authority replica backup manifest is invalid")
 	}
 	return r.VerifySections()
 }

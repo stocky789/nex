@@ -527,7 +527,8 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 	unit, unitPath := remoteUnitPath(s)
 	content := remoteUnit(source, path, fstype, options, credential)
 	allowed, _ := ctx.Value(storageRemountAllowedKey{}).(bool)
-	changed, old, created, err := replaceManagedMountUnit(unitPath, content, allowed)
+	old, created, err := replaceManagedMountUnit(unitPath, content, allowed)
+	changed := old != nil
 	if err != nil {
 		return "", err
 	}
@@ -670,34 +671,34 @@ func writeManagedMountUnit(path string, content []byte) error {
 }
 
 // replaceManagedMountUnit updates only an existing Nex unit. It returns its previous contents
-// for rollback; callers must not restart it until Core has blocked repository dependencies.
-func replaceManagedMountUnit(path string, content []byte, allowRemount bool) (changed bool, old []byte, created bool, err error) {
+// for rollback, non-nil only when it rewrote the unit; callers must not restart it until Core has blocked repository dependencies.
+func replaceManagedMountUnit(path string, content []byte, allowRemount bool) (old []byte, created bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return false, nil, false, err
+		return nil, false, err
 	}
 	old, err = os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := writeManagedMountUnit(path, content); err != nil {
-			return false, nil, false, err
+			return nil, false, err
 		}
-		return false, nil, true, nil
+		return nil, true, nil
 	}
 	if err != nil {
-		return false, nil, false, err
+		return nil, false, err
 	}
 	if !strings.HasPrefix(string(old), nexMountMarker) {
-		return false, nil, false, errors.New("refusing to replace an existing mount unit")
+		return nil, false, errors.New("refusing to replace an existing mount unit")
 	}
 	if string(old) == string(content) {
-		return false, nil, false, nil
+		return nil, false, nil
 	}
 	if !allowRemount {
-		return false, nil, false, errors.New("storage mount change requires Core to block repository dependencies")
+		return nil, false, errors.New("storage mount change requires Core to block repository dependencies")
 	}
 	if err := atomicWrite(path, content); err != nil {
-		return false, nil, false, err
+		return nil, false, err
 	}
-	return true, old, false, nil
+	return old, false, nil
 }
 
 func verifyRemoteMount(ctx context.Context, path, source, fstype string, required []string) error {

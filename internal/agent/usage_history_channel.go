@@ -68,8 +68,8 @@ func serveStatsChannel(ctx context.Context, s State, req protocol.StatsChannelRe
 func statsChannelHandler(history http.Handler, store *Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/stats", history)
-	mux.HandleFunc("GET /backup-runs", func(w http.ResponseWriter, r *http.Request) { backupInventoryPage(w, r, store, false) })
-	mux.HandleFunc("GET /backup-catalog", func(w http.ResponseWriter, r *http.Request) { backupInventoryPage(w, r, store, true) })
+	mux.HandleFunc("GET /backup-runs", func(w http.ResponseWriter, r *http.Request) { serveBackupRunPage(w, r, store) })
+	mux.HandleFunc("GET /backup-catalog", func(w http.ResponseWriter, r *http.Request) { serveBackupCatalogPage(w, r, store) })
 	mux.HandleFunc("GET /hardware", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(readHardware(r.Context(), "/"))

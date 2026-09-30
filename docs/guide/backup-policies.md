@@ -7,7 +7,7 @@ history on the pool master. Controller lists, creates, pauses and Run now throug
 authenticated APIs. Core schedules can run while Controller is absent. The Create
 policy UI currently submits `stopped`; quiesced capture is refused, and online
 crash capture is limited to supported running BIOS guests.
-NFS, SMB3, S3-compatible and SFTP repositories are advertised in the current
+NFS, SMB3, S3-compatible and SFTP repositories are supported in the current
 development build. The final enabled-build browser and timed scheduler gates
 remain open; use the selected destination's fresh Core health and host access
 before relying on a policy.

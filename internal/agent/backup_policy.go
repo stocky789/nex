@@ -4,8 +4,10 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -339,12 +341,7 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 	if err != nil {
 		return false, err
 	}
-	repoIDs := make([]string, 0, len(repos.Repositories))
-	for id := range repos.Repositories {
-		repoIDs = append(repoIDs, id)
-	}
-	sort.Strings(repoIDs)
-	for _, id := range repoIDs {
+	for _, id := range slices.Sorted(maps.Keys(repos.Repositories)) {
 		repo := repos.Repositories[id]
 		repo.Access, repo.MemberAccess, repo.Health = protocol.StorageAccess{}, nil, protocol.BackupRepositoryHealth{}
 		if err := visit(1, repo); err != nil {
@@ -355,23 +352,19 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 	if err != nil {
 		return false, err
 	}
-	policyIDs := make([]string, 0, len(policies.Policies))
-	for id := range policies.Policies {
-		policyIDs = append(policyIDs, id)
-	}
-	sort.Strings(policyIDs)
-	for _, id := range policyIDs {
+	for _, id := range slices.Sorted(maps.Keys(policies.Policies)) {
 		if err := visit(2, policies.Policies[id]); err != nil {
 			return false, err
 		}
 	}
 	for _, group := range []struct {
-		kind byte
-		path string
+		kind    byte
+		path    string
+		corrupt string
 	}{
-		{3, poolBackupRunsPath(s)},
-		{4, poolBackupCatalogPath(s)},
-		{6, poolBackupReceiptsPath(s)},
+		{3, poolBackupRunsPath(s), "backup run record is corrupt"},
+		{4, poolBackupCatalogPath(s), "backup catalog entry is corrupt"},
+		{6, poolBackupReceiptsPath(s), "backup metadata receipt is corrupt"},
 	} {
 		entries, err := os.ReadDir(group.path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -391,26 +384,28 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 			if err != nil {
 				return false, err
 			}
+			// Every record is named for its ID; a mismatch means the file is corrupt.
+			var record any
+			var valid error
+			var id string
 			switch group.kind {
 			case 3:
 				var run protocol.BackupRun
-				if json.Unmarshal(raw, &run) != nil || run.Valid() != nil || run.OperationID+".json" != entry.Name() {
-					return false, errors.New("backup run record is corrupt")
-				}
-				err = visit(3, run)
+				err = json.Unmarshal(raw, &run)
+				record, valid, id = run, run.Valid(), run.OperationID
 			case 4:
 				var point protocol.BackupRecoveryPoint
-				if json.Unmarshal(raw, &point) != nil || point.Valid() != nil || point.ID+".json" != entry.Name() {
-					return false, errors.New("backup catalog entry is corrupt")
-				}
-				err = visit(4, point)
+				err = json.Unmarshal(raw, &point)
+				record, valid, id = point, point.Valid(), point.ID
 			case 6:
 				var receipt protocol.BackupMetadataReceipt
-				if json.Unmarshal(raw, &receipt) != nil || receipt.Valid() != nil || receipt.OperationID+".json" != entry.Name() {
-					return false, errors.New("backup metadata receipt is corrupt")
-				}
-				err = visit(6, receipt)
+				err = json.Unmarshal(raw, &receipt)
+				record, valid, id = receipt, receipt.Valid(), receipt.OperationID
 			}
+			if err != nil || valid != nil || id+".json" != entry.Name() {
+				return false, errors.New(group.corrupt)
+			}
+			err = visit(group.kind, record)
 			if err != nil {
 				return false, err
 			}
@@ -420,12 +415,7 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 	if err != nil {
 		return false, err
 	}
-	pinIDs := make([]string, 0, len(pins.Pins))
-	for id := range pins.Pins {
-		pinIDs = append(pinIDs, id)
-	}
-	sort.Strings(pinIDs)
-	for _, id := range pinIDs {
+	for _, id := range slices.Sorted(maps.Keys(pins.Pins)) {
 		if err := visit(5, pins.Pins[id]); err != nil {
 			return false, err
 		}

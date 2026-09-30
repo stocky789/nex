@@ -3,16 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { bundleTestModule } from "./test-helpers.mjs";
 
-const { availableBackupKinds, repositoryHealth, repositoryTarget } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "repository-health"));
+const { repositoryHealth, repositoryTarget } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "repository-health"));
 const { backupSource, hostAccess, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: "2026-09-28T09:59:00Z" } }), "online");
 assert.equal(repositoryHealth({ health: { status: "offline", observed_at: "2026-09-28T09:59:00Z" } }), "offline");
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: new Date(Date.now() + 3_600_000).toISOString() } }), "online", "a master clock ahead of the browser does not hide Core's health");
 assert.equal(repositoryHealth({ health: { status: "unknown" } }), "unknown", "Core and the Controller mark stale health unknown");
 assert.equal(repositoryHealth({}), "unknown");
-assert.deepEqual(availableBackupKinds("fresh", []), ["nfs"], "unsupported Core exposes only NFS");
-assert.deepEqual(availableBackupKinds("stale", ["backup-destination-s3-v1"]), ["nfs"], "stale capability cannot enable a destination");
-assert.deepEqual(availableBackupKinds("fresh", ["backup-destination-s3-v1", "backup-destination-sftp-v1"]), ["nfs", "s3", "sftp"]);
 assert.equal(repositoryTarget({ kind: "s3", s3_source: { endpoint: "https://objects.example.test", bucket: "backups", prefix: "pool-a" } }), "https://objects.example.test/backups/pool-a");
 
 const hosts = [

@@ -6352,7 +6352,7 @@
 }</pre></details>
 <details id="BackupRepository"><summary>BackupRepository</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.&quot;,
+  &quot;description&quot;: &quot;Master-owned backup destination record. Kinds are NFS, SMB3, S3 and SFTP; Core validates the kind and source.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepository&quot;,
   &quot;properties&quot;: {
     &quot;id&quot;: {

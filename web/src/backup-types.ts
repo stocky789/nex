@@ -7,13 +7,7 @@ import type { API } from "./types";
 export type BackupNFSSource = { server: string; export: string; directory?: string };
 export type BackupKind = "nfs" | "smb3" | "s3" | "sftp";
 
-export function availableBackupKinds(connection?: string, capabilities: string[] = []): BackupKind[] {
-  const kinds: BackupKind[] = ["nfs"];
-  if (connection === "fresh") for (const kind of ["smb3", "s3", "sftp"] as BackupKind[]) {
-    if (capabilities.includes(`backup-destination-${kind}-v1`)) kinds.push(kind);
-  }
-  return kinds;
-}
+export const backupKinds: BackupKind[] = ["nfs", "smb3", "s3", "sftp"];
 
 export type BackupStorageAccess = {
   status?: string;

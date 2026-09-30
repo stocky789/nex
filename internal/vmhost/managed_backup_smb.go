@@ -104,22 +104,7 @@ func probeBackupFilesystemPublication(root string) (err error) {
 	}()
 	payload := []byte("nex-backup-publication-probe")
 	path := filepath.Join(staging, "artifact")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	if _, err = f.Write(payload); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = syncManagedDir(staging); err != nil {
+	if err = AtomicWrite(path, payload, 0600); err != nil {
 		return err
 	}
 	if err = os.Rename(staging, published); err != nil {

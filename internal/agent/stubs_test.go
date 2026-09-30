@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"nex.local/nex/internal/vmhost"
+	"nex.local/nex/internal/vmhost/vmhosttest"
 )
 
 // TestMain keeps this package's tests off the developer's real hypervisor. Several paths shell
@@ -42,6 +43,6 @@ func runWithStubbedHostTools(m *testing.M) (int, error) {
 	}
 	// SMB credentials are sealed with systemd-creds, which prompts the desktop user for
 	// authentication; vmhost refuses the real tool inside any test binary.
-	vmhost.SetSystemdCredsRunner(vmhost.FakeSystemdCreds)
+	vmhost.SetSystemdCredsRunner(vmhosttest.FakeSystemdCreds)
 	return m.Run(), nil
 }

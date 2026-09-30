@@ -158,10 +158,13 @@ func TestPoolPromotionRetainsBackupAuthority(t *testing.T) {
 
 	pushReplicas(t, master)
 	stored, err := loadPoolReplica(candidate)
-	if err != nil || stored == nil || stored.Replica.BackupAuthority == nil {
+	if err != nil || stored == nil || stored.Replica.BackupManifest == nil {
 		t.Fatalf("candidate replica missing backup authority: %#v err=%v", stored, err)
 	}
-	auth := stored.Replica.BackupAuthority
+	auth, err := loadPoolBackupAuthorityPages(candidate, stored.Replica.BackupManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(auth.Definitions) != 1 || auth.Definitions[0].ID != "pol-1" ||
 		len(auth.History) != 1 || auth.History[0].OperationID != "run-1" ||
 		len(auth.Catalog) != 1 || auth.Catalog[0].ID != "point-1" ||
@@ -308,11 +311,11 @@ func TestPoolPromotionRebuildsCatalogFromNFSWhenIndexEmpty(t *testing.T) {
 
 	pushReplicas(t, master)
 	stored, err := loadPoolReplica(candidate)
-	if err != nil || stored == nil || stored.Replica.BackupAuthority == nil {
+	if err != nil || stored == nil || stored.Replica.BackupManifest == nil {
 		t.Fatalf("candidate replica missing backup authority: %#v err=%v", stored, err)
 	}
-	if len(stored.Replica.BackupAuthority.Catalog) != 0 {
-		t.Fatalf("want empty catalog in replica, got %#v", stored.Replica.BackupAuthority.Catalog)
+	if stored.Replica.BackupManifest.Catalog != 0 {
+		t.Fatalf("want empty catalog in replica, got %d", stored.Replica.BackupManifest.Catalog)
 	}
 
 	lab.powerOff("master-1")
@@ -361,7 +364,7 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 	if err := savePoolPeer(s, peer); err != nil {
 		t.Fatal(err)
 	}
-	rebuildPoolBackupCatalogAfterAuthorityAdopt(context.Background(), s)
+	_ = reconcilePoolBackupCatalogAfterAuthorityAdopt(context.Background(), s, &poolTransferRecord{})
 	catalog, err := loadPoolBackupCatalog(s)
 	if err != nil || len(catalog) != 1 || catalog[0].ID != "point-rebuild" {
 		t.Fatalf("catalog after NFS rebuild: %#v err=%v", catalog, err)

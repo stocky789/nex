@@ -113,7 +113,7 @@ func TestPoolBackupPagedAuthorityRetainsMoreThanFiveThousandRuns(t *testing.T) {
 	if _, err := loadPoolReplica(candidate); err != nil {
 		t.Fatalf("retry did not repair missing page: %v", err)
 	}
-	if len(manifest.PageSHA256) < 2 {
+	if manifest.PageCount < 2 {
 		t.Fatal("expected multiple pages")
 	}
 	second := poolBackupPageFile(candidate, manifest.SHA256, 1)
@@ -124,18 +124,9 @@ func TestPoolBackupPagedAuthorityRetainsMoreThanFiveThousandRuns(t *testing.T) {
 	if err := os.Remove(second); err != nil {
 		t.Fatal(err)
 	}
-	previousWrite := writePoolBackupPage
-	t.Cleanup(func() { writePoolBackupPage = previousWrite })
-	writePoolBackupPage = func(path string, data []byte, mode os.FileMode) error {
-		if filepath.Base(path) == "0000" {
-			return fmt.Errorf("already present prefix page was resent")
-		}
-		return previousWrite(path, data, mode)
-	}
 	if err := PushPoolAuthorityReplicas(context.Background(), master, 20*time.Second); err != nil {
 		t.Fatalf("resumed page push: %v", err)
 	}
-	writePoolBackupPage = previousWrite
 	if restored, err := os.ReadFile(second); err != nil || !bytes.Equal(restored, other) {
 		t.Fatalf("missing middle page was not restored: %v", err)
 	}
@@ -272,84 +263,11 @@ func TestPoolBackupActivationSwitchesAllStoresWithPeerRecord(t *testing.T) {
 	}
 }
 
-func TestPoolBackupAuthorityNearTransferLimit(t *testing.T) {
-	stamp := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
-	auth := &protocol.PoolBackupAuthority{}
-	for i := 0; i < 1000; i++ {
-		auth.History = append(auth.History, protocol.BackupRun{
-			OperationID: fmt.Sprintf("run-%05d", i), Kind: protocol.BackupKindBackupNow,
-			PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed",
-			Error: strings.Repeat("x", 64<<10), CreatedAt: stamp,
-		})
-	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifest.TotalBytes < 60<<20 || manifest.TotalBytes > protocol.PoolBackupBundleLimit || len(manifest.PageBytes) < 200 {
-		t.Fatalf("near-limit manifest is not bounded as expected: bytes=%d pages=%d", manifest.TotalBytes, len(manifest.PageBytes))
-	}
-	again, err := encodePoolBackupAuthority(auth, nil)
-	if err != nil || again.SHA256 != manifest.SHA256 {
-		t.Fatalf("near-limit digest changed: %v", err)
-	}
-	for i := 1000; i < 1050; i++ {
-		auth.History = append(auth.History, protocol.BackupRun{
-			OperationID: fmt.Sprintf("run-%05d", i), Kind: protocol.BackupKindBackupNow,
-			PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed",
-			Error: strings.Repeat("x", 64<<10), CreatedAt: stamp,
-		})
-	}
-	if large, err := encodePoolBackupAuthority(auth, nil); err != nil || large.Version != 2 || large.TotalBytes <= protocol.PoolBackupBundleLimit || large.PageCount <= len(manifest.PageBytes) {
-		t.Fatalf("large authority did not use v2: %+v %v", large, err)
-	}
-}
-
-func TestPoolBackupAuthoritySparsePagesRemainBelowPageLimit(t *testing.T) {
-	stamp := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
-	run := protocol.BackupRun{OperationID: "run-00000", Kind: protocol.BackupKindBackupNow,
-		PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed",
-		Error: strings.Repeat("x", 128<<10), CreatedAt: stamp}
-	body, err := json.Marshal(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	frameBytes := len(body) + 5
-	if frameBytes <= protocol.PoolBackupPageLimit/2 {
-		t.Fatal("fixture does not force one record per page")
-	}
-	count := protocol.PoolBackupBundleLimit / frameBytes
-	auth := &protocol.PoolBackupAuthority{History: make([]protocol.BackupRun, count)}
-	for i := range auth.History {
-		run.OperationID = fmt.Sprintf("run-%05d", i)
-		auth.History[i] = run
-	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(manifest.PageBytes) != count || len(manifest.PageBytes) > 511 {
-		t.Fatalf("sparse authority used %d pages for %d records", len(manifest.PageBytes), count)
-	}
-	run.OperationID = fmt.Sprintf("run-%05d", count)
-	auth.History = append(auth.History, run)
-	if large, err := encodePoolBackupAuthority(auth, nil); err != nil || large.Version != 2 || large.PageCount <= len(manifest.PageBytes) {
-		t.Fatalf("sparse authority did not switch to v2: %+v %v", large, err)
-	}
-}
-
-func TestPoolBackupAuthorityV2ManifestDoesNotCapRetainedRecordCount(t *testing.T) {
-	m := protocol.PoolBackupManifest{Version: 2, SHA256: strings.Repeat("a", 64), PageCount: 1,
+func TestPoolBackupAuthorityManifestDoesNotCapRetainedRecordCount(t *testing.T) {
+	m := protocol.PoolBackupManifest{SHA256: strings.Repeat("a", 64), PageCount: 1,
 		TotalBytes: 5, History: 100001, Catalog: 100001, Pins: 100001, MetadataReceipts: 100001}
 	if err := m.Valid(); err != nil {
-		t.Fatalf("v2 retained record count was capped: %v", err)
-	}
-	m.Version = 0
-	m.PageCount = 0
-	m.PageSHA256 = []string{strings.Repeat("a", 64)}
-	m.PageBytes = []int{5}
-	if err := m.Valid(); err == nil {
-		t.Fatal("legacy v1 record count bound was removed")
+		t.Fatalf("retained record count was capped: %v", err)
 	}
 }
 
@@ -361,7 +279,7 @@ func TestPoolBackupAuthorityPageReadIsBounded(t *testing.T) {
 	run := protocol.BackupRun{OperationID: "run-page-bound", Kind: protocol.BackupKindBackupNow,
 		PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed", CreatedAt: time.Now().UTC()}
 	manifest, err := stagePoolBackupAuthority(s, &protocol.PoolBackupAuthority{History: []protocol.BackupRun{run}})
-	if err != nil || manifest.Version != 2 {
+	if err != nil {
 		t.Fatalf("v2 fixture failed: %+v %v", manifest, err)
 	}
 	if err := os.Truncate(poolBackupPageFile(s, manifest.SHA256, 0), 1<<30); err != nil {
@@ -405,7 +323,7 @@ func TestPoolBackupAuthorityV2PeerTransferAndCorruptRetry(t *testing.T) {
 	runtime.ReadMemStats(&after)
 	t.Logf("v2 transfer elapsed=%s allocated=%d bytes", time.Since(started), after.TotalAlloc-before.TotalAlloc)
 	record, err := loadPoolReplica(candidate)
-	if err != nil || record == nil || record.Replica.BackupManifest == nil || record.Replica.BackupManifest.Version != 2 {
+	if err != nil || record == nil || record.Replica.BackupManifest == nil {
 		t.Fatalf("candidate did not acknowledge v2 authority: %#v %v", record, err)
 	}
 	manifest := record.Replica.BackupManifest
@@ -518,7 +436,7 @@ func TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory(t *testing.T)
 	pushReplicas(t, master)
 	for _, id := range []string{"member-1", "member-2"} {
 		record, err := loadPoolReplica(lab.host(id))
-		if err != nil || record == nil || record.Replica.BackupManifest == nil || record.Replica.BackupManifest.Version != 2 ||
+		if err != nil || record == nil || record.Replica.BackupManifest == nil ||
 			record.Replica.BackupManifest.TotalBytes <= protocol.PoolBackupBundleLimit {
 			t.Fatalf("%s did not verify >64 MiB v2 history: %#v %v", id, record, err)
 		}
@@ -699,33 +617,6 @@ func poolBackupBundleDirs(t *testing.T, s *Store) int {
 	return count
 }
 
-func TestSmallBackupAuthorityLeavesNoPageBlobs(t *testing.T) {
-	s := seedBackupMaster(t)
-	if err := os.MkdirAll(poolBackupRunsPath(s), 0700); err != nil {
-		t.Fatal(err)
-	}
-	run := protocol.BackupRun{OperationID: "run-small", Kind: protocol.BackupKindBackupNow,
-		PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed", CreatedAt: time.Now().UTC()}
-	body, err := json.Marshal(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(poolBackupRunsPath(s), "run-small.json"), body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := stagePoolBackupAuthorityFromStore(s)
-	if err != nil || manifest == nil || manifest.TotalBytes > poolBackupBundleLimit {
-		t.Fatalf("small authority staging = %#v %v", manifest, err)
-	}
-	entries, err := os.ReadDir(filepath.Join(s.dir, poolBackupBlobDir))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("small authority left %d page blobs", len(entries))
-	}
-}
-
 func TestBackupAuthorityAbandonedStageIsCollected(t *testing.T) {
 	s := seedBackupMaster(t)
 	first, err := newPoolBackupStage(s)
@@ -764,40 +655,6 @@ func TestBackupAuthorityAbandonedStageIsCollected(t *testing.T) {
 	defer releasePoolBackupStage(third)
 	if _, err := os.Stat(second); err != nil {
 		t.Fatalf("active stage was collected: %v", err)
-	}
-}
-
-func TestBackupAuthorityV2ToV1CollectsOldPages(t *testing.T) {
-	lab := promotionLab(t, 1)
-	master, candidate := lab.host("master-1"), lab.host("member-1")
-	previous := poolBackupBundleLimit
-	t.Cleanup(func() { poolBackupBundleLimit = previous })
-	if err := os.MkdirAll(poolBackupRunsPath(master), 0700); err != nil {
-		t.Fatal(err)
-	}
-	run := protocol.BackupRun{OperationID: "run-small", Kind: protocol.BackupKindBackupNow,
-		PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed", CreatedAt: time.Now().UTC()}
-	body, err := json.Marshal(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(poolBackupRunsPath(master), "run-small.json"), body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	pushReplicas(t, master)
-	poolBackupBundleLimit = 1
-	pushReplicas(t, master)
-	first, err := loadPoolReplica(candidate)
-	if err != nil || first == nil || first.Replica.BackupManifest == nil || first.Replica.BackupManifest.Version != 2 {
-		t.Fatalf("v2 replica was not staged: %#v %v", first, err)
-	}
-	poolBackupBundleLimit = previous
-	pushReplicas(t, master)
-	if dirs := poolBackupBundleDirs(t, candidate); dirs != 0 {
-		t.Fatalf("v1 replacement kept %d obsolete page bundles", dirs)
-	}
-	if bytes := poolBackupBlobBytes(t, candidate); bytes != 0 {
-		t.Fatalf("v1 replacement kept %d obsolete blob bytes", bytes)
 	}
 }
 
@@ -847,10 +704,7 @@ func TestSignedBackupAuthorityWaitsForCatalogRunTransaction(t *testing.T) {
 	if err != nil || replica == nil {
 		t.Fatalf("replica after settlement: %v", err)
 	}
-	auth := replica.Replica.BackupAuthority
-	if auth == nil && replica.Replica.BackupManifest != nil {
-		auth, err = loadPoolBackupAuthorityPages(candidate, replica.Replica.BackupManifest)
-	}
+	auth, err := loadPoolBackupAuthorityPages(candidate, replica.Replica.BackupManifest)
 	if err != nil || auth == nil || len(auth.Catalog) != 1 || len(auth.History) != 1 {
 		t.Fatalf("signed authority has a mixed catalog/run state: %#v %v", auth, err)
 	}
@@ -868,7 +722,7 @@ func TestPoolBackupAuthorityV2PromotionStagesBeforeMasterFlip(t *testing.T) {
 		ManifestSHA256: strings.Repeat("a", 64)}
 	auth := &protocol.PoolBackupAuthority{History: []protocol.BackupRun{run}, Catalog: []protocol.BackupRecoveryPoint{point}}
 	manifest, err := stagePoolBackupAuthority(s, auth)
-	if err != nil || manifest.Version != 2 {
+	if err != nil {
 		t.Fatalf("v2 staging: %+v %v", manifest, err)
 	}
 	oldRoot := peerState(t, s).BackupActiveRoot
@@ -932,7 +786,7 @@ func TestPoolBackupAuthorityV2PromotionRetainsHistory(t *testing.T) {
 	}
 	pushReplicas(t, master)
 	replica, err := loadPoolReplica(candidate)
-	if err != nil || replica == nil || replica.Replica.BackupManifest == nil || replica.Replica.BackupManifest.Version != 2 {
+	if err != nil || replica == nil || replica.Replica.BackupManifest == nil {
 		t.Fatalf("candidate does not hold v2 authority: %#v %v", replica, err)
 	}
 	before := peerState(t, master).Membership
@@ -959,11 +813,7 @@ func TestBackupAuthorityV2RequiresCurrentMemberSupport(t *testing.T) {
 		t.Fatal(err)
 	}
 	pushReplicas(t, master)
-	auth, err := PoolBackupAuthorityRefs(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
+	manifest, err := encodePoolBackupAuthorityFromStore(master, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,11 +844,7 @@ func TestBackupAuthorityV2AllowsRunAndCatalogSettlement(t *testing.T) {
 	if _, err := ReservePoolBackupRun(s, run); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := PoolBackupAuthorityRefs(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
+	manifest, err := encodePoolBackupAuthorityFromStore(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1108,11 +954,7 @@ func TestBackupAuthorityV2ProtectsRepositoryAndCatalog(t *testing.T) {
 	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
 		t.Fatal(err)
 	}
-	auth, err := PoolBackupAuthorityRefs(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := encodePoolBackupAuthority(auth, nil)
+	manifest, err := encodePoolBackupAuthorityFromStore(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,4 +973,49 @@ func TestBackupAuthorityV2ProtectsRepositoryAndCatalog(t *testing.T) {
 	if err != nil || !point.Protected {
 		t.Fatalf("v2 protect omitted catalog flag: %#v %v", point, err)
 	}
+}
+
+// stagePoolBackupAuthority writes an authority held in memory as staged pages.
+func stagePoolBackupAuthority(s *Store, auth *protocol.PoolBackupAuthority) (*protocol.PoolBackupManifest, error) {
+	manifest, err := encodePoolBackupAuthority(auth, nil)
+	if err != nil {
+		return nil, err
+	}
+	index := 0
+	_, err = encodePoolBackupAuthority(auth, func(page []byte) error {
+		path := poolBackupPageFile(s, manifest.SHA256, index)
+		index++
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return err
+		}
+		return vmhost.AtomicWrite(path, page, 0600)
+	})
+	return manifest, err
+}
+
+// stagePoolBackupAuthorityActivation stages an in-memory authority as pages,
+// then prepares its activation like a promotion does; nil is an empty authority.
+func stagePoolBackupAuthorityActivation(s *Store, auth *protocol.PoolBackupAuthority, generation uint64) (string, func(), error) {
+	if auth == nil {
+		return stagePoolBackupAuthorityActivationPages(s, nil, generation)
+	}
+	manifest, err := stagePoolBackupAuthority(s, auth)
+	if err != nil {
+		return "", nil, err
+	}
+	return stagePoolBackupAuthorityActivationPages(s, manifest, generation)
+}
+
+func loadPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) (*protocol.PoolBackupAuthority, error) {
+	auth := &protocol.PoolBackupAuthority{}
+	err := walkPoolBackupAuthorityPages(s, m, func(page *protocol.PoolBackupAuthority) error {
+		auth.Repositories = append(auth.Repositories, page.Repositories...)
+		auth.Definitions = append(auth.Definitions, page.Definitions...)
+		auth.History = append(auth.History, page.History...)
+		auth.Catalog = append(auth.Catalog, page.Catalog...)
+		auth.Pins = append(auth.Pins, page.Pins...)
+		auth.MetadataReceipts = append(auth.MetadataReceipts, page.MetadataReceipts...)
+		return nil
+	})
+	return auth, err
 }

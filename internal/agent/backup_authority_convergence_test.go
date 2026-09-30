@@ -54,7 +54,7 @@ func TestBackupAuthorityV2UnchangedRootIsNotRewritten(t *testing.T) {
 	}
 	pushReplicas(t, master)
 	replica, _, err := buildPoolAuthorityReplica(master)
-	if err != nil || replica.BackupManifest == nil || replica.BackupManifest.Version != 2 {
+	if err != nil || replica.BackupManifest == nil {
 		t.Fatalf("v2 manifest = %#v %v", replica.BackupManifest, err)
 	}
 	if replica.BackupManifest.PageCount >= 50 {
@@ -82,7 +82,7 @@ func TestBackupAuthorityV2ReachesMemberWithoutReplica(t *testing.T) {
 	}
 	pushReplicas(t, master)
 	stored, err := loadPoolReplica(member)
-	if err != nil || stored == nil || stored.Replica.BackupManifest == nil || stored.Replica.BackupManifest.Version != 2 {
+	if err != nil || stored == nil || stored.Replica.BackupManifest == nil {
 		t.Fatalf("fresh member replica = %#v %v", stored, err)
 	}
 }

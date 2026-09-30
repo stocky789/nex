@@ -3354,7 +3354,7 @@
 }</pre></details>
 <details id="BackupRepository"><summary>BackupRepository</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.&quot;,
+  &quot;description&quot;: &quot;Master-owned backup destination record. Kinds are NFS, SMB3, S3 and SFTP; Core validates the kind and source.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepository&quot;,
   &quot;properties&quot;: {
     &quot;id&quot;: {
@@ -4335,10 +4335,6 @@
     },
     &quot;membership&quot;: {
       &quot;$ref&quot;: &quot;#/components/schemas/PoolMembership&quot;
-    },
-    &quot;backup_credential_sync&quot;: {
-      &quot;type&quot;: &quot;boolean&quot;,
-      &quot;description&quot;: &quot;True when the joining member must pull current Core-private backup credentials from the master before rehome can complete.&quot;
     }
   },
   &quot;required&quot;: [
@@ -4625,16 +4621,6 @@
       },
       &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
     },
-    &quot;backup_authority&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;$ref&quot;: &quot;#/components/schemas/PoolBackupAuthority&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ]
-    },
     &quot;backup_manifest&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -4644,7 +4630,7 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ],
-      &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
+      &quot;description&quot;: &quot;Paged backup authority reference; the pages are pushed separately and bound by the manifest root.&quot;
     },
     &quot;corosync_key_wrapped&quot;: {
       &quot;anyOf&quot;: [
@@ -4898,21 +4884,11 @@
 }</pre></details>
 <details id="PoolBackupManifest"><summary>PoolBackupManifest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Signed backup authority reference. Version 0 retains per-page SHA-256 and byte lengths with a 64 MiB/1024-page bound. Version 2 binds ordered page_count, total_bytes, full SHA-256 root and record counts; page_sha256 and page_bytes are null and every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.&quot;,
+  &quot;description&quot;: &quot;Signed backup authority reference. It binds ordered page_count, total_bytes, full SHA-256 root and record counts; every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolBackupManifest&quot;,
   &quot;properties&quot;: {
     &quot;sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;page_sha256&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      },
-      &quot;description&quot;: &quot;Version 0 per-page SHA-256 values; null in version 2.&quot;
     },
     &quot;total_bytes&quot;: {
       &quot;type&quot;: &quot;integer&quot;
@@ -4935,38 +4911,21 @@
     &quot;metadata_receipts&quot;: {
       &quot;type&quot;: &quot;integer&quot;
     },
-    &quot;page_bytes&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;integer&quot;,
-        &quot;minimum&quot;: 1,
-        &quot;maximum&quot;: 262144
-      },
-      &quot;description&quot;: &quot;Version 0 exact per-page byte lengths; null in version 2.&quot;
-    },
-    &quot;version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;0 or omitted for legacy per-page-hash format; 2 for streaming large-authority format.&quot;
-    },
     &quot;page_count&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Version 2 ordered page count; zero or omitted in version 0.&quot;
+      &quot;description&quot;: &quot;Ordered page count.&quot;
     }
   },
   &quot;required&quot;: [
     &quot;sha256&quot;,
-    &quot;page_sha256&quot;,
-    &quot;page_bytes&quot;,
     &quot;total_bytes&quot;,
     &quot;repositories&quot;,
     &quot;definitions&quot;,
     &quot;history&quot;,
     &quot;catalog&quot;,
     &quot;pins&quot;,
-    &quot;metadata_receipts&quot;
+    &quot;metadata_receipts&quot;,
+    &quot;page_count&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>

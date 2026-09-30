@@ -328,6 +328,10 @@ class PeerAPIContractTests(APIContractTests):
                     path += '{}'  # Identifier segment; a leading origin variable adds nothing.
             if path.startswith('/api/v1/pool/'):
                 called.add((method.lower(), path))
+        # Repository capability preflights share one POST helper and pass their route as a literal.
+        called.discard(('post', consts['poolBackupPeerPath'] + '{}'))
+        called.update(('post', consts['poolBackupPeerPath'] + route) for route in
+                      re.findall(r'postPeerCapability\([^\n]*"(/capability/\w+)"', source))
         # CPU observations share a bounded request helper and dispatch on literal
         # operation suffixes. Recover those real routes rather than treating the
         # whole suffix as an arbitrary resource identifier.

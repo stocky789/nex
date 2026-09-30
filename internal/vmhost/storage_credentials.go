@@ -104,26 +104,11 @@ func sealMountCredential(ctx context.Context, path, body string) error {
 
 // SealCredential writes data to path encrypted by systemd-creds under the credential name.
 func SealCredential(ctx context.Context, name, path string, data []byte) error {
-	tmp := path + ".new"
-	defer os.Remove(tmp)
-	if _, err := runSystemdCreds(ctx, data, "systemd-creds", "--no-ask-password", "encrypt", "--name="+name, "-", tmp); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0600); err != nil {
-		return err
-	}
-	f, err := os.Open(tmp)
+	sealed, err := runSystemdCreds(ctx, data, "systemd-creds", "--no-ask-password", "encrypt", "--name="+name, "-", "-")
 	if err != nil {
 		return err
 	}
-	err = f.Sync()
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWrite(path, sealed)
 }
 
 func openMountCredential(ctx context.Context, path string) (string, error) {

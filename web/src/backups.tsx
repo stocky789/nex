@@ -64,6 +64,22 @@ export function activeTestRestores(runs: BackupRun[] | null, point: BackupRecove
     });
 }
 
+// useLatestLoad lets only the newest load of a kind report: begin() aborts the previous one.
+function useLatestLoad() {
+  const [load] = useState(() => {
+    let current = 0, controller: AbortController | undefined;
+    return {
+      begin() {
+        controller?.abort();
+        const own = controller = new AbortController(), id = ++current;
+        return { signal: own.signal, stale: () => id !== current || own.signal.aborted };
+      },
+      cancel() { controller?.abort(); },
+    };
+  });
+  return load;
+}
+
 export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, vmFilter = "", flow = "" }: Props) {
   const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [repos, setRepos] = useState<BackupRepository[] | null>(null);
@@ -101,13 +117,10 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const pendingBackup = useRef<Record<string, { vm_id: string; repository_id: string; consistency: string }>>({});
   const pendingProtect = useRef<Record<string, { repository_id: string; recovery_point_id: string; protected: boolean }>>({});
   const restoreDrafts = useRef<Record<string, RestoreDraft>>({});
-  const loadGen = useRef(0);
-  const loadAbort = useRef<AbortController | null>(null);
-  const catalogGen = useRef(0);
-  const catalogAbort = useRef<AbortController | null>(null);
+  const inventoryLoad = useLatestLoad();
+  const catalogLoad = useLatestLoad();
+  const runLoad = useLatestLoad();
   const catalogScope = useRef("");
-  const runGen = useRef(0);
-  const runAbort = useRef<AbortController | null>(null);
   const runLoading = useRef("");
   const filters = useRef({ filterVM, filterRepo, query });
   filters.current = { filterVM, filterRepo, query };
@@ -139,20 +152,17 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
 
   const loadCatalog = async () => {
     if (!poolID) { setCatalogPage({ items: [], generation: "", total: 0, untested_count: 0, backup_days_14: [] }); return; }
-    catalogAbort.current?.abort();
-    const abort = new AbortController();
-    catalogAbort.current = abort;
-    const gen = ++catalogGen.current;
+    const { signal, stale } = catalogLoad.begin();
     const scope = currentFilterKey();
     try {
-      const page = await api<BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, abort.signal);
-      if (gen !== catalogGen.current || abort.signal.aborted) return;
+      const page = await api<BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, signal);
+      if (stale()) return;
       const sameScope = catalogScope.current === scope;
       catalogScope.current = scope;
       setCatalogPage(current => refreshBackupPage(current, page, sameScope));
       setCatalogError("");
     } catch (err) {
-      if (gen !== catalogGen.current || abort.signal.aborted) return;
+      if (stale()) return;
       setCatalogPage(null);
       setCatalogError(`Recovery points unavailable: ${String(err)}`);
     }
@@ -163,22 +173,19 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const loadRuns = async (retry = 0) => {
     const pointID = selectedIDRef.current;
     if (!poolID || !pointID || (retry === 0 && runLoading.current === pointID)) return;
-    runAbort.current?.abort();
-    const abort = new AbortController();
-    runAbort.current = abort;
-    const gen = ++runGen.current;
+    const { signal, stale } = runLoad.begin();
     runLoading.current = pointID;
     const base = `pools/${encodeURIComponent(poolID)}/backup-runs?recovery_point_id=${encodeURIComponent(pointID)}`;
     try {
-      const response = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, abort.signal);
-      if (gen !== runGen.current || abort.signal.aborted) return;
-      const all = await collectBackupPageItems(response, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, abort.signal));
-      if (gen !== runGen.current || abort.signal.aborted) return;
+      const response = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, signal);
+      if (stale()) return;
+      const all = await collectBackupPageItems(response, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
+      if (stale()) return;
       runLoading.current = "";
       setPointRuns(all);
       setRunError("");
     } catch (err) {
-      if (gen !== runGen.current || abort.signal.aborted) return;
+      if (stale()) return;
       runLoading.current = "";
       if ((err as { status?: number }).status === 409 && retry < 2) { await loadRuns(retry + 1); return; }
       setRunError(`Test restore history unavailable: ${String(err)}`);
@@ -190,15 +197,12 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       setRepos([]);
       return;
     }
-    loadAbort.current?.abort();
-    const abort = new AbortController();
-    loadAbort.current = abort;
-    const gen = ++loadGen.current;
+    const { signal, stale } = inventoryLoad.begin();
     const [repositories, policyList] = await Promise.allSettled([
-        api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, abort.signal),
-        api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, abort.signal),
+        api<BackupRepository[]>(`pools/${encodeURIComponent(poolID)}/backup-repositories`, "GET", undefined, undefined, undefined, signal),
+        api<BackupPolicy[]>(`pools/${encodeURIComponent(poolID)}/backup-policies`, "GET", undefined, undefined, undefined, signal),
       ]);
-    if (gen !== loadGen.current || abort.signal.aborted) return;
+    if (stale()) return;
     setRepos(repositories.status === "fulfilled" ? repositories.value : null);
     setPolicies(policyList.status === "fulfilled" ? policyList.value : null);
     setRepositoryError(repositories.status === "rejected" ? `Repository inventory unavailable: ${String(repositories.reason)}` : "");
@@ -263,7 +267,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     restoreDrafts.current = {};
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 15000);
-    return () => { window.clearInterval(timer); loadAbort.current?.abort(); catalogAbort.current?.abort(); runAbort.current?.abort(); };
+    return () => { window.clearInterval(timer); inventoryLoad.cancel(); catalogLoad.cancel(); runLoad.cancel(); };
   }, [poolID]);
 
   useEffect(() => {

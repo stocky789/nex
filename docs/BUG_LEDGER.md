@@ -10013,2707 +10013,728 @@ Append resolved defects with their evidence and the approach to avoid.
 ## BUG-0674 — Hwmon stall regression depended on another test's live sensor read
 
 - Date: 2026-09-28.
-- Symptom: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls` intermittently failed
-  with `first read = []` in the full agent package, while passing alone.
-- Root cause: the test used the package's single `hwmonLast` reader. An earlier hardware
-  report can leave a real sensor read in flight after its deadline; the test's first call
-  then returns no cached values for its different fixture root without starting a read.
-- Fix: keep the production singleton, and run the fixture against a local `hwmonReader`
-  instance so its FIFO and cache assertions do not depend on host sensors or test order.
-- Regression: before the fix, `go test ./internal/agent -count=1 -timeout=60s -json`
-  reported `first read = []` twice. After the fix, `go test ./internal/agent -count=2
-  -timeout=5m` passed, as did `go test -race ./internal/agent -count=3 -run
-  'TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls|TestStatsChannelServesHistoryAndHardware'`.
-  The existing forge `phase1.yml` runs the agent package with `go test -race ./...`;
-  no forge run is claimed.
-- Avoid: resetting the production singleton in a test while its background goroutine
-  can still finish and overwrite the fixture state.
+- Symptom: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls` intermittently failed with `first read = []` in the full agent package, passing alone.
+- Root cause: the test used the package-wide `hwmonLast` reader; an earlier report could leave a real sensor read in flight, so the first call returned no cached values.
+- Fix: keep the production singleton; run the fixture against a local `hwmonReader` instance so it does not depend on host sensors or test order.
+- Regression: failed before with `first read = []` (twice), passed after. `go test ./internal/agent -run '^TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls$' -count=2`. No forge run claimed.
+- Avoid: resetting the production singleton in a test while its background goroutine can still overwrite fixture state.
 
 ## BUG-0675 — Policy run-now returned 503 after reserving a backup
 
 - Date: 2026-09-28.
-- Symptom: Core-local policy run-now returned `503 backup operation unavailable` for two
-  separate requests, while each durable run published a recovery point and succeeded.
-- Root cause: a newly queued backup journal entry has no `ObservedAt` yet. Its pending
-  result copied that zero timestamp into the metadata receipt, which validation refused
-  after the run was already reserved. The initial receipt remained pending.
-- Fix: pending backup results use the journal's request time until an observed result
-  exists. Core can acknowledge the reservation while execution continues.
-- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before the fix with
-  `backup metadata receipt is invalid` and passed after it. The existing forge Go
-  suites run `./...` on pushes and pull requests. A disposable Core-local rerun
-  returned `202 pending` and published one recovery point; no CI run is claimed.
-- Avoid: treating a 503 submit reply as proof that no durable run exists, or retrying
-  under a new operation ID before checking the original run and operation result.
+- Symptom: Core-local policy run-now returned `503 backup operation unavailable` while the durable run still published a recovery point and succeeded.
+- Root cause: a newly queued journal entry has no `ObservedAt`; its pending result copied the zero timestamp into the metadata receipt, which validation refused after reservation.
+- Fix: pending backup results use the journal's request time until an observed result exists, so Core can acknowledge the reservation.
+- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before (`backup metadata receipt is invalid`), passed after. `go test ./internal/agent -run '^TestPolicyRunNowAcknowledgesReservedRun$' -count=1`. No CI run claimed.
+- Avoid: treating a 503 submit reply as proof no durable run exists, or retrying under a new operation ID before checking the original.
 
 ## BUG-0676 — S3 restore copy omitted its local destination directory
 
 - Date: 2026-09-28.
-- Symptom: a disposable Core two-disk S3 backup published successfully, but restore-as-new
-  failed before VM registration opening `backup-restore/<operation>/vda.qcow2`: the directory
-  did not exist. The source disks had been moved aside to require repository recovery.
-- Root cause: S3 `CopyArtifacts` opened the destination file without creating the local
-  restore directory. It also rejected an exact retry when a prior local artifact existed.
-- Fix: create the private restore directory before copying; verify and reuse exact local
-  artifacts, and replace corrupt local copies on retry.
-- Regression: `TestS3CopyArtifactsCreatesRestoreDirectory` failed before the fix with
-  `no such file or directory`, then passed with fresh, exact-retry, and corrupt-copy cases.
-  Focused S3 tests passed; the full agent package run hit an unrelated temporary-directory
-  cleanup race in `TestRunRefusesUnadvertisedBackupDestinations`. After that test's
-  shutdown was fixed, the full agent suite passed. A fresh disposable two-disk
-  restore-as-new succeeded with both markers read from an isolated guest; this
-  does not establish cross-host or failover recovery.
-  Round-2 test review (2026-09-29): `TestS3CopyArtifactsCreatesRestoreDirectory`
-  in `internal/agent/backup_repository_s3_test.go` fails when S3 `CopyArtifacts`
-  stops creating the restore directory. Command: `go test ./internal/agent -run
-  '^TestS3CopyArtifactsCreatesRestoreDirectory$' -count=1`.
+- Symptom: restore-as-new from a published two-disk S3 backup failed opening `backup-restore/<operation>/vda.qcow2` because the directory did not exist.
+- Root cause: S3 `CopyArtifacts` opened the destination without creating the restore directory, and rejected an exact retry when a prior local artifact existed.
+- Fix: create the private restore directory first; verify and reuse exact local artifacts and replace corrupt local copies on retry.
+- Regression: `TestS3CopyArtifactsCreatesRestoreDirectory` failed before (`no such file or directory`), passed after. `go test ./internal/agent -run '^TestS3CopyArtifactsCreatesRestoreDirectory$' -count=1`.
 - Avoid: testing restore copies only into an already-existing temporary directory.
 
 ## BUG-0677 — Policy run-now replay stayed uncertain after a completed run
 
 - Date: 2026-09-28.
-- Symptom: after a Core-local run-now returned `202 pending`, its durable run published
-  successfully, but the metadata receipt stayed pending and an exact same-ID replay
-  returned `needs_attention`. The replay did not create a second run.
-- Root cause: run settlement updated the run and catalog but never settled the
-  run-now admission receipt. The generic metadata replay path read that stale receipt
-  without checking the terminal run.
-- Fix: settle the run-now receipt after the durable run; on exact replay, reconcile
-  a pending receipt from the terminal run so an interrupted receipt write can recover.
-- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before this fix with
-  a pending receipt after successful run settlement. It now checks settlement,
-  a simulated interrupted receipt update, successful exact replay, and one retained
-  run. `go test ./internal/agent ./internal/localcore -count=1` and the focused race
-  test passed. A disposable Core-local rerun returned `202 pending`, then the
-  exact same-ID replay returned `202 succeeded` with one run and a succeeded
-  receipt. The forge runs the agent package in its Go suite; no CI run is claimed.
-  Round-2 test review (2026-09-29): `TestPolicyRunNowAcknowledgesReservedRun`
-  also repeats the terminal settlement over a pending receipt. It fails when
-  that repeat stops settling the run-now receipt. Command: `go test
-  ./internal/agent -run '^TestPolicyRunNowAcknowledgesReservedRun$' -count=1`.
-- Avoid: treating a reservation receipt as the final backup outcome or issuing
-  a new run ID to resolve an uncertain exact replay.
+- Symptom: after run-now returned `202 pending` and the run succeeded, the receipt stayed pending and an exact same-ID replay returned `needs_attention`.
+- Root cause: run settlement never settled the run-now admission receipt, and the generic replay path read that stale receipt without checking the terminal run.
+- Fix: settle the run-now receipt after the durable run; on exact replay, reconcile a pending receipt from the terminal run.
+- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before (pending receipt after settlement), passed after. `go test ./internal/agent -run '^TestPolicyRunNowAcknowledgesReservedRun$' -count=1`.
+- Avoid: treating a reservation receipt as the final backup outcome, or issuing a new run ID to resolve an uncertain replay.
 
 ## BUG-0678 — Controller policy run-now collided with its backup command
 
 - Date: 2026-09-28.
-- Symptom: Controller queued a policy run-now operation, but Core reported
-  `controller reused command ID with different input` after reserving a pending
-  run under that ID. No backup artifact was published.
-- Root cause: Core journaled the Controller's `backup-policy-run-now` command,
-  then tried to journal `backup-now` under the same operation ID. Journal input
-  identity checks correctly rejected the different command. After that collision
-  was fixed, the Run loop still tried to complete a pending reservation as a
-  terminal command and stopped. An interruption between run reservation and
-  journal transition also let the member scheduler select the same run.
-- Fix: after reservation, Core makes the existing journal entry executable as
-  `backup-now` under the same ID. The durable receipt binds exact Controller
-  replays to the original policy and VM; the reported outcome retains the
-  Controller's `backup-policy-run-now` kind. The Run loop leaves the converted
-  pending entry for its backup worker. Member dispatch skips runs with either
-  Controller journal kind, including before transition. An interrupted
-  reservation resumes the same run.
-- Regression: `TestControllerPolicyRunNowReusesJournalIdentity` failed before
-  the fix with the reported collision. It now covers dispatchability, exact and
-  changed Controller replay, reservation recovery, terminal replay and one run.
-  `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed with a second peer
-  dispatch before journal recovery and now passes. A pending reservation made
-  `TestControllerPolicyRunNowReusesJournalIdentity` fail with `invalid local
-  managed command completion` before the Run-loop fix.
-  `TestControllerPolicyRunNowRunLoopDispatchesAfterReservation` exercises the
-  actual Run loop. The forge Go suites run the agent package; no CI run is claimed.
-  Round-2 test review (2026-09-29):
-  `TestControllerPolicyRunNowRunLoopDispatchesAfterReservation` now requires the
-  backup worker's missing-repository failure on the reserved host, not any
-  failed run. It fails when the run-now reservation drops the VM host. Command:
-  `go test ./internal/agent -run
-  '^TestControllerPolicyRunNowRunLoopDispatchesAfterReservation$' -count=1`.
-- Avoid: bypassing journal identity checks or starting another run under a new
-  operation ID after reservation uncertainty.
+- Symptom: Core reported `controller reused command ID with different input` after reserving a pending run; no backup was published.
+- Root cause: Core journaled `backup-policy-run-now`, then tried to journal `backup-now` under the same ID; the Run loop also mishandled the pending reservation and the member scheduler could select the same run.
+- Fix: after reservation, convert the existing journal entry to executable `backup-now` under the same ID, bind exact replays to the original policy/VM, and make member dispatch skip both Controller journal kinds.
+- Regression: `TestControllerPolicyRunNowReusesJournalIdentity`, `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed before, passed after; `go test ./internal/agent -run '^TestControllerPolicyRunNow(ReusesJournalIdentity|MemberUsesOneDispatcher|RunLoopDispatchesAfterReservation)$' -count=1`.
+- Avoid: bypassing journal identity checks or starting another run under a new operation ID after reservation uncertainty.
 
 ## BUG-0679 — Stale member observations refused large backup authority writes
 
 - Date: 2026-09-28.
-- Symptom: after both members verified a signed v2 backup authority root beyond
-  64 MiB, the master refused an NFS repository metadata receipt before commit.
-- Root cause: admission used master-side member replica observations that were
-  more than two minutes old, even though the members held current verified v2
-  roots. It treated an old observation as proof that members lacked support.
-  Independent review then found that admitting from a fresh cached observation
-  could allow a just-disconnected member, and a v2-capable member could still
-  be behind the master's current generation.
-- Fix: require a live, certificate-pinned mTLS status GET from every required
-  member with a three-second bound, and match verified v2 status to the
-  master's exact current generation and digest. Recheck generation and
-  membership before the metadata commit. Disconnected, lagging or old-version
-  members fail closed.
-- Regression: `go test ./internal/agent -run
-  'TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory|TestBackupAuthorityV2RefusesMemberBehindMasterGeneration|TestBackupAuthorityV2RequiresCurrentMemberSupport'
-  -count=1` covers admission after stale observations, refusal after immediate
-  disconnect, refusal of a member behind the master, and unsupported members.
-  The stale-observation case failed before its fix and passed after it; the
-  disconnect and lagging-member cases exposed the later admission gaps and
-  passed after the final source correction. Native repository registration
-  still returned 503 on the older lab overlay; retry with the corrected
-  candidate remains unrun, and no CI run is claimed.
-  Round-2 test review (2026-09-29):
-  `TestBackupAuthorityAdmissionRechecksAfterMemberProof` commits an authority
-  generation, then separately changes membership, while a member answers its
-  status proof. It fails when either recheck before the metadata commit is
-  removed. Command: `go test ./internal/agent -run
-  '^TestBackupAuthorityAdmissionRechecksAfterMemberProof$' -count=1`.
-- API impact: existing Core-local contract; repository admission may now
-  succeed after live authenticated proof from every required member. Guide
-  impact: none.
-- Avoid: raising the authority size limit by skipping current-member proof or
-  trusting cached observations or capability alone as current replica proof.
+- Symptom: with both members holding a verified v2 authority root over 64 MiB, the master refused an NFS repository metadata receipt before commit.
+- Root cause: admission used member replica observations over two minutes old, treating them as proof of missing support; a fresh cache could also admit a just-disconnected or lagging member.
+- Fix: require a live certificate-pinned mTLS status GET (3 s bound) from every required member matching the master's exact generation and digest; recheck before commit; fail closed otherwise.
+- Regression: `go test ./internal/agent -run 'TestBackupAuthorityV2AdmitsRepositoryReceiptAfterLargeHistory|TestBackupAuthorityV2RefusesMemberBehindMasterGeneration|TestBackupAuthorityV2RequiresCurrentMemberSupport|TestBackupAuthorityAdmissionRechecksAfterMemberProof' -count=1`. Native retest and CI not run.
+- Avoid: raising the size limit or trusting cached observations/capability alone as current replica proof.
 
 ## BUG-0680 — Member backup requests treated adopted repositories as new registrations
 
 - Date: 2026-09-28.
-- Symptom: in a disposable SFTP cross-host restore, Controller submission
-  returned HTTP 202, then Core reported `needs_attention` with `member backup
-  peer refused the request`. The master run stayed pending/reserved; the member
-  created no restore run, staging files or VM.
-- Root cause: the member's backup worker sent a peer repository with its
-  retained remote identity through new-registration preparation. Registration
-  rejects that identity before restore can begin. The same route would use
-  the peer operation ID rather than the registration receipt scope for SMB3
-  credential lookup.
-- Fix: prepare peer repositories through Core's existing adoption path and
-  new registrations through the registration path. This preserves the remote
-  identity and uses the correct credential scope for the peer request.
-- Regression: `TestPeerBackupPreparationAcceptsRetainedRemoteIdentity`
-  failed before the source fix with `ErrBackupInvalid` for SFTP and passed
-  after it with `GOCACHE=/tmp/nex-go-cache go test ./internal/agent -run
-  '^TestPeerBackupPreparationAcceptsRetainedRemoteIdentity$' -count=1`.
-  It also checks the S3 retained-identity path. SMB3 credential scope was
-  source-traced but has no separate red/green regression. Independent source
-  review found no issue; the regression reaches the missing credential
-  receipt, not a successful remote probe or restore. Native cross-host
-  retry remains unrun because the current workspace denies local and QEMU/VDE
-  sockets; no CI run is claimed.
-  Round-2 test review (2026-09-29):
-  `TestPeerBackupPreparationAcceptsRetainedRemoteIdentity` now also sends the
-  peer request through a running Core Run loop. It fails when Run's preparation
-  calls registration directly. Command: `go test ./internal/agent -run
-  '^TestPeerBackupPreparationAcceptsRetainedRemoteIdentity$' -count=1`.
-- API impact: existing peer repository contract. Guide impact: none; no
-  operator step changed.
-- Avoid: routing a repository already adopted from the master through
-  registration validation or a new credential receipt lookup.
+- Symptom: a cross-host SFTP restore returned HTTP 202, then `needs_attention` with `member backup peer refused the request`; the member created no restore run.
+- Root cause: the member worker sent a peer repository with retained remote identity through new-registration preparation, which rejects that identity; SMB3 lookup used the wrong credential scope.
+- Fix: prepare peer repositories through Core's adoption path and new registrations through the registration path.
+- Regression: `TestPeerBackupPreparationAcceptsRetainedRemoteIdentity` failed before (`ErrBackupInvalid` for SFTP), passed after. `go test ./internal/agent -run '^TestPeerBackupPreparationAcceptsRetainedRemoteIdentity$' -count=1`. SMB3 scope has no separate regression.
+- Avoid: routing an adopted repository through registration validation or a new credential receipt lookup.
 
 ## BUG-0681 — Backup authority snapshot could be numbered after a newer commit
 
 - Date: 2026-09-28.
-- Symptom: independent source review found a race in authority push: a backup
-  metadata receipt could commit after the replica snapshot was built but
-  before that snapshot's generation was advanced. No native symptom or replay
-  was observed.
-- Root cause: snapshot build and generation advance did not hold the same
-  backup authority lock, leaving a window for a newer metadata commit.
-- Fix: hold the existing backup authority lock through snapshot build and
-  generation advance, then release it before the network push.
-- Regression: `TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit`
-  paused generation advance and attempted a concurrent metadata commit. It
-  failed before the fix and passed after with `GOCACHE=/tmp/nex-go-cache go
-  test -race ./internal/agent -run
-  '^TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit$' -count=1`.
-  Independent review found no blocking issue and traced the lock order and
-  network boundary. The test uses a 100 ms negative assertion and a nonparallel
-  global hook; native member replication remains unrun because the current
-  workspace denies local and QEMU/VDE sockets. No CI run is claimed.
-  Round-2 test review (2026-09-29): The 100 ms negative wait is replaced by
-  `TryLock` on the backup authority lock while generation advance is paused. The
-  test fails when the push unlocks before numbering. Command: `go test
-  ./internal/agent -run
-  '^TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit$' -count=1`.
-- API impact: existing signed authority peer contract. Guide impact: none;
-  no operator step changed.
-- Avoid: assigning a generation to a snapshot while Core-owned backup state
-  can change between its build and numbering.
+- Symptom: source review found a race in authority push where a metadata receipt could commit between snapshot build and generation advance; no native symptom seen.
+- Root cause: snapshot build and generation advance did not hold the same backup authority lock.
+- Fix: hold the existing backup authority lock through snapshot build and generation advance, releasing it before the network push.
+- Regression: `TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit` failed before, passed after. `go test -race ./internal/agent -run '^TestPoolAuthorityPushNumbersBackupSnapshotBeforeNextCommit$' -count=1`.
+- Avoid: assigning a generation to a snapshot while Core-owned backup state can change between build and numbering.
 
 ## BUG-0682 — Interrupted remote prune vanished from catalog rebuild
 
 - Date: 2026-09-28.
-- Symptom: source review found that rebuilding an S3 or SFTP repository after
-  an interrupted prune could discard the catalog row needed for an exact
-  deletion retry. No native crash was observed.
-- Root cause: S3 listed only manifests, hiding a deletion record after the
-  manifest was removed. SFTP ignored its root-level deletion record after
-  the point directory was removed.
-- Fix: S3 listing refuses an active deletion record. SFTP records completion
-  durably after removing the point and intent; listing refuses an incomplete
-  deletion record and preserves the completed record to prevent ID reuse.
-- Regression: `TestS3BackupDeleteResumesAfterLostManifestReply` and
-  `TestSFTPDeleteResumesExactInterruptedPoint` failed before the fix with
-  `entries hid interrupted prune` and `scan hid prune after point directory
-  removal`. Both passed with `go test -race ./internal/agent -run
-  'Test(S3BackupDeleteResumesAfterLostManifestReply|SFTPDeleteResumesExactInterruptedPoint)$'
-  -count=1`. These use in-process S3/SFTP protocol fakes; native remote crash
-  durability and CI remain unverified.
-- API impact: existing repository storage contract. Guide impact: none; no
-  operator step changed.
-- Avoid: treating an absent manifest or point directory as proof that prune
-  finished while its durable deletion record remains unresolved.
+- Symptom: source review found rebuilding an S3 or SFTP repository after an interrupted prune could discard the catalog row needed for an exact deletion retry; no native crash seen.
+- Root cause: S3 listed only manifests, hiding the deletion record once the manifest was gone; SFTP ignored its root-level deletion record after the point directory was removed.
+- Fix: S3 listing refuses an active deletion record; SFTP records completion durably, refuses an incomplete record on listing and keeps the completed one to prevent ID reuse.
+- Regression: `TestS3BackupDeleteResumesAfterLostManifestReply`, `TestSFTPDeleteResumesExactInterruptedPoint` failed before, passed after. `go test -race ./internal/agent -run 'Test(S3BackupDeleteResumesAfterLostManifestReply|SFTPDeleteResumesExactInterruptedPoint)$' -count=1`. In-process fakes only.
+- Avoid: treating an absent manifest or point directory as proof prune finished while its deletion record is unresolved.
 
 ## BUG-0683 — Missing member restore operation held the master's dispatch slot
 
 - Date: 2026-09-28.
-- Symptom: after a member refused a cross-host restore before creating its
-  operation, the master's `needs_attention` reconciliation kept polling the
-  missing operation and held `activeSnapshot`, leaving a later restore pending.
-- Root cause: the peer GET collapsed a missing exact operation into a generic
-  retryable error, and the member returned HTTP 409 for that absence.
-- Fix: authenticated peer GET returns HTTP 404 for a missing operation. The
-  master ends that reconciliation attempt as `needs_attention` without
-  settling the reserved run, clearing its restore pin, or replaying the POST.
-  Unavailable peers and other uncertain errors remain retryable.
-- Regression: `TestPeerBackupReconciliationStopsOnMissingExactOperation`
-  failed before the fix and passed afterward. The authenticated member route
-  check `TestPeerBackupMissingOperationReturnsNotFound` and related peer
-  checks passed with `go test -race ./internal/agent -run
-  '^TestPeerBackup(ReconciliationStopsOnMissingExactOperation|MissingOperationReturnsNotFound)$|^TestPeerTestRestoreWaitsForJournalToCatchUpWithRun$|^TestPeerS3DispatchSendsPortableRepositoryAndReconcilesReplay$'
-  -count=1`. A later disposable three-Core retest with the peer fix and an
-  SFTP capability-only overlay completed a fresh cross-host restore: master
-  and member reported `succeeded`, and both restored disk markers matched in
-  `qemu-io` and an isolated, network-free guest. The earlier refused operation
-  stayed `needs_attention` with no member operation; it was not replayed.
-  Round-2 test review (2026-09-29):
-  `TestUnreachableMemberRestoreObservationReleasesBackupSlot` runs the master's
-  Core Run loop against an unreachable member. It fails when an unanswered
-  observation keeps the backup slot, and it checks that the run stays pending
-  with its pin. Command: `go test ./internal/agent -run
-  '^TestUnreachableMemberRestoreObservationReleasesBackupSlot$' -count=1`.
-- API impact: changed peer GET contract: a missing exact operation now returns
-  HTTP 404 instead of 409. Guide impact: none; operator steps are unchanged.
-- Avoid: treating absence of a member operation as permission to replay a
-  restore with an uncertain native outcome.
+- Symptom: after a member refused a cross-host restore before creating its operation, the master kept polling the missing operation and held `activeSnapshot`, leaving a later restore pending.
+- Root cause: the peer GET collapsed a missing exact operation into a generic retryable error, and the member returned HTTP 409 for that absence.
+- Fix: authenticated peer GET returns 404 for a missing operation; the master ends that reconciliation as `needs_attention` without settling the run, clearing its pin or replaying the POST.
+- Regression: `TestPeerBackupReconciliationStopsOnMissingExactOperation` failed before, passed after. `go test -race ./internal/agent -run '^TestPeerBackup(ReconciliationStopsOnMissingExactOperation|MissingOperationReturnsNotFound)$|^TestUnreachableMemberRestoreObservationReleasesBackupSlot$' -count=1`.
+- Avoid: treating absence of a member operation as permission to replay a restore with an uncertain native outcome.
 
 ## BUG-0684 — Recovered promotion retained an acknowledged attention receipt
 
 - Date: 2026-09-28.
-- Symptom: after a transient fencer error, the candidate's durable pool transfer
-  later completed, but the Controller operation remained `needs_attention`.
-- Root cause: Core did not reconcile the acknowledged `pool-promote` command
-  journal from the completed transfer; its report sends only unacknowledged
-  results. Controller also declined a later terminal result for promotion. An
-  older Controller could acknowledge that later result without settling its
-  row, leaving no result for an upgraded Controller to consume.
-- Fix: on Core's journal-owning loop, reconcile only the exact candidate
-  promotion receipt when its durable transfer reaches `done`, then report the
-  result again. Controller accepts the authenticated success for that operation
-  and can settle the same row from the candidate's fresh, durable `done` inventory
-  report after an older Controller already acknowledged the result.
-- Regression: `TestPoolPromotionJournalRecoversAfterDurableCompletion` and
-  `TestPromotionOperationRecoversAfterCoreCompletes` each failed before the fix
-  and passed after it. The Core check keeps the receipt uncertain after the
-  transient fence failure, then proves the same transfer finished before
-  reconciling it. `TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedResult`
-  failed before the mixed-version fix and passed afterward; it sends no later
-  result and checks that an unfinished promotion remains uncertain. `go test -race ./internal/agent -run
-  '^TestPoolPromotionJournalRecoversAfterDurableCompletion$|^TestPoolPromotionResumesFromEveryStage$'
-  -count=1` and `go test -race ./internal/controller -run
-  '^TestPromotionOperationRecovers(AfterCoreCompletes|FromInventoryAfterOldControllerAcknowledgedResult)$|^TestOnlyZFSProvisionResultsRecoverFromAttention$'
-  -count=1` passed. In a disposable native fixture, restarting Controller then
-  the promoted Core with the original acknowledged attention receipt and
-  completed transfer recovered the same operation to `succeeded`; exact POST
-  replay returned the same ID without another transfer or fence, and the old
-  master stayed off. A separate fresh two-Core fixture then ran a verified
-  historical Controller through one transient fencer failure. Core finished
-  the exact durable transfer and its journal was `succeeded`/acknowledged,
-  while the historical Controller kept the task `needs_attention`. Replacing
-  only Controller with current on the same data and certificate settled that
-  row to `succeeded` from Core inventory, despite no fresh result; exact POST
-  replay returned HTTP 200 with the same ID, transfer/journal bytes were
-  unchanged, the fencer command count did not increase and the old master
-  stayed off. No CI run is claimed.
-- API impact: existing Core report/result contract; no payload or route change.
-  Guide impact: none; operator steps are unchanged.
-- Avoid: treating a timeout or an independent success projection as sufficient
-  to settle a promotion command without its exact durable transfer completion.
+- Symptom: after a transient fencer error, the candidate's durable pool transfer completed but the Controller operation stayed `needs_attention`.
+- Root cause: Core never reconciled the acknowledged `pool-promote` journal from the completed transfer (reports send only unacknowledged results), and Controller declined a later terminal result for promotion.
+- Fix: Core reconciles the exact candidate promotion receipt once its transfer is `done` and re-reports; Controller accepts that success and can settle the row from the candidate's durable `done` inventory.
+- Regression: `TestPoolPromotionJournalRecoversAfterDurableCompletion`, `TestPromotionOperationRecoversAfterCoreCompletes`, `TestPromotionOperationRecoversFromInventoryAfterOldControllerAcknowledgedResult` failed before, passed after. `go test -race ./internal/agent -run '^TestPoolPromotionJournalRecoversAfterDurableCompletion$' -count=1` and `go test -race ./internal/controller -run '^TestPromotionOperationRecovers(AfterCoreCompletes|FromInventoryAfterOldControllerAcknowledgedResult)$' -count=1`. No CI run claimed.
+- Avoid: treating a timeout or independent success projection as enough to settle a promotion without its exact durable transfer completion.
 
 ## BUG-0685 — Partial SFTP prune completion marker blocked exact retry
 
 - Date: 2026-09-28.
-- Symptom: source review found that a short write of `.nex-deleted-ID` could
-  leave a digest prefix that blocked both repository rebuild and deletion retry.
-  No native interrupted write was observed.
-- Root cause: exclusive marker creation can leave a partial file after a write
-  or sync failure, but retry accepted only a complete digest and could not
-  replace the partial file.
-- Fix: treat only an exact digest prefix as unresolved work; deletion retry
-  removes and syncs that partial marker, then writes the complete digest. If
-  file sync fails after a full marker write, exact retry reopens and syncs that
-  marker before reporting deletion settled. The original deletion record
-  remains throughout and still blocks point ID reuse.
-- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` injects a partial
-  completion marker after point removal. It failed before the fix with
-  `partial completion marker retry: backup request conflicts with retained
-  work` and passed after it. The check also rejects an unrelated marker and
-  keeps rebuild blocked until completion. The same test injects failure of the
-  full marker's file sync: deletion and rebuild refuse settlement, then exact
-  retry succeeds after sync recovers. That case failed before the reopen/sync
-  fix and passed afterward; focused race and broader SFTP checks passed.
-  In-process SFTP testing does not establish native server crash durability;
-  no CI run is claimed.
-- API impact: existing repository storage contract. Guide impact: none; no
-  operator step changed.
+- Symptom: source review found a short write of `.nex-deleted-ID` could leave a digest prefix that blocked both repository rebuild and deletion retry; no native interrupted write seen.
+- Root cause: exclusive marker creation can leave a partial file after a write or sync failure, but retry accepted only a complete digest and could not replace it.
+- Fix: treat only an exact digest prefix as unresolved; retry removes and syncs the partial marker then writes the full digest, and reopens/syncs a fully written marker after sync failure. The deletion record keeps blocking ID reuse.
+- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` failed before (`partial completion marker retry: backup request conflicts with retained work`), passed after. `go test -race ./internal/agent -run '^TestSFTPDeleteResumesExactInterruptedPoint$' -count=1`. In-process SFTP only.
 - Avoid: assuming an exclusive write leaves either a complete file or no file.
 
 ## BUG-0686 — Same-ID remote repository replacement orphaned retained points
 
 - Date: 2026-09-28.
-- Symptom: source review found that registering an S3 or SFTP repository with an
-  existing ID but a new destination or credential reference replaced the
-  master's durable destination while catalog points kept the old ID. Restore,
-  rebuild and retention then resolved those points through the new destination.
-- Root cause: registration and commit guarded SMB3 replacement only. S3 and
-  SFTP changes incremented the generation without preserving the old target.
-- Fix: refuse same-ID S3 and SFTP source or credential-reference changes before
-  remote preparation and again under the master's commit lock. Use a new
-  repository ID and keep the old destination available for retained restores.
-- Regression: `TestRemoteRepositoryReplacementPreservesRetainedPoints` failed
-  before the fix for S3/SFTP source and credential changes: each committed a
-  generation-2 replacement. It passes after the fix and checks the durable
-  destination and catalog point stay intact. Focused agent race tests covering
-  this check, SMB replacement and S3 exact preparation replay passed. No native
-  remote service or CI run is claimed.
-- API impact: existing Core repository registration contract; no route or
-  payload change. Guide impact: updated with new-ID rotation instructions.
-- Avoid: reusing a repository ID when the old catalog still needs its original
-  destination and credentials.
+- Symptom: source review found registering an S3 or SFTP repository with an existing ID but a new destination or credential reference replaced the destination while catalog points kept the old ID, so restore, rebuild and retention resolved through the new destination.
+- Root cause: registration and commit guarded SMB3 replacement only; S3 and SFTP changes bumped the generation without preserving the old target.
+- Fix: refuse same-ID S3/SFTP source or credential-reference changes before remote preparation and again under the master's commit lock; use a new repository ID instead.
+- Regression: `TestRemoteRepositoryReplacementPreservesRetainedPoints` failed before (each change committed a generation-2 replacement), passed after. `go test -race ./internal/agent -run '^TestRemoteRepositoryReplacementPreservesRetainedPoints$' -count=1`. No native remote or CI run claimed.
+- Avoid: reusing a repository ID when the old catalog still needs its original destination and credentials.
 
 ## BUG-0687 — Published backup could not settle after authority admission recovered
 
 - Date: 2026-09-28.
-- Symptom: a post-promotion NFS backup published its complete manifest and two
-  matching disk artifacts, but a lagging member blocked authority admission.
-  The run stayed pending/reserved and its journal reported `needs_attention`;
-  exact same-ID replay still could not settle after the member caught up.
-- Root cause: backup replay returned the retained uncertain journal result
-  without retrying settlement of the already published point.
-- Fix: exact replay checks the published point and retries catalog/run
-  settlement when authority admission is available, without recapturing or
-  republishing the backup.
-- Regression: `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
-  failed before the fix and passed afterward. It checks admission refusal,
-  pending run, absent catalog point, missing-point refusal without recapture,
-  successful exact retry, settled reply replay and unchanged artifact hashes.
-  In the disposable promoted fixture, an exact Core-local POST returned HTTP
-  202/`succeeded`: the same journal and run settled, the catalog manifest SHA
-  matched the published manifest, and the member's signed v2 history matched
-  the master's 1,053 runs at generation 16. The original 1,052 seeded run-ID
-  set retained its pre-replay digest. Full `go test ./...` passed before a later
-  restore reconciliation edit; no final-candidate suite or CI run is claimed.
-  The post-promotion restore later settled and its two disk markers were read
-  inside an isolated guest under BUG-0689. This closes only the bounded NFS
-  marker-disk payload check; the four-kind acceptance matrix remains open.
-- API impact: existing Core-local backup request and Core-owned run/catalog
-  contracts; no route or payload change. Guide impact: none; no operator step
-  changed.
-- Avoid: publishing a second point or creating a new operation to resolve
-  uncertain settlement of the exact published backup.
+- Symptom: a post-promotion NFS backup published its manifest and disks, but a lagging member blocked admission; the run stayed pending and exact same-ID replay could not settle after the member caught up.
+- Root cause: backup replay returned the retained uncertain journal result without retrying settlement of the already published point.
+- Fix: exact replay checks the published point and retries catalog/run settlement once admission is available, without recapturing or republishing.
+- Regression: `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp` failed before, passed after. `go test ./internal/agent -run '^TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp$' -count=1`. No final-candidate suite or CI run claimed.
+- Avoid: publishing a second point or creating a new operation to resolve uncertain settlement of the exact published backup.
 
 ## BUG-0688 — Member repository probes misreported remote access
 
 - Date: 2026-09-28.
-- Symptom: in a disposable diagnostic overlay, member NFS access became
-  current, but S3 on both members and SFTP on one member failed with a stale
-  credential-repository error; both SMB3 repositories failed retained-work
-  identity checks despite matching share markers.
-- Root cause: transient S3/SFTP preparation did not save the member's exact
-  repository before credential-gated access checks. SMB3 comparison included
-  a filesystem ID that differs by client. Master access also did not refresh
-  with its periodic health probe, and member results could outlive their
-  useful observation window.
-- Fix: save the exact prepared member repository before the probe; compare
-  SMB3 server, share and marker identity; stamp member receipt time at the
-  master, expire stale/future observations and refresh master access on each
-  periodic health probe.
-- Regression: `TestBackupMemberProbeAdoptsRemoteCredentialBeforeCheckingAccess`
-  and `TestBackupMemberProbeUsesStableSMBIdentity` failed before their fixes
-  and passed afterward. `TestBackupMasterAccessFollowsPeriodicProbe` likewise
-  failed before and passed after its fix. Focused member/master/health race
-  tests passed; `TestBackupMemberAccessProbeOfflineExpiryAndRestart` covers
-  authenticated probe, generation mismatch, peer outage, expiry and Core
-  restart. The final combined build was not installed before fixture shutdown;
-  native member retest, browser recapture and CI remain open.
-- API impact: existing authenticated peer member-access POST and repository
-  access fields; no further route or payload change. Guide impact: none;
-  operator steps did not change.
-- Avoid: reporting a member healthy from stale observations or comparing
-  client-specific filesystem IDs as shared SMB repository identity.
+- Symptom: member S3 and SFTP probes failed with a stale credential-repository error and both SMB3 repositories failed retained-work identity checks despite matching share markers.
+- Root cause: transient S3/SFTP preparation did not save the member's exact repository before credential-gated checks; SMB3 comparison included a per-client filesystem ID; master access did not refresh with the periodic probe and member results could outlive their window.
+- Fix: save the prepared member repository before probing; compare SMB3 server, share and marker identity; stamp member receipt time at the master, expire stale/future observations, refresh master access each probe.
+- Regression: `TestBackupMemberProbeAdoptsRemoteCredentialBeforeCheckingAccess`, `TestBackupMemberProbeUsesStableSMBIdentity`, `TestBackupMasterAccessFollowsPeriodicProbe` failed before, passed after. `go test -race ./internal/agent -run 'TestBackup(MemberProbe|MasterAccess)' -count=1`. Native retest and CI open.
+- Avoid: reporting a member healthy from stale observations or comparing client-specific filesystem IDs as SMB repository identity.
 
 ## BUG-0689 — Registered restore stayed uncertain with a pending run
 
 - Date: 2026-09-28.
-- Symptom: an exact post-promotion restore-as-new request registered a VM, but
-  authority admission left its Core run pending/reserved and its journal at
-  `needs_attention`. The restored VM existed while the operation had no
-  settled result.
-- Root cause: restore reconciliation accepted a run already marked
-  `needs_attention` but excluded an exact pending run whose matching command
-  journal recorded the uncertain native outcome.
-- Fix: allow reconciliation of a pending restore run only when the journal
-  retains `needs_attention` for the same command. Observe the existing native
-  registration and settle the original run; do not issue another restore.
-- Regression: `TestAllocatingRestoreResumesOnlyExactRetainedOperation` was
-  extended to cover a pending/reserved run paired with the exact uncertain
-  journal. `go test ./internal/agent -run
-  '^TestAllocatingRestoreResumesOnlyExactRetainedOperation$' -count=1` failed
-  before the fix with `restore run has no retained uncertain state` and passed
-  afterward. The broader `go test ./internal/agent -run
-  'Test(AllocatingRestore|PublishedBackup|Restore|PoolBackup)' -count=1`
-  passed; independent source review passed. In the disposable promoted fixture,
-  restarting the matched Core overlay auto-reconciled the same restore:
-  journal, run and API reported `succeeded`, the run stage was `registered`,
-  and the restored VM started with zero NICs and returned to shut off. A
-  separate isolated, network-free, read-only Linux guest attached both
-  restored disks, read the exact root and data ASCII markers at the tested
-  offsets, then powered off. After restore, all 1,052 original seeded run IDs
-  retained their original set digest; the master held 1,054 total run records,
-  and the surviving member's signed generation 19/history of 1,054 matched
-  it. These marker disks lacked a guest OS, so this does not prove guest OS
-  recovery or the broader four-kind matrix; no CI run is claimed.
-  Round-2 test review (2026-09-29):
-  `TestAllocatingRestoreResumesOnlyExactRetainedOperation` also pairs the
-  pending run with a pending journal and with a changed journal command. It
-  fails when either the journal-status or the exact-command guard is removed.
-  Command: `go test ./internal/agent -run
-  '^TestAllocatingRestoreResumesOnlyExactRetainedOperation$' -count=1`.
-- API impact: existing Core restore request and Core-owned run/journal
-  contracts; no route or payload change. Guide impact: none; no operator step
-  changed.
-- Avoid: treating a pending run as proof that no native restore occurred, or
-  retrying a restore without checking its exact journal and VM registration.
+- Symptom: an exact post-promotion restore-as-new registered a VM, but the run stayed pending/reserved and the journal `needs_attention`, leaving the operation unsettled.
+- Root cause: restore reconciliation accepted a run already marked `needs_attention` but excluded an exact pending run whose matching journal recorded the uncertain native outcome.
+- Fix: reconcile a pending restore run only when the journal retains `needs_attention` for the same command; observe the existing registration and settle the original run without issuing another restore.
+- Regression: `TestAllocatingRestoreResumesOnlyExactRetainedOperation` failed before (`restore run has no retained uncertain state`), passed after. `go test ./internal/agent -run '^TestAllocatingRestoreResumesOnlyExactRetainedOperation$' -count=1`. No CI run claimed.
+- Avoid: treating a pending run as proof no native restore occurred, or retrying a restore without checking its exact journal and VM registration.
 
 ## BUG-0690 — Same-ID NFS replacement could orphan retained points
 
 - Date: 2026-09-28.
-- Symptom: independent review found that changing an NFS repository's source
-  or observed filesystem identity under the same ID could redirect retained
-  points to a different destination. A changed generation could also leave
-  member access observations mismatched.
-- Root cause: the replacement guard returned false for NFS-to-NFS changes.
-  Early registration reached native preparation for a changed source, and the
-  commit path could accept changed source or filesystem identity.
-- Fix: refuse same-ID NFS source changes before preparation and source or
-  observed-filesystem identity changes under the commit lock. Register a new
-  repository ID for a moved destination, preserving the old one for retained
-  restores. Peer requests carry the master's observed NFS identity so member
-  adoption and promotion pin that filesystem before claiming its owner marker;
-  a different observed filesystem is refused.
-- Regression: `TestNFSRepositoryReplacementPreservesRetainedPoints` failed
-  before the fix: source change reached native mount preparation and failed
-  there with permission denied, while changed filesystem identity committed.
-  It passed after the guard and verifies the original destination, generation
-  and catalog point remain intact. `TestPeerNFSAdoptionPinsMasterFilesystem`
-  passed in the focused run: it checks that the peer carries the master's
-  identity, preparation receives it, and a different filesystem identity is
-  rejected. In the disposable promoted fixture, same-ID NFS source change and
-  exact replay each returned HTTP 503; source, observed identity and generation
-  stayed unchanged. In a later matched disposable fixture, replacing the NFS
-  export's backing filesystem changed the kernel NFSv4 FSID on both mounted
-  hosts. Member access failed, and same-ID registration plus exact replay
-  returned HTTP 503. After the original export was restored, the repository's
-  identity and generation stayed unchanged. Test restore of a retained old
-  point succeeded; read-only mounts of its two restored disks matched the
-  original marker hashes. Verification and exact VM/disk cleanup succeeded,
-  and the point remained in Core's catalog. Mixed-version peer refusal and CI
-  remain pending.
-- API impact: existing Core repository registration route with stricter
-  same-ID replacement refusal, and changed authenticated peer NFS contract:
-  dispatch, member access and promotion now carry and require the master's
-  observed filesystem identity. Older peers derived identity from source
-  alone, so matching updated Core versions are required. Guide impact:
-  updated with new-ID instructions for NFS moves.
-- Avoid: reusing a repository ID whose retained recovery points still depend
-  on its original NFS source and filesystem identity.
+- Symptom: changing an NFS repository's source or observed filesystem identity under the same ID could redirect retained points to a different destination; member access observations could mismatch.
+- Root cause: the replacement guard returned false for NFS-to-NFS changes, so a changed source reached native preparation and the commit path accepted changed source or filesystem identity.
+- Fix: refuse same-ID source/identity changes before preparation and under the commit lock; a moved destination needs a new repository ID. Peer requests carry the master's observed NFS identity and a different filesystem is refused.
+- Regression: `TestNFSRepositoryReplacementPreservesRetainedPoints` failed before, passed after; `TestPeerNFSAdoptionPinsMasterFilesystem` passed. `go test ./internal/agent -run '^(TestNFSRepositoryReplacementPreservesRetainedPoints|TestPeerNFSAdoptionPinsMasterFilesystem)$' -count=1`. Mixed-version peer refusal and CI pending.
+- Avoid: reusing a repository ID whose retained recovery points depend on its original NFS source and filesystem identity.
 
 ## BUG-0691 — Online remote capture used a Core-private work directory
 
 - Date: 2026-09-28.
-- Symptom: a disposable Controller-submitted S3 online backup stopped before
-  QEMU capture because `libvirt-qemu` could not create its work directory
-  below Core's private state. The operation became `needs_attention` with a
-  pending/reserved run even though no capture had begun. SFTP used the same
-  staging path.
-- Root cause: S3 and SFTP selected `backup-staging/` below the root-only Core
-  state for both stopped and online capture. Preparation returned an
-  uncertain result for a proven pre-capture failure.
-- Fix: online S3/SFTP capture uses a private QEMU-owned work root below the
-  existing libvirt storage path; stopped capture keeps its Core-private
-  staging. Work-root creation checks the path and owner-only mode. A
-  pre-capture preparation error settles the exact run as failed.
-- Regression: `TestRemoteOnlineBackupUsesQEMUAccessibleWorkDir` failed before
-  the path fix and passed after it. On the selected disposable matched Core
-  build, S3 and SFTP each published an online two-disk point; S3, SFTP and
-  SMB3 online points each returned one succeeded run/point and HTTP 200 on
-  exact backup replay. A deliberate work-root mode fault then returned one
-  failed S3 run, no point and HTTP 200/failed on replay; the disposable root
-  mode was restored immediately. The original uncertain fixture operations
-  remain recorded and were not replayed as new captures. These results do
-  not establish the wider per-kind fault matrix or CI.
-- API impact: existing Core backup-now and Controller VM backup operations;
-  no route or payload change. Guide impact: none; the supported operator
-  steps do not change. Core retains all run and point state.
-- Avoid: giving QEMU a path under Core's root-only state or treating a
-  pre-capture permission failure as an uncertain native backup outcome.
+- Symptom: an online S3 (and SFTP) backup stopped before QEMU capture because `libvirt-qemu` could not create its work directory under Core's private state; the run went `needs_attention` though no capture began.
+- Root cause: S3 and SFTP used root-only `backup-staging/` for online capture, and a proven pre-capture failure was returned as an uncertain result.
+- Fix: online S3/SFTP capture uses a private QEMU-owned work root under the libvirt storage path (owner-only mode checked); stopped capture keeps Core-private staging. Pre-capture preparation errors settle the run as failed.
+- Regression: `TestRemoteOnlineBackupUsesQEMUAccessibleWorkDir` failed before, passed after. `go test ./internal/agent -run '^TestRemoteOnlineBackupUsesQEMUAccessibleWorkDir$' -count=1`. Wider per-kind fault matrix and CI not established.
+- Avoid: giving QEMU a path under Core's root-only state, or treating a pre-capture permission failure as an uncertain backup outcome.
 
 ## BUG-0692 — Slow peer verification stranded a completed restore
 
 - Date: 2026-09-28.
-- Symptom: an online S3 point restored and booted on a disposable member,
-  but the master reported `needs_attention` and kept the run pending/reserved.
-  Its exact replay returned the same uncertain result.
-- Root cause: the master's full S3 artifact readback inherited a 10-second
-  peer HTTP request context. A timeout during verification was classified as
-  permanent even though the member's exact restore had succeeded.
-- Fix: give full point verification its own bounded context, retain the
-  short authenticated peer request timeout, and retry transient repository
-  read failures. Invalid point content and digest mismatches remain terminal.
-- Regression: `TestPeerS3RestoreVerificationTimeoutCanRetry` failed before
-  the fix by classifying a canceled S3 verification as permanent, then passed.
-  A matched disposable Core restart reconciled the **same** S3 restore to
-  succeeded/registered; exact Controller replay returned HTTP 200/succeeded
-  with one run and no second VM. Its zero-NIC member VM had already booted in
-  isolation while the original disks were unavailable; both marker hashes
-  matched. Large-volume verification throughput beyond the bounded fixture
-  and CI remain unproven.
-  Round-2 test review (2026-09-29):
-  `TestPeerS3RestoreVerificationTimeoutCanRetry` now uses an expired deadline
-  instead of cancellation and fails when a timeout is classified as permanent.
-  The separate verification context (outside the 10-second GET) has no
-  deterministic test; it would need a clock seam. Command: `go test
-  ./internal/agent -run '^TestPeerS3RestoreVerificationTimeoutCanRetry$'
-  -count=1`.
-- API impact: existing authenticated Core peer backup operation and Core-owned
-  restore run contracts; no route or payload change. Guide impact: none; no
-  operator instruction changes.
-- Avoid: treating a timed-out readback as proof that a completed member
-  restore or its repository point is invalid.
+- Symptom: an online S3 point restored and booted on a member, but the master reported `needs_attention` and kept the run pending; exact replay returned the same uncertain result.
+- Root cause: the master's full S3 readback inherited a 10-second peer HTTP request context, and the timeout was classified as permanent though the member restore had succeeded.
+- Fix: full point verification gets its own bounded context, the short peer request timeout stays, and transient repository read failures are retried. Invalid content and digest mismatches stay terminal.
+- Regression: `TestPeerS3RestoreVerificationTimeoutCanRetry` failed before, passed after. `go test ./internal/agent -run '^TestPeerS3RestoreVerificationTimeoutCanRetry$' -count=1`. The separate verification context has no deterministic test (needs a clock seam).
+- Avoid: treating a timed-out readback as proof that a completed member restore or its repository point is invalid.
 
 ## BUG-0693 — Failed capture retained local staging disks
 
 - Date: 2026-09-28.
-- Symptom: a terminal backup failure during capture or remote publication could
-  leave full staged disk images on the VM host indefinitely.
-- Root cause: backup work-directory cleanup was enabled only after successful
-  repository publication. Failed runs cannot resume capture on exact replay.
-- Fix: remove work files on every terminal path after the native capture job is
-  known inactive. Preserve them when native job inactivity cannot be proven.
-- Regression: `TestFailedBackupRemovesPartialCapture` creates a partial disk
-  before a conversion error; it failed with the original cleanup condition and
-  passed after the fix. The existing Go package suites in both forge workflows
-  and the cheap GitHub workflow run this test on pushes and pull requests.
-  A matched disposable Core build then ran a selected NFS stopped backup with
-  a faulted `qemu-img` that wrote a partial disk and failed. Core recorded one
-  failed run, removed the staging directory, published no point, and exact
-  Core-local replay returned the same failure. The fault hook was removed and
-  all fixture processes stopped. Online and interrupted-upload cleanup, and
-  CI results remain open.
-- API impact: existing Core backup-now result; no contract change. Guide
-  impact: none; no operator step changes. Core owns the run and point state.
-- Avoid: keeping terminal failed-run staging files as if exact replay could
-  resume their capture.
+- Symptom: a terminal backup failure during capture or remote publication could leave full staged disk images on the VM host indefinitely.
+- Root cause: work-directory cleanup was enabled only after successful repository publication, and failed runs cannot resume capture on replay.
+- Fix: remove work files on every terminal path once the native capture job is known inactive; keep them if inactivity cannot be proven.
+- Regression: `TestFailedBackupRemovesPartialCapture` failed with the old cleanup condition, passed after. `go test ./internal/agent -run '^TestFailedBackupRemovesPartialCapture$' -count=1`. Online and interrupted-upload cleanup, and CI results, remain open.
+- Avoid: keeping terminal failed-run staging files as if exact replay could resume their capture.
 
 ## BUG-0694 — Offline member blocked backup repository registration
 
 - Date: 2026-09-29.
-- Symptom: a live browser SFTP credential handoff succeeded and registration
-  queued, but Core failed registration while a ready pool member was offline;
-  no repository appeared.
-- Root cause: Core required credential delivery to every durable `ready` member
-  before saving the master's repository record. Membership readiness does not
-  mean the member is reachable. The same delivery error could also turn a
-  committed registration into a failed operation.
-- Fix: verify the master's private credential before commit, save the Core-owned
-  repository, and deliver credentials to every reachable member without making
-  a temporarily unreachable member fail registration. Periodic Core probes
-  retry delivery. Member dispatch and promotion still refuse missing private
-  credentials or inaccessible repositories.
-- Regression: `TestBackupRepositoryRegistrationWithOfflineMember` failed before
-  the fix with `ErrBackupUnavailable`, then passed. It checks master commit,
-  exact retry, delivery to a second reachable member despite a failed first
-  delivery, promotion refusal before delivery, reconnect delivery, and missing
-  master credential refusal before commit. The existing Go package jobs in
-  both forge workflows and the cheap GitHub workflow run it on pushes and pull
-  requests. In a disposable matched Core build, browser SFTP credential
-  handoff returned HTTP 201 and registration HTTP 202; Core then reported the
-  repository with a succeeded operation while one ready member guest was off.
-  The online member reported read/write access and the offline member a failed
-  probe. After swapping the running member guest, the reconnected member
-  reported read/write access and held a verified signed authority replica at
-  the master's generation with a repository manifest. The two Core guests,
-  storage guest, Controller, tunnels and browser were stopped afterward.
-  Native promotion after reconnect, broad faults and forge CI remain open.
-- API impact: existing Controller credential handoff and backup repository
-  registration contracts; no route or payload change. Guide impact: none;
-  current supported NFS instructions do not change. Core owns the durable
-  repository and credential records.
-- Avoid: treating durable membership status as a liveness prerequisite for
-  saving pool repository state, or acknowledging registration before checking
-  the master's own credential receipt.
+- Symptom: SFTP credential handoff succeeded and registration queued, but Core failed registration while a ready pool member was offline; no repository appeared.
+- Root cause: Core required credential delivery to every durable `ready` member before saving the master's record, but readiness does not mean reachable.
+- Fix: verify the master's private credential, save the repository, and deliver to reachable members; periodic probes retry delivery. Member dispatch and promotion still refuse missing credentials or inaccessible repositories.
+- Regression: `TestBackupRepositoryRegistrationWithOfflineMember` failed with `ErrBackupUnavailable` before, passed after. `go test ./internal/agent -run '^TestBackupRepositoryRegistrationWithOfflineMember$' -count=1`. Native promotion after reconnect and forge CI remain open.
+- Avoid: treating durable membership status as a liveness prerequisite for saving pool repository state, or acknowledging registration before checking the master's credential receipt.
 
 ## BUG-0695 — Large catalog rebuild outlived its request and could not resume
 
 - Date: 2026-09-29.
-- Symptom: a disposable S3 catalog rebuild lost its Core-local HTTPS reply
-  after the 30-second server write limit. Its receipt stayed `pending`, but an
-  exact retry returned `needs_attention` without resuming the scan; a later
-  SFTP rebuild conflicted with that unsettled operation.
-- Root cause: catalog import/rebuild scanned and hashed the repository on the
-  single Core request loop under a 30-second context. A pending metadata
-  receipt had no catalog retry path.
-- Fix: Core reserves the exact receipt, runs the bounded scan in a background
-  worker, and settles the receipt after the scan. Local POST returns
-  `202/pending`; operation GET remains `pending` during work. Exact input can
-  resume a pending receipt after interruption, while a transient scan error
-  stays visible on that receipt for a later retry.
-- Regression: `TestCatalogRebuildRetriesPendingReceipt` failed before the
-  pending-receipt fix and passed after it; it also checks pending GET and
-  transient-error visibility. `TestBackupCatalogPendingResponseAccepted`
-  checks the local HTTP 202 for import and rebuild. Existing Go package jobs
-  in both forge workflows and the cheap GitHub workflow run these tests on
-  pushes and pull requests. On a matched disposable Core build, the original
-  S3 operation returned `202/pending` on exact retry, then `succeeded` after
-  19 two-second polls; the catalog still contained 24 points. The SFTP
-  rebuild remained pending because that older fixture held incomplete remote
-  delete records; Core reported a conflict, and the selected catalog index
-  was restored from a disposable rollback copy. In a later full-pool check,
-  a fresh missing-index S3 rebuild restored the selected point byte-for-byte,
-  retained a protected old point and left a pruned point absent. A separate
-  clean SFTP repository published one two-disk point and rebuilt its removed
-  index byte-for-byte, while the older repository's unresolved delete records
-  were left untouched. Interrupted prune, broader interruption and forge CI
-  remain open.
-  Round-2 test review (2026-09-29):
-  `TestControllerCatalogCommandJoinsLocalRunAndSettles` gets the local `pending`
-  reply while the scan is held, so it fails when the scan runs on the Run loop.
-  Its 200 ms sleep is replaced by a Run-loop round trip. Command: `go test
-  ./internal/agent -run '^TestControllerCatalogCommandJoinsLocalRunAndSettles$'
-  -count=1`.
-- API impact: changed existing Core-local import/rebuild response timing:
-  `202/pending` precedes a settled operation GET or exact replay. Controller
-  uses its existing asynchronous operation contract. Guide impact: updated
-  catalog rebuild recovery steps. Core owns the receipt and catalog.
-- Avoid: treating a successful request reservation, a timed-out HTTPS reply,
-  or a pending receipt as proof that the catalog was rebuilt.
+- Symptom: an S3 catalog rebuild lost its HTTPS reply after the 30-second write limit; the receipt stayed `pending` but exact retry returned `needs_attention` without resuming, and a later SFTP rebuild conflicted.
+- Root cause: import/rebuild scanned and hashed the repository on the single Core request loop under a 30-second context, and a pending metadata receipt had no catalog retry path.
+- Fix: Core reserves the receipt, runs the bounded scan in a background worker and settles afterward; POST returns `202/pending`. Exact input resumes a pending receipt; transient scan errors stay visible for retry.
+- Regression: `TestCatalogRebuildRetriesPendingReceipt`, `TestBackupCatalogPendingResponseAccepted` and `TestControllerCatalogCommandJoinsLocalRunAndSettles` (fails if the scan runs on the Run loop). `go test ./internal/agent -run '^TestControllerCatalogCommandJoinsLocalRunAndSettles$' -count=1`. Interrupted prune and forge CI remain open.
+- Avoid: treating a request reservation, a timed-out HTTPS reply, or a pending receipt as proof the catalog was rebuilt.
 
 ## BUG-0696 — Replacement Controller lost an offline member name and linked to a missing Host
 
 - Date: 2026-09-29.
-- Symptom: after a fenced promotion and Controller replacement, the former
-  master remained in the Core-reported Members list with unknown connection,
-  but its name fell back to a UUID and its link opened a missing Hosts panel.
-- Root cause: Core membership saved the member ID but not its hostname; the
-  Controller knew names only for hosts enrolled with that Controller, while
-  the Members UI assumed every member had an enrolled Hosts row.
-- Fix: Core stores the host-reported hostname in the master's durable
-  membership and replicates it with signed authority. Older pools backfill
-  names on authenticated reconcile only after every ready peer proves it can
-  verify the new signed format. A named pool refuses an older first join, but
-  retained issued-offer replay still returns its original certificate. Core
-  omits names from strict older Controller reports until the new capability is
-  acknowledged. Controller uses the Core name for an unenrolled member, and
-  the UI links only members present in the Controller Hosts inventory. Legacy
-  empty names remain valid and use the stable ID; no host control identity is
-  invented.
-- Regression: `TestPoolMembershipRetainsHostnamesAcrossJoin` failed to compile
-  before the field and passed after it; focused join/replay tests passed.
-  `TestLegacyJoinReplaySurvivesHostnameBackfill` failed before its ordering
-  correction and passed after. Legacy/offline peer, Controller preflight,
-  `TestReplacementControllerShowsOfflineMemberNameFromCore` and
-  `web/src/pool-members.test.mjs` passed; the UI link assertion failed before
-  the fix. Existing Go, web and API-contract forge jobs include these files.
-  A separate new disposable pool installed the current-source Core on two
-  hosts, joined them, and verified both saved hostnames in master membership
-  and the signed member replica. A fresh Controller with a new data directory
-  and CA adopted only the live master: Members showed the offline member by
-  its Core name with unknown connection, while Hosts had no row. All fixture
-  processes stopped. A later headless browser pass on that fresh Controller
-  showed the named offline member with Connection Unknown and no Hosts link;
-  only the enrolled master linked. Native mixed-version upgrade and forge CI
-  remain open.
-- API impact: changed contract, additive optional peer join and Core
-  membership `hostname`; the Controller Members response keeps its existing
-  `name` field. Guide impact: updated join/replacement guidance. Core owns the
-  durable membership and its signed replica.
-- Avoid: treating a Controller enrollment row as the only source of a pool
-  member's name or assuming a membership row grants Host-panel access.
+- Symptom: after fenced promotion and Controller replacement, the former master appeared in Members with unknown connection but a UUID name, and its link opened a missing Hosts panel.
+- Root cause: Core membership stored the member ID but not its hostname; the Controller only knew names of hosts enrolled with it, and the UI assumed every member had a Hosts row.
+- Fix: Core stores the host-reported hostname in durable membership and signed authority (older pools backfill only once every ready peer can verify it). The Controller uses the Core name for unenrolled members and the UI links only enrolled hosts.
+- Regression: `TestPoolMembershipRetainsHostnamesAcrossJoin`, `TestLegacyJoinReplaySurvivesHostnameBackfill`, `TestReplacementControllerShowsOfflineMemberNameFromCore` and `web/src/pool-members.test.mjs` (UI link assertion failed before). `go test ./internal/agent -count=1`. Mixed-version upgrade and forge CI remain open.
+- Avoid: treating a Controller enrollment row as the only source of a pool member's name, or assuming a membership row grants Host-panel access.
 
 ## BUG-0697 — Failed backup registration stranded a private credential
 
 - Date: 2026-09-29.
-- Symptom: failed SMB3, S3 and SFTP registration attempts left Core-private
-  handoff receipts, but the existing support list and retire API did not show
-  or retire them. Four failed handoffs were observed in a disposable lab;
-  no secret cleanup was claimed there.
-- Root cause: generic receipt reporting and retirement covered VM storage
-  credentials only. Backup handoffs had a separate private receipt store, with
-  cleanup only when a committed repository replaced an earlier receipt.
-- Fix: Core includes redacted backup receipts in the existing report and
-  routes the existing retire command through backup receipt cleanup. It checks
-  repository and unresolved registration references again under Core's locks,
-  keeps a signed replay tombstone after clearing the secret, and removes an
-  unused SMB3 side credential file.
-- Regression: focused Core receipt, failed registration, pending operation,
-  in-flight retirement, SMB side-file and ordinary storage-path tests passed;
-  a red baseline was not captured. On a matched current-source disposable Core
-  overlay, four earlier failed handoffs appeared as eligible, retired through
-  Controller, and stayed retired after exact handoff replay returned 503.
-  Private inspection confirmed four empty-secret 0600 tombstones and removal
-  of the unused SMB side file. Five active receipts remained ineligible with
-  their private material intact; four-kind repository access and exact
-  repository/point/run ID sets survived. Forge CI remains open.
-  Round-2 test review (2026-09-29):
-  `TestUnusedBackupCredentialRetirementKeepsReplayTombstone`,
-  `TestBackupCredentialRetirementRejectsCommittedAndUnresolvedRegistration`,
-  `TestPendingBackupMetadataReceiptBlocksCredentialRetirement`,
-  `TestFailedBackupRegistrationCredentialMayBeRetired` and
-  `TestBackupCredentialRetirementWaitsForPreparationAndRemovesSMBMaterial` in
-  `internal/agent/backup_credential_retire_test.go`. They fail when retirement
-  keeps the secret, skips the reference check or keeps the SMB3 side file.
-  Command: `go test ./internal/agent -run
-  'BackupCredentialRetire|BackupRegistrationCredential|BlocksCredentialRetirement'
-  -count=1`.
-- API impact: changed existing Core report and credential-retire semantics;
-  the Controller list and retire routes retain their payloads. Guide impact:
-  none for the currently supported NFS workflow; the support cleanup contract
-  is documented in `docs/API.md`. Core owns the private receipt and tombstone.
-- Avoid: treating a failed Controller registration response as evidence that
-  the Core-private handoff was erased, or deleting a receipt while an
-  ambiguous registration can still commit.
+- Symptom: failed SMB3, S3 and SFTP registrations left Core-private handoff receipts that the support list and retire API neither showed nor retired.
+- Root cause: generic receipt reporting and retirement covered VM storage credentials only; backup handoffs had a separate receipt store cleaned only when a committed repository replaced a receipt.
+- Fix: Core reports redacted backup receipts and routes the existing retire command through backup receipt cleanup, rechecking references under locks, keeping a signed replay tombstone and removing an unused SMB3 side credential file.
+- Regression: `TestUnusedBackupCredentialRetirementKeepsReplayTombstone` and four sibling retirement tests pass; no red baseline was captured. `go test ./internal/agent -run 'BackupCredentialRetire|BackupRegistrationCredential|BlocksCredentialRetirement' -count=1`. Forge CI remains open.
+- Avoid: treating a failed Controller registration response as proof the Core-private handoff was erased, or deleting a receipt while an ambiguous registration can still commit.
 
 ## BUG-0698 — Interrupted NFS/SMB3 prune left a partial point and blocked retry
 
 - Date: 2026-09-29.
-- Symptom: if Core or the destination stopped after filesystem prune removed
-  an artifact but before the point and catalog row were removed, exact backup
-  settlement could not finish and catalog rebuild refused the incomplete
-  point. A retained catalog row could still name an unrestorable point.
-- Root cause: filesystem deletion used `os.RemoveAll` without a durable
-  decision record. On retry, the pre-delete `ReadPoint` rejected the partial
-  directory, and rebuild could not distinguish an authorized deletion from
-  corruption.
-- Fix: NFS/SMB3 records a durable repository-root delete intent tied to the
-  validated manifest and Core catalog digest before removing named files.
-  Exact retry rechecks authority, active restore pins and protection; it
-  resumes only a matching intent. A present manifest must match the saved
-  bytes, so a replacement with the same ID cannot be deleted. A completion
-  tombstone survives the catalog-removal window. Scan refuses an unfinished
-  intent, while incomplete points without one remain conflicts.
-- Regression: `TestFilesystemPruneResumesOnlyRecordedPartialDeletion` failed
-  before the fix on exact retry and passed afterward; a same-ID replacement
-  case failed before its correction and passed afterward. Focused race,
-  corrupt-point and retention checks, the full agent package suite and the
-  privacy check passed. Independent source review found the replacement
-  hazard, then re-reviewed its correction with no remaining material finding.
-  In a disposable native NFS/SMB3 fixture, an ignored exact-point hook stopped
-  Core after manifest and one disk artifact were removed. The durable intent
-  matched the catalog digest, and another artifact remained. Core was killed
-  with automatic service restart disabled, then its clean current-source
-  capability overlay resumed the retained operation. Exact Controller replay
-  used the same operation with no extra run or point; each old directory was
-  gone, tombstone remained, rebuild succeeded and new/protected points plus
-  source disk hashes survived. This is controlled fault injection, not a
-  spontaneous hardware crash. Forge CI and broader faults remain open.
-- API impact: changed existing retention and catalog-rebuild failure/retry
-  behavior with no schema change. Guide impact: updated catalog rebuild
-  troubleshooting. Core owns the catalog/run and destination delete intent;
-  a fresh Controller reads the Core result, not a private cleanup registry.
-- Avoid: removing a partially deleted point or its intent manually to force
-  a successful catalog scan, or treating an arbitrary incomplete point as an
-  authorized prune without the matching durable intent.
+- Symptom: if Core or the destination stopped mid-prune, exact backup settlement could not finish, catalog rebuild refused the incomplete point, and a catalog row could name an unrestorable point.
+- Root cause: filesystem deletion used `os.RemoveAll` with no durable decision record, so retry's `ReadPoint` rejected the partial directory and rebuild could not tell authorized deletion from corruption.
+- Fix: NFS/SMB3 records a durable delete intent tied to the manifest and catalog digest before removing files; exact retry rechecks authority, pins and protection and resumes only a matching intent. A completion tombstone survives catalog removal.
+- Regression: `TestFilesystemPruneResumesOnlyRecordedPartialDeletion` (plus a same-ID replacement case) failed before, passed after. `go test ./internal/agent -run '^TestFilesystemPruneResumesOnlyRecordedPartialDeletion$' -count=1`. Forge CI and broader faults remain open.
+- Avoid: manually removing a partially deleted point or its intent to force a catalog scan, or treating an incomplete point as an authorized prune without a matching intent.
 
 ## BUG-0699 — SMB3 restore required a write probe on the source repository
 
 - Date: 2026-09-29.
-- Symptom: a disposable SMB3 share set read-only refused a new backup as
-  expected, but also refused restoration of an intact protected point before
-  VM creation. Core reported that it could not create a QEMU access probe.
-- Root cause: the shared repository verification path ran SMB3 write probes
-  for both publication and read-only point access.
-- Fix: Core keeps mount, owner and SMB marker checks on reads, while reserving
-  the QEMU and publication write probes for write operations and health tests.
-  Manifest and artifact validation still run during restore. Exact retry of
-  an already published, uncertain manual backup without retention now reads
-  the point before settling its existing run, without requiring a new write
-  probe; a new backup still checks write access. Policy settlement still
-  requires writes if retention pruning remains due.
-- Regression: `TestVerifySMBBackupReadSkipsPublicationProbe` failed to compile
-  before the read path was added and passed after. It checks that read access
-  skips both write probes, write access executes both, and a wrong share marker
-  is refused. Focused race and serial full Go tests passed. In the same
-  disposable fixture, a fresh current-source SMB3 capability overlay restored
-  the protected point while the mounted share's server denied writes. Both
-  copied disks had the exact old markers, exact replay reused the operation,
-  the five catalog point IDs and source hashes stayed unchanged, and no NBD
-  mount remained. The original Samba configuration was restored and writes
-  recovered. `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
-  failed before the reconciliation correction and passed afterward with
-  writes denied; its absent-point replay still stayed unresolved. Focused
-  race passed. Independent follow-up review confirmed that the policy
-  retention path remains write-dependent; the regression covers manual
-  backup only. Native published-point replay under write denial, forge CI and
-  broader destination faults remain open.
-- API impact: existing contract; restore and catalog read behavior changes
-  when the SMB3 server denies writes without a route or schema change. Guide
-  impact: updated. Core owns the mounted source and recovery point.
-- Avoid: using a writable repository health probe as the precondition for
-  reading a retained recovery point.
+- Symptom: a read-only SMB3 share refused a new backup as expected but also refused restoring an intact protected point, reporting it could not create a QEMU access probe.
+- Root cause: the shared verification path ran SMB3 write probes for both publication and read-only point access.
+- Fix: read paths keep mount, owner and marker checks; QEMU and publication write probes run only for writes and health tests. Exact retry of a published manual backup without retention settles by reading the point.
+- Regression: `TestVerifySMBBackupReadSkipsPublicationProbe` failed to compile before, passed after; `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp` failed before. `go test ./internal/vmhost -count=1`. Policy retention still needs writes; forge CI open.
+- Avoid: using a writable repository health probe as the precondition for reading a retained recovery point.
 
 ## BUG-0700 — Failed first SMB3 mount start blocked fresh same-ID registration
 
 - Date: 2026-09-29.
-- Symptom: a new disposable SMB3 share was briefly unavailable at registration.
-  The failed request left a Core-managed mount unit. After the share recovered,
-  fresh requests with the same repository ID and new credentials were refused
-  as a mount rotation even though no repository had been committed. Exact
-  replay correctly returned the original failure. A different new ID worked.
-- Root cause: `prepareRemote` wrote the mount unit, then returned on a failed
-  `systemctl enable --now` before the NFS/SMB caller installed its validation
-  cleanup. The failed unit was treated as an existing mount on the next
-  request.
-- Fix: Core tracks a newly created remote mount unit and detaches it if
-  preparation fails. Existing units and credential-rotation rollback keep
-  their prior handling; failed detach remains an explicit uncertain rollback.
-  Remote NFS/SMB preparation and its cleanup are serialized so an overlapping
-  successful preparation cannot lose its mount to another request's rollback.
-- Regression: `TestFailedFirstRemoteMountStartLeavesNoUnit` failed before the
-  fix because the unit remained and passed afterward with a fresh same-ID
-  request using a different credential path. A second concurrent preparation
-  regression failed before serialization and passed after it. Focused race
-  and full vmhost package tests passed. Independent review found the overlap
-  hazard and re-reviewed its correction with no further concrete finding.
-  A fresh current-source disposable Core then failed first registration
-  against a deliberately absent new SMB share with no new unit, CIFS mount or
-  repository left behind. Exact replay kept the failed operation. After the
-  share became available, a fresh credential/request for that same repository
-  ID succeeded and Core access was readable/writable. The first failed
-  handoff was already retired; the active receipt stayed ready. Original
-  seven point IDs, hashes and the pre-fix orphan unit were unchanged. Forge
-  CI and broader interrupted-mount cases remain open.
-- API impact: existing contract; a failed first NFS/SMB mount preparation now
-  cleans its private unit so a new registration request can retry the same ID.
-  No route or schema changes. Guide impact: none; the operator retry step is
-  unchanged. No new durable state is added.
-- Avoid: assuming a failed `systemctl enable --now` cannot leave Core's new
-  unit on disk, or treating that orphan as a committed repository.
+- Symptom: after a briefly unavailable SMB3 share failed registration, fresh requests with the same repository ID and new credentials were refused as a mount rotation though nothing was committed.
+- Root cause: `prepareRemote` wrote the mount unit, then returned on a failed `systemctl enable --now` before the caller installed cleanup, so the next request saw an existing mount.
+- Fix: Core tracks a newly created remote mount unit and detaches it if preparation fails; existing units and rotation rollback are unchanged. NFS/SMB preparation and cleanup are serialized so overlapping requests cannot lose a mount.
+- Regression: `TestFailedFirstRemoteMountStartLeavesNoUnit` and a concurrent-preparation test failed before, passed after. `go test ./internal/vmhost -count=1`. Forge CI and broader interrupted-mount cases remain open.
+- Avoid: assuming a failed `systemctl enable --now` cannot leave a new unit on disk, or treating that orphan as a committed repository.
 
 ## BUG-0701 — Pending SFTP prune remained readable
 
 - Date: 2026-09-29.
-- Symptom: source review found that a point with a durable SFTP delete record
-  and still-intact manifest passed the public read path. A restore could begin
-  after deletion had started. Catalog rebuild already refused the same pending
-  record, and protection writes already checked it under the peer lock.
-- Root cause: SFTP `readPoint` validated the manifest and artifacts but did not
-  check the repository's delete record before returning them.
-- Fix: `readPoint` refuses any pending delete record. Exact prune retry reads
-  its recorded manifest before calling `readPoint` only for a first deletion,
-  so an interrupted prune can still finish.
-- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` now asserts that an
-  intact point with a published delete record returns conflict. It failed
-  before the fix (`<nil>`) and passed afterward, including focused race
-  checking. Serial full Go tests also passed. Independent read-only source
-  and documentation reviews found no concrete issue. A later matched native
-  SFTP post-intent fault left the old manifest intact but Core refused restore
-  of that point and catalog rebuild; after permission recovery, the original
-  prune settled and rebuild succeeded. Forge CI has not run.
-- API impact: existing contract; SFTP restore/read of a point pending deletion
-  now refuses it, with no route or schema change. Guide impact: none while
-  SFTP remains a disabled candidate; no operator step changed. No new durable
-  state is added.
-- Avoid: treating an intact SFTP manifest as proof a point is restorable when
-  its durable deletion has already begun.
+- Symptom: a point with a durable SFTP delete record and intact manifest passed the public read path, so a restore could begin after deletion had started.
+- Root cause: SFTP `readPoint` validated the manifest and artifacts but never checked the repository's delete record.
+- Fix: `readPoint` refuses any pending delete record; exact prune retry reads its recorded manifest first on a first deletion so an interrupted prune can still finish.
+- Regression: `TestSFTPDeleteResumesExactInterruptedPoint` now asserts conflict for an intact point with a delete record; it failed before (`<nil>`) and passed after. `go test ./internal/agent -run '^TestSFTPDeleteResumesExactInterruptedPoint$' -count=1`. Forge CI has not run.
+- Avoid: treating an intact SFTP manifest as proof a point is restorable once its durable deletion has begun.
 
 ## BUG-0702 — A published policy backup could not resume interrupted retention
 
 - Date: 2026-09-29.
-- Symptom: a disposable S3 policy **Run now** published its new point, then
-  received a scoped `DeleteObject` refusal while pruning an older point. Core
-  kept the delete intent and reported `needs_attention`; restore and rebuild
-  refused the pending deletion. After permission recovery and a matched Core
-  restart, exact Controller replay still returned `needs_attention`, and an
-  SFTP run for the same VM stayed pending behind the unresolved S3 run.
-- Root cause: `SettlePoolBackupRun` saved the new catalog point but pruned
-  before saving the terminal run and Run-now receipt. The journal became
-  `needs_attention`; Core only reconciled direct backup-now journal replays,
-  while Controller exact replay returned its retained task without redispatch.
-  Scheduled backups shared the journal recovery gap.
-- Fix: Core's periodic recovery lane selects one local published backup with
-  a matching retained run and `needs_attention` journal, validates its existing
-  point, and retries settlement and retention under the original operation ID.
-  It never recaptures the VM; unresolved or still-denied work remains
-  `needs_attention`. Attempts run off the Store-owning loop, one at a time,
-  with five minutes between unsuccessful attempts. The retry context now
-  reaches remote pruning and closes a stalled SFTP transport. A terminal run
-  with an unfinished journal is also reconciled after restart.
-- Regression: the focused Run-loop test reproduces write-denied retention,
-  then verifies Core-owned recovery of the same policy Run-now run/receipt and
-  exact replay, a scheduled run, and the terminal-run/journal crash window.
-  It also checks cancellation before settlement. The SFTP stalled-handshake
-  cancellation check and focused race run passed. The full agent package
-  passed. Independent read-only review found the initially unbounded prune
-  context; its corrected path was re-reviewed without a further concrete
-  issue. On matched current-source disposable Core, S3 and SFTP each resumed
-  their own post-intent prune after service permission recovery and Core
-  restart, before Controller was needed. Each original run, receipt and
-  journal settled `succeeded`; exact Controller replay reported that same
-  result with one run and one new point. Protected controls and original
-  point/source hashes remained intact. Forge CI and broader interruption
-  cases remain open.
-  Round-2 test review (2026-09-29): The focused Run-loop test is
-  `TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal`. It fails when
-  the Run loop stops selecting published backups for reconciliation. Command:
-  `go test ./internal/agent -run
-  '^TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal$' -count=1`.
-- API impact: existing contract; Core can settle an existing published
-  scheduled or Run-now backup after destination recovery and report the later
-  result to Controller. No new route or schema. Guide impact: updated so
-  operators wait for the original run to settle after correcting access.
-  Core owns the existing run, receipt, journal and delete intent.
-- Avoid: treating a terminal Controller `needs_attention` task as proof that
-  Core has no recoverable published point, or starting a second backup to
-  clear an interrupted prune.
+- Symptom: an S3 policy Run now published its point but was refused `DeleteObject` while pruning; after permission recovery and restart, exact replay still returned `needs_attention` and a same-VM SFTP run stayed pending.
+- Root cause: `SettlePoolBackupRun` saved the point but pruned before saving the terminal run and receipt, leaving the journal `needs_attention`; Core reconciled only direct backup-now replays.
+- Fix: a periodic Core recovery lane picks one local published backup with a `needs_attention` journal and retries settlement and retention under the original operation ID, never recapturing. It runs off the Store loop, one at a time, five minutes between failed attempts.
+- Regression: `TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal` fails when the Run loop stops reconciling published backups. `go test ./internal/agent -run '^TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal$' -count=1`. Forge CI and broader interruption cases remain open.
+- Avoid: treating a terminal Controller `needs_attention` task as proof Core has no recoverable published point, or starting a second backup to clear an interrupted prune.
 
 ## BUG-0703 — SFTP write denial was reported as a retained-work conflict
 
 - Date: 2026-09-29.
-- Symptom: a matched native OpenSSH target allowed reads but denied writes.
-  A new stopped backup settled one failed run with no point or local stage,
-  yet the terminal error said `backup request conflicts with retained work`.
-  Exact replay retained that misleading result.
-- Root cause: when an exclusive owner or publication-intent write failed,
-  SFTP retried reading the target to resolve an ambiguous write. If the file
-  was absent, it discarded the original permission error and returned a
-  conflict, which Core mapped to a client error.
-- Fix: preserve the write error if the follow-up read proves the file absent;
-  return a read error if its state cannot be checked, and reserve conflict for
-  a present but different owner or intent. Exact matching retries still work.
-- Regression: `TestSFTPPublishReportsReadOnlyRoot` failed before the fix with
-  a conflict and passed afterward with the permission failure for both owner
-  claim, publication intent and exact intent retry. Focused SFTP tests, race
-  checking and the full agent package passed. Independent read-only source
-  review found no remaining concrete issue. A matched fixed-build OpenSSH
-  retest returned one terminal failed run with `permission denied`, no new
-  point or staging, and exact replay retained that result. The protected
-  two-disk control restored under denial and verified both markers; typed
-  cleanup cleared its VM and pin. Original point and source hashes matched
-  after access recovery. Forge CI remains open.
-- API impact: existing contract; permission failure now uses the existing
-  backend-error path instead of a false retained-work conflict. No route or
-  schema changes. Guide impact: none while SFTP is disabled. No new durable
-  state is added.
-- Avoid: converting an unavailable write target into a conflict when a
-  follow-up read shows the proposed file was never created.
+- Symptom: on an SFTP target that allowed reads but denied writes, a new backup failed with `backup request conflicts with retained work` instead of a permission error, and replay kept that message.
+- Root cause: after a failed owner or publication-intent write, SFTP re-read the target; if the file was absent it discarded the permission error and returned a conflict.
+- Fix: preserve the write error when the follow-up read proves the file absent, return a read error if state cannot be checked, and reserve conflict for a present but different owner or intent.
+- Regression: `TestSFTPPublishReportsReadOnlyRoot` failed with a conflict before, passed after (owner claim, intent, exact intent retry). `go test ./internal/agent -run '^TestSFTPPublishReportsReadOnlyRoot$' -count=1`. Forge CI remains open.
+- Avoid: converting an unavailable write target into a conflict when a follow-up read shows the file was never created.
 
 ## BUG-0704 — Failed SFTP upload stranded a full remote target
 
 - Date: 2026-09-29.
-- Symptom: a disposable size-capped OpenSSH target filled during a two-disk
-  backup. Core recorded one terminal failed run with no point, but the remote
-  repository retained a partial disk and publication intent after exact
-  replay. Local capture staging had been removed, so the operation could not
-  resume or reclaim that space. A protected point still restored under the
-  full condition.
-- Root cause: SFTP published its manifest staging after artifact upload, so
-  the durable intent contained only a digest when a disk write failed.
-  `executeBackupNow` terminal-failed every `Publish` error, leaving no Core
-  reconciliation path for the incomplete upload.
-- Fix: SFTP now syncs its existing staged manifest before artifact bytes.
-  An uncertain SFTP publication keeps the original Core run/journal
-  `needs_attention`; Core first checks for an exact completed point. If none
-  exists, the master uses a durable repository abort marker to remove only
-  files named by the staged manifest, after ownership, authority, catalog,
-  protection and file-type checks. Interrupted abort resumes under the same
-  operation and only then terminal-fails the run. A malformed pre-artifact
-  stage may be removed only when no artifact exists. A legacy hash-only
-  partial with artifact bytes is preserved for inspection.
-- Regression: focused SFTP protocol checks cover partial-upload abort,
-  interrupted abort-marker completion, exact retries, unknown/symlink and
-  protected/final refusal, plus empty pre-artifact cleanup. They passed with
-  focused race checking. A through-reconciliation test then caught a zero-byte
-  abort marker blocking Core cleanup; after `readPoint` distinguished an absent
-  final manifest from a conflicting final manifest, that regression, focused
-  race checking and the full agent package passed. Serial full Go tests passed
-  before this last correction and need repeating;
-  independent read-only review then found BUG-0706, a symlink-point cleanup
-  risk, which was fixed separately. On a matched disposable OpenSSH build
-  before that guard, Core restarted after capacity recovery and autonomously
-  removed the retained partial disk, staged manifest, intent and abort marker.
-  The original operation settled one terminal failed run with no point and
-  stable exact replay; prior catalog hashes stayed intact. A later matched
-  guarded build restored the protected two-disk control with both markers,
-  verified and cleaned it, reported healthy repository access, and retained
-  exact catalog/control/source hashes. Forge CI remains open.
-  Round-2 test review (2026-09-29): `TestSFTPIncompletePublicationAbort` (staged
-  manifest before artifacts, then abort) and
-  `TestSFTPReconcileResumesZeroByteAbortMarker` (through Core reconciliation).
-  The first fails when the manifest is staged after the artifacts. Command: `go
-  test ./internal/agent -run
-  '^TestSFTP(IncompletePublicationAbort|ReconcileResumesZeroByteAbortMarker)$'
-  -count=1`.
-- API impact: existing contract; an uncertain SFTP backup remains
-  `needs_attention` under the same operation until Core proves publication
-  or finishes exact abort. No new route or schema. Guide impact: none while
-  SFTP remains disabled. State owner: Core; the destination-local staged
-  manifest and abort marker are durable records reconciled by the pool master,
-  and a fresh Controller reads the existing Core run/journal status.
-- Avoid: terminal-failing an ambiguous remote write while leaving an
-  incomplete upload that no Core operation can resume or clean.
+- Symptom: a size-capped SFTP target filled mid two-disk backup; Core recorded a failed run with no point, but the remote kept a partial disk and publication intent that nothing could resume or reclaim.
+- Root cause: the manifest staging was published after artifact upload, so the intent held only a digest on disk-write failure, and `executeBackupNow` terminal-failed every `Publish` error with no reconciliation path.
+- Fix: SFTP syncs its staged manifest before artifact bytes; an uncertain publication stays `needs_attention` while the master checks for a completed point, else aborts via a durable marker removing only manifest-named files, then terminal-fails.
+- Regression: `TestSFTPIncompletePublicationAbort` (fails if manifest is staged after artifacts) and `TestSFTPReconcileResumesZeroByteAbortMarker`. `go test ./internal/agent -run '^TestSFTP(IncompletePublicationAbort|ReconcileResumesZeroByteAbortMarker)$' -count=1`. Serial full Go run needs repeating; forge CI open.
+- Avoid: terminal-failing an ambiguous remote write while leaving an incomplete upload no Core operation can resume or clean.
 
 ## BUG-0705 — Missing restore point stayed in attention after definite refusal
 
 - Date: 2026-09-29.
-- Symptom: restoring an incomplete SFTP point through Controller created no
-  Core run, pin or VM, but the task remained `needs_attention` with `backup
-  operation not found` on exact replay.
-- Root cause: the Core report loop mapped every backup run reservation error
-  to `needs_attention`, including a definite missing catalog point before any
-  native work or durable restore reservation.
-- Fix: report `failed` for `ErrBackupNotFound` and `ErrBackupInvalid` at this
-  pre-execution boundary. Conflict, unavailable and uncertain persistence
-  errors remain `needs_attention`.
-- Regression: `TestReportRestoreMissingPointFailsBeforeReservation` failed
-  before the fix with `needs_attention` and passed afterward with a registered
-  NFS repository, missing catalog point, terminal failed journal, no run/pin/VM
-  and unchanged exact replay. Independent read-only source review found no
-  safety defect; it requested the registered-repository and absence assertions,
-  which were added. A matched disposable OpenSSH retest submitted a fresh
-  restore for the now-absent incomplete point: Controller returned terminal
-  `failed`, exact replay retained that result, and Core created no run, pin,
-  VM or disk. The earlier pre-fix `needs_attention` task remained historical
-  attention after restart; Core does not automatically re-enter an uncertain
-  backup journal. Forge CI remains open.
-  Round-2 test review (2026-09-29):
-  `TestReportRestoreMissingPointFailsBeforeReservation` also injects a
-  reservation error with no definite answer and requires `needs_attention`. It
-  fails when every reservation error becomes `failed`. Command: `go test
-  ./internal/agent -run '^TestReportRestoreMissingPointFailsBeforeReservation$'
-  -count=1`.
-- API impact: existing contract; report-driven restore now uses the existing
-  terminal `failed` Result for definite pre-execution refusal. No route or
-  schema change. Guide impact: updated to explain missing-point failure and
-  the need for a new request after a later import. Core owns the existing
-  journal; no new durable record.
+- Symptom: restoring an incomplete SFTP point through Controller created no run, pin or VM, but the task stayed `needs_attention` with `backup operation not found` on replay.
+- Root cause: the Core report loop mapped every run-reservation error to `needs_attention`, including a definite missing catalog point before any native work.
+- Fix: report `failed` for `ErrBackupNotFound` and `ErrBackupInvalid` at this pre-execution boundary; conflict, unavailable and uncertain persistence errors stay `needs_attention`.
+- Regression: `TestReportRestoreMissingPointFailsBeforeReservation` failed with `needs_attention` before, passed after (also fails if every error becomes `failed`). `go test ./internal/agent -run '^TestReportRestoreMissingPointFailsBeforeReservation$' -count=1`. Forge CI remains open.
 - Avoid: preserving uncertainty for a restore that Core proved never began.
 
 ## BUG-0706 — SFTP incomplete-upload abort followed a symlink point directory
 
 - Date: 2026-09-29.
-- Symptom: independent source review found that abort cleanup checked files
-  inside a point but not the point directory itself. A symlink point could
-  redirect cleanup into a different directory and delete its matching files.
-- Root cause: `abortIncompleteOnClient` called `ReadDir` and `Remove` through
-  the point path without first checking its file type with `Lstat`.
-- Fix: reject any existing point path that is not a real directory before
-  checking its manifest or descending into it. An absent point remains
-  resumable for an interrupted abort.
-- Regression: the SFTP abort test moved an incomplete point to another
-  directory and replaced the point path with a symlink. Before the fix,
-  cleanup returned success and removed the target artifact; after the fix,
-  it returns `ErrBackupConflict` and leaves target bytes unchanged. Focused
-  race and serial full Go tests passed after the fix; independent correction
-  review found no further concrete defect. The later matched native guarded
-  build preserved the 17 catalog point/hash pairs, restored and cleaned the
-  protected two-disk control, and reported healthy repository access; it did
-  not exercise a malicious symlink through a public Core operation. Forge CI
-  remains open.
-  Round-2 test review (2026-09-29):
-  `TestSFTPAbortIncompleteResumesAndRefusesConflicts` covers the symlink point.
-  It fails without the point `Lstat` check. Command: `go test ./internal/agent
-  -run '^TestSFTPAbortIncompleteResumesAndRefusesConflicts$' -count=1`.
-- API impact: existing contract; unsafe abort now returns the existing
-  conflict result. Guide impact: none while SFTP remains disabled. No new
-  durable state; Core owns the existing abort marker and journal.
-- Avoid: validating only directory entries before a recursive remote cleanup;
-  check the directory itself before any child path is opened or removed.
+- Symptom: abort cleanup checked files inside a point but not the point directory, so a symlink point could redirect cleanup into another directory and delete matching files.
+- Root cause: `abortIncompleteOnClient` called `ReadDir` and `Remove` through the point path without an `Lstat` file-type check.
+- Fix: reject any existing point path that is not a real directory before reading its manifest or descending; an absent point stays resumable.
+- Regression: `TestSFTPAbortIncompleteResumesAndRefusesConflicts` (symlink point) failed without the `Lstat` check, now returns `ErrBackupConflict` with target bytes intact: `go test ./internal/agent -run '^TestSFTPAbortIncompleteResumesAndRefusesConflicts$' -count=1`.
+- Avoid: validating only directory entries before a recursive remote cleanup; check the directory itself before opening or removing any child.
 
 ## BUG-0707 — Controller Run now sent member VM backup to pool master
 
 - Date: 2026-09-29.
-- Symptom: a disposable Controller policy Run now for a member-hosted VM stayed
-  queued, then failed on the master with `source VM definition is unavailable`.
-  The member received no backup request.
-- Root cause: Core prepared the command with the VM's member host but reserved
-  the run without `HostID`. The master dispatch loop routes from the durable
-  run's host, so it treated this as a local backup.
-- Fix: bind the run to Core's resolved VM host before reservation. Exact pending
-  metadata replay refuses a run whose host differs from Core's resolved host.
-  (The blank-host replay binding for older runs was removed on 2026-09-29 with
-  the no-legacy-compatibility decision; no such runs exist.)
-- Regression: `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed before
-  the fix on the missing host and passed after it. It also checks metadata
-  replay, one Controller dispatcher and changed-placement refusal.
-  Focused race and full agent tests passed. Independent read-only review
-  found the legacy local-run compatibility issue; the narrowed guard passed
-  its correction review. On a frozen-source disposable two-Core overlay, a
-  fresh Controller Run now for the member VM settled succeeded/published:
-  the master run named the member, its journal succeeded, the Controller task
-  and exact replay agreed, and one point had a final manifest and both
-  artifacts. The prior 18 point hashes, source disks and signed replica
-  verified. The historical failed operation remains failed. Forge CI remains
-  open.
-- API impact: existing contract; the same Controller and Core policy Run now
-  requests now route to the member named by the durable Core run. Guide impact:
-  none; the documented operator action is unchanged. No new record: Core owns
-  the existing run, journal and policy; Controller adopts their results.
+- Symptom: Run now for a member-hosted VM stayed queued, then failed on the master with `source VM definition is unavailable`; the member never got a request.
+- Root cause: Core reserved the run without `HostID`, so the master dispatch loop treated it as a local backup.
+- Fix: bind the run to Core's resolved VM host before reservation; exact pending-metadata replay refuses a run whose host differs.
+- Regression: `TestControllerPolicyRunNowMemberUsesOneDispatcher` failed before (missing host), passes after: `go test ./internal/agent -run '^TestControllerPolicyRunNowMemberUsesOneDispatcher$' -count=1`.
 - Avoid: routing a pool operation from a field omitted during reservation.
 
 ## BUG-0708 — S3 ambiguous final publication could be reported failed
 
 - Date: 2026-09-29.
-- Symptom: source review found that a final S3 manifest write could commit
-  while its reply and immediate read failed. Core would terminal-fail the run
-  without cataloging a restorable point. A definite final-write denial also
-  left uncataloged artifacts with no bounded cleanup path.
-- Root cause: Core treated every S3 `Publish` error as a definite failure;
-  S3 had no durable incomplete-upload intent or safe abort protocol.
-- Fix: Core retains publication attention and first verifies an exact
-  published point. S3 stages an exact manifest intent, records an abort
-  marker, and conditionally places a permanent tombstone at that same final
-  manifest key before conditionally replacing every exact artifact with its
-  own permanent same-key tombstone. Late conditional final or artifact writes
-  then lose their key races. Cleanup verifies authority,
-  catalog, pins, protection, object names, digests and conditional deletion;
-  unknown or changed objects remain for inspection. Interrupted cleanup
-  resumes under the original operation, and a published point remains
-  authoritative.
-- Regression: fake-S3 tests cover denied final write, interrupted abort,
-  foreign/mutated objects, committed write with lost reply and failed read,
-  a delayed final write, delayed single and multipart artifact writes, and
-  partial-fence retry. The first cleanup design failed independent review
-  because a separate abort key did not fence the delayed final write. A
-  second independent review found a delayed-artifact orphan leak; the
-  per-artifact fence correction passed its read-only re-review. Focused S3
-  tests passed. A matched disposable MinIO build ignored wrong-ETag
-  `DeleteObject If-Match`, deleting the sentinel, so Core correctly refused
-  registration before native cleanup could run. A separate pinned S3Proxy
-  4.1.1 single-process filesystem service passed Core registration and
-  protected two-disk backup/restore. A fixture-only final-manifest 403 after
-  both artifacts uploaded retained attention, then Core restarted and
-  terminal-failed the same run, replacing exact final/artifact keys with
-  durable abort tombstones; replay, old catalog/source hashes and protected
-  restore held. A separate fixture gate let the final PUT commit, returned
-  503 for its reply and nine exact readbacks, then released access. Core
-  autonomously settled that same member run succeeded with one catalog point,
-  byte-identical manifest/artifacts, stable replay and prior hashes. The
-  provider's single-process limit, broader provider behavior and forge CI
-  remain open.
-  Round-2 test review (2026-09-29): `TestS3AbortFencesDelayedFinalManifest`,
-  `TestS3AbortIncompletePublication`, `TestS3AbortFencesDelayedArtifactWrites`
-  and `TestS3AbortResumesPartiallyFencedArtifacts`. They fail without the
-  final-key or the artifact tombstones. Command: `go test ./internal/agent -run
-  '^TestS3Abort' -count=1`.
-- API impact: existing contract; uncertain S3 publication now uses the
-  existing `needs_attention` and later exact succeeded/failed result. No
-  route or schema changes. Guide impact: none while S3 remains disabled.
-  Core owns the existing run/journal and new repository-local intent, abort
-  and tombstone; fresh Controller adoption uses Core inventory.
-- Avoid: deleting artifacts after an ambiguous write without fencing the
-  exact final and artifact keys against late commits.
+- Symptom: a final S3 manifest write could commit while its reply and read failed, so Core terminal-failed the run with no cataloged point; a definite denial left uncataloged artifacts with no cleanup path.
+- Root cause: Core treated every S3 `Publish` error as definite; S3 had no durable incomplete-upload intent or safe abort protocol.
+- Fix: retain attention and verify an exact published point first; otherwise stage an intent, record an abort marker, and conditionally tombstone the final manifest key and each artifact key so late writes lose their races, then clean up exact objects.
+- Regression: `TestS3AbortFencesDelayedFinalManifest`, `TestS3AbortIncompletePublication`, `TestS3AbortFencesDelayedArtifactWrites`, `TestS3AbortResumesPartiallyFencedArtifacts` fail without the tombstones: `go test ./internal/agent -run '^TestS3Abort' -count=1`. Fake S3 plus single-process provider only.
+- Avoid: deleting artifacts after an ambiguous write without fencing the exact final and artifact keys against late commits.
 
 ## BUG-0709 — Member publication attention could not reconcile autonomously
 
 - Date: 2026-09-29.
-- Symptom: a member's accepted peer backup could retain a published or
-  incomplete point in `needs_attention`; its periodic Core worker was gated
-  to pool masters, and exact peer replay returned the retained result.
-- Root cause: the publication reconciliation predicate required the local
-  host to be master even for a journal explicitly accepted from the master.
-- Fix: permit the local member worker to reconcile only an accepted peer
-  journal with the exact retained run and matching command intent when the
-  older run recorded one. The master still
-  observes the member result through the authenticated peer API.
-- Regression: `TestMemberPeerPublicationAttentionReconcilesWithoutController`
-  failed before and passed after the predicate change; it rejects a member
-  command without `PeerDispatched`. Focused race passed, and independent
-  read-only integration review found no concrete issue. Serial full Go
-  passed after the correction. A matched NFS member operation published under
-  a private post-sync lost-reply plus exact-ID read-error overlay and reached
-  attention. With Controller off, restarting both Cores on normal source
-  autonomously settled member and master succeeded/published; fresh
-  Controller adoption and exact replay kept one point, 25 prior catalog
-  hashes and protected/source hashes. This is a fault injection, not an
-  observed NFS server error; forge CI remains open.
-- API impact: existing contract; no request or schema change. Guide impact:
-  none while remote destinations remain gated. No new durable state; Core
-  owns the existing member journal, run and repository record.
+- Symptom: a member's accepted peer backup could stay in `needs_attention` with a published or incomplete point because its Core worker was gated to masters.
+- Root cause: the publication reconciliation predicate required the local host to be master even for a journal accepted from the master.
+- Fix: let the member worker reconcile an accepted peer journal with the exact retained run and matching command intent; the master still observes the result via the peer API.
+- Regression: `TestMemberPeerPublicationAttentionReconcilesWithoutController` failed before, passes after: `go test ./internal/agent -run '^TestMemberPeerPublicationAttentionReconcilesWithoutController$' -count=1`. Lab used fault injection, not a real NFS error.
 - Avoid: excluding accepted peer work from Core's outage reconciliation.
 
 ## BUG-0710 — SFTP abort could race a delayed final manifest rename
 
 - Date: 2026-09-29.
-- Symptom: independent review found that a lost final-rename reply could
-  leave the server rename in flight after Core's abort checked for a final
-  manifest. Abort could then delete artifacts while that rename published
-  the final manifest.
-- Root cause: the separate abort record did not atomically fence the staged
-  `.nex-manifest` source used by final publication.
-- Fix: before deleting artifacts, abort atomically renames that exact staged
-  source to a durable `.nex-abort-manifest` claim and syncs it. Final
-  publication and abort now compete for the same source path: a published
-  final refuses cleanup, while a completed claim prevents a late final
-  rename. Exact claimed bytes resume an interrupted abort; unknown,
-  symlink, protected and cataloged points remain refused.
-- Regression: an adversarial SFTP test forced final rename to win after
-  abort's initial final-path check; the old path removed an artifact, while
-  the corrected path preserved final and artifact bytes and refused abort.
-  Focused race and full agent tests passed; independent read-only correction
-  review found no concrete defect. A second abort-wins delayed-rename check
-  passed focused race testing and preserved a separate published control.
-  A matched native OpenSSH final-manifest denial and recovery settled the
-  same operation failed with no incomplete point, preserved old catalog and
-  source hashes, and passed a protected two-disk control restore. Native
-  delayed-rename ordering and forge CI remain open.
-  Round-2 test review (2026-09-29): `TestSFTPAbortWinsDelayedFinalRename` and
-  `TestSFTPAbortLosingToDelayedRenameUnblocksPoint`. Both fail without the
-  `.nex-abort-manifest` claim. Command: `go test ./internal/agent -run
-  '^TestSFTPAbort(WinsDelayedFinalRename|LosingToDelayedRenameUnblocksPoint)$'
-  -count=1`.
-- API impact: existing contract; uncertain SFTP publication still uses the
-  same attention and exact terminal results. Guide impact: none while SFTP
-  is disabled. Core owns the existing run/journal plus the destination-local
-  abort claim; a fresh Controller reads Core inventory.
-- Avoid: treating a prior final-path absence check as proof that a remote
-  rename cannot complete after artifact cleanup starts.
+- Symptom: a lost final-rename reply could leave the server rename in flight after abort checked for a final manifest, so abort deleted artifacts while the final manifest was published.
+- Root cause: the separate abort record did not atomically fence the staged `.nex-manifest` source used by final publication.
+- Fix: abort atomically renames the staged source to a synced `.nex-abort-manifest` claim before deleting artifacts, so abort and final publication compete for one path; unknown, symlink, protected and cataloged points stay refused.
+- Regression: `TestSFTPAbortWinsDelayedFinalRename` and `TestSFTPAbortLosingToDelayedRenameUnblocksPoint` fail without the claim: `go test ./internal/agent -run '^TestSFTPAbort(WinsDelayedFinalRename|LosingToDelayedRenameUnblocksPoint)$' -count=1`. Native delayed-rename ordering not exercised.
+- Avoid: treating an earlier final-path absence check as proof a remote rename cannot complete after artifact cleanup starts.
 
 ## BUG-0711 — Filesystem publication reply error lost a complete point
 
 - Date: 2026-09-29.
-- Symptom: NFS or SMB3 could commit a staged point's final rename, then fail
-  to sync the repository parent or lose that reply. Core would mark the run
-  failed while the complete point existed outside the catalog.
-- Root cause: Core treated every filesystem `Publish` error as definite and
-  did not check exact readback after the rename boundary.
-- Fix: Core marks rename and later errors as uncertain, reconciles the exact
-  point, and retains attention if readback cannot prove the outcome. Proven
-  pre-rename failures settle failed after stage cleanup, so they cannot block
-  later work indefinitely.
-- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` failed
-  before the fix and now passes. The same fixture forces an actual pre-rename
-  missing-source error and checks terminal failure with no point. Focused
-  agent and vmhost tests, serial full Go, Python and web checks passed;
-  independent read-only correction review found no concrete issue. A private
-  fixture overlay returned a lost reply after native NFS rename and parent
-  sync; the member/Core and Controller settled one succeeded run and point,
-  exact replay, protected controls and source hashes held. A matched SMB3
-  member then returned the same uncertain error only after real SMB rename
-  and parent sync; one succeeded run/point, exact Controller replay, 29 prior
-  catalog hashes, protected SMB control and source hashes held. Both overlays
-  simulate lost replies after successful sync; actual server sync failures
-  and forge CI remain open.
-- API impact: existing contract; Core uses the existing attention, exact
-  result and catalog contracts. Guide impact: none; operator steps are
-  unchanged. No new durable record; Core owns the existing run and catalog.
-- Avoid: treating filesystem `rename`/sync error as proof of no publication,
-  or treating a proven pre-rename error as permanently uncertain.
+- Symptom: NFS or SMB3 could commit the final rename, then fail the parent sync or lose the reply; Core marked the run failed while a complete point sat outside the catalog.
+- Root cause: Core treated every filesystem `Publish` error as definite and did no exact readback after the rename boundary.
+- Fix: treat rename and later errors as uncertain, reconcile the exact point, and keep attention if readback cannot prove the outcome; proven pre-rename failures settle failed after stage cleanup.
+- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` failed before, passes after (also covers pre-rename failure): `go test ./internal/agent -run '^TestFilesystemPostRenameErrorReconcilesPublishedPoint$' -count=1`. Lab simulated lost replies, not real sync failures.
+- Avoid: treating a filesystem rename/sync error as proof of no publication, or a proven pre-rename error as permanently uncertain.
 
 ## BUG-0712 — S3 abort marker could block a valid published point
 
 - Date: 2026-09-29.
-- Symptom: a delayed conditional final manifest PUT could win after Core
-  wrote an abort marker but before it placed the final-key tombstone. The
-  complete point then remained unreadable and uncataloged indefinitely.
-- Root cause: abort wrote its separate marker before resolving the atomic
-  same-key publication race; `ReadPoint` and rebuild reject that marker.
-- Fix: conditionally place and verify the final-key tombstone before writing
-  the abort marker. If final publication wins, abort leaves no marker and Core
-  can adopt the exact point. If the tombstone wins, it fences later writes;
-  intent plus embedded manifest allow cleanup to resume after interruption.
-- Regression: `TestS3PublishedFinalWinsAbortAfterAbsenceCheck` forced the
-  delayed final PUT to win at the tombstone request. Before the fix it failed
-  because `ReadPoint` returned a retained-work conflict; afterward the point
-  remained readable and adoptable. Existing abort-wins, delayed artifact and
-  partial retry tests passed; focused race passed. Independent correction
-  review found no concrete issue. A matched two-Core S3Proxy lab held the final
-  PUT before the provider, returned lost replies and failed reads, then let
-  provider 404s trigger abort. The delayed final PUT won with HTTP 200; the
-  conditional tombstone lost with HTTP 412. Core kept one published catalog
-  point and one succeeded member run, exact Controller replay returned the
-  same success, and no abort/delete marker or tombstone remained. The final
-  manifest, both artifacts, 28 prior catalog hashes, protected old point and
-  source disks stayed intact. A symmetric native operation committed the
-  final-key tombstone first (HTTP 200), then refused the delayed final PUT
-  (HTTP 412): one terminal failed run, no new point, exact failed replay,
-  and 30 prior catalog hashes plus protected/source hashes intact. These are
-  single-process provider and fixture-only timing checks; forge CI remains
-  open.
-- API impact: existing contract; existing attention/result/catalog behavior
-  now settles the winning publication. Guide impact: none while S3 is gated.
-  No new durable record; Core owns the existing intent, abort marker and
-  same-key tombstone, and a fresh Controller adopts Core inventory.
-- Avoid: publishing a separate abort marker before the exact final key is
-  durably fenced against a competing final PUT.
+- Symptom: a delayed conditional final manifest PUT could win after Core wrote the abort marker but before the final-key tombstone, leaving a complete point unreadable and uncataloged.
+- Root cause: abort wrote its separate marker before resolving the atomic same-key publication race; `ReadPoint` and rebuild reject that marker.
+- Fix: conditionally place and verify the final-key tombstone before writing the abort marker; if final publication wins no marker is left and Core adopts the point.
+- Regression: `TestS3PublishedFinalWinsAbortAfterAbsenceCheck` failed before (retained-work conflict), passes after: `go test ./internal/agent -run '^TestS3PublishedFinalWinsAbortAfterAbsenceCheck$' -count=1`. Single-process provider and fixture timing only.
+- Avoid: publishing a separate abort marker before the exact final key is durably fenced against a competing final PUT.
 
 ## BUG-0713 — Absent SMB3 final publication stayed in attention
 
 - Date: 2026-09-29.
-- Symptom: after the SMB service stopped at final rename, a complete staged
-  point never became final. Once service returned, both stage and final were
-  absent, but exact replay and Core restart kept one run in
-  `needs_attention` indefinitely.
-- Root cause: uncertain-publication reconciliation terminalized absent
-  points only for S3/SFTP backends with `AbortIncomplete`; the NFS/SMB3
-  filesystem backend had no safe same-key abort fence.
-- Fix: when writable Core authority is held and no catalog point or stage
-  exists, atomically create and sync an exact final-key file with a complete
-  abort marker. A late directory rename cannot replace it. Catalog rebuild
-  skips only the matching marker; an interrupted marker write can resume.
-  Existing valid points or staging remain untouched and in attention. The
-  authority check precedes writable repository verification.
-- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` gained
-  an absent uncertain-publication case. It failed before the fix with
-  `needs_attention` and passed after with one terminal failed run and a
-  final-key fence that rejects late rename. The focused test also checks
-  catalog rebuild, interrupted marker completion, a published point, foreign
-  stage, FIFO and restricted authority; the earlier focused race passed.
-  Independent review of the first correction found and led to fixes for
-  stale-authority verification writes and a FIFO hang; final correction
-  review found no blocker. In a matched SMB3 retest, the preserved same-ID
-  operation automatically settled failed with no recapture. Catalog rebuild
-  retained all 33 prior ID/hash pairs; a same-ID directory rename against
-  the complete final-key marker failed ENOTDIR, exact replay survived Core
-  restart, and an older protected two-disk point restored with both marker
-  and artifact hashes. Source/protected hashes stayed intact and the fixture
-  was stopped. Forge CI remains open.
-- API impact: existing contract; existing attention, terminal result and
-  catalog semantics settle a proven absent filesystem publication. Guide
-  impact: none; supported NFS operator steps are unchanged and SMB3 remains
-  gated. Core owns the final-key fence and run; Controller adopts the result.
-- Avoid: declaring an uncertain final rename failed from absence alone,
-  because a delayed rename could still publish without a same-key fence.
+- Symptom: after the SMB service stopped at final rename, stage and final were both absent, yet the run stayed `needs_attention` across replay and Core restart.
+- Root cause: absent-point terminalization only existed for S3/SFTP `AbortIncomplete`; the NFS/SMB3 filesystem backend had no safe same-key abort fence.
+- Fix: with writable Core authority and no catalog point or stage, atomically create and sync a final-key file holding a complete abort marker, so a late directory rename cannot replace it; rebuild skips only that marker.
+- Regression: `TestFilesystemPostRenameErrorReconcilesPublishedPoint` gained an absent-publication case that failed before (stayed `needs_attention`): `go test ./internal/agent -run '^TestFilesystemPostRenameErrorReconcilesPublishedPoint$' -count=1`.
+- Avoid: declaring an uncertain final rename failed from absence alone, since a delayed rename could still publish without a same-key fence.
 
 ## BUG-0714 — Repaired catalog rebuild left Controller in attention
 
 - Date: 2026-09-29.
-- Symptom: an NFS rebuild refused a one-byte-corrupt published artifact and
-  retained `needs_attention`. After the artifact was repaired byte-for-byte,
-  a Core-local retry with the same operation ID imported the point once and
-  reported success, but Controller exact replay and inventory still showed
-  the old attention outcome.
-- Root cause: the Core-local retry settled its durable backup metadata receipt
-  but did not settle the matching managed-command journal. Core reported that
-  stale journal outcome to Controller, which correctly retained it.
-- Fix: reconcile a terminal catalog receipt to only a matching pending or
-  attention journal entry, checking kind, intent and current writable pool
-  authority. The Core run loop also reconciles the receipt-to-journal crash
-  gap on restart and backup ticks. Existing terminal journal entries are
-  preserved. Receipt and journal persistence failures propagate rather than
-  masquerading as ordinary catalog errors.
-- Regression: `TestCatalogRebuildLocalRetrySettlesControllerJournal` failed
-  before the fix with the journal in attention after the receipt succeeded;
-  it passes after the fix and checks operation projection, durable restart
-  convergence, intent mismatch and terminal preservation. A forced receipt
-  write failure test failed before the persistence correction and now passes
-  for successful and failed scans; a forced journal-save failure recovers
-  from the terminal receipt after store reopen. A separate red/green test
-  caught an authority-capacity refusal incorrectly classified as a disk
-  failure; only actual receipt writes now carry the fatal persistence type.
-  Focused catalog tests and full local Go, Python, web, API, documentation,
-  privacy and diff checks passed; independent review caught both corrections.
-  In a matched disposable NFS retest, the preserved stale task converged at
-  Core startup. A fresh one-byte-corrupt point was refused without VM or pin;
-  after byte-exact repair, the same Core rebuild ID settled its receipt,
-  journal and live Controller task without a Controller restart. Exact Core
-  and Controller replays returned success, one point was imported, 43 prior
-  catalog hashes stayed exact, and a protected two-disk restore passed both
-  markers and cleanup. All fixture processes were stopped. Forge CI remains
-  open.
-  Round-2 test review (2026-09-29):
-  `TestCatalogRebuildReceiptReconcilesStaleJournalAfterRestart` also refuses
-  settlement while authority is frozen, and
-  `TestRunLoopSettlesCatalogJournalFromLaterReceipt` settles a receipt written
-  while Run is running. They fail without the writable-authority check and
-  without the backup-tick call. The startup call is not separately testable: the
-  first backup tick fires right after it. Command: `go test ./internal/agent
-  -run
-  '^Test(CatalogRebuildReceiptReconcilesStaleJournalAfterRestart|RunLoopSettlesCatalogJournalFromLaterReceipt)$'
-  -count=1`.
-- API impact: existing contract; the same Core operation and Controller task
-  now converge through existing result and managed-outcome APIs. Guide impact:
-  none; the catalog-rebuild guide already instructs an exact-ID retry after
-  repairing a pending scan failure. Core owns the receipt, journal and catalog;
-  a fresh Controller adopts the terminal outcome from authenticated Core
-  inventory.
-- Avoid: treating a successful metadata receipt as sufficient while the
-  Controller-visible Core journal for that exact operation remains stale.
+- Symptom: after a corrupt artifact was repaired and a Core-local rebuild retry imported the point, Controller replay and inventory still showed the old attention outcome.
+- Root cause: the retry settled the durable backup receipt but not the matching managed-command journal, so Core reported the stale journal outcome.
+- Fix: reconcile a terminal catalog receipt to a matching pending or attention journal entry (kind, intent, writable authority checked); the run loop repeats this on restart and backup ticks; persistence failures propagate.
+- Regression: `TestCatalogRebuildLocalRetrySettlesControllerJournal` failed before (journal stayed in attention), plus `TestCatalogRebuildReceiptReconcilesStaleJournalAfterRestart` and `TestRunLoopSettlesCatalogJournalFromLaterReceipt`: `go test ./internal/agent -run '^Test(CatalogRebuildLocalRetrySettlesControllerJournal|CatalogRebuildReceiptReconcilesStaleJournalAfterRestart|RunLoopSettlesCatalogJournalFromLaterReceipt)$' -count=1`.
+- Avoid: treating a successful metadata receipt as sufficient while the Core journal for that operation is still stale.
 
 ## BUG-0715 — Repository preparation could write after authority changed
 
 - Date: 2026-09-29.
-- Symptom: independent source review found that a member's new Core-local
-  SFTP registration could create a remote owner marker before Core refused
-  its master-only commit. A master could also pass a pre-write authority
-  check, then create the marker after a concurrent transfer froze authority.
-  The same asynchronous preparation ordering affected the other destination
-  kinds' precommit side effects.
-- Root cause: registration began native preparation before master membership
-  and transfer authority were checked under the backup authority lock. The
-  SFTP owner claim had no established-identity distinction for adoption.
-- Fix: serialize new registration preparation with transfer freeze under
-  `poolBackupAuthorityMu`, checking exact master membership, pool and writable
-  authority before any native destination work. Release the lock before the
-  separate inventory commit. SFTP adoption refuses a missing owner marker
-  when it already has a pinned remote identity. The existing 30-second
-  preparation context bounds transfer waiting.
-- Regression: focused member-registration and freeze-race tests failed before
-  the shared guard and passed afterward. A missing-owner adoption test failed
-  before the SFTP correction and now passes. Focused SFTP/peer/registration
-  tests, a serial full Go suite and `git diff --check` passed; independent
-  correction review found no blocker. A fresh matched two-Core SFTP fixture
-  on binary SHA-256
-  `af5f3ed6e16f5f410515d9ba30ac5ddf84fca816c975a1acabcff364e87b994c`
-  registered a new exact owner, observed member read/write access, published
-  and restored a protected two-disk point with matching markers and full
-  hashes, and passed exact replays and cleanup. Sixty-four prior catalog
-  hashes and source disks stayed exact; all processes stopped. A member-local
-  registration attempt returned 503 with no remote files or run, but used a
-  mismatched master credential receipt because Controller refused member
-  handoff; valid-credential member ordering has focused source proof only.
-  Forge CI remains open.
-  Round-2 test review (2026-09-29):
-  `TestSFTPRegistrationRefusesMemberBeforePreparation`,
-  `TestSFTPRegistrationPreparationSerializesWithFreeze` and
-  `TestSFTPAdoptionDoesNotClaimMissingOwner`. They fail without the locked
-  membership and authority checks, or without the adoption owner guard. Command:
-  `go test ./internal/agent -run
-  '^TestSFTP(RegistrationRefusesMemberBeforePreparation|RegistrationPreparationSerializesWithFreeze|AdoptionDoesNotClaimMissingOwner)$'
-  -count=1`.
-- API impact: existing contract; registration now refuses an ineligible Core
-  before touching the selected destination, with no route or payload change.
-  Guide impact: none for this authority fix; the four-kind guide is updated
-  with capability enablement. Core owns the remote
-  owner marker and durable repository record; a fresh Controller reads the
-  record from authenticated master inventory.
-- Avoid: checking authority only at the final repository commit or outside
-  the lock that transfer freeze uses. A lawful precommit owner claim may remain
-  if transfer freezes before inventory commit; it names the same pool and ID
-  and contains no recovery point, and exact same-pool retry remains the safe
-  reconciliation path.
+- Symptom: a member's new SFTP registration could create a remote owner marker before Core refused the master-only commit, and a master could write it after a concurrent transfer froze authority; other destination kinds had the same ordering.
+- Root cause: native preparation began before master membership and transfer authority were checked under the authority lock; SFTP adoption could not tell an established identity from a new one.
+- Fix: serialize new-registration preparation with transfer freeze under `poolBackupAuthorityMu`, checking master, pool and writable authority before any destination work; SFTP adoption refuses a missing owner marker when a remote identity is pinned.
+- Regression: `TestSFTPRegistrationRefusesMemberBeforePreparation`, `TestSFTPRegistrationPreparationSerializesWithFreeze`, `TestSFTPAdoptionDoesNotClaimMissingOwner` failed before: `go test ./internal/agent -run '^TestSFTP(RegistrationRefusesMemberBeforePreparation|RegistrationPreparationSerializesWithFreeze|AdoptionDoesNotClaimMissingOwner)$' -count=1`. Valid-credential member ordering has source proof only.
+- Avoid: checking authority only at the final repository commit or outside the lock transfer freeze uses.
 
 ## BUG-0716 — Repository I/O held the pool lock and could stall forever
 
 - Date: 2026-09-29.
-- Symptom: independent review found that S3, SFTP and filesystem repository
-  operations held `poolPeerMu` while downloading and hashing whole artifacts
-  (S3 publish/delete/abort, SFTP publish/delete, filesystem delete), blocking
-  every pool membership read for the duration. S3 had no HTTP response
-  timeout and SFTP's `ssh.NewClientConn` ignored `ClientConfig.Timeout`, with
-  no keepalive, so a stalled server hung an operation indefinitely. Prune,
-  protection, catalog rebuild and published-backup settlement all fully
-  re-read every point, so large points never finished within their contexts
-  and one S3 backup was downloaded three times.
-- Root cause: `ReadPoint` was the only way to read a point and always hashed
-  every artifact, and callers used it under the lock and for cheap decisions.
-- Fix: add `StatPoint` to the repository boundary: manifest, digest, markers
-  and artifact size (S3 HEAD, SFTP/filesystem Lstat), no content read. Prune,
-  protection, Scan/rebuild, post-publication and published-backup reconcile
-  use it; restore and test restore still hash. Publication already verifies
-  artifacts before the manifest commits, so the extra S3 and SFTP final
-  re-reads are gone and a backup is downloaded at most once. S3 abort commits
-  its tombstone under the lock and deletes exact artifacts after releasing it;
-  SFTP publication no longer takes the lock for the reconnect check. The S3
-  client gets a 2-minute per-connection read timeout; SFTP bounds the
-  handshake with a connection deadline and closes a connection whose
-  keepalive is unanswered for 30 seconds. SFTP restore copies are capped at
-  the manifest size.
-- Regression: `TestS3MetadataOperationsSkipArtifactDownloads`,
-  `TestS3AbortReadsArtifactsWithoutPoolPeerLock`,
-  `TestS3ClientTimesOutStalledResponse`, `TestSFTPConnectTimesOutStalledServer`,
-  `TestSFTPMetadataReadsSkipArtifactContent` and
-  `TestFilesystemMetadataReadsSkipArtifactContent` in `internal/agent`. Run
-  with `go test -count=1 -run 'MetadataReadsSkip|MetadataOperationsSkip|AbortReadsArtifactsWithoutPoolPeerLock|ClientTimesOutStalledResponse|ConnectTimesOutStalledServer' ./internal/agent/`.
-  Each failed against the prior sources through `go test -overlay` and passes
-  now; focused backup/repository suites and focused `-race` passed. Fake S3
-  and in-process SSH fixtures only; forge CI remains open.
-- Avoid: holding `poolPeerMu` across any full-content remote read, or using a
-  hashing read to decide prune, protection or rebuild. Size-only reads are
-  sound only for a committed manifest, which is written after verification.
+- Symptom: S3, SFTP and filesystem operations held `poolPeerMu` while downloading and hashing whole artifacts, blocking pool membership reads; missing S3/SFTP timeouts let a stalled server hang forever, and large points never finished prune/rebuild/settlement.
+- Root cause: `ReadPoint` was the only read path and always hashed every artifact, so callers used it under the lock and for cheap decisions.
+- Fix: add `StatPoint` (manifest, digest, markers, sizes; no content read) for prune, protection, rebuild and reconcile; drop redundant post-publication re-reads; move S3 deletes outside the lock; add S3 read timeout and SFTP handshake deadline and keepalive.
+- Regression: `TestS3MetadataOperationsSkipArtifactDownloads`, `TestS3AbortReadsArtifactsWithoutPoolPeerLock`, `TestS3ClientTimesOutStalledResponse`, `TestSFTPConnectTimesOutStalledServer`, `TestSFTPMetadataReadsSkipArtifactContent`, `TestFilesystemMetadataReadsSkipArtifactContent` failed on prior source: `go test -count=1 -run 'MetadataReadsSkip|MetadataOperationsSkip|AbortReadsArtifactsWithoutPoolPeerLock|ClientTimesOutStalledResponse|ConnectTimesOutStalledServer' ./internal/agent/`. Fake fixtures only.
+- Avoid: holding `poolPeerMu` across a full-content remote read, or using a hashing read to decide prune, protection or rebuild.
 
 ## BUG-0717 — SFTP repositories blocked on partial markers and pinned keys
 
 - Date: 2026-09-29.
-- Symptom: independent review of the SFTP backup backend found that:
-  - a prune record verified its digest against a re-marshalled manifest, so
-    after a Core upgrade changed manifest marshalling every rebuild of that
-    repository failed permanently;
-  - an empty or truncated intent, `.nex-protected` or `owner.json` left by a
-    failed write on a full server was reported as a conflict that neither
-    retry, abort, unprotect nor registration could clear;
-  - a delayed final rename landing between the abort record and the abort's
-    manifest claim left the abort record beside a whole published point,
-    blocking reads and rebuild for the repository;
-  - the delete stage file `.nex-delete-stage-<id>` was the prune record name
-    of point `stage-<id>`;
-  - a pinned Ed25519 key failed against stock OpenSSH (Go negotiated the ECDSA
-    key or a host certificate first);
-  - health probes wrote without a pool authority check and leaked their file
-    when the first write failed;
-  - settled prune records accumulated forever and every rebuild read each one;
-  - restore copy reported every point read failure as a conflict and did not
-    sync the restore directory.
-- Root cause: markers were written once with no interrupted-write recovery,
-  the prune record stored a parsed manifest instead of its bytes, and the
-  abort claim race was handled in only one ordering.
-- Fix: in `internal/agent/backup_repository_sftp.go`, one `writeMarker` finishes
-  a strict-prefix marker, reports the real write error and fsyncs an existing
-  marker; intent, owner, protection, staged manifest, prune stage and
-  completion markers use it. An empty intent with no point directory is
-  aborted; a partial `.nex-protected` counts as protected. Prune records keep
-  the raw manifest bytes; the stage is `.nex-delete-<id>.stage`. Abort drops
-  its record when the final manifest exists and it never claimed the staged
-  manifest (nothing is removed before that claim). Connect offers one plain
-  host-key type per handshake (Ed25519, ECDSA, RSA). Probe checks authority and
-  registers cleanup before writing. Delete retires settled prune records whose
-  catalog entries are gone. Restore copy returns the read error and syncs the
-  restore directory.
-- Regression: `TestSFTPPruneRecordsSurviveSchemaChangeAndRetire`,
-  `TestSFTPEmptyMarkersRecover`, `TestSFTPAbortLosingToDelayedRenameUnblocksPoint`,
-  `TestSFTPConnectFindsPinnedHostKeyType`, `TestSFTPProbeChecksAuthorityAndCleansUp`
-  and `TestSFTPPublicWrappersOverSSH` in `internal/agent`. Run with
-  `go test -count=1 -run 'TestSFTP' ./internal/agent/`. Eleven single-fix
-  reverted sources run through `go test -overlay` each failed the matching test;
-  all pass now, and focused `-race` passed. In-process SSH/SFTP fixtures only
-  (its rename overwrites, and native OpenSSH durability is not exercised);
-  forge CI remains open.
-- Avoid: treating any partial marker as foreign content, digesting a
-  re-marshalled struct instead of stored bytes, or leaving the default host
-  key algorithm list when exactly one fingerprint is pinned.
+- Symptom: after a Core upgrade prune records failed digest checks; partial intent/protected/owner markers were reported as unclearable conflicts; a delayed rename left an abort record beside a published point; a pinned Ed25519 key failed on stock OpenSSH; probes leaked files; and settled prune records accumulated.
+- Root cause: markers were written once with no interrupted-write recovery, the prune record stored a parsed manifest instead of its bytes, and the abort-claim race was handled in only one ordering.
+- Fix: in `backup_repository_sftp.go`, one `writeMarker` completes partial markers; prune records keep raw manifest bytes; abort drops its record when a final exists; connect offers one host-key type per handshake; probe checks authority first; settled prune records are retired.
+- Regression: `TestSFTPPruneRecordsSurviveSchemaChangeAndRetire`, `TestSFTPEmptyMarkersRecover`, `TestSFTPAbortLosingToDelayedRenameUnblocksPoint`, `TestSFTPConnectFindsPinnedHostKeyType`, `TestSFTPProbeChecksAuthorityAndCleansUp` failed on reverted sources: `go test -count=1 -run 'TestSFTP' ./internal/agent/`. In-process SSH fixtures only.
+- Avoid: treating any partial marker as foreign content, digesting a re-marshalled struct instead of stored bytes, or leaving the default host-key list when one fingerprint is pinned.
 
 ## BUG-0718 — Backup pages broke the VM panel, retention preview and test history
 
 - Date: 2026-09-29.
-- Symptom: after recovery points and runs became Core pages, independent review
-  of the Controller UI found that:
-  - the VM panel read the page object as an array, so **Last backup** and
-    **Last tested restore** always showed Unavailable;
-  - the create-policy retention preview counted only the loaded, filtered
-    Recovery points page and ignored the policy's repository;
-  - every 15-second poll blanked the selected point's run history, disabling
-    **Test restore** and its verify/cleanup actions, and a slow collection
-    never finished; "Load more test history" appended to state nobody read;
-  - each search keystroke sent a relayed Core read, and a pool switch queried
-    the previous pool's selected point.
-- Root cause: `vm-last-backup.tsx` was not moved to the page shape, the preview
-  reused the display list, and `loadRuns` reset and restarted the collection on
-  every refresh while also fetching an unused pool-wide page.
-- Fix: `loadRecoveryPoints` in `web/src/backup-types.ts` reads every page for
-  a Core-side `vm_id`/`repository_id` filter. The VM panel and the retention preview (per VM, in the
-  chosen repository) use it. `loadRuns` loads only the selected point, keeps
-  the previous history and skips a poll while a collection is in progress; the
-  unused run page and its button are deleted. Search is debounced, and a pool switch clears the
-  selected point first.
-- Regression: `web/src/backup-pages.test.mjs` (paged `vm_id` walk) and `web/src/backup-policies.test.mjs`; run `npm test` in
-  `web/`: passed. The helper is new, so the checks fail on the prior source by
-  construction. No browser walkthrough was run for this batch.
-- Avoid: computing a destructive-setting estimate from a paged or filtered
-  display list, or clearing complete state on a background poll.
+- Symptom: after recovery points and runs became Core pages, the VM panel always showed Unavailable for last backup/test, the retention preview miscounted, each poll blanked run history (disabling Test restore), and search/pool switches sent wrong reads.
+- Root cause: `vm-last-backup.tsx` still read the page object as an array, the preview reused the filtered display list, and `loadRuns` reset the collection on every refresh.
+- Fix: `loadRecoveryPoints` in `web/src/backup-types.ts` reads every page for a Core-side `vm_id`/`repository_id` filter and feeds the VM panel and preview; `loadRuns` keeps prior history and skips a poll mid-collection; search is debounced and a pool switch clears the selected point.
+- Regression: `web/src/backup-pages.test.mjs` and `web/src/backup-policies.test.mjs` (new helper, fail on prior source by construction): `npm test` in `web/`. No browser walkthrough run.
+- Avoid: computing a destructive-setting estimate from a paged or filtered display list, or clearing state on a background poll.
 
 ## BUG-0719 — Controller backup relay misreported stale masters and bad destinations
 
 - Date: 2026-09-29.
-- Symptom: independent review of the Controller backup relay found that:
-  - a master clock ahead of the Controller or browser showed Unknown
-    repository health after each probe;
-  - a stale master and a first-page "not master" reply returned `409`, which
-    the UI treats as changed history; Core `503` became `502` "invalid page";
-  - an unknown pool returned `503`, and a backup credential for an unknown
-    pool returned `409` "sql: no rows in result set";
-  - a backup credential was delivered before its destination was validated,
-    leaving an orphan receipt, and a non-NFS create without `id` always
-    failed with a receipt mismatch;
-  - the Controller receipt mirror was capped at 1024 across all hosts, so
-    accumulating retired tombstones could drop a live receipt.
-- Root cause: the Controller masked health on its own clock, mapped relay statuses coarsely, used
-  one error path for missing rows, and bounded the mirror globally.
-- Fix: in `internal/controller`, repository health trusts Core's status unless
-  the master is stale; the relay returns `503` for stale or
-  non-master Core and Core `503`, `400` for Core `400`, and `404` for an
-  unknown pool (`failPoolMaster`); the backup credential handoff requires the
-  destination (`repository`) and refuses one Core would refuse, plus an SMB3
-  username containing `=`; a non-NFS create without `id` is `400`; the
-  receipt mirror bound is per host with retired receipts last. The UI mirrors
-  Core's destination validation before sending the secret and drops browser
-  clock comparisons.
-- Regression: `TestBackupPageRelayMapsCoreStatuses`,
-  `TestBackupPageValidationAcceptsCursorArithmetic`,
-  `TestBackupPolicyUpdateNeedsKnownPool`,
-  `TestCredentialReceiptMirrorBoundIsPerHostAndKeepsLiveReceipts`,
-  `TestBackupRepositoryListMarksStaleHealthUnknown` and
-  `TestBackupCredentialHandoffAndRegistrationKeepSecretOutOfDatabase` in
-  `internal/controller`; run `go test -count=1 -run 'TestBackup|TestCredentialReceipt|TestStorageCredential' ./internal/controller/`:
-  passed. With the staged Controller sources through `go test -overlay`, the
-  relay, policy and receipt tests failed; `web/src/backup-repositories.test.mjs`
-  covers `backupSource` and the skew-tolerant health. Forge CI remains open.
-- Avoid: comparing another host's timestamps with the local clock, or
-  returning a raw database error to an operator.
-- Later (2026-09-29, no-legacy decision): the policy-update capability gate,
-  the older-Core health fallback and the legacy catalog/run arrays were
-  deleted with the Controller/Core backup page handshake, because every
-  supported Core serves pages and enforces `expected_revision`.
+- Symptom: clock skew showed Unknown repository health; stale-master and not-master replies returned `409`, Core `503` became `502`, unknown pools gave `503`/`409` raw SQL errors; credentials were delivered before destination validation leaving orphan receipts; the receipt mirror cap could drop live receipts.
+- Root cause: the Controller masked health on its own clock, mapped relay statuses coarsely, used one error path for missing rows, and bounded the mirror globally.
+- Fix: in `internal/controller`, trust Core health unless the master is stale, map relay statuses (`503`, `400`, `404`), require and validate the destination before credential handoff, and bound the mirror per host with retired receipts last.
+- Regression: `TestBackupPageRelayMapsCoreStatuses`, `TestBackupPolicyUpdateNeedsKnownPool`, `TestCredentialReceiptMirrorBoundIsPerHostAndKeepsLiveReceipts` and related failed on staged sources: `go test -count=1 -run 'TestBackup|TestCredentialReceipt|TestStorageCredential' ./internal/controller/`.
+- Avoid: comparing another host's timestamps with the local clock, or returning a raw database error to an operator.
 
 ## BUG-0720 — S3 repositories wedged on interrupted prunes, refused registrations and old records
 
 - Date: 2026-09-29.
-- Symptom: independent review of the S3 backend found that:
-  - a prune interrupted after it removed every point object left its delete
-    record, and `Entries` refused the whole repository for catalog import and
-    rebuild, which cannot resume the prune without a catalog entry;
-  - a registration refused by its probe kept `.nex-owner.json` bound to that
-    attempt's random repository ID, so the corrected retry was a "conflict";
-  - member dispatch cleared the multipart proof on every prepare, repeating two
-    ~5 MiB multipart uploads inside the 10 s request budget, and a probe cut off
-    by that deadline left its multipart upload behind (the SDK aborts with the
-    expired context);
-  - abort tombstones, delete records and intents were recognised only while
-    `manifest.Valid()` accepted the bound manifest, which re-hashes a
-    re-marshalled captured spec, so a spec schema change would make one old
-    aborted point block rebuild;
-  - a failed intent/abort marker read was treated as absence; a different
-    object at an artifact key returned a raw SDK 412 after a full re-upload; a
-    prefix inside another repository's prefix, or `.`, could be registered; a
-    console "folder" object blocked registration; multipart uploads left by a
-    crashed publisher were never aborted; the probe's first conditional PUT
-    failed on an SDK retry's 412 and sent no checksum header, unlike
-    publication writes; and Delete kept an always-true check.
-- Root cause: the S3 backend refused any delete record regardless of point
-  state, claimed ownership before proving the service, invalidated its proof
-  cache on every adoption, trusted full manifest validation for records that
-  carry their own raw digest, and did not list multipart uploads.
-- Fix: in `internal/agent/backup_repository_s3.go`, `Entries` accepts a valid
-  delete record once no other point object remains (as the filesystem backend
-  does); a registration that claimed the owner releases it by exact-content
-  conditional delete when the probe fails, and claiming ignores leftover probe
-  objects and a zero-byte folder object; only registration clears the
-  multipart proof; `probeMultipart` aborts on every upload failure with a fresh
-  bounded context; `recordedManifest` checks identity and artifact names
-  without `manifest.Valid()` for intents, tombstones and delete records;
-  `hasIncompleteMarker` returns read errors; `putArtifact` HEADs first,
-  settles on an exact earlier upload and reports any other object as
-  `ErrBackupConflict` before transferring; registration refuses a `.` prefix
-  and an owner at any ancestor prefix; `AbortIncomplete` aborts multipart
-  uploads under the point prefix; the probe writes through `putExactMarker`
-  with a checksum header; the dead Delete check is removed.
-- Regression: `TestS3EntriesAcceptsPruneThatRemovedThePoint`,
-  `TestS3RecordsSurviveManifestValidationChange`,
-  `TestS3RefusedRegistrationReleasesOwner`,
-  `TestS3RegistrationRefusesNestedPrefix`, `TestS3AdoptionReusesMultipartProof`,
-  `TestS3ProbeAbortsInterruptedMultipart`,
-  `TestS3AbortIncompleteAbortsOrphanMultipart` and
-  `TestS3PublishReportsConflictsAndMarkerReadErrors` in `internal/agent`. Run
-  `go test -count=1 -run 'TestS3|TestPeerS3' ./internal/agent/`: passed. All
-  eight failed against the prior sources through `go test -overlay` and pass
-  now; focused `-race` on them passed. Fake S3 only; no real provider run;
-  forge CI remains open.
-- Avoid: refusing a record whose point is already gone, leaving a claim from a
-  refused registration, re-proving the service on every dispatch, validating a
-  digest-bound record through a re-marshalled hash, or trusting the SDK's own
-  multipart abort after its context expired.
-
+- Symptom: an interrupted prune left a delete record that made `Entries` refuse the repository; a refused registration left an owner marker that blocked retry; dispatch repeated multipart proofs and leaked uploads; old records blocked rebuild after schema changes; several read errors and prefix overlaps were mishandled.
+- Root cause: the backend refused any delete record regardless of point state, claimed ownership before proving the service, invalidated its proof cache on every adoption, trusted full manifest validation for digest-bound records, and did not list multipart uploads.
+- Fix: in `backup_repository_s3.go`, accept a delete record once no point object remains, release a failed registration's owner claim, clear the multipart proof only on registration, abort multipart on failure with a fresh context, validate records by identity, HEAD before upload, refuse nested prefixes.
+- Regression: `TestS3EntriesAcceptsPruneThatRemovedThePoint`, `TestS3RecordsSurviveManifestValidationChange`, `TestS3RefusedRegistrationReleasesOwner`, `TestS3RegistrationRefusesNestedPrefix` and four others failed on prior sources: `go test -count=1 -run 'TestS3|TestPeerS3' ./internal/agent/`. Fake S3 only.
+- Avoid: refusing a record whose point is gone, leaving a claim from a refused registration, re-proving the service every dispatch, or trusting the SDK's multipart abort after its context expired.
 
 ## BUG-0721 — SMB backup repository lost its share identity on promotion and leaked mounts
 
 - Date: 2026-09-29.
-- Symptom: independent review found that:
-  - promotion staged each replicated SMB3 repository with its share identity
-    cleared, so the new master's preparation created or accepted whatever
-    marker the share had, including a different share (verified with a
-    reproduction test); member adoption did the same and compared the identity
-    only after writing the marker and owner claim;
-  - the owner claim ran before the share marker check;
-  - a failed first SMB registration after the mount (owner claim or
-    publication probe) left a mount unit that referenced the soon-retired
-    credential, so every later registration was refused as a rotation;
-  - SMB backup mounts lacked `nosuid,nodev,noexec`;
-  - a crash during the publication probe left `.nex-backup-probe-*`
-    directories for good;
-  - waiting for another mount preparation ignored the request's context;
-  - opening an SMB repository for a read required its credential receipt.
-- Root cause: adoption treated "no identity" as "new registration", the
-  admission callback ran before identity, and the claim and probe ran after
-  preparation returned, outside the new-mount rollback.
-- Fix: `prepareBackupRepositoryForAdoption` requires and passes the pool's
-  SMB identity (promotion keeps the replicated identity; member peer, probe
-  and capability paths pass the expected identity); `prepareSMBWithAdmission`
-  runs the claim after the marker check, and the backup admission now claims
-  and probes inside it; SMB backup units add `nosuid,nodev,noexec`; the
-  publication probe removes its own leftovers older than one hour; the
-  preparation slot is a channel that honours context; SMB reads open without
-  the credential, while writes (`Verify`) still require it.
-- Regression: `TestPrepareBackupSMBChecksMarkerBeforeClaimAndDropsNewUnitOnFailure`,
-  `TestBackupFilesystemPublicationProbe` and `TestRemotePreparationWaitHonoursContext`
-  in `internal/vmhost`; `TestAdoptedSMBRepositoryVerifiesReplicatedMarker` and
-  `TestSMBBackupRegistrationRequiresOperationBoundCredentialAndExactSource` in
-  `internal/agent`. Run `go test -count=1 -run 'Backup|SMB|Remote|Mount|Storage|Probe' ./internal/vmhost/`
-  and `go test -count=1 -run 'TestAdoptedSMB|TestSMB|TestPeerSMB' ./internal/agent/`:
-  passed. Through `go test -overlay` with the prior ordering the owner was
-  claimed on a mismatched share, the unit remained after a failed probe, the
-  stale probe stayed, and promotion prepared without the pool marker.
-  NFS backup mounts keep their released options (changing them would refuse
-  re-preparation of existing units). Forge CI remains open.
-- Avoid: clearing a replicated identity before re-preparing, admitting a
-  directory before its share is identified, or doing post-mount work outside
-  the rollback of a newly created unit.
+- Symptom: promotion and member adoption staged SMB3 repositories with the share identity cleared, so a different share could be accepted; a failed first registration left a mount unit blocking retries; mounts lacked `nosuid,nodev,noexec`; probe directories leaked; and reads required a credential receipt.
+- Root cause: adoption treated "no identity" as "new registration", the claim ran before the share marker check, and claim and probe ran outside the new-mount rollback.
+- Fix: `prepareBackupRepositoryForAdoption` requires and passes the pool SMB identity; the claim and probe run after the marker check inside the rollback; add `nosuid,nodev,noexec`; clean stale probe dirs older than an hour; make the preparation wait honour context; open SMB reads without the credential.
+- Regression: `TestPrepareBackupSMBChecksMarkerBeforeClaimAndDropsNewUnitOnFailure`, `TestBackupFilesystemPublicationProbe`, `TestRemotePreparationWaitHonoursContext` failed on prior ordering: `go test -count=1 -run 'Backup|SMB|Remote|Mount|Storage|Probe' ./internal/vmhost/`; agent tests `TestAdoptedSMBRepositoryVerifiesReplicatedMarker`: `go test -count=1 -run 'TestAdoptedSMB|TestSMB|TestPeerSMB' ./internal/agent/`.
+- Avoid: clearing a replicated identity before re-preparing, admitting a directory before its share is identified, or doing post-mount work outside the new unit's rollback.
 
 ## BUG-0722 — NFS/SMB backup deletes and aborts could stall retention and rebuild
 
 - Date: 2026-09-29.
-- Symptom: independent review found that on the filesystem backend:
-  - a point whose prune crashed after its delete intent was still readable and
-    protectable, catalog rebuild refused the whole repository, and only a
-    retry with the lost catalog entry could finish it;
-  - delete intents were never removed;
-  - `.DS_Store`, `._*` or an interrupted-write `.write-*` file in a point
-    refused its deletion with a bare conflict, stopping retention;
-  - an aborted point read as "not a directory" rather than absent;
-  - a failed rename left `.staging-<id>`, and abort then refused forever.
-- Root cause: reads ignored the intent, the intent was needed only by an
-  exact prune retry, the delete allow-list had no room for file-manager
-  litter, and abort treated its own leftover staging as foreign.
-- Fix: `readPoint` refuses a point with a pending intent and reports an abort
-  fence as `os.ErrNotExist`; `Scan` and `Entries` leave pending points out;
-  every `Delete` first finishes intents whose catalog entry is gone and then
-  removes them; deletion removes known litter and names any other entry;
-  `AbortIncomplete` writes its fence and then removes the staging directory,
-  which can no longer be renamed over it.
-- Regression: `TestFilesystemPendingDeleteIsHiddenAndFinishedAfterCatalogLoss`,
-  `TestFilesystemAbortClearsStagingAndReportsPointAbsent`,
-  `TestFilesystemPostRenameErrorReconcilesPublishedPoint` and
-  `TestFilesystemPruneResumesOnlyRecordedPartialDeletion` in `internal/agent`;
-  run `go test -count=1 -run 'TestFilesystem' ./internal/agent/`: passed. Each
-  fix reverted alone through `go test -overlay` failed a new test. Forge CI
-  remains open.
-- Avoid: making rebuild wait on an exact prune retry that may never come,
-  treating Nex's own staging as foreign after fencing it, or removing the
-  current point's intent before its catalog entry is gone (the retry needs it).
+- Symptom: on the filesystem backend a crashed prune left a readable point and blocked catalog rebuild, intents were never removed, litter files (`.DS_Store`, `._*`, `.write-*`) refused deletion, and abort left `.staging-<id>` forever.
+- Root cause: reads ignored the delete intent, the intent was needed only by an exact prune retry, the delete allow-list had no room for litter, and abort treated its own staging as foreign.
+- Fix: `readPoint` refuses points with a pending intent; `Delete` finishes and removes orphaned intents and known litter; `AbortIncomplete` writes its fence then removes staging.
+- Regression: `TestFilesystemPendingDeleteIsHiddenAndFinishedAfterCatalogLoss`, `TestFilesystemAbortClearsStagingAndReportsPointAbsent` (each fix reverted alone failed a test); `go test -count=1 -run 'TestFilesystem' ./internal/agent/`. Forge CI open.
+- Avoid: making rebuild wait on a prune retry that may never come, or treating Nex's own fenced staging as foreign.
 
 ## BUG-0723 — Large backup authority could not replicate, settle or promote
 
 - Date: 2026-09-29.
-- Symptom: source review and focused reproductions of the version-2 backup
-  authority found:
-  - every probe tick rewrote and fsynced every page blob, measured at about
-    50 s for 4,000 records;
-  - v2 used one record per page, and each page request carried the full
-    signed replica, so large authorities never converged;
-  - a member with no stored replica reported `backup_page_version` 0, so the
-    master never sent it a v2 replica;
-  - one offline member blocked terminal settlement of reserved runs and
-    receipts;
-  - a promotion with an empty signed catalog stuck at `catalog-rebuild`,
-    because the import waited for members the new master had not re-pointed;
-  - page roots were never collected after any failed push or aborted transfer;
-  - a probe-tick push waiting behind a long backup write made snapshot
-    confirmations fail as busy.
-- Root cause: building a replica also staged its pages, and the build ran on
-  every sizing check as well as every push. The page-version field, kept only
-  for older members, described the stored replica rather than the binary. The
-  capacity gate refused any write once the authority was large, not just
-  writes that grew it. GC ran only
-  after fully successful pushes, deferred on any non-succeeded transfer and
-  chose a predecessor by directory mtime. The push set its single-flight flag
-  before taking the backup lock.
-- Fix:
-  - building only encodes the manifest; the push stages pages, under the
-    backup lock, and only when the signed root is not already on disk;
-  - v2 packs records up to 256 KiB, with page ends chosen by record content
-    so an append resends one page;
-  - the progress probe stats pages;
-  - the page-version capability (`backup_page_version` and the
-    `pool-backup-authority-pages-v1`/`-v2` advertisements) is deleted: the
-    project owner ruled on 2026-09-29 that no mixed-version path is kept, so
-    the gate now checks only that each member holds the current replica;
-  - the gate refuses only writes that grow the authority (v1 reserved bytes,
-    or a new v2 record ID), and not during `catalog-rebuild`;
-  - GC runs after every push and after any terminal transfer, keeping the
-    pushed root and the stored replica root;
-  - the push takes the backup lock before its busy flag.
-  - Smaller fixes in the same code: the catalog import after adoption uses
-    the caller's context; the progress probe clears staging only on a content
-    mismatch, and under the blob lock; a corrupt blob is repaired in place so
-    linked pages heal; the v1 page upload no longer drops write errors; the
-    promotion journal check reads the transfer only for a waiting receipt;
-    the unlocked store walk skips records pruned since the listing.
-- Regression: `TestBackupAuthorityV2UnchangedRootIsNotRewritten`,
-  `TestBackupAuthorityV2ReachesMemberWithoutReplica`,
-  `TestBackupAuthorityV2SettlementIgnoresUnavailableMember`,
-  `TestPoolPromotionV2EmptyCatalogImportsBeforeRepoint`,
-  `TestBackupAuthorityPagesCollectedAfterFailures` and
-  `TestBackupAuthorityBlobRepairFixesLinkedPages` in `internal/agent`; run
-  `go test -count=1 -run 'TestBackupAuthorityV2UnchangedRootIsNotRewritten|TestBackupAuthorityV2ReachesMemberWithoutReplica|TestBackupAuthorityV2SettlementIgnoresUnavailableMember|TestPoolPromotionV2EmptyCatalogImportsBeforeRepoint|TestBackupAuthorityPagesCollectedAfterFailures|TestBackupAuthorityBlobRepairFixesLinkedPages' ./internal/agent/`:
-  passed, and passed with `-race`. All six failed against the staged sources
-  through `go test -overlay`. The two GC fixes, each reverted alone, failed
-  the GC test. `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
-  (BUG-0687) and `TestCatalogRebuildReceiptAdmissionRefusalIsNotPersistenceError`
-  now freeze authority to produce their refusal, because settlement is no
-  longer gated. No lab or forge CI run is claimed.
-- API impact: changed contract. `backup_page_version` is removed from
-  `PoolReplicaStatus` and `PoolReplicaAck`, and the two page capabilities are
-  no longer advertised. V2 page boundaries changed, and the progress probe
-  returns 500 on a read failure. No route changed. `docs/API.md` and both
-  OpenAPI documents are updated and regenerated. Guide impact: updated
-  (`backup-now.md`, `backup-policies.md`).
-- Avoid:
-  - staging or fsyncing pages from a sizing check;
-  - gating a settlement whose room its reservation already admitted;
-  - keeping a capability check for member versions the project no longer
-    supports;
-  - choosing retained roots by mtime.
+- Symptom: v2 authority pushes rewrote every page each probe tick (~50 s for 4,000 records), large authorities never converged, one offline member blocked settlement, and an empty-catalog promotion stuck at `catalog-rebuild`.
+- Root cause: building a replica also staged its pages, the page-version field described the stored replica, the capacity gate refused every write once large, and GC ran only after fully successful pushes.
+- Fix: build only encodes the manifest and the push stages pages under the backup lock; v2 packs records into 256 KiB content-chosen pages; page-version capability removed; gate refuses only growing writes; GC runs after every push.
+- Regression: `TestBackupAuthorityV2UnchangedRootIsNotRewritten`, `TestBackupAuthorityV2ReachesMemberWithoutReplica`, `TestBackupAuthorityV2SettlementIgnoresUnavailableMember`, `TestPoolPromotionV2EmptyCatalogImportsBeforeRepoint`, `TestBackupAuthorityPagesCollectedAfterFailures`, `TestBackupAuthorityBlobRepairFixesLinkedPages`; `go test -count=1 ./internal/agent/` (passed with focused `-run` and `-race`). No lab or CI run claimed.
+- Avoid: staging or fsyncing pages from a sizing check, gating a settlement already admitted, keeping capability checks for unsupported versions, or choosing retained roots by mtime.
 
 ## BUG-0724 — NFS backup repository mounts allowed executables and device nodes
 
 - Date: 2026-09-29.
-- Symptom: SMB backup mounts were restricted to data (`nosuid,nodev,noexec`)
-  in BUG-0721, but NFS backup repository mounts still used only
-  `vers=4,hard,_netdev`, so a backup export could expose setuid programs or
-  device nodes on the host.
-- Root cause: BUG-0721 kept NFS backup units unchanged only so already
-  written units stayed byte-identical. Nex is not in production, so that
-  compatibility reason no longer applies.
-- Fix: `prepareNFS` takes the same `extraOptions` argument as SMB preparation;
-  `PrepareBackupRepository` passes `,nosuid,nodev,noexec`. VM storage NFS
-  mounts are unchanged. A lab NFS backup unit written before this change is
-  refused on re-preparation until it is detached once.
-- Regression: `TestNFSBackupMountIsDataOnlyAndVMStorageMountIsNot` in
-  `internal/vmhost`; run
-  `go test -count=1 -run 'TestNFSBackupMount' ./internal/vmhost/`: passed. It
-  failed with the previous `managed_backup.go` call through `go test -overlay`.
-  No lab or forge CI run is claimed.
-- API impact: none; mount options are Core-internal. Guide impact: none.
-- Avoid: keeping weaker mount options for existing units in an unreleased
-  product.
+- Symptom: NFS backup mounts used only `vers=4,hard,_netdev`, so a backup export could expose setuid programs or device nodes (SMB was already restricted in BUG-0721).
+- Root cause: BUG-0721 left NFS backup units unchanged for byte-identical compatibility, which no longer applies as Nex is not in production.
+- Fix: `prepareNFS` takes `extraOptions`; `PrepareBackupRepository` passes `,nosuid,nodev,noexec`. VM storage NFS mounts are unchanged.
+- Regression: `TestNFSBackupMountIsDataOnlyAndVMStorageMountIsNot` (failed with the old call); `go test -count=1 -run 'TestNFSBackupMount' ./internal/vmhost/` passed. No lab or CI run claimed.
+- Avoid: keeping weaker mount options for existing units in an unreleased product.
 
 ## BUG-0725 — Member backup runs stayed pending or needing attention on the master
 
 - Date: 2026-09-29.
-- Symptom: source review of member dispatch found runs the master never
-  settled:
-  - a scheduled, policy or inherited member run the master recorded as
-    `needs_attention` was never read again, even after the member reconciled
-    it; the point never reached the master catalog and every later occurrence
-    for the VM was `skipped_overlap`;
-  - a preflight refusal before the member admitted the run, or a member with no
-    record of it (404), left the run pending with "manual reconciliation";
-  - a pending member run was skipped forever once its VM moved to the master,
-    and one bad run aborted the whole dispatch pass;
-  - a Controller-journaled reconcile polled every 2 s while holding the
-    master's snapshot/backup slot, so one member stuck in `needs_attention`
-    froze every master-local snapshot, backup and restore;
-  - a member journal in `needs_attention` whose run record already said
-    `failed` was "inconsistent status" forever;
-  - a demoted master's `needs_attention` journal was never completed after the
-    new master settled the run;
-  - `publishedBackupNext` was never pruned and `backupDestinationSupported`
-    was a dead tautology.
-- Root cause: only pending runs and Controller journals were observed; a
-  member 404 was treated as unknown although members journal an operation
-  before running it; the reconcile wait looped inside the worker.
-- Fix (`internal/agent/backup_peer_dispatch.go`, `run.go`):
-  - `nextPendingPeerBackup` also re-observes (GET only) `needs_attention`
-    member runs without a local journal, dispatches to the run's reserved host,
-    reuses `peerBackupWorkForCommand` and skips bad runs with a 30 s backoff;
-  - a member 404, a VM no longer on the reserved host, or a permanent preflight
-    refusal after a 404 is `errPeerBackupNotStarted` and settles the run
-    `failed`;
-  - the reconcile path does one observation per 30 s and adopts a pool run
-    already settled elsewhere;
-  - a member journal needing attention is accepted whatever its run record
-    says, so the master records it and re-observes;
-  - GET, and delivery/preflight/POST, get separate deadlines.
-- Regression: `TestNeedsAttentionMemberRunSettlesWhenMemberReconciles`,
-  `TestNeedsAttentionMemberRunWithoutMemberRecordSettlesFailed`,
-  `TestPendingMemberRunForMovedVMSettlesFailedWithoutPost`,
-  `TestPeerPreflightRefusalBeforeAdmissionSettlesFailed`,
-  `TestPeerBackupObservationSettlesMissingOperationAsNotStarted` and
-  `TestAttentionJournalAdoptsSettledMemberRun` in `internal/agent`; run
-  `go test -count=1 -run 'TestNeedsAttentionMemberRun|TestPendingMemberRunForMovedVM|TestPeerPreflightRefusalBeforeAdmission|TestPeerBackupObservation|TestAttentionJournalAdopts' ./internal/agent/`:
-  passed, and passed with `-race`. Each failed through `go test -overlay`
-  with its fix reverted. No lab or forge CI run is claimed.
-- API impact: none. Peer routes and payloads are unchanged; the master reads a
-  member 404 as definite absence. Guide impact: updated (`backup-policies.md`).
-- Avoid:
-  - polling a member inside a worker that holds the master's snapshot slot;
-  - treating a member 404 as unknown when the member journals before running;
-  - resolving a pending run's host from the VM's current placement.
+- Symptom: member runs the master recorded as `needs_attention` were never re-read, so later occurrences were `skipped_overlap`; preflight refusals and member 404s stayed pending; a stuck member froze master snapshots via a 2 s reconcile poll.
+- Root cause: only pending runs and Controller journals were observed, a member 404 was treated as unknown although members journal before running, and the reconcile wait looped inside the worker.
+- Fix: `nextPendingPeerBackup` re-observes `needs_attention` member runs and dispatches to the reserved host; a 404 or moved VM settles the run `failed`; reconcile observes once per 30 s.
+- Regression: `TestNeedsAttentionMemberRunSettlesWhenMemberReconciles`, `TestNeedsAttentionMemberRunWithoutMemberRecordSettlesFailed`, `TestPendingMemberRunForMovedVMSettlesFailedWithoutPost`, `TestPeerPreflightRefusalBeforeAdmissionSettlesFailed`, `TestPeerBackupObservationSettlesMissingOperationAsNotStarted`, `TestAttentionJournalAdoptsSettledMemberRun`; `go test -count=1 ./internal/agent/` (passed, also `-race`). No lab or CI run claimed.
+- Avoid: polling a member inside a worker holding the snapshot slot, treating a member 404 as unknown, or resolving a pending run's host from the VM's current placement.
 
 ## BUG-0726 — Master re-hashed whole member points and retried content failures forever
 
 - Date: 2026-09-29.
-- Symptom: after a member backup or restore succeeded, the master verified the
-  point with `ReadPoint` (full hash or download) under a 5-minute cap while
-  holding its snapshot slot. Large points timed out on every attempt, and a
-  digest mismatch or incomplete point was a plain error, so it was retried
-  forever instead of needing attention. Reproduced in `.cache/review-verify6`.
-- Root cause: dispatch used the restore-grade read for a publication check, and
-  `peerBackupVerificationError` only treated `ErrBackupConflict`/`Invalid` as
-  permanent.
-- Fix (`internal/agent/backup_peer_dispatch.go`): verification uses
-  `StatPoint` (manifest, markers, artifact sizes; the member only publishes a
-  manifest after its artifacts verify, and restore still hashes). A read
-  failure is permanent when the repository itself still verifies; only an
-  unreachable repository is retried.
-- Regression: `TestPeerBackupVerificationRetriesOnlyUnreachableRepository` and
-  `TestPeerRestoreVerificationStatsPointAndRefusesMissingArtifact`; run
-  `go test -count=1 -run 'TestPeerBackupVerificationRetriesOnlyUnreachableRepository|TestPeerRestoreVerificationStatsPointAndRefusesMissingArtifact' ./internal/agent/`:
-  passed; both failed with the old classification and the second with
-  `ReadPoint`, through `go test -overlay`.
-- API impact: none. Guide impact: none (no operator step changes).
-- Avoid: hashing a whole remote point to confirm it was published; classifying
-  a content failure by error type when the storage returns plain errors.
+- Symptom: after a member backup or restore, the master verified the point with a full `ReadPoint` under a 5-minute cap, so large points timed out every time and digest mismatches were retried forever.
+- Root cause: dispatch used the restore-grade read for a publication check, and only `ErrBackupConflict`/`Invalid` were classed permanent.
+- Fix: verification uses `StatPoint`; a read failure is permanent when the repository itself still verifies, and only an unreachable repository is retried.
+- Regression: `TestPeerBackupVerificationRetriesOnlyUnreachableRepository`, `TestPeerRestoreVerificationStatsPointAndRefusesMissingArtifact` (failed with old code); `go test -count=1 ./internal/agent/` passed.
+- Avoid: hashing a whole remote point to confirm publication, or classifying content failures by error type when storage returns plain errors.
 
 ## BUG-0727 — Cluster worker rewrote pool identity; one credential blocked a join
 
 - Date: 2026-09-29.
-- Symptom:
-  - `RetryPoolPeerOrigin`, on the cluster goroutine, ran `ResumePoolRehome`,
-    which reads the journal and writes and saves `Store.State` while the Run
-    loop owns it: a data race and possible fatal concurrent map access; a
-    failing rehome also skipped the peer-origin advertisement;
-  - the master answered a joining member's credential pull with 409 when any
-    one repository's receipt could not be exported, so the rehome never ended;
-  - registration delivered credentials to members sequentially while holding
-    `poolBackupAuthorityMu` (10 s each);
-  - a member with an older repository generation reported "probe failed".
-- Fix: the pending rehome resumes only in the Run loop's `resumePoolJoin`
-  (`run.go`), and `RetryPoolPeerOrigin` only advertises (`peer.go`). The
-  credential export skips a repository whose receipt cannot be exported
-  (dispatch delivers per repository) and still refuses when authority is
-  unavailable. Minimal edits in `pool_backup.go` (flow batch): delivery runs
-  after the authority lock is released, and an older member generation reports
-  "member has not adopted this repository generation yet".
-- Regression: `TestJoinBackupCredentialSyncRetryAndLegacyNFS` (the cluster
-  worker must leave the rehome pending), `TestCredentialPullSkipsOneUnexportableRepository`,
-  `TestCredentialDeliveryDoesNotHoldBackupAuthority` and
-  `TestMemberProbeReportsOlderGenerationAsPendingAdoption`; run
-  `go test -count=1 -run 'TestJoinBackupCredentialSyncRetryAndLegacyNFS|TestCredentialPullSkipsOneUnexportableRepository|TestCredentialDeliveryDoesNotHoldBackupAuthority|TestMemberProbeReportsOlderGenerationAsPendingAdoption' ./internal/agent/`:
-  passed, and passed with `-race`; each failed through `go test -overlay`
-  with its fix reverted.
-- API impact: none. Guide impact: updated (`backup-repositories.md`).
-- Avoid: calling Store-owning recovery from the cluster worker; holding the
-  pool backup authority across member network calls.
+- Symptom: `RetryPoolPeerOrigin` ran `ResumePoolRehome` on the cluster goroutine, racing the Run loop over `Store.State`; one unexportable receipt made the master answer a joining member 409 forever; credential delivery held `poolBackupAuthorityMu` sequentially.
+- Root cause: Store-owning recovery ran off the Run loop, credential export failed on any one repository, and delivery happened under the authority lock.
+- Fix: rehome resumes only in `resumePoolJoin`; `RetryPoolPeerOrigin` only advertises; export skips an unexportable repository; delivery runs after the lock is released.
+- Regression: `TestJoinBackupCredentialSyncRetryAndLegacyNFS`, `TestCredentialPullSkipsOneUnexportableRepository`, `TestCredentialDeliveryDoesNotHoldBackupAuthority`, `TestMemberProbeReportsOlderGenerationAsPendingAdoption`; `go test -count=1 ./internal/agent/` (passed, also `-race`).
+- Avoid: calling Store-owning recovery from the cluster worker, or holding the pool backup authority across member network calls.
 
 ## BUG-0728 — Controller catalog command stuck pending; a receipt read error stopped Core
 
 - Date: 2026-09-29.
-- Symptom: a catalog import/rebuild started by the local or peer API and then
-  issued by the Controller left the Controller's journal pending until restart
-  when the shared run ended without an outcome. Any receipt read error on
-  catalog completion returned from `Run`, stopping the agent.
-- Root cause: `catalogDone` only completed the journal named by the run that
-  started the work; the Controller's join only set `preparingBackupRepo`.
-- Fix (`internal/agent/run.go`): completion settles the journal for the
-  operation whenever `preparingBackupRepo` holds it, and a receipt read error
-  becomes that journal's `needs_attention` error. The now unused `journalID`
-  on catalog completions is removed.
-- Regression: `TestControllerCatalogCommandJoinsLocalRunAndSettles`; run
-  `go test -count=1 -run TestControllerCatalogCommandJoinsLocalRunAndSettles ./internal/agent/`:
-  passed; failed through `go test -overlay` without the fix.
-- API impact: none. Guide impact: none.
+- Symptom: a catalog import/rebuild started locally then issued by the Controller left the Controller journal pending until restart, and any receipt read error on completion returned from `Run`, stopping the agent.
+- Root cause: `catalogDone` completed only the journal named by the run that started the work.
+- Fix: completion settles the journal held in `preparingBackupRepo`, and a receipt read error becomes that journal's `needs_attention` error; unused `journalID` removed.
+- Regression: `TestControllerCatalogCommandJoinsLocalRunAndSettles` (failed without the fix); `go test -count=1 -run TestControllerCatalogCommandJoinsLocalRunAndSettles ./internal/agent/` passed.
 - Avoid: keying completion on which caller started a shared run.
 
 ## BUG-0729 — Backup destination and pool hostname validators accepted unsafe values
 
 - Date: 2026-09-29.
-- Symptom: `BackupRepository.Valid` accepted control characters (CR/LF, ESC),
-  `host:port` server names, a `.` directory or prefix, S3 endpoint ports above
-  65535, unbounded source and health-error lengths, malformed remote
-  fingerprints and an NFS `credential_ref`. `ValidPoolHostname` accepted edge
-  whitespace, TAB, ESC, C1 and bidi-override characters, so a member could
-  present a misleading name to operators.
-- Fix (`internal/protocol/backup.go`, `pool.go`): one `validBackupText` bound
-  refuses control characters; hosts are bare names or IP literals; ports are
-  range-checked; the remote fingerprint format is checked once in `Valid`, so
-  the duplicate checks in `validPeerS3Identity`/`validPeerSFTPIdentity` are
-  removed. Hostnames must be printable with no edge whitespace. A joining Core
-  must report a valid hostname; the old path for hostname-less joiners is
-  removed (owner decision 2026-09-29: no compatibility with older Cores).
-- Regression: `TestBackupRepositoryRejectsUnsafeRemoteSources` and
-  `TestValidPoolHostnameRefusesSpoofingCharacters` in `internal/protocol`; run
-  `go test -count=1 ./internal/protocol/`: passed; both failed against the
-  staged sources through `go test -overlay`.
-  `TestLegacyJoinReplaySurvivesHostnameBackfill` is deleted with the
-  hostname-less join path.
-- API impact: changed contract (stricter validation of backup repository
-  requests, `docs/API.md` updated; no schema change). Guide impact: updated
-  (`backup-repositories.md`).
-- Avoid: per-field ad hoc character lists; separate format checks at each use
-  site.
-
+- Symptom: `BackupRepository.Valid` accepted control characters, `host:port` names, `.` prefixes, out-of-range S3 ports, unbounded lengths and malformed fingerprints; `ValidPoolHostname` accepted whitespace, TAB, ESC, C1 and bidi characters.
+- Root cause: per-field ad hoc checks with gaps and duplicated format checks at use sites.
+- Fix: one `validBackupText` bound refuses control characters, hosts are bare names or IP literals, ports are range-checked, fingerprints are checked once in `Valid`, and hostnames must be printable; the hostname-less join path is removed.
+- Regression: `TestBackupRepositoryRejectsUnsafeRemoteSources`, `TestValidPoolHostnameRefusesSpoofingCharacters`; `go test -count=1 ./internal/protocol/` passed (both failed on the old sources).
+- Avoid: per-field ad hoc character lists and separate format checks at each use site.
 
 ## BUG-0730 — Backup credentials outlived pool changes; one bad file disabled them all
 
 - Date: 2026-09-29.
-- Symptom: a host that joined another pool kept its former pool's backup
-  receipts, and `BackupCredentialReceipts` then failed the whole listing, so
-  every heartbeat reported "backup credential state is unavailable". An ejected
-  host kept every backup secret and SMB3 mount credential file of the pool it
-  left. One unreadable or corrupt file in `secrets/backup` made resolve, export,
-  rotation and listing fail for every repository on the host. A crashed atomic
-  write left a `.write-*` temp file with plaintext that nothing removed. The
-  member's credential pull was capped at 1 MiB, below 256 repositories of up to
-  64 KiB secrets. The heartbeat listing took `poolBackupAuthorityMu`, so a long
-  prune or catalog import froze the Run loop. Core accepted an SMB3 username
-  with `=`, which the mount credential file cannot hold, and stored an orphan
-  receipt. A retired receipt replay reported "conflicts" instead of "retired"
-  (unreachable branch), and the Core routed any `backup-credential*` binding to
-  the backup store while the Controller keys on `backup-credential:`.
-- Root cause: every credential function kept its own directory loop that failed
-  on any bad file; nothing erased credentials when the pool ID changed; the
-  listing validated foreign receipts as its own; the pull bound predated
-  destination limits; the listing locked for a hint that retirement rechecks.
-- Fix: `readBackupCredentials` (one loop for every caller, under
-  `clusterSecretMu`) skips and counts damaged files and removes crashed-write
-  temp files; the listing skips foreign receipts, reports the rest plus
-  `errBackupCredentialDamaged` as a failed `backup-credentials` check, and no
-  longer takes `poolBackupAuthorityMu`. `eraseForeignBackupCredentials` removes
-  receipts and SMB3 files of another pool/host after a join rehome (`peer.go`)
-  and an eject re-initialization (`pool_transfer.go`). The pull reads up to
-  32 MiB. The SMB3 scope refuses `=`; the retired check runs before the
-  credential comparison; the prefix is `backup-credential:`.
-- Regression: `TestBackupCredentialReceiptsSkipForeignAndDamagedFiles`,
-  `TestBackupCredentialReceiptsDoNotWaitForBackupAuthority`,
-  `TestBackupCredentialScopeRefusesSMBUsernameWithEquals`,
-  `TestRetiredBackupCredentialReplayReportsRetirement`,
-  `TestJoinErasesFormerPoolCredentialsAndPullsLargeSet` and
-  `TestEjectedHostErasesBackupCredentials` in
-  `internal/agent/backup_credential_pool_change_test.go`; run
-  `go test -count=1 -run 'TestBackupCredentialReceipts|TestBackupCredentialScopeRefusesSMB|TestRetiredBackupCredentialReplay|TestJoinErasesFormer|TestEjectedHostErasesBackup' ./internal/agent/`:
-  passed (also with `-race`); all six failed against the pre-fix sources
-  through `go test -overlay`.
-- API impact: existing contract (report and peer pull payloads unchanged;
-  `docs/API.md` notes the pull bound, erase on pool change and partial
-  listing). Guide impact: updated (`backup-repositories.md`).
-- Avoid: failing a whole credential store for one file; locking the pool backup
-  authority on the heartbeat path; relying on scope checks to hide a former
-  pool's secrets instead of erasing them.
+- Symptom: a host that changed pool kept the old pool's backup receipts and SMB3 credential files, and one corrupt file in `secrets/backup` failed resolve, export, rotation and listing for every repository; heartbeat froze behind the authority lock.
+- Root cause: each credential function had its own loop that failed on any bad file, nothing erased credentials on pool change, and the listing locked for a hint retirement rechecks.
+- Fix: one `readBackupCredentials` loop skips and counts damaged files; `eraseForeignBackupCredentials` runs on join rehome and eject; the listing no longer takes `poolBackupAuthorityMu`; pull bound raised to 32 MiB; SMB3 refuses `=`.
+- Regression: `TestBackupCredentialReceiptsSkipForeignAndDamagedFiles`, `TestBackupCredentialReceiptsDoNotWaitForBackupAuthority`, `TestBackupCredentialScopeRefusesSMBUsernameWithEquals`, `TestRetiredBackupCredentialReplayReportsRetirement`, `TestJoinErasesFormerPoolCredentialsAndPullsLargeSet`, `TestEjectedHostErasesBackupCredentials`; `go test -count=1 ./internal/agent/` (passed, also `-race`).
+- Avoid: failing a whole credential store for one file, locking the backup authority on the heartbeat path, or relying on scope checks instead of erasing a former pool's secrets.
 
 ## BUG-0731 — Restores stuck when a repository read failed before any effect
 
 - Date: 2026-09-29.
-- Symptom: a restore-replace whose manifest or verification read failed before
-  it touched the original VM (an S3/SFTP timeout, a transient auth or DNS
-  error) stayed `needs_attention` forever. Its pin blocked retention of the
-  point, the original VM stayed blocked for backups and restores, and every
-  reconcile tick downloaded and hashed the whole point again. A member
-  restore-as-new or test restore with the same failure also never resolved,
-  because only the master can prove "not placed" from its owner record. A
-  restore whose run could not be reserved waited forever with no run to
-  reconcile. `failReplaceRun` reported `failed` and cleared the pin even when
-  its settlement was refused. Restore staging under `backup-restore/<op>` was
-  never removed, so failed and successful restores left whole-disk copies on
-  the state partition. Restores downloaded S3/SFTP points twice (full
-  `ReadPoint`, then the digest-checked copy).
-- Root cause: pre-effect failures were classed as uncertain without looking
-  for evidence of effects; replace reconciliation only accepted native cutover
-  evidence; no step removed staging; the pre-copy check used the full-read
-  `ReadPoint` although `CopyArtifacts` verifies every digest.
-- Fix: `validatedCatalogBackupManifest` uses `StatPoint`. Restore replace
-  fails (and releases its pin) when the retained-original record, written
-  before the owner reservation and cutover, is absent, in execution and in
-  reconciliation, which also accepts a pending run left by a refused attention
-  settlement. Restore-as-new and test restore create a durable staging
-  directory before any placement request; `restorePlacementHasNoEffects`
-  requires no native journal and then uses the master owner record or, on a
-  member, the absent staging directory; reconciliation fails such runs before
-  reading the repository. `unreservedBackupResult` fails a command whose run
-  was never reserved. `failReplaceRun` keeps the run uncertain and the pin when
-  settlement is refused. Every terminal restore removes its staging.
-- Regression: `TestRestoreReplaceReadFailureBeforeEffectsFails`,
-  `TestFailReplaceRunKeepsRunUncertainWhenSettlementIsRefused`,
-  `TestMemberRestoreWithoutStagingSettlesFailed` and `TestUnreservedRestoreFails`
-  in `internal/agent/backup_flow_test.go`; `TestPhase6BackupHermeticCIRegression`
-  now requires a failed restore to remove its staging. Run
-  `go test -count=1 -run 'TestRestoreReplaceReadFailure|TestFailReplaceRunKeeps|TestMemberRestoreWithoutStaging|TestUnreservedRestoreFails|TestPhase6BackupHermeticCIRegression' ./internal/agent/`:
-  passed (also with `-race`); each failed with its fix reverted through
-  `go test -overlay`.
-- API impact: none (Core-internal outcome classification; routes and payloads
-  unchanged). Guide impact: updated (`restore-as-new.md`, `restore-replace.md`).
-- Avoid: treating every pre-cutover error as uncertain; proving "not placed"
-  only from a record a member cannot see; clearing a pin after a refused
-  settlement.
+- Symptom: a restore whose manifest read failed before touching the VM stayed `needs_attention` forever, holding its pin and blocking the VM; restore staging was never removed and S3/SFTP points were downloaded twice.
+- Root cause: pre-effect failures were classed uncertain without looking for evidence of effects, no step removed staging, and the pre-copy check used full-read `ReadPoint` although `CopyArtifacts` verifies digests.
+- Fix: `validatedCatalogBackupManifest` uses `StatPoint`; restores fail and release the pin when no effect evidence exists, `unreservedBackupResult` fails unreserved runs, `failReplaceRun` keeps the pin if settlement is refused, and every terminal restore removes its staging.
+- Regression: `TestRestoreReplaceReadFailureBeforeEffectsFails`, `TestFailReplaceRunKeepsRunUncertainWhenSettlementIsRefused`, `TestMemberRestoreWithoutStagingSettlesFailed`, `TestUnreservedRestoreFails`, `TestPhase6BackupHermeticCIRegression`; `go test -count=1 ./internal/agent/` (passed, also `-race`).
+- Avoid: treating every pre-cutover error as uncertain, proving "not placed" from a record a member cannot see, or clearing a pin after a refused settlement.
 
 ## BUG-0732 — Retention could prune the point it was settling and stopped at one bad point
 
 - Date: 2026-09-29.
-- Symptom: retention ranked points only by the capturing host's clock, so a
-  backup captured on a host whose clock was behind was pruned by its own
-  settlement while its run reported `succeeded`. One missing or corrupt point
-  stopped retention for the VM on every later backup, and the prune error
-  failed the settlement, so the run stayed unsettled. Prune (with repository
-  I/O) ran under `poolBackupAuthorityMu` for up to ten minutes, stalling every
-  other settlement, pin, probe save and history page. Settlement replaced the
-  run's `created_at` with the caller's time.
-- Root cause: prune ran inside the locked settlement, before the run was saved,
-  returned on its first error and trusted `CapturedAt` alone.
-- Fix: `settlePoolBackupRun` commits the run and catalog entry under the lock
-  (`commitPoolBackupRun`), then runs retention outside it. Retention ranked the
-  settling point first (replaced by BUG-0738: ranking is by capture time and the
-  settling point is only excluded), verifies the repository only when something is due,
-  takes the lock per point (`pruneRecoveryPoint`, which rechecks pins and
-  protection), skips a point it cannot delete and continues. Skipped points are
-  recorded on the succeeded run's error (`noteBackupRetentionFailure`), which
-  exact settlement retries accept. Settlement always keeps the reserved
-  `created_at`.
-- Regression: `TestRetentionKeepsSettlingPointAndSkipsUndeletablePoint` in
-  `internal/agent/backup_flow_test.go` (clock-skewed new point, undeletable
-  point, lock free during repository I/O, kept `created_at`, retry after a
-  note); updated `TestMemberBackupSettlementLeavesRetentionToMaster` and
-  `TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal`. Run
-  `go test -count=1 -run 'TestRetentionKeepsSettlingPoint|TestMemberBackupSettlementLeavesRetention|TestPolicyRunNow' ./internal/agent/`:
-  passed (also with `-race`); ranking, skip, lock and `created_at` mutants each
-  failed it through `go test -overlay`.
-- API impact: existing contract (a succeeded run may carry an `error` naming
-  points retention skipped). Guide impact: updated (`backup-policies.md`).
-- Avoid: failing a published backup's settlement for retention; ranking the
-  settling point above newer points (BUG-0738). This entry still pruned each
-  point with repository I/O under the global backup lock and on the Run loop;
-  BUG-0739 moved that I/O out.
+- Symptom: retention ranked by the capturing host's clock, so a backup from a host with a slow clock was pruned by its own settlement; one bad point stopped retention, and prune I/O under `poolBackupAuthorityMu` stalled other settlements.
+- Root cause: prune ran inside the locked settlement before the run was saved, returned on its first error and trusted `CapturedAt` alone.
+- Fix: `settlePoolBackupRun` commits under the lock, then runs retention outside it, locking per point and skipping undeletable points (noted on the succeeded run); settlement keeps the reserved `created_at`.
+- Regression: `TestRetentionKeepsSettlingPointAndSkipsUndeletablePoint`, updated `TestMemberBackupSettlementLeavesRetentionToMaster` and `TestPolicyRunNowSettlesDespiteWriteDenialAndRecoversJournal`; `go test -count=1 ./internal/agent/` (passed, also `-race`).
+- Avoid: failing a published backup's settlement for retention, or ranking the settling point above newer points (see BUG-0738).
 
 ## BUG-0733 — Interrupted backup publication captured again; work and journals left behind
 
 - Date: 2026-09-29.
-- Symptom: a backup-now re-executed after a Core restart during upload found no
-  published point, captured every disk again (hours for large disks) and only
-  then hit a conflict with its earlier S3 intent. Capture work under
-  `backup-staging/<op>` or the online work directory leaked after a crash. A
-  crash after the reconciler settled a run `failed` but before the journal
-  update left the journal `needs_attention` forever. An exact local retry of a
-  `needs_attention` backup ran the full repository reconciliation on the Run
-  loop.
-- Root cause: nothing durable recorded that publication had begun; work
-  cleanup was only a deferred call after capture setup; the reconciler ignored
-  settled runs; the accept path called the reconciler synchronously.
-- Fix: `executeBackupNow` records the run at stage `publication` (pending)
-  before `Publish`; a retry that finds that stage reconciles instead of
-  capturing, settling a finished point or aborting the partial one and failing
-  the run. The work root is computed and removed for every attempt, and the
-  reconciler removes it once the run settles. `reconcilePublishedBackupNow`
-  copies an already settled run into the journal, and
-  `publishedLocalBackupNeedsReconcile` selects failed runs too. The
-  synchronous reconcile in the accept path is deleted; the background
-  reconciler handles it.
-- Regression: `TestInterruptedPublicationIsNotCapturedAgain` in
-  `internal/agent/backup_flow_test.go`; `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`
-  now checks that an exact request answers from the journal. Run
-  `go test -count=1 -run 'TestInterruptedPublication|TestPublishedBackupExactRetry' ./internal/agent/`:
-  passed (also with `-race`); the stage and settled-run mutants each failed it
-  through `go test -overlay`.
-- API impact: none (new run stage value on an existing record). Guide impact:
-  updated (`backup-now.md`).
-- Avoid: detecting an earlier attempt only after a full capture; running
-  repository I/O on the Run loop from a request path.
+- Symptom: a backup-now retried after a Core restart mid-upload captured every disk again before conflicting with its S3 intent; capture work leaked after a crash; a settled-`failed` run could leave the journal `needs_attention` forever.
+- Root cause: nothing durable recorded that publication had begun, work cleanup was a deferred call after setup, the reconciler ignored settled runs, and the accept path reconciled synchronously.
+- Fix: `executeBackupNow` records the run at stage `publication` before `Publish` and a retry reconciles instead of capturing; the work root is always removed; settled runs are copied into the journal; the synchronous reconcile in the accept path is deleted.
+- Regression: `TestInterruptedPublicationIsNotCapturedAgain`, updated `TestPublishedBackupExactRetrySettlesAfterAuthorityCatchesUp`; `go test -count=1 ./internal/agent/` (passed, also `-race`).
+- Avoid: detecting an earlier attempt only after a full capture, or running repository I/O on the Run loop from a request path.
 
 ## BUG-0734 — Catalog import rechecked capacity per point and reverted unprotect
 
 - Date: 2026-09-29.
-- Symptom: importing a repository with N points re-encoded the whole backup
-  authority N times under `poolBackupAuthorityMu`, and its save loop ignored
-  the context. Import could revert an operator's unprotect made during its
-  unlocked scan, and could re-catalog a point retention deleted meanwhile.
-- Root cause: `savePoolBackupCatalogEntry` checked capacity per point; the
-  scanned marker overrode the catalog's protection; nothing noticed a prune
-  during the scan.
-- Fix: import validates all points, checks capacity once
-  (`checkBackupCatalogPointCapacity` takes several points) and writes them with
-  `writePoolBackupCatalogEntry`, checking the context per point. A cataloged
-  point keeps the catalog's protection. `poolBackupPruneSeq` counts retention
-  deletions; import scans again (up to three times) if it changed. The
-  test-only `ImportPoolBackupCatalog` and `RebuildPoolBackupCatalogFromRepository`
-  wrappers are deleted.
-- Regression: `TestCatalogImportKeepsOperatorUnprotect` in
-  `internal/agent/backup_flow_test.go`; run
-  `go test -count=1 -run 'TestCatalogImportKeepsOperatorUnprotect' ./internal/agent/`:
-  passed; it failed with the old protection merge through `go test -overlay`.
-  The single capacity check and the prune sequence have no dedicated test.
-- API impact: none. Guide impact: none (no operator step changes).
+- Symptom: importing N points re-encoded the whole authority N times under `poolBackupAuthorityMu`, ignored the context, could revert an operator's unprotect, and could re-catalog a point retention deleted meanwhile.
+- Root cause: `savePoolBackupCatalogEntry` checked capacity per point, the scanned marker overrode catalog protection, and nothing noticed a prune during the scan.
+- Fix: import checks capacity once and writes entries with a per-point context check; a cataloged point keeps its protection; `poolBackupPruneSeq` triggers a rescan (up to three) if a prune happened.
+- Regression: `TestCatalogImportKeepsOperatorUnprotect` (failed with old merge); `go test -count=1 -run 'TestCatalogImportKeepsOperatorUnprotect' ./internal/agent/` passed. Single capacity check and prune sequence have no dedicated test.
 - Avoid: per-record full-authority checks inside a batch.
 
 ## BUG-0735 — Backup history walks restarted on every settlement
 
 - Date: 2026-09-29.
-- Symptom: the run page generation hashed every run's status and times, so any
-  settlement in the pool returned `409` and a walk of a large history never
-  finished; the catalog generation also changed at UTC midnight and on each
-  protection or test result. A page held `poolBackupAuthorityMu` while writing
-  up to 2 MiB to a slow reader. A host that was no longer master answered `409`,
-  which the Controller relays as "history changed" on a later page.
-- Root cause: generations covered mutable fields; the lock was deferred over the
-  response write; not-master shared the changed-generation status.
-- Fix: generations cover only the ordered record IDs (plus repository names for
-  catalog search) and the master; the lock covers only the reads; not-master
-  returns `503`.
-- Regression: `TestOversizedBackupHistoryPagesAndMutation` and
-  `TestBackupCatalogPageFiltersAndMutation` (status/protection changes keep the
-  walk, an added or removed record returns `409`) and
-  `TestBackupPagesOnMemberAreUnavailable`. Run
-  `go test -count=1 -run 'TestOversizedBackupHistoryPages|TestBackupCatalogPageFilters|TestBackupPagesOnMember' ./internal/agent/`:
-  passed; generation and status mutants failed them through `go test -overlay`.
-- API impact: existing contract clarified in `docs/API.md` (what a generation
-  covers). Guide impact: none.
+- Symptom: any settlement in the pool made a history page return `409`, so walks of large histories never finished; a page held `poolBackupAuthorityMu` while writing up to 2 MiB; a non-master answered `409`, relayed as "history changed".
+- Root cause: generations hashed mutable fields, the lock was deferred over the response write, and not-master shared the changed-generation status.
+- Fix: generations cover only ordered record IDs (plus repository names for catalog search) and the master; the lock covers only reads; not-master returns `503`.
+- Regression: `TestOversizedBackupHistoryPagesAndMutation`, `TestBackupCatalogPageFiltersAndMutation`, `TestBackupPagesOnMemberAreUnavailable`; `go test -count=1 ./internal/agent/` passed.
 - Avoid: hashing mutable fields into a paging generation.
 
 ## BUG-0736 — Member repository record written without the backup lock
 
 - Date: 2026-09-29.
-- Symptom: the member's peer backup path read, changed and saved
-  `pool-backup-repositories.json` without `poolBackupAuthorityMu` while the
-  master's access probe wrote it under the lock, so one write could lose the
-  other. Member access rows were never removed for ejected members.
-- Root cause: the adoption was inlined without the lock; access rows were
-  updated per member and never replaced.
-- Fix: `adoptPeerBackupRepository` runs under the lock and refuses any change
-  to a repository's generation, kind, credential reference, source or identity
-  (a registration keeps them for life). The unreachable generation-bump branch
-  in `upsertPoolBackupRepositoryPrepared` and the member-side credential
-  retirement it fed are deleted. Each probe pass replaces a repository's member
-  rows and drops unlisted repositories.
-- Regression: none dedicated (lock scope and deletions); the focused agent
-  backup suite passed.
-- API impact: none. Guide impact: none.
+- Symptom: the member's peer backup path read, changed and saved `pool-backup-repositories.json` without `poolBackupAuthorityMu` while the master's probe wrote it, so one write could lose the other; access rows for ejected members were never removed.
+- Root cause: adoption was inlined without the lock, and access rows were updated per member and never replaced.
+- Fix: `adoptPeerBackupRepository` runs under the lock and refuses changes to generation, kind, credential reference, source or identity; each probe pass replaces a repository's member rows.
+- Regression: none dedicated (lock scope and deletions); the focused agent backup suite passed, run `go test -count=1 ./internal/agent/`.
 - Avoid: unlocked read-modify-write of shared backup records.
 
 ## BUG-0737 — Former-pool backup state and credential housekeeping gaps
 
 - Date: 2026-09-29.
-- Symptom: an ejected or re-joined host kept the former pool's backup
-  repository records and its NFS/SMB3 backup mounts; a crashed SMB3 mount
-  credential write left a plaintext `.write-*` file for good; retiring an
-  ordinary storage receipt on the Run loop waited for the pool backup
-  authority lock; every credential projection carried every retired tombstone
-  of its repository, so about 500 rotations exceeded the 128 KiB peer bound;
-  the backup health probe read `s.State` host and pool IDs off the Run loop.
-- Root cause: the pool-change erase covered only credentials; nothing swept the
-  SMB3 credential directory; `RetireUnusedBackupCredential` took the authority
-  lock before finding out whether the receipt was a backup one; the projection
-  had no bound; the probe goroutine was started from the probe loop with the
-  live Store.
-- Fix: `eraseForeignBackupRepositories` detaches (`vmhost.DetachBackupRepository`)
-  and deletes every repository record of another pool, before the credential
-  erase on join rehome and eject. `Run` removes SMB3 credential temp files at
-  start. Retirement finds the receipt under `clusterSecretMu` first and returns
-  for an ordinary receipt without the authority lock. A projection lists only
-  the 64 newest tombstones. The Run loop starts the health probe on a
-  `copyState` worker Store; member access rows are keyed by state directory.
-  Legacy cleanup in the same batch: `ReadPoint` (the restore copy verifies
-  digests) and `vmhost.VerifyPublishedBackupRecoveryPoint`, the unbound
-  restore-allocation shim and its journal normalization, and pin reindexing
-  from recovery-point keys are deleted. `markLegacyPeerBackupJournal` is kept
-  as `markDemotedMasterBackupJournal`: it also lets a master demoted without a
-  planned handoff settle its own backup journal as member work.
-- Regression: `TestRunRemovesSMBCredentialWriteTemps`,
-  `TestOrdinaryCredentialRetireDoesNotWaitForBackupAuthority`,
-  `TestEjectedHostDetachesFormerPoolBackupRepositories`,
-  `TestBackupCredentialProjectionCapsRetiredList` in
-  `internal/agent/backup_cleanup_test.go`. Run
-  `go test -count=1 -run 'TestRunRemovesSMBCredentialWriteTemps|TestOrdinaryCredentialRetire|TestEjectedHostDetachesFormer|TestBackupCredentialProjectionCaps' ./internal/agent/`:
-  passed (also with `-race`); each failed against a single-fix mutant through
-  `go test -overlay`. No dedicated test for the probe snapshot (a data race);
-  the health and member-access tests passed with `-race`.
-- API impact: none (peer projection shape unchanged, only bounded). Guide
-  impact: updated backup-repositories.md (join/eject) and restore-as-new.md
-  (removed older unbound allocations note).
-- Avoid: taking the backup authority lock before knowing the work is backup
-  work; handing a goroutine the live Store.
+- Symptom: an ejected or re-joined host kept the former pool's backup repository records and NFS/SMB3 mounts, crashed SMB3 credential writes left plaintext `.write-*` files, and ~500 rotations exceeded the 128 KiB peer bound.
+- Root cause: the pool-change erase covered only credentials, nothing swept the SMB3 directory, retirement took the authority lock before checking the receipt kind, projections were unbounded, and the health probe used the live Store.
+- Fix: `eraseForeignBackupRepositories` detaches and deletes other-pool repositories on rehome and eject; `Run` removes SMB3 temp files at start; ordinary receipts skip the authority lock; projections list 64 tombstones; the probe runs on a `copyState` Store.
+- Regression: `TestRunRemovesSMBCredentialWriteTemps`, `TestOrdinaryCredentialRetireDoesNotWaitForBackupAuthority`, `TestEjectedHostDetachesFormerPoolBackupRepositories`, `TestBackupCredentialProjectionCapsRetiredList`; `go test -count=1 ./internal/agent/` (passed, also `-race`). The probe snapshot race has no dedicated test.
+- Avoid: taking the backup authority lock before knowing the work is backup work, or handing a goroutine the live Store.
 
 ## BUG-0738 — A late settlement of an older point pruned a newer point
 
-- Date: 2026-09-29.
-- Symptom: with `keep_latest: 1`, an older point that settled after a newer one
-  (a needs_attention publication reconcile, member re-observation, or a run
-  inherited by promotion) was ranked newest, so its retention deleted the
-  newer point and kept the older one.
-- Root cause: BUG-0732 forced the settling point's `CapturedAt` above every
-  other point to survive clock skew, which also promoted it over genuinely newer
-  points.
-- Fix: `prunePublishedBackupPayloads` ranks every point by capture time and only
-  drops the settling point from its own prune list; a later pass removes it if
-  it is not among the newest. `poolBackupRetentionMu` runs one retention pass at
-  a time, so concurrent settlements never rank while another pass deletes.
-- Regression: `TestLateSettlementKeepsNewerPoint` (the review scenario) and the
-  updated `TestRetentionKeepsSettlingPointAndSkipsUndeletablePoint` (a skewed
-  settling point beside a newer point) in `internal/agent/backup_flow_test.go`.
-  Run `go test -count=1 -run 'TestRetentionKeepsSettlingPoint|TestLateSettlementKeepsNewerPoint' ./internal/agent/`:
-  passed; both failed through `go test -overlay` with the old ranking.
-- API impact: none. Guide impact: updated (`backup-policies.md`).
-- Avoid: rewriting a point's capture time to change its rank.
+- Date: 2026-09-29
+- Symptom: With `keep_latest: 1`, an older point that settled after a newer one ranked newest, so retention deleted the newer point and kept the older.
+- Root cause: BUG-0732 forced the settling point's `CapturedAt` above all others to survive clock skew, which also promoted it over genuinely newer points.
+- Fix: `prunePublishedBackupPayloads` ranks by real capture time and only excludes the settling point from its own prune list; `poolBackupRetentionMu` serializes retention passes.
+- Regression: `TestLateSettlementKeepsNewerPoint`, `TestRetentionKeepsSettlingPointAndSkipsUndeletablePoint` (failed with old ranking via `go test -overlay`, pass after): `go test -count=1 -run 'TestRetentionKeepsSettlingPoint|TestLateSettlementKeepsNewerPoint' ./internal/agent/`
+- Avoid: Rewriting a point's capture time to change its rank.
 
 ## BUG-0739 — Retention held the backup lock over repository I/O and ran on the Run loop
 
-- Date: 2026-09-29.
-- Symptom: each pruned point held `poolBackupAuthorityMu` across a remote
-  protection read and a full delete (S3/SFTP round trips, or a hung NFS mount
-  for up to ten minutes), and member-run settlement ran retention on the Run
-  loop. The catalog-import prune counter was bumped before the delete, so an
-  import that loaded it in that window could catalog a point the prune then
-  removed.
-- Fix: `pruneRecoveryPoint` rechecks pins and protection under the lock and
-  marks the point in `poolBackupPruning`, then reads protection and deletes
-  outside the lock; `putBackupRestorePin` and `SetPoolBackupPointProtected`
-  refuse a marked point. The counter is bumped under the lock after the delete
-  returns, with the catalog entry removal. `settlePeerBackupCompletion` runs on
-  the peer-backup worker goroutine, and the direct member path commits on the
-  Run loop and applies retention (`applyBackupRetention`) on a tracked
-  goroutine. The filesystem delete records its intent under `poolPeerMu` and
-  removes files (including the leftover-intent sweep) outside it.
-- Regression: `TestPruneDeletesOutsideLockAndCountsAfterDelete` in
-  `internal/agent/backup_flow_test.go` (no lock during repository I/O, a pin in
-  the window is refused, counter after delete). Run
-  `go test -count=1 -run 'TestPruneDeletesOutsideLock' ./internal/agent/`:
-  passed; the pre-fix `pruneRecoveryPoint` (lock held) and a bump-before-delete
-  mutant each failed through `go test -overlay`.
-- API impact: none. Guide impact: none (no operator step changes).
-- Avoid: repository I/O under `poolBackupAuthorityMu` or `poolPeerMu`; counting
-  a deletion before it happened.
+- Date: 2026-09-29
+- Symptom: Each pruned point held `poolBackupAuthorityMu` across remote reads and deletes (S3/SFTP, or a hung NFS mount), retention ran on the Run loop, and the import prune counter was bumped before the delete.
+- Root cause: Prune did protection reads and deletes under the lock, and counted the deletion before it happened.
+- Fix: `pruneRecoveryPoint` rechecks pins under the lock, marks the point in `poolBackupPruning`, then does I/O outside it and bumps the counter after the delete; retention moved off the Run loop.
+- Regression: `TestPruneDeletesOutsideLockAndCountsAfterDelete` (pre-fix lock-held and bump-before-delete mutants failed via `go test -overlay`): `go test -count=1 -run 'TestPruneDeletesOutsideLock' ./internal/agent/`
+- Avoid: Repository I/O under `poolBackupAuthorityMu` or `poolPeerMu`; counting a deletion before it happened.
 
 ## BUG-0740 — S3 and SFTP transfer timeouts broke slow but working links
 
-- Date: 2026-09-29.
-- Symptom: the S3 client's two-minute per-read deadline started while a part
-  upload was still being sent (Go reads the response only after the body), so
-  on a slow uplink every multipart backup failed. The SFTP client closed the
-  connection when one keepalive reply took 30 s, which a saturated link can
-  queue behind upload data.
-- Fix: S3 uses `s3ProgressConn`, which renews one deadline on every read and
-  write, so the response wait lasts as long as the upload progresses and a
-  silent connection still fails after two minutes. SFTP uses
-  `sftpProgressConn`: the connection fails only after it receives nothing for
-  three keepalive intervals (90 s); keepalives every 30 s keep an idle
-  connection reading, and a late reply no longer closes it. The explicit
-  handshake deadline is gone; the read deadline bounds it.
-- Regression: `TestS3ConnectionFailsOnlyWithoutProgress` and the existing
-  `TestS3ClientTimesOutStalledResponse`;
-  `TestSFTPKeepsProgressingConnectionAndClosesSilentOne` and the existing
-  `TestSFTPConnectTimesOutStalledServer`. Run
-  `go test -count=1 -run 'TestS3ConnectionFailsOnlyWithoutProgress|TestS3ClientTimesOutStalledResponse|TestSFTPKeepsProgressing|TestSFTPConnectTimesOutStalledServer' ./internal/agent/`:
-  passed; a write-does-not-renew S3 mutant and the old SFTP keepalive timer each
-  failed through `go test -overlay`. Not measured on a throttled real link.
-- API impact: none. Guide impact: none.
-- Avoid: whole-response or single-reply deadlines on transfers whose length
-  depends on link speed; bound silence, not duration.
+- Date: 2026-09-29
+- Symptom: The S3 two-minute read deadline started during part upload, failing every multipart backup on a slow uplink; SFTP closed the connection when one keepalive reply took 30 s.
+- Root cause: Whole-response and single-reply deadlines that depend on link speed rather than on silence.
+- Fix: `s3ProgressConn` and `sftpProgressConn` renew the deadline on progress; SFTP fails only after three silent keepalive intervals (90 s).
+- Regression: `TestS3ConnectionFailsOnlyWithoutProgress`, `TestSFTPKeepsProgressingConnectionAndClosesSilentOne` failed on old code via `go test -overlay`; not measured on a throttled real link: `go test -count=1 -run 'TestS3ConnectionFailsOnlyWithoutProgress|TestS3ClientTimesOutStalledResponse|TestSFTPKeepsProgressing|TestSFTPConnectTimesOutStalledServer' ./internal/agent/`
+- Avoid: Whole-response or single-reply deadlines on link-speed-dependent transfers; bound silence, not duration.
 
 ## BUG-0741 — Eject cleanup unmounted under the backup lock and re-minted the pool ID
 
-- Date: 2026-09-29.
-- Symptom: `eraseForeignBackupRepositories` held `poolBackupAuthorityMu` while
-  unmounting (a dead server held it for the whole join/eject context), and
-  every eject retry after a failed step took a new random pool ID.
-- Fix: the foreign repositories are unmounted outside the lock and their
-  records removed under it afterwards. The ejected host's new pool ID is kept in
-  the transfer record (`NewPoolID`) before use, so a retry reuses it.
-- Regression: `TestEjectedHostDetachesFormerPoolBackupRepositories` in
-  `internal/agent/backup_cleanup_test.go` (first unmount fails, retry keeps the
-  pool ID, no lock during unmount). Run
-  `go test -count=1 -run 'TestEjectedHostDetachesFormer' ./internal/agent/`:
-  passed; a mint-per-attempt mutant and a lock-held mutant each failed through
-  `go test -overlay`.
-- API impact: none. Guide impact: none.
-- Avoid: minting identities inside a retried step without recording them first.
+- Date: 2026-09-29
+- Symptom: `eraseForeignBackupRepositories` held `poolBackupAuthorityMu` while unmounting (a dead server blocked it), and every eject retry minted a new random pool ID.
+- Root cause: Unmount ran under the lock, and the new pool ID was generated inside the retried step without being recorded.
+- Fix: Unmount outside the lock and remove records under it afterwards; store the new pool ID in the transfer record (`NewPoolID`) before use so retries reuse it.
+- Regression: `TestEjectedHostDetachesFormerPoolBackupRepositories` (mint-per-attempt and lock-held mutants failed via `go test -overlay`): `go test -count=1 -run 'TestEjectedHostDetachesFormer' ./internal/agent/`
+- Avoid: Minting identities inside a retried step without recording them first.
 
 ## BUG-0742 — Review lows: activation import cancelled, unbounded retention note, repeated logs, online work removed
 
-- Date: 2026-09-29.
-- Symptom: the promoted master's catalog import ran on the activation RPC
-  context and was cancelled with it; the retention note grew a succeeded run
-  without an authority capacity check; a needs_attention member run with a
-  permanent error logged every 30 s; a backup retry removed online capture work
-  while the earlier QEMU job might still be writing.
-- Fix: activation passes `context.WithoutCancel` (the import keeps its own
-  ten-minute bound); `noteBackupRetentionFailure` checks authority capacity
-  before saving; `settlePeerBackupCompletion` records a permanent error once and
-  stays quiet on re-observation; `executeBackupNow` removes online work only
-  when `OnlineBackupJobInactive` proves the job ended.
-- Regression: `TestRetryKeepsOnlineWorkWhileJobMayBeActive` in
-  `internal/agent/backup_flow_test.go`; run
-  `go test -count=1 -run 'TestRetryKeepsOnlineWork' ./internal/agent/`: passed,
-  and failed through `go test -overlay` with unconditional cleanup. The other
-  three are one-line changes without dedicated tests.
-- API impact: none. Guide impact: none.
-- Avoid: tying background work to a caller's request context; deleting files a
-  job may still write without proof it ended.
+- Date: 2026-09-29
+- Symptom: The promoted master's catalog import was cancelled with the activation RPC; retention note grew without a capacity check; a permanent member error logged every 30 s; a retry removed online capture work a QEMU job might still write.
+- Root cause: Background work tied to the caller's context, a missing capacity check, and unconditional cleanup.
+- Fix: Activation uses `context.WithoutCancel`; `noteBackupRetentionFailure` checks capacity; the error is logged once; online work is removed only when `OnlineBackupJobInactive` proves the job ended.
+- Regression: `TestRetryKeepsOnlineWorkWhileJobMayBeActive` failed with unconditional cleanup (`go test -overlay`); the other three fixes have no dedicated tests: `go test -count=1 -run 'TestRetryKeepsOnlineWork' ./internal/agent/`
+- Avoid: Tying background work to a request context; deleting files a job may still write without proof it ended.
 
 ## BUG-0743 — Backup repository generation modelled a rotation Core never performs
 
-- Date: 2026-09-30.
-- Symptom: `BackupRepository.generation` never advanced (Core refuses same-ID
-  source or credential changes), yet members accepted a higher-generation
-  projection with a different credential for the same repository ID, carried a
-  retired-receipt list for that rotation, and reported "member has not adopted
-  this repository generation yet". Tests exercised the path by bumping the
-  generation by hand.
-- Fix (owner decision 2026-09-30): the field, its comparisons, the peer
-  capability `generation` members, the projection `retired` list and member
-  retirement are removed. A member refuses any different receipt for an
-  existing repository ID; rotation registers a new repository ID. The master
-  still retires receipts of abandoned registration attempts and now removes
-  their SMB3 mount credential file in `retireSupersededBackupCredentials`.
-- Regression: `TestSupersededBackupCredentialRetirement` and
-  `TestPeerBackupCredentialScopeAndPromotion` in
-  `internal/agent/backup_peer_credentials_test.go`; run
-  `go test -count=1 -run 'TestSupersededBackupCredentialRetirement|TestPeerBackupCredentialScopeAndPromotion' ./internal/agent/`:
-  passed; the first failed through `go test -overlay` without the SMB3 file
-  cleanup. This supersedes `TestMemberProbeReportsOlderGenerationAsPendingAdoption`
-  (BUG-0727) and `TestBackupCredentialProjectionCapsRetiredList` (BUG-0737),
-  whose behaviour no longer exists.
-- API impact: changed contract. Guide impact: updated (`backup-repositories.md`).
-- Avoid: a version counter on a record whose identity-bearing fields are
-  immutable; replace the record under a new ID instead.
+- Date: 2026-09-30
+- Symptom: `BackupRepository.generation` never advanced, yet members accepted a higher-generation projection with a different credential for the same ID and carried retired-receipt logic; tests bumped it by hand.
+- Root cause: Generation and rotation support modelled a flow Core refuses (same-ID source or credential changes are rejected).
+- Fix: Removed the field, peer `generation` capability, projection `retired` list and member retirement; members refuse a different receipt for an existing ID; the master removes SMB3 credential files of abandoned registrations.
+- Regression: `TestSupersededBackupCredentialRetirement` (failed without SMB3 file cleanup via `go test -overlay`), `TestPeerBackupCredentialScopeAndPromotion`: `go test -count=1 -run 'TestSupersededBackupCredentialRetirement|TestPeerBackupCredentialScopeAndPromotion' ./internal/agent/`
+- Avoid: A version counter on a record whose identity fields are immutable; register a new ID instead.
 
 ## BUG-0744 — Member runs needing attention were re-checked every 30 s, dispatch failures on every event
 
-- Date: 2026-09-30.
-- Symptom: a needs-attention member run with a permanent error was re-observed
-  every 30 s forever, and a direct-path run whose member dispatch failed was
-  re-selected on every Run-loop event (heartbeat, request, completion).
-- Root cause: fixed `peerBackupRetry` spacing that was dropped whenever the
-  wait expired, and no spacing at all on the direct path's dispatch failure.
-- Fix (owner decision 2026-09-30): `peerBackoff` keeps the next observation
-  time in memory per run; the same error doubles the wait from 30 s to a 1 h
-  cap, a different or normal answer restarts at 30 s. The direct path skips a
-  waiting run when selecting its next command. Restart re-checks once and backs
-  off again; no durable state.
-- Regression: `TestPeerBackoffDoublesToCapAndResetsWhenAnswerChanges` and
-  `TestNeedsAttentionMemberRunIsReobservedOnlyAfterBackoff` in
-  `internal/agent/backup_peer_reconcile_test.go`; run
-  `go test -count=1 -run 'TestPeerBackoff|TestNeedsAttentionMemberRunIsReobserved' ./internal/agent/`:
-  passed. Red check not run: the tests use the new type and do not compile
-  without the fix.
-- API impact: none. Guide impact: none.
-- Avoid: fixed retry spacing for an error that will not clear by itself.
+- Date: 2026-09-30
+- Symptom: A needs-attention member run with a permanent error was re-observed every 30 s forever, and a failed direct-path dispatch was re-selected on every Run-loop event.
+- Root cause: Fixed `peerBackupRetry` spacing dropped once the wait expired, and no spacing on direct-path dispatch failure.
+- Fix: `peerBackoff` keeps an in-memory next-observation time per run, doubling from 30 s to a 1 h cap and resetting when the answer changes; the direct path skips waiting runs.
+- Regression: `TestPeerBackoffDoublesToCapAndResetsWhenAnswerChanges`, `TestNeedsAttentionMemberRunIsReobservedOnlyAfterBackoff` passed; red check not run (tests do not compile without the fix): `go test -count=1 -run 'TestPeerBackoff|TestNeedsAttentionMemberRunIsReobserved' ./internal/agent/`
+- Avoid: Fixed retry spacing for an error that will not clear by itself.
 
 ## BUG-0745 — Every authority page upload repeated the full signed replica
 
-- Date: 2026-09-30.
-- Symptom: pushing a large backup authority to a member sent the signed replica
-  (up to 1 MiB) with every page and reuse request and verified its signature
-  each time, so bytes and CPU scaled with page count.
-- Root cause: the page protocol had no session; each request re-proved its
-  authority (BUG-0723 deferred item).
-- Fix (owner decision 2026-09-30): `POST /api/v1/pool/replica/backup-page`
-  opens a member-side push session with the signed replica once (10 minute
-  expiry, one per member, in memory). Page requests carry only
-  `manifest_sha256`; the member refuses them without a live session for that
-  root and master, or once its stored replica is newer. Version-0 pages are still
-  hashed against the verified manifest; version-2 pages are gated by the final
-  full-root check. The old per-page protocol is removed. The same change adds
-  the `pool-backup-authority-capacity` check (degraded at 80% of any limit).
-- Regression: `TestBackupAuthorityPushSendsSignedReplicaOncePerSession`,
-  `TestBackupAuthorityPushSessionRefusesForgedStaleAndExpired` and
-  `TestPoolBackupAuthorityCapacityWarnsAtEightyPercent` in
-  `internal/agent/backup_authority_push_session_test.go`; run
-  `go test -count=1 -run 'TestBackupAuthorityPush|TestPoolBackupAuthorityCapacity' ./internal/agent/`:
-  passed. Red check not run: the tests use the new request shape and do not
-  compile without the fix.
-- API impact: changed contract. Guide impact: updated (`backup-policies.md`).
-- Avoid: re-sending and re-verifying the credential on every chunk of a
-  multi-request transfer.
-
+- Date: 2026-09-30
+- Symptom: Pushing a large backup authority to a member sent the signed replica (up to 1 MiB) and verified its signature with every page, so bytes and CPU scaled with page count.
+- Root cause: The page protocol had no session; each request re-proved its authority.
+- Fix: `POST /api/v1/pool/replica/backup-page` opens a member-side push session (10 min, in memory) with the replica once; pages carry only `manifest_sha256`; the per-page protocol is removed.
+- Regression: `TestBackupAuthorityPushSendsSignedReplicaOncePerSession`, `TestBackupAuthorityPushSessionRefusesForgedStaleAndExpired` passed; red check not run (new request shape): `go test -count=1 -run 'TestBackupAuthorityPush|TestPoolBackupAuthorityCapacity' ./internal/agent/`
+- Avoid: Re-sending and re-verifying the credential on every chunk of a multi-request transfer.
 
 ## BUG-0746 — One policy's retention pruned manual and other policies' recovery points
 
-- Date: 2026-09-30.
-- Symptom: retention ranked every point of a VM in the repository, so a policy's
-  keep-latest removed points from Back up now and from other policies. The
-  policy form's preview counted the same wider set, and a succeeded run's
-  retention note was not shown in Backups.
-- Root cause: the catalog point recorded no creating policy, so retention could
-  only scope by VM and repository.
-- Fix (owner decisions 2026-09-30): `BackupRecoveryPoint.policy_id` is set from
-  the run when settlement catalogs the point (kept on catalog rebuild) and
-  `prunePublishedBackupPayloads` ranks and prunes only points of the settling
-  run's policy; manual points and points with no recorded policy are never
-  pruned. Rules stay a union, documented in the guide and the policy form. The
-  preview is removed (a new policy has no points). Backups shows the note on the
-  recovery point panel.
-- Regression: `TestRetentionPrunesOnlyThePolicysOwnPoints`,
-  `TestLateSettlementKeepsNewerPoint` (records the policy),
-  `TestRetentionRulesAreAUnion` (`internal/protocol`) and
-  `retentionWarnings` in `web/src/backups-test-restores.test.mjs`; run
-  `go test -count=1 -run 'Retention|Prune|LateSettlement' ./internal/agent/ ./internal/protocol/`
-  and `npm test` in `web`: passed; the scope test failed through `go test -overlay`
-  without the policy filter.
-- API impact: changed contract (`policy_id` on recovery points). Guide impact: updated (`backup-policies.md`, `backup-now.md`).
-- Avoid: scoping deletion by what a resource looks like (VM, repository) when
-  ownership is a fact the catalog can record at creation.
+- Date: 2026-09-30
+- Symptom: Retention ranked every point of a VM in the repository, so one policy's keep-latest removed points from Back up now and other policies; the form preview counted the wider set.
+- Root cause: The catalog point recorded no creating policy, so retention could only scope by VM and repository.
+- Fix: `BackupRecoveryPoint.policy_id` is set at settlement and `prunePublishedBackupPayloads` prunes only the settling run's policy points; manual and unowned points are never pruned; preview removed.
+- Regression: `TestRetentionPrunesOnlyThePolicysOwnPoints` (failed without the policy filter via `go test -overlay`), `TestRetentionRulesAreAUnion`: `go test -count=1 -run 'Retention|Prune|LateSettlement' ./internal/agent/ ./internal/protocol/` and `npm test` in `web`
+- Avoid: Scoping deletion by what a resource looks like when ownership can be recorded at creation.
 
 ## BUG-0747 — Backup credentials sat in plaintext on disk and SMB3 domain accounts were refused
 
-- Date: 2026-09-30.
-- Symptom: backup credential receipts under `storage-cluster/secrets/backup` and the SMB3
-  mount credential files under `backup-smb-credentials` were readable plaintext; the backup
-  credential handoff refused `domain`, so domain accounts could not be used for SMB3.
-- Root cause: receipts held the secret in JSON with only an HMAC proof (integrity, not
-  confidentiality); mount.cifs read a persistent file in the state directory.
-- Fix (owner decisions 2026-09-30): receipts are AES-256-GCM sealed under a random per-host
-  key file with pool, host and reference as authenticated data (the HMAC proof is gone);
-  a plaintext, tampered or other-key receipt is refused and reported by the
-  `backup-credentials` check. The SMB3 mount password is written to a root-only file on
-  tmpfs (`/run/nex-core-agent`, `RuntimeDirectory=` in the service) just before the mount
-  and removed after; `RetireBackupRepositorySMBCredential` and the `.write-*` sweep are
-  deleted. SMB3 accepts a validated `domain` (`protocol.ValidSMBDomain`) through the web
-  form, Controller offer validation, Core scope validation and the mount credential file.
-  Superseded by BUG-0750: the mount is now remade at boot from a sealed file.
-- Regression: `TestBackupCredentialsAreEncryptedAtRest`,
-  `TestBackupCredentialDomainIsSMBOnlyAndValidated`
-  (`internal/agent/backup_credentials_test.go`),
-  `TestPrepareBackupRepositorySMBUsesTransientCredentialFile` (`internal/vmhost`),
-  `TestBackupCredentialHandoffDomainValidation` (`internal/controller`) and
-  `validSMBDomain` in `web/src/backup-repositories.test.mjs`; run
-  `go test -count=1 -run 'Credential|Receipt|SMB' ./internal/agent/ ./internal/vmhost/ ./internal/controller/`:
-  passed. Red check not run: the new tests use the new types and do not compile without the fix.
-- API impact: changed contract (backup credential `domain`). Guide impact: updated
-  (`backup-repositories.md`).
-- Avoid: an HMAC "proof" beside plaintext as protection for a secret at rest, and a
-  persistent credential file for a mount that Core can remake.
+- Date: 2026-09-30
+- Symptom: Backup credential receipts and SMB3 mount credential files were readable plaintext, and the credential handoff refused `domain`, so domain accounts could not use SMB3.
+- Root cause: Receipts held the secret in JSON with only an HMAC proof (integrity, not confidentiality); mount.cifs read a persistent file.
+- Fix: Receipts are AES-256-GCM sealed under a per-host key; the SMB3 password goes to a root-only tmpfs file just before the mount; SMB3 accepts a validated `domain`. Superseded by BUG-0750.
+- Regression: `TestBackupCredentialsAreEncryptedAtRest`, `TestBackupCredentialDomainIsSMBOnlyAndValidated`, `TestPrepareBackupRepositorySMBUsesTransientCredentialFile` passed; red check not run (new types): `go test -count=1 -run 'Credential|Receipt|SMB' ./internal/agent/ ./internal/vmhost/ ./internal/controller/`
+- Avoid: An HMAC "proof" beside plaintext as protection at rest, and a persistent credential file for a mount Core can remake.
 
 ## BUG-0748 — A delayed protect or unprotect write could undo a newer one
 
-- Date: 2026-09-30.
-- Symptom: the protection marker held fixed content, so an unprotect that had read the marker
-  and then stalled deleted a marker a newer protect had written, leaving a protected point
-  unprotected and open to prune.
-- Root cause: markers were identical for every protect and removal was unconditional.
-- Fix (owner decision 2026-09-30): each protect writes a unique nonce marker. S3 replaces or
-  deletes only the marker it read, with `If-Match` on its ETag (a stale write is refused with a
-  conflict). SFTP and filesystem removal renames the marker aside atomically, compares its
-  exact content, and links or renames a newer marker back. A stalled protect that lands after a
-  newer unprotect can still recreate the marker; that direction keeps the point, so it is left.
-- Regression: `TestS3StaleUnprotectKeepsNewerMarker`, `TestSFTPStaleUnprotectKeepsNewerMarker`
-  (`internal/agent`), `TestStaleBackupUnprotectKeepsNewerMarker` (`internal/vmhost`); run
-  `go test -count=1 -run 'StaleUnprotect|StaleBackupUnprotect' ./internal/agent/ ./internal/vmhost/`: passed.
-  Red check not run.
-- API impact: none (repository marker content only). Guide impact: none.
-- Avoid: unconditional delete of a marker after a separate read.
+- Date: 2026-09-30
+- Symptom: An unprotect that read the marker and then stalled deleted a marker a newer protect had written, leaving a protected point open to prune.
+- Root cause: Markers were identical for every protect and removal was unconditional.
+- Fix: Each protect writes a unique nonce marker; S3 uses `If-Match` on the ETag; SFTP and filesystem rename the marker aside, compare content, and restore a newer one. A stalled protect after a newer unprotect can still recreate it (keeps the point, left as is).
+- Regression: `TestS3StaleUnprotectKeepsNewerMarker`, `TestSFTPStaleUnprotectKeepsNewerMarker`, `TestStaleBackupUnprotectKeepsNewerMarker` passed; red check not run: `go test -count=1 -run 'StaleUnprotect|StaleBackupUnprotect' ./internal/agent/ ./internal/vmhost/`
+- Avoid: Unconditional delete of a marker after a separate read.
 
 ## BUG-0749 — Catalog rebuild lost each point's creating policy, so rebuilt points were never pruned
 
-- Date: 2026-09-30.
-- Symptom: after a catalog rebuild on a fresh master, points had no `policy_id` and retention
-  (scoped to the creating policy by BUG-0746) never removed them.
-- Root cause: the policy ID lived only in the master catalog.
-- Fix: the scheduler passes the policy ID in the backup command, capture writes it into the
-  point's manifest (`policy_id`), and every repository scan (filesystem, SFTP, S3) copies it to
-  the recovered catalog entry; rebuild no longer takes it from a prior catalog entry.
-- Regression: `TestCatalogRebuildRestoresPolicyIDForRetention`; run
-  `go test -count=1 -run RestoresPolicyID ./internal/agent/`: passed. Red check not run: the
-  test needs the new manifest field.
-- API impact: changed contract (`policy_id` in the backup manifest and backup-now request).
-  Guide impact: updated (`backup-policies.md`).
-- Avoid: keeping ownership of a repository object only in the master catalog.
+- Date: 2026-09-30
+- Symptom: After a catalog rebuild on a fresh master, points had no `policy_id`, so policy-scoped retention (BUG-0746) never removed them.
+- Root cause: The policy ID lived only in the master catalog.
+- Fix: The backup command carries the policy ID, capture writes it into the point manifest (`policy_id`), and every repository scan (filesystem, SFTP, S3) restores it to the catalog entry.
+- Regression: `TestCatalogRebuildRestoresPolicyIDForRetention` passed; red check not run (needs new manifest field): `go test -count=1 -run RestoresPolicyID ./internal/agent/`
+- Avoid: Keeping ownership of a repository object only in the master catalog.
 
 ## BUG-0750 — SMB3 backup repositories stayed unmounted after a host reboot; tests could prompt for host authentication
 
-- Date: 2026-09-30.
-- Symptom: after BUG-0747 the SMB3 password lived in a transient `/run` file written just
-  before mounting, so a rebooted host could not remount the repository until Core prepared it
-  again. Tests that reached the systemd-creds move raised polkit prompts on the developer desktop.
-- Root cause: a transient file cannot be read by a mount unit at boot; the mount had no
-  boot-time secret source. Test packages had no seam for systemd-creds.
-- Fix: backup SMB3 and VM-storage SMB seal the credential with `systemd-creds encrypt`
-  (`--no-ask-password`) into a private file and the mount unit loads it with
-  `LoadCredentialEncrypted=` and `credentials=%d/nex-smb`. The transient `/run` code is gone.
-  `vmhost.runSystemdCreds` refuses the real tool under `testing.Testing()`; agent, localcore and
-  vmhost `TestMain` install `vmhost.FakeSystemdCreds`.
-- Regression: `TestStorageCredentialIsSealedAndUnitLoadsItEncrypted`,
-  `TestStorageCredentialSealFailureLeavesNothingBehind`,
-  `TestStorageCredentialDecryptFailureIsRefused`, `TestRealSystemdCredsIsRefusedInTests`
-  (`internal/vmhost`); run `go test -count=1 ./internal/agent/ ./internal/vmhost/ ./internal/controller/`.
-  Real TPM2/host-key sealing and reboot remount are not exercised: needs a real host.
-- API impact: none. Guide impact: updated (`backup-repositories.md`).
-- Avoid: a transient credential file for a mount that must come up at boot, and tests that
-  exec host authentication tools.
+- Date: 2026-09-30
+- Symptom: After BUG-0747 the SMB3 password was a transient `/run` file, so a rebooted host could not remount until Core prepared it again; tests reaching systemd-creds raised polkit prompts.
+- Root cause: A transient file cannot be read by a mount unit at boot, and test packages had no seam for systemd-creds.
+- Fix: Backup SMB3 and VM-storage SMB seal the credential with `systemd-creds encrypt` and the mount unit uses `LoadCredentialEncrypted=`; real systemd-creds is refused under tests, which install `vmhost.FakeSystemdCreds`.
+- Regression: `TestStorageCredentialIsSealedAndUnitLoadsItEncrypted`, `TestRealSystemdCredsIsRefusedInTests` and siblings; real TPM2 sealing and reboot remount not exercised: `go test -count=1 ./internal/agent/ ./internal/vmhost/ ./internal/controller/`
+- Avoid: A transient credential file for a mount that must come up at boot, and tests that exec host authentication tools.
 
 ## BUG-0751 — Round-3 review: SFTP marker cap, retained SMB credential files, marker loss on error, key and capacity handling
 
-- Date: 2026-09-30.
-- Symptom: (1) a protected scheduled point (32-character ID, up to 64 allowed) made a marker
-  longer than the SFTP 64-byte read cap, so `Protected` and unprotect failed; (2) retiring or abandoning
-  an SMB3 credential left its sealed mount file on the host; (3) a failed unprotect could delete the
-  newer marker (a failed hard link on SMB shares, or a swallowed SFTP rename-back error); (4) a lost
-  credential key was silently replaced on a read path; (5) member-run backoff was keyed on transport
-  error text (ports) and reached 1 h for an unreachable member, and settled runs kept entries; (6) the
-  capacity warning treated the v1/v2 replication switch and byte size as limits and ran on members;
-  (7) the push session had a fixed 10-minute life; (8) every SMB3 prepare resealed the credential of an
-  already mounted repository; (9) SMB discovery wrote its password file to `/tmp`.
-- Root cause: caps and limits sized for older short markers; retirement only rewrote the receipt;
-  `defer os.Remove(claimed)` and a discarded rename error; key creation shared with the read path;
-  the backoff key was `err.Error()`; limits were copied literals.
-- Fix: `maxBackupProtectMarker` (128) for SFTP; `retireBackupCredentialFile` removes the SMB3 sealed
-  file first (`vmhost.RemoveBackupSMBCredential`); both marker removals rename a newer marker back
-  (rename, not link) and keep it beside the point as `.rm-*` if that fails; the credential key lives in
-  `backup-credential-key/key`, only created when a receipt is written, reported missing otherwise;
-  transport errors are one `member unreachable` class capped at 5 minutes, and finished runs drop their
-  entry; capacity warns only for repositories and policies (shared protocol constants), measured only
-  on the master; each accepted page extends the push session; a mounted repository keeps its sealed
-  file; discovery uses `/dev/shm`; the appliance unit runs `systemd-creds setup`.
-- Regression: `TestSFTPProtectsMaximumLengthPointID`, `TestS3ProtectsMaximumLengthPointID`,
-  `TestSFTPUnprotectKeepsUnreadableMarker`, `TestBackupUnprotectKeepsUnreadableMarker`,
-  `TestSupersededBackupCredentialRetirement`, `TestBackupCredentialsAreEncryptedAtRest` (lost key),
-  `TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass`,
-  `TestPoolBackupAuthorityCapacityWarnsAtEightyPercentOfHardLimits`,
-  `TestPoolBackupAuthorityCapacityIsMeasuredOnlyOnTheMaster`,
-  `TestBackupAuthorityPushSessionSlidesOnAcceptedPages`,
-  `TestPrepareBackupRepositorySMBKeepsSealedFileOfMountedRepository`, `TestDiscoverStorageNativeSources`.
-  Each was confirmed red with `go test -overlay` against the old code, then green. Filesystem
-  markers hold no point ID, so no length test applies. The crash window between rename-aside and
-  restore (a `.rm-*` file without a marker) and a real-host remount remain untested.
-- API impact: none (Core-internal; the capacity check keeps its name and status). Guide impact: updated.
-- Avoid: caps sized to today's example IDs, `defer` cleanup of a file that may be the only copy, and
-  keying backoff on error text.
+- Date: 2026-09-30
+- Symptom: SFTP protect markers exceeded the 64-byte read cap; retired SMB3 sealed files stayed on host; failed unprotect could delete a newer marker; lost key silently replaced; backoff keyed on error text; capacity warning misjudged limits; push session fixed-length; discovery wrote to `/tmp`.
+- Root cause: Caps sized for old short markers, retirement only rewrote the receipt, `defer os.Remove` and a discarded rename error, key creation on the read path, and copied literal limits.
+- Fix: Marker cap 128; retirement removes the sealed SMB3 file; marker removal renames a newer marker back or keeps `.rm-*`; key created only on receipt write; one capped `member unreachable` backoff class; shared limit constants; sliding push session; discovery uses `/dev/shm`.
+- Regression: `TestSFTPProtectsMaximumLengthPointID`, `TestSFTPUnprotectKeepsUnreadableMarker`, `TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass`, `TestBackupAuthorityPushSessionSlidesOnAcceptedPages` and others, each red via `go test -overlay` then green; crash window and real-host remount untested: `go test -count=1 ./internal/agent/ ./internal/vmhost/`
+- Avoid: Caps sized to today's example IDs, `defer` cleanup of a file that may be the only copy, and keying backoff on error text.
 
 ## BUG-0752 — Backup credential receipt key stored as a plain file; crash-leftover protect markers never settled
 
-- Date: 2026-09-30.
-- Symptom: the receipt key sat unsealed beside the receipts (owner requires credentials always
-  encrypted); a crash between rename-aside and restore of a protect marker left the only copy
-  as `.nex-protected.rm-*`, so the point read as unprotected and could be pruned.
-- Root cause: the key was written with `writePrivate` and never sealed; nothing looked for
-  `.rm-*` files.
-- Fix: the key is sealed with `systemd-creds` (`--no-ask-password`, through
-  `vmhost.SealCredential/OpenCredential` and the existing runner seam) to
-  `backup-credential-key/key.cred`. Both service units load it with
-  `LoadCredentialEncrypted=nex-backup-key:` and Core reads `$CREDENTIALS_DIRECTORY`; if the
-  credential is absent it decrypts the sealed file, and only a receipt write creates a new key.
-  A missing file would fail the unit at start, so an `ExecStartPre` creates the sealed file
-  on first start. The plain key path is gone. `sweepBackupProtectMarkers` (filesystem) and
-  `sweepMarkers` (SFTP) run at scan and unprotect: a leftover is renamed back when there is no
-  marker, removed only if byte-identical to the current one, otherwise kept.
-- Regression: `TestBackupCredentialKeyIsSealedAndLoadedFromServiceCredential`,
-  `TestBackupCredentialsAreEncryptedAtRest` (lost key), `TestBackupProtectMarkerSweepSettlesLeftovers`,
-  `TestSFTPSweepRestoresLeftoverMarker`; full `go test -count=1 ./...` passed with the fake
-  systemd-creds runner. Not run: real TPM2/host-key sealing, unit start with
-  `LoadCredentialEncrypted`, the first-start `ExecStartPre` (needs a real host).
-- API impact: none (Core-internal). Guide impact: updated (`backup-repositories.md`).
-- Avoid: a key file beside the data it protects, and treating a `.rm-*` file as garbage.
+- Date: 2026-09-30
+- Symptom: The receipt key sat unsealed beside the receipts, and a crash between rename-aside and restore left a protect marker only as `.nex-protected.rm-*`, so the point read unprotected and could be pruned.
+- Root cause: The key was written with `writePrivate` and never sealed; nothing looked for `.rm-*` files.
+- Fix: The key is sealed with `systemd-creds` to `backup-credential-key/key.cred` and loaded via `LoadCredentialEncrypted=`; `sweepBackupProtectMarkers` and `sweepMarkers` restore or remove leftovers at scan and unprotect.
+- Regression: `TestBackupCredentialKeyIsSealedAndLoadedFromServiceCredential`, `TestBackupProtectMarkerSweepSettlesLeftovers`, `TestSFTPSweepRestoresLeftoverMarker`; real TPM2 sealing and unit start not run: `go test -count=1 ./...`
+- Avoid: A key file beside the data it protects, and treating a `.rm-*` file as garbage.
 
 ## BUG-0753 — Large ISO VM create reported as CPU incompatibility
 
-- Date: 2026-09-28.
-- Symptom: creating a guest that attached a multi-GiB install ISO on remote storage failed
-  after about 20–24 seconds with `CPU baseline … is not verified compatible with this
-  host's KVM runtime`. The same CPU baseline created guests without that ISO successfully.
-  The Controller process did not restart.
-- Root cause: VM placement preflight is hard-capped at 20 seconds, but it fully SHA-256'd
-  the install ISO under `context.Background()` (overrunning the deadline). The following
-  native CPU compare then ran with an already cancelled context; that failure was wrapped
-  as a CPU incompatibility.
-- Fix: placement checks ISO presence and recorded size only (same approach as BUG-0541);
-  create/update Execute still verifies the digest before defining the guest. Native CPU
-  compare now preserves context cancellation/deadline errors instead of renaming them.
-- Regression: `TestCheckVMPlacementMediaUsesPresenceNotDigest` and
-  `TestNativeCPUComparePreservesContextDeadline` failed before and passed after.
-  `go test ./internal/vmhost -count=1` passed.
-- Avoid: doing unbounded remote ISO hashing inside a short placement timeout, or wrapping
-  every compare failure as "CPU incompatible".
+- Date: 2026-09-28
+- Symptom: Creating a guest with a multi-GiB install ISO on remote storage failed after about 20-24 s with `CPU baseline ... is not verified compatible with this host's KVM runtime`; the same baseline worked without the ISO.
+- Root cause: Placement preflight (20 s cap) fully SHA-256'd the ISO under `context.Background()`, overrunning the deadline; the next CPU compare ran with a cancelled context and was wrapped as incompatibility.
+- Fix: Placement checks ISO presence and recorded size only (as in BUG-0541); Execute still verifies the digest; CPU compare preserves context cancellation/deadline errors.
+- Regression: `TestCheckVMPlacementMediaUsesPresenceNotDigest`, `TestNativeCPUComparePreservesContextDeadline` failed before and passed after: `go test ./internal/vmhost -count=1`
+- Avoid: Unbounded remote ISO hashing inside a short placement timeout, or wrapping every compare failure as "CPU incompatible".
 
 ## BUG-0754 — DHCP Controller resume left host permanently stale
 
 - Date: 2026-09-28
-- Symptom: After updating Core via apt and rebooting, Controller came up but the host stayed stale/unknown in the Controller GUI; apt reported both packages already at the newest version and refused further upgrades; Core local deployment stayed `needs_attention` with `controller address verification failed: ... connection refused`.
-- Root cause: On Resume, a DHCP Controller deployment skips `ResumeAgent` and rediscovers the guest IP via qemu-ga, then verifies TLS once. Guest-agent DHCP can succeed before `nex-controller` listens on :8443, so verification fails, the operation is marked `needs_attention`, and the embedded agent never starts. Nothing retries until `nex-core-local` is restarted after the Controller is already up.
-- Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes after rediscovery; if that still fails, Resume falls back to starting the enrolled agent on its last known endpoint so the host is not permanently blind.
-- Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify (`connection refused`) and passes with the retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bounded failure. `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1` ok. Lab recovery: restarting `nex-core-local` after Controller was listening cleared `needs_attention`, resumed reporting (`connection healthy`, `nex-controller` `running`).
-- Avoid: treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback when verification fails.
+- Symptom: After a Core apt update and reboot, the host stayed stale in the Controller GUI and local deployment stayed `needs_attention` with `controller address verification failed: ... connection refused`.
+- Root cause: DHCP resume rediscovers the guest IP and verifies TLS once; that can succeed before `nex-controller` listens on :8443, so it is marked `needs_attention` and the agent never starts, with no retry.
+- Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes; if it still fails, Resume starts the enrolled agent on its last known endpoint.
+- Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify and passes with retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bound: `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1`
+- Avoid: Treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback.

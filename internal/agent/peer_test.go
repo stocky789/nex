@@ -394,15 +394,38 @@ func TestStorageClusterMemberVerifyPathsAcceptOnlyCurrentMaster(t *testing.T) {
 	}
 }
 
+// rehomeMember is a member of a reachable master's pool whose local pool identity
+// is reset, so a test can mark a rehome pending and resume it.
+func rehomeMember(t *testing.T) *Store {
+	t.Helper()
+	master, s := peerStore(t, "master-1", "new-pool"), peerStore(t, "member-1", "old-pool")
+	master.State.PoolName = "New Pool"
+	for _, store := range []*Store{master, s} {
+		if err := EnsurePoolMembership(store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	joinPeerMember(t, master, s)
+	s.State.PoolID, s.State.PoolName = "old-pool", ""
+	return s
+}
+
+func markRehomePending(t *testing.T, s *Store) {
+	t.Helper()
+	state := peerState(t, s)
+	state.PendingRehome = &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}
+	if err := savePoolPeer(s, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPoolRehomeResumes(t *testing.T) {
-	s := peerStore(t, "member-1", "old-pool")
+	s := rehomeMember(t)
 	vm := poolVMTestSpec("11111111-1111-4111-8111-111111111111", s.State.HostID)
 	if err := savePoolVMs(s, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: "old-pool", VMID: vm.ID, HostID: s.State.HostID, Spec: *vm}}, Inventory: map[string]poolVMInventory{s.State.HostID: {HostID: s.State.HostID, Generation: 1, VMs: []protocol.VMCreateSpec{*vm}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
-		t.Fatal(err)
-	}
+	markRehomePending(t, s)
 	if err := ResumePoolRehome(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
@@ -538,10 +561,8 @@ func TestPoolRehomeDoesNotResurrectDeletedSoloVMOnPromotion(t *testing.T) {
 }
 
 func TestPoolRehomeCancellationKeepsMarkerForRetry(t *testing.T) {
-	s := peerStore(t, "member-1", "old-pool")
-	if err := savePoolPeer(s, poolPeerState{PendingRehome: &poolRehome{PoolID: "new-pool", PoolName: "New Pool"}}); err != nil {
-		t.Fatal(err)
-	}
+	s := rehomeMember(t)
+	markRehomePending(t, s)
 	if err := os.WriteFile(poolVMFile(s), []byte("not JSON"), 0600); err != nil {
 		t.Fatal(err)
 	}

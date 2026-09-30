@@ -236,16 +236,7 @@ func TestS3AbortFencesDelayedFinalManifest(t *testing.T) {
 	b, fake := testS3Storage(t)
 	ctx := context.Background()
 	payload := []byte("disk before delayed final")
-	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	fake.denyManifestPut = true
-	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
-		t.Fatal("initial final denial missing")
-	}
-	fake.denyManifestPut = false
+	manifest := publishDeniedS3Point(t, b, fake, payload)
 	fake.manifestPutEntered = make(chan struct{})
 	fake.releaseManifestPut = make(chan struct{})
 	fake.blockManifestPutOnce.Store(true)
@@ -262,7 +253,7 @@ func TestS3AbortFencesDelayedFinalManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(fake.releaseManifestPut)
-	if err := <-finalResult; !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+	if err := <-finalResult; !isS3Precondition(err) {
 		t.Fatalf("delayed final PUT escaped tombstone: %v", err)
 	}
 	if _, _, err := b.StatPoint(ctx, manifest.RecoveryPointID); !errors.Is(err, os.ErrNotExist) {
@@ -280,16 +271,7 @@ func TestS3PublishedFinalWinsAbortAfterAbsenceCheck(t *testing.T) {
 	b, fake := testS3Storage(t)
 	ctx := context.Background()
 	payload := []byte("disk before final wins")
-	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	fake.denyManifestPut = true
-	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
-		t.Fatal("initial final denial missing")
-	}
-	fake.denyManifestPut = false
+	manifest := publishDeniedS3Point(t, b, fake, payload)
 	fake.manifestPutEntered = make(chan struct{})
 	fake.releaseManifestPut = make(chan struct{})
 	fake.finalCommitted = make(chan struct{})
@@ -328,16 +310,7 @@ func TestS3AbortFencesDelayedArtifactWrites(t *testing.T) {
 			b, fake := testS3Storage(t)
 			ctx := context.Background()
 			payload := []byte("disk before delayed artifact")
-			manifest := testS3Manifest(payload)
-			stage := filepath.Join(t.TempDir(), "disk.qcow2")
-			if err := os.WriteFile(stage, payload, 0600); err != nil {
-				t.Fatal(err)
-			}
-			fake.denyManifestPut = true
-			if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
-				t.Fatal("initial final denial missing")
-			}
-			fake.denyManifestPut = false
+			manifest := publishDeniedS3Point(t, b, fake, payload)
 			fake.artifactPutEntered = make(chan struct{})
 			fake.releaseArtifactPut = make(chan struct{})
 			key := b.pointKey(manifest.RecoveryPointID, "disk.qcow2")
@@ -369,7 +342,7 @@ func TestS3AbortFencesDelayedArtifactWrites(t *testing.T) {
 				go func() {
 					_, err := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
 						Key: aws.String(key), Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*")})
-					if !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+					if !isS3Precondition(err) {
 						lateResult <- fmt.Errorf("single PUT escaped tombstone: %v", err)
 						return
 					}
@@ -553,6 +526,28 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	}
 }
 
+func writeS3Stage(t *testing.T, payload []byte) string {
+	t.Helper()
+	stage := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(stage, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return stage
+}
+
+// publishDeniedS3Point uploads a point's artifacts and intent while the final
+// manifest PUT is denied, then allows it again.
+func publishDeniedS3Point(t *testing.T, b *s3BackupStorage, fake *fakeS3, payload []byte) protocol.BackupManifest {
+	t.Helper()
+	manifest := testS3Manifest(payload)
+	fake.denyManifestPut = true
+	if _, err := b.Publish(context.Background(), manifest, map[string]string{"disk.qcow2": writeS3Stage(t, payload)}); err == nil {
+		t.Fatal("initial final denial missing")
+	}
+	fake.denyManifestPut = false
+	return manifest
+}
+
 func testS3Manifest(payload []byte) protocol.BackupManifest {
 	digest := sha256.Sum256(payload)
 	return protocol.BackupManifest{Version: protocol.BackupManifestVersion, RecoveryPointID: "point-1", RepositoryID: "repo-1",
@@ -588,10 +583,7 @@ func TestS3BackupPublicationAndCorruption(t *testing.T) {
 	b.repo.RemoteIdentity = &identity
 	payload := []byte("standalone disk bytes")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -630,10 +622,7 @@ func TestS3CopyArtifactsCreatesRestoreDirectory(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("restorable disk")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -716,10 +705,7 @@ func TestS3AbortIncompletePublication(t *testing.T) {
 			ctx := context.Background()
 			payload := []byte("unpublished disk bytes")
 			manifest := testS3Manifest(payload)
-			stage := filepath.Join(t.TempDir(), "disk.qcow2")
-			if err := os.WriteFile(stage, payload, 0600); err != nil {
-				t.Fatal(err)
-			}
+			stage := writeS3Stage(t, payload)
 			fake.denyManifestPut = scenario != "published" && scenario != "lost-reply"
 			fake.loseManifestReply = scenario == "lost-reply"
 			if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil && scenario != "published" {
@@ -862,10 +848,7 @@ func TestS3BackupRefusesRestrictedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, []byte("disk"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, []byte("disk"))
 	if _, err := b.Publish(context.Background(), testS3Manifest([]byte("disk")), map[string]string{"disk.qcow2": stage}); err == nil {
 		t.Fatal("restricted writer published")
 	}
@@ -882,10 +865,7 @@ func TestS3BackupDeleteRequiresExactPoint(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -927,10 +907,7 @@ func TestS3BackupDeleteResumesAfterLostManifestReply(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -1006,10 +983,7 @@ func TestS3MultipartFailureAbortsAndRetryPublishes(t *testing.T) {
 		payload[i] = byte(i)
 	}
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	fake.mu.Lock()
 	fake.failPart = true
 	fake.mu.Unlock()
@@ -1049,10 +1023,7 @@ func TestS3MetadataOperationsSkipArtifactDownloads(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk bytes")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	digest, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage})
 	if err != nil {
 		t.Fatal(err)
@@ -1086,10 +1057,7 @@ func TestS3AbortReadsArtifactsWithoutPoolPeerLock(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("unpublished disk bytes")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	fake.denyManifestPut = true
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
 		t.Fatal("publication failure not reported")
@@ -1157,7 +1125,7 @@ func TestS3ConnectionFailsOnlyWithoutProgress(t *testing.T) {
 	local, remote := net.Pipe()
 	defer local.Close()
 	defer remote.Close()
-	conn := s3ProgressConn{local}
+	conn := progressConn{local, s3BackupReadTimeout}
 	response := make(chan error, 1)
 	go func() {
 		_, err := conn.Read(make([]byte, 1))
@@ -1187,10 +1155,7 @@ func TestS3ConnectionFailsOnlyWithoutProgress(t *testing.T) {
 func publishS3TestPoint(t *testing.T, b *s3BackupStorage, payload []byte) protocol.BackupManifest {
 	t.Helper()
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(context.Background(), manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -1207,9 +1172,8 @@ func TestS3EntriesAcceptsPruneThatRemovedThePoint(t *testing.T) {
 	fake.mu.Lock()
 	manifestRaw := fake.objects[b.pointKey(id, "manifest.json")]
 	fake.mu.Unlock()
-	sum := sha256.Sum256(manifestRaw)
-	record, _ := json.Marshal(s3BackupDeleteRecord{Repository: b.repo.ID, Pool: b.repo.PoolID, Point: id,
-		ManifestSHA: hex.EncodeToString(sum[:]), Manifest: manifestRaw, Keys: b.manifestKeys(manifest)})
+	record, _ := json.Marshal(s3BackupDeleteRecord{s3BackupManifestRecord{Repository: b.repo.ID, Pool: b.repo.PoolID, Point: id,
+		ManifestSHA: sha256Hex(manifestRaw), Manifest: manifestRaw}, b.manifestKeys(manifest)})
 	fake.mu.Lock()
 	fake.objects[b.pointKey(id, s3BackupDeleteKey)] = record
 	delete(fake.objects, b.pointKey(id, "manifest.json"))
@@ -1364,10 +1328,7 @@ func TestS3AbortIncompleteAbortsOrphanMultipart(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	fake.denyManifestPut = true
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err == nil {
 		t.Fatal("denied publication succeeded")
@@ -1393,10 +1354,7 @@ func TestS3PublishReportsConflictsAndMarkerReadErrors(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	artifact := b.pointKey(manifest.RecoveryPointID, "disk.qcow2")
 	var uploads atomic.Int32
 	fake.onRequest = func(r *http.Request) {
@@ -1430,10 +1388,7 @@ func TestS3StaleUnprotectKeepsNewerMarker(t *testing.T) {
 	ctx := context.Background()
 	payload := []byte("disk for protection race")
 	manifest := testS3Manifest(payload)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}
@@ -1470,10 +1425,7 @@ func TestS3StaleUnprotectKeepsNewerMarker(t *testing.T) {
 func TestS3PublishReportsProviderRefusal(t *testing.T) {
 	b, fake := testS3Storage(t)
 	payload := []byte("disk the provider refuses")
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	fake.rejectArtifactPut = true
 	_, err := b.Publish(context.Background(), testS3Manifest(payload), map[string]string{"disk.qcow2": stage})
 	if err == nil || !strings.Contains(err.Error(), "upload disk.qcow2 to S3") || !strings.Contains(err.Error(), "EntityTooLarge") {
@@ -1517,10 +1469,7 @@ func TestS3ProtectsMaximumLengthPointID(t *testing.T) {
 	payload := []byte("disk")
 	manifest := testS3Manifest(payload)
 	manifest.RecoveryPointID = strings.Repeat("a", 64)
-	stage := filepath.Join(t.TempDir(), "disk.qcow2")
-	if err := os.WriteFile(stage, payload, 0600); err != nil {
-		t.Fatal(err)
-	}
+	stage := writeS3Stage(t, payload)
 	if _, err := b.Publish(ctx, manifest, map[string]string{"disk.qcow2": stage}); err != nil {
 		t.Fatal(err)
 	}

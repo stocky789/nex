@@ -49,14 +49,14 @@ func TestPeerS3PreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 	lab := newTransferLab(t, 1)
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := testPeerS3Repository(t, master)
-	if _, err := preparePeerS3Repository(context.Background(), member, repo); err == nil {
+	if _, err := preparePeerRepository(context.Background(), member, repo, nil); err == nil {
 		t.Fatal("member prepared S3 without private receipt")
 	}
 	projection, err := exportPeerBackupCredential(master, repo, member.State.HostID)
 	if err != nil || importPeerBackupCredential(member, projection) != nil {
 		t.Fatalf("private projection: %v", err)
 	}
-	prepared, err := preparePeerS3Repository(context.Background(), member, repo)
+	prepared, err := preparePeerRepository(context.Background(), member, repo, nil)
 	if err != nil || !preparedBackupRepositoryMatches(repo, prepared) {
 		t.Fatalf("member S3 capability: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestPeerS3PreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 		}(),
 		func() protocol.BackupRepository { r := repo; r.CredentialRef = "other-receipt"; return r }(),
 	} {
-		if _, err := preparePeerS3Repository(context.Background(), member, changed); !errors.Is(err, ErrBackupConflict) {
+		if _, err := preparePeerRepository(context.Background(), member, changed, nil); !errors.Is(err, ErrBackupConflict) {
 			t.Fatalf("changed identity or receipt accepted: %v", err)
 		}
 	}

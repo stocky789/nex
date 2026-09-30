@@ -4441,12 +4441,12 @@
   }
 }</pre></details></section>
 <section id="offerStorageCredentials"><h2>POST <code>/api/v1/storage/credentials</code></h2>
-<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \ = , ; &#x27; &quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.</p>
+<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \ = , ; &#x27; &quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;offerStorageCredentials&quot;,
   &quot;summary&quot;: &quot;Deliver repository credentials to Core&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \\ = , ; &#x27; \&quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409. The destination kind remains unusable until Core advertises the capability and passes its product gate.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \\ = , ; &#x27; \&quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -9672,12 +9672,12 @@
   }
 }</pre></details></section>
 <section id="createBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories</code></h2>
-<p>Register a pool backup repository</p><p>Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only when the fresh master advertises backup-destination-&lt;kind&gt;-v1 and a matching one-time Core credential receipt has been acknowledged; no new kind is advertised by this schema alone. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.</p>
+<p>Register a pool backup repository</p><p>Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createBackupRepository&quot;,
   &quot;summary&quot;: &quot;Register a pool backup repository&quot;,
-  &quot;description&quot;: &quot;Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only when the fresh master advertises backup-destination-&lt;kind&gt;-v1 and a matching one-time Core credential receipt has been acknowledged; no new kind is advertised by this schema alone. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9876,7 +9876,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;Changed request replay, missing matching credential receipt, unavailable master, or absent destination capability.&quot;,
+      &quot;description&quot;: &quot;Changed request replay, missing matching credential receipt, or unavailable master.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -20619,16 +20619,6 @@
       },
       &quot;description&quot;: &quot;In-progress destructive network or media removals, replicated so promotion cannot forget an unresolved outcome.&quot;
     },
-    &quot;backup_authority&quot;: {
-      &quot;anyOf&quot;: [
-        {
-          &quot;$ref&quot;: &quot;#/components/schemas/PoolBackupAuthority&quot;
-        },
-        {
-          &quot;type&quot;: &quot;null&quot;
-        }
-      ]
-    },
     &quot;backup_manifest&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -20638,7 +20628,7 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ],
-      &quot;description&quot;: &quot;Full paged backup authority reference; mutually exclusive with inline backup_authority.&quot;
+      &quot;description&quot;: &quot;Paged backup authority reference; the pages are pushed separately and bound by the manifest root.&quot;
     },
     &quot;corosync_key_wrapped&quot;: {
       &quot;anyOf&quot;: [
@@ -24428,7 +24418,7 @@
 }</pre></details>
 <details id="BackupRepository"><summary>BackupRepository</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.&quot;,
+  &quot;description&quot;: &quot;Master-owned backup destination record. Kinds are NFS, SMB3, S3 and SFTP; Core validates the kind and source.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepository&quot;,
   &quot;properties&quot;: {
     &quot;id&quot;: {
@@ -25679,21 +25669,11 @@
 }</pre></details>
 <details id="PoolBackupManifest"><summary>PoolBackupManifest</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Signed backup authority reference. Version 0 retains per-page SHA-256 and byte lengths with a 64 MiB/1024-page bound. Version 2 binds ordered page_count, total_bytes, full SHA-256 root and record counts; page_sha256 and page_bytes are null and every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.&quot;,
+  &quot;description&quot;: &quot;Signed backup authority reference. It binds ordered page_count, total_bytes, full SHA-256 root and record counts; every page is at most 256 KiB. The member verifies the full root, frames, unique IDs and counts before acknowledging.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.PoolBackupManifest&quot;,
   &quot;properties&quot;: {
     &quot;sha256&quot;: {
       &quot;type&quot;: &quot;string&quot;
-    },
-    &quot;page_sha256&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;string&quot;
-      },
-      &quot;description&quot;: &quot;Version 0 per-page SHA-256 values; null in version 2.&quot;
     },
     &quot;total_bytes&quot;: {
       &quot;type&quot;: &quot;integer&quot;
@@ -25716,38 +25696,21 @@
     &quot;metadata_receipts&quot;: {
       &quot;type&quot;: &quot;integer&quot;
     },
-    &quot;page_bytes&quot;: {
-      &quot;type&quot;: [
-        &quot;array&quot;,
-        &quot;null&quot;
-      ],
-      &quot;items&quot;: {
-        &quot;type&quot;: &quot;integer&quot;,
-        &quot;minimum&quot;: 1,
-        &quot;maximum&quot;: 262144
-      },
-      &quot;description&quot;: &quot;Version 0 exact per-page byte lengths; null in version 2.&quot;
-    },
-    &quot;version&quot;: {
-      &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;0 or omitted for legacy per-page-hash format; 2 for streaming large-authority format.&quot;
-    },
     &quot;page_count&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
-      &quot;description&quot;: &quot;Version 2 ordered page count; zero or omitted in version 0.&quot;
+      &quot;description&quot;: &quot;Ordered page count.&quot;
     }
   },
   &quot;required&quot;: [
     &quot;sha256&quot;,
-    &quot;page_sha256&quot;,
-    &quot;page_bytes&quot;,
     &quot;total_bytes&quot;,
     &quot;repositories&quot;,
     &quot;definitions&quot;,
     &quot;history&quot;,
     &quot;catalog&quot;,
     &quot;pins&quot;,
-    &quot;metadata_receipts&quot;
+    &quot;metadata_receipts&quot;,
+    &quot;page_count&quot;
   ],
   &quot;additionalProperties&quot;: false
 }</pre></details>

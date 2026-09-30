@@ -38,7 +38,7 @@ type runNowBackupPolicyRequest struct {
 }
 
 func (c *Controller) listBackupPolicies(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.listPoolBackupInventory(w, r.PathValue("id"), "backup policies", func(m *protocol.ManagedState) (bool, any) {
+	c.listPoolBackupInventory(w, r.PathValue("id"), "backup policies", func(m *protocol.ManagedState, _ bool) (bool, any) {
 		if !m.BackupPoliciesReported {
 			return false, nil
 		}

@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/vmhost"
@@ -214,11 +216,7 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 	final := filepath.Join(b.repo.MountPath, pointID)
 	f, err := os.OpenFile(final, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, os.ErrExist) {
-		var fd int
-		fd, err = syscall.Open(final, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-		if err == nil {
-			f = os.NewFile(uintptr(fd), final)
-		}
+		f, err = openNoFollow(final, syscall.O_RDWR|syscall.O_NONBLOCK)
 	}
 	if err != nil {
 		return err
@@ -251,12 +249,7 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 	if err := os.RemoveAll(filepath.Join(b.repo.MountPath, ".staging-"+pointID)); err != nil {
 		return err
 	}
-	dir, err := os.Open(b.repo.MountPath)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return syncBackupDirectory(b.repo.MountPath)
 }
 
 func (b filesystemBackupStorage) CopyArtifacts(ctx context.Context, pointID, localDir string, manifest protocol.BackupManifest) error {
@@ -316,14 +309,13 @@ func (b filesystemBackupStorage) Entries(ctx context.Context) ([]string, error) 
 }
 
 func filesystemAbortFence(path, id string) (bool, error) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	f, err := openNoFollow(path, syscall.O_RDONLY|syscall.O_NONBLOCK)
 	if errors.Is(err, syscall.ELOOP) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	info, err := f.Stat()
 	marker := filesystemAbortMarker(id)
@@ -445,8 +437,7 @@ func (b filesystemBackupStorage) recordDeleteIntent(ctx context.Context, pointID
 	if err != nil {
 		return filesystemDeleteIntent{}, nil, err
 	}
-	sum := sha256.Sum256(manifestRaw)
-	if hex.EncodeToString(sum[:]) != digest {
+	if sha256Hex(manifestRaw) != digest {
 		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
 	intent = filesystemDeleteIntent{Manifest: manifestRaw, Digest: digest}
@@ -493,7 +484,7 @@ func (b filesystemBackupStorage) finishDelete(pointID string, intent filesystemD
 				return err
 			}
 		}
-		if err := syncBackupDirectoryRoot(root); err != nil {
+		if err := syncBackupDirectory(pointDir); err != nil {
 			return err
 		}
 	}
@@ -577,8 +568,7 @@ func (b filesystemBackupStorage) readDeleteIntent(id string) (filesystemDeleteIn
 		manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
 		return intent, false, ErrBackupConflict
 	}
-	digest := sha256.Sum256(intent.Manifest)
-	if intent.Digest != hex.EncodeToString(digest[:]) {
+	if intent.Digest != sha256Hex(intent.Manifest) {
 		return intent, false, ErrBackupConflict
 	}
 	return intent, true, nil
@@ -586,11 +576,8 @@ func (b filesystemBackupStorage) readDeleteIntent(id string) (filesystemDeleteIn
 
 func filesystemDeleteNames(manifest protocol.BackupManifest) []string {
 	names := []string{"manifest.json"}
-	for _, disk := range manifest.Disks {
-		names = append(names, disk.Filename)
-	}
-	for _, fw := range manifest.Firmware {
-		names = append(names, fw.Filename)
+	for _, artifact := range manifestArtifacts(manifest) {
+		names = append(names, artifact.Filename)
 	}
 	return names
 }
@@ -649,16 +636,7 @@ func openFilesystemDeleteDir(pointDir string, manifest protocol.BackupManifest) 
 }
 
 func syncBackupDirectory(path string) error {
-	root, err := os.OpenRoot(path)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return syncBackupDirectoryRoot(root)
-}
-
-func syncBackupDirectoryRoot(root *os.Root) error {
-	dir, err := root.Open(".")
+	dir, err := os.Open(path)
 	if err != nil {
 		return err
 	}
@@ -668,4 +646,110 @@ func syncBackupDirectoryRoot(root *os.Root) error {
 
 func backupRepositoryEntryCouldBePoint(name string) bool {
 	return !strings.HasPrefix(name, ".") && protocol.ValidSnapshotOperationID(name)
+}
+
+// openNoFollow opens path without following a final symlink. A symlink fails
+// with the raw ELOOP errno.
+func openNoFollow(path string, flags int) (*os.File, error) {
+	fd, err := syscall.Open(path, flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
+func sha256Hex(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// hashLimited hashes at most size+1 bytes of r, so callers can tell a stream
+// longer than size (n > size) from a match.
+func hashLimited(r io.Reader, size int64) (n int64, digest string, err error) {
+	h := sha256.New()
+	n, err = io.Copy(h, io.LimitReader(r, size+1))
+	return n, hex.EncodeToString(h.Sum(nil)), err
+}
+
+// manifestArtifacts lists the disk and firmware artifacts of a manifest by
+// filename, size and digest.
+func manifestArtifacts(manifest protocol.BackupManifest) []protocol.BackupDiskArtifact {
+	artifacts := slices.Clone(manifest.Disks)
+	for _, fw := range manifest.Firmware {
+		artifacts = append(artifacts, protocol.BackupDiskArtifact{Filename: fw.Filename, Size: fw.Size, SHA256: fw.SHA256})
+	}
+	return artifacts
+}
+
+// copyVerifiedToLocal makes localPath an exact copy of the remote object. An
+// existing file with the right size and digest is kept; anything else there is
+// replaced. A failed or mismatched copy leaves no file behind.
+func copyVerifiedToLocal(open func() (io.ReadCloser, error), localPath string, size int64, digest string) (err error) {
+	if info, statErr := os.Lstat(localPath); statErr == nil {
+		if info.Mode().IsRegular() && info.Size() == size {
+			if local, openErr := os.Open(localPath); openErr == nil {
+				n, sum, hashErr := hashLimited(local, size)
+				local.Close()
+				if hashErr == nil && n == size && sum == digest {
+					return nil
+				}
+			}
+		}
+		if err := os.Remove(localPath); err != nil {
+			return err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	remote, err := open()
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	f, err := os.OpenFile(localPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+		if err != nil {
+			_ = os.Remove(localPath)
+		}
+	}()
+	n, sum, err := hashLimited(io.TeeReader(remote, f), size)
+	if err != nil {
+		return err
+	}
+	if n != size || sum != digest {
+		return ErrBackupConflict
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// progressConn renews the deadline on every read and write, so a connection
+// fails only after timeout without any progress. A response is read only after
+// the whole request body is sent; the reader waiting for it stays alive for as
+// long as the upload makes progress.
+type progressConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c progressConn) renew() error { return c.SetDeadline(time.Now().Add(c.timeout)) }
+
+func (c progressConn) Read(p []byte) (int, error) {
+	if err := c.renew(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
+}
+
+func (c progressConn) Write(p []byte) (int, error) {
+	if err := c.renew(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
 }

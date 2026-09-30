@@ -801,21 +801,7 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 	// Backup repositories, policies, retained runs and catalog index land with the same
 	// activation: the survivor must not become master with empty backup authority while
 	// the signed replica still named those jobs (Campaign B).
-	backupAuthority := replica.BackupAuthority
-	if replica.BackupManifest != nil && replica.BackupManifest.Version == 0 {
-		backupAuthority, err = loadPoolBackupAuthorityPages(s, replica.BackupManifest)
-		if err != nil {
-			return nil, errors.New("the signed backup authority pages are incomplete or invalid")
-		}
-	}
-	var backupRoot string
-	var rollbackBackup func()
-	if replica.BackupManifest != nil && replica.BackupManifest.Version == 2 {
-		backupRoot, rollbackBackup, err = stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
-	} else {
-		backupAuthority = inheritedBackupAuthority(backupAuthority)
-		backupRoot, rollbackBackup, err = stagePoolBackupAuthorityActivation(s, backupAuthority, replica.Generation)
-	}
+	backupRoot, rollbackBackup, err := stagePoolBackupAuthorityActivationPages(s, replica.BackupManifest, replica.Generation)
 	if err != nil {
 		poolVMMu.Lock()
 		_ = savePoolVMs(s, vmSnapshot)
@@ -846,8 +832,7 @@ func adoptPoolAuthorityFromReplica(ctx context.Context, s *Store, replica protoc
 				state.MasterURL = self.PeerOrigin
 			}
 			record.Stage = "repoint"
-			if backupAuthority != nil && len(backupAuthority.Catalog) == 0 && len(backupAuthority.Repositories) > 0 ||
-				replica.BackupManifest != nil && replica.BackupManifest.Version == 2 && replica.BackupManifest.Catalog == 0 && replica.BackupManifest.Repositories > 0 {
+			if replica.BackupManifest != nil && replica.BackupManifest.Catalog == 0 && replica.BackupManifest.Repositories > 0 {
 				record.Stage = "catalog-rebuild"
 			}
 			record.UpdatedAt = time.Now().UTC()
@@ -1581,35 +1566,6 @@ func unsettledBackupTransferRefusal(s *Store) error {
 		}
 	}
 	return nil
-}
-
-// A fenced promotion can inherit an operation that the old master was still
-// executing. It has the run and pin, but no execution command or proof of a
-// native outcome; never present that inherited record as work still in flight.
-func inheritedBackupAuthority(authority *protocol.PoolBackupAuthority) *protocol.PoolBackupAuthority {
-	if authority == nil {
-		return nil
-	}
-	copy := *authority
-	copy.History = append([]protocol.BackupRun(nil), authority.History...)
-	copy.MetadataReceipts = append([]protocol.BackupMetadataReceipt(nil), authority.MetadataReceipts...)
-	now := time.Now().UTC()
-	for i := range copy.History {
-		if copy.History[i].Status == "pending" {
-			copy.History[i].Status = "needs_attention"
-			copy.History[i].Stage = "authority_transfer"
-			copy.History[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
-			copy.History[i].UpdatedAt = now
-		}
-	}
-	for i := range copy.MetadataReceipts {
-		if copy.MetadataReceipts[i].Status == "pending" {
-			copy.MetadataReceipts[i].Status = "needs_attention"
-			copy.MetadataReceipts[i].Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
-			copy.MetadataReceipts[i].ObservedAt = now
-		}
-	}
-	return &copy
 }
 
 // recordPoolMasterPeerOrigin records the master's own peer origin in its membership row if

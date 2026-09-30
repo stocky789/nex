@@ -6129,7 +6129,7 @@
       },
       "BackupRepository": {
         "type": "object",
-        "description": "Master-owned backup destination record. NFS is implemented; other kinds are planned schema variants and require explicit Core capability before registration or execution.",
+        "description": "Master-owned backup destination record. Kinds are NFS, SMB3, S3 and SFTP; Core validates the kind and source.",
         "x-go-type": "protocol.BackupRepository",
         "properties": {
           "id": {

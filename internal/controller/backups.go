@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -51,7 +50,7 @@ type restoreAsNewAPIRequest struct {
 }
 
 func (c *Controller) listBackupRepositories(w http.ResponseWriter, r *http.Request, user, csrf string) {
-	c.listPoolBackupInventoryWithFreshness(w, r.PathValue("id"), "backup_repositories", func(m *protocol.ManagedState, masterFresh bool) (bool, any) {
+	c.listPoolBackupInventory(w, r.PathValue("id"), "backup_repositories", func(m *protocol.ManagedState, masterFresh bool) (bool, any) {
 		if !m.BackupRepositoriesReported {
 			return false, nil
 		}
@@ -127,24 +126,20 @@ func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	switch {
-	case status == 409 && query.Has("generation"):
-		fail(w, 409, "backup history changed; restart from first page")
-		return
-	case status == 409:
+	if status == 409 && !query.Has("generation") {
 		fail(w, 503, "pool master is not serving backup history; retry after the master change settles")
 		return
-	case status == 413:
-		fail(w, 413, "a backup history record exceeds the page limit")
-		return
-	case status == 400:
-		fail(w, 400, "invalid backup page cursor or filter")
-		return
-	case status == 503:
-		fail(w, 503, "backup history is unavailable from the pool master")
+	}
+	if msg, ok := map[int]string{
+		409: "backup history changed; restart from first page",
+		413: "a backup history record exceeds the page limit",
+		400: "invalid backup page cursor or filter",
+		503: "backup history is unavailable from the pool master",
+	}[status]; ok {
+		fail(w, status, msg)
 		return
 	}
-	if status != 200 || len(body) > backupRelayPageBytes || !validBackupRelayPage(body, pool, catalog, query.Get("cursor")) {
+	if status != 200 || len(body) > backupRelayPageBytes || !validBackupRelayPage(body, pool, catalog) {
 		fail(w, 502, "pool master returned an invalid backup history page")
 		return
 	}
@@ -155,24 +150,11 @@ func (c *Controller) relayBackupInventoryPage(w http.ResponseWriter, r *http.Req
 
 const backupRelayPageBytes = 2 << 20
 
-func validBackupRelayPage(body []byte, pool string, catalog bool, cursor string) bool {
-	start := 0
-	if cursor != "" {
-		start, _ = strconv.Atoi(cursor)
-	}
-	valid := func(generation, next string, total, count int) bool {
-		if !backupPageGenerationValid(generation) || total < 0 || count > 64 || start+count > total {
-			return false
-		}
-		if next == "" {
-			return start+count == total
-		}
-		n, err := strconv.Atoi(next)
-		return err == nil && n == start+count && n < total && count > 0
-	}
+// validBackupRelayPage checks the trust boundary only: Core owns cursor and count arithmetic.
+func validBackupRelayPage(body []byte, pool string, catalog bool) bool {
 	if catalog {
 		var page protocol.BackupCatalogPage
-		if json.Unmarshal(body, &page) != nil || !valid(page.Generation, page.NextCursor, page.Total, len(page.Items)) || page.UntestedCount < 0 {
+		if json.Unmarshal(body, &page) != nil || !backupPageGenerationValid(page.Generation) || page.UntestedCount < 0 {
 			return false
 		}
 		seen := map[string]bool{}
@@ -185,7 +167,7 @@ func validBackupRelayPage(body []byte, pool string, catalog bool, cursor string)
 		return true
 	}
 	var page protocol.BackupRunPage
-	if json.Unmarshal(body, &page) != nil || !valid(page.Generation, page.NextCursor, page.Total, len(page.Items)) || page.AttentionCount < 0 {
+	if json.Unmarshal(body, &page) != nil || !backupPageGenerationValid(page.Generation) || page.AttentionCount < 0 {
 		return false
 	}
 	seen := map[string]bool{}
@@ -207,11 +189,7 @@ func failPoolMaster(w http.ResponseWriter, err error) {
 	fail(w, 503, "pool master is unavailable")
 }
 
-func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState) (bool, any)) {
-	c.listPoolBackupInventoryWithFreshness(w, pool, label, func(m *protocol.ManagedState, _ bool) (bool, any) { return pick(m) })
-}
-
-func (c *Controller) listPoolBackupInventoryWithFreshness(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState, bool) (bool, any)) {
+func (c *Controller) listPoolBackupInventory(w http.ResponseWriter, pool, label string, pick func(*protocol.ManagedState, bool) (bool, any)) {
 	if !nameValid(pool) {
 		fail(w, 404, "pool not found")
 		return
@@ -277,24 +255,6 @@ func (c *Controller) createBackupRepository(w http.ResponseWriter, r *http.Reque
 	c.enqueueBackupRepository(w, pool, user, body.RequestID, "backup-repository-register", &repo, body)
 }
 
-func (c *Controller) backupDestinationHost(tx *sql.Tx, pool, master, kind string) error {
-	if err := c.backupHost(tx, pool, master); err != nil {
-		return err
-	}
-	if kind == protocol.BackupRepoKindNFS {
-		return nil
-	}
-	var raw string
-	if err := tx.QueryRow("SELECT capabilities FROM host_capabilities WHERE host_id=?", master).Scan(&raw); err != nil {
-		return err
-	}
-	var capabilities []string
-	if json.Unmarshal([]byte(raw), &capabilities) != nil || !contains(capabilities, "backup-destination-"+kind+"-v1") {
-		return fmt.Errorf("pool master does not support %s backup destinations", kind)
-	}
-	return nil
-}
-
 func (c *Controller) testBackupRepository(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	pool, repoID := r.PathValue("id"), r.PathValue("repo_id")
 	var body testBackupRepositoryRequest
@@ -333,12 +293,7 @@ func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, 
 		failPoolMaster(w, err)
 		return
 	}
-	if kind == "backup-repository-register" {
-		err = c.backupDestinationHost(tx, pool, master, repo.Kind)
-	} else {
-		err = c.backupHost(tx, pool, master)
-	}
-	if err != nil {
+	if err = c.backupHost(tx, pool, master); err != nil {
 		fail(w, 409, err.Error())
 		return
 	}

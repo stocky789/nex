@@ -326,48 +326,24 @@ const (
 
 // PoolBackupManifest binds every byte of a paged authority to the signed replica.
 type PoolBackupManifest struct {
-	Version          int      `json:"version,omitempty"`
-	SHA256           string   `json:"sha256"`
-	PageCount        int      `json:"page_count,omitempty"`
-	PageSHA256       []string `json:"page_sha256"`
-	PageBytes        []int    `json:"page_bytes"`
-	TotalBytes       int      `json:"total_bytes"`
-	Repositories     int      `json:"repositories"`
-	Definitions      int      `json:"definitions"`
-	History          int      `json:"history"`
-	Catalog          int      `json:"catalog"`
-	Pins             int      `json:"pins"`
-	MetadataReceipts int      `json:"metadata_receipts"`
+	SHA256           string `json:"sha256"`
+	PageCount        int    `json:"page_count"`
+	TotalBytes       int    `json:"total_bytes"`
+	Repositories     int    `json:"repositories"`
+	Definitions      int    `json:"definitions"`
+	History          int    `json:"history"`
+	Catalog          int    `json:"catalog"`
+	Pins             int    `json:"pins"`
+	MetadataReceipts int    `json:"metadata_receipts"`
 }
 
 func (m PoolBackupManifest) Valid() error {
 	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 ||
 		m.Repositories < 0 || m.Repositories > PoolBackupMaxRepositories || m.Definitions < 0 || m.Definitions > PoolBackupMaxDefinitions ||
-		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 {
+		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 ||
+		m.PageCount <= 0 || m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
+		(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
-	}
-	if m.Version == 2 {
-		if len(m.PageSHA256) != 0 || len(m.PageBytes) != 0 || m.PageCount <= 0 ||
-			m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
-			(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
-			return errors.New("backup authority v2 manifest is invalid")
-		}
-		return nil
-	}
-	if m.Version != 0 || m.PageCount != 0 || m.TotalBytes > PoolBackupBundleLimit ||
-		m.History > 100000 || m.Catalog > 100000 || m.Pins > 100000 || m.MetadataReceipts > 100000 ||
-		len(m.PageSHA256) == 0 || len(m.PageSHA256) != len(m.PageBytes) || len(m.PageSHA256) > 1024 {
-		return errors.New("backup authority manifest exceeds bound or is invalid")
-	}
-	total := 0
-	for i, hash := range m.PageSHA256 {
-		if !lowerSHA256(hash) || m.PageBytes[i] <= 0 || m.PageBytes[i] > PoolBackupPageLimit {
-			return errors.New("backup authority page digest is invalid")
-		}
-		total += m.PageBytes[i]
-	}
-	if total != m.TotalBytes {
-		return errors.New("backup authority page sizes do not match")
 	}
 	return nil
 }

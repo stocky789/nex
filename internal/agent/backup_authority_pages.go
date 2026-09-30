@@ -281,92 +281,57 @@ func checkPoolBackupAuthorityCapacity(s *Store, edit func(*protocol.PoolBackupAu
 	if s.State.HostID == "" || peer.Membership.MasterHostID != s.State.HostID {
 		return nil // Member mirrors and promotion staging do not publish authority.
 	}
+	// The authority is never loaded whole: the edit lists only the records it
+	// writes, and it grows the stored authority only by naming one the store
+	// neither holds nor reserved.
+	auth := &protocol.PoolBackupAuthority{}
+	edit(auth)
+	written, err := checkPoolBackupTerminalRoom(auth)
+	if err != nil {
+		return err
+	}
 	source, err := encodePoolBackupAuthorityFromStore(s, nil)
 	if err != nil {
 		return err
 	}
-	grows := false
-	if source != nil && poolBackupNeedsV2(source) {
-		// A v2 authority is not loaded whole; the edit grows it only by naming a
-		// record the store neither holds nor reserved.
-		auth := &protocol.PoolBackupAuthority{}
-		edit(auth)
-		grows = poolBackupAuthorityEditAdds(s, source, auth)
-	} else {
-		auth, err := PoolBackupAuthorityRefs(s)
-		if err != nil {
-			return err
-		}
-		if auth == nil {
-			auth = &protocol.PoolBackupAuthority{}
-		}
-		before, _, err := poolBackupAuthorityReservedBytes(auth)
-		if err != nil {
-			return err
-		}
-		edit(auth)
-		after, v2, err := poolBackupAuthorityReservedBytes(auth)
-		if err != nil {
-			return err
-		}
-		grows = after > before && (v2 || after > poolBackupBundleLimit)
+	if source == nil {
+		source = &protocol.PoolBackupManifest{}
 	}
-	// The adopting master imports its catalog before it re-points members, so
-	// none of them can confirm its authority yet.
-	if !grows || peer.Transfer != nil && peer.Transfer.Stage == "catalog-rebuild" {
+	// A small authority is replicated in full with the next push. The adopting
+	// master imports its catalog before it re-points members, so none of them can
+	// confirm its authority yet.
+	if !poolBackupAuthorityLarge(source, written) || !poolBackupAuthorityEditAdds(s, source, auth) ||
+		peer.Transfer != nil && peer.Transfer.Stage == "catalog-rebuild" {
 		return nil
 	}
 	return requirePoolBackupMembersCurrent(s, peer.Membership)
 }
 
-// poolBackupAuthorityReservedBytes is the authority's encoded size plus the
-// room every unresolved run and receipt needs for its terminal outcome.
-func poolBackupAuthorityReservedBytes(auth *protocol.PoolBackupAuthority) (int, bool, error) {
-	manifest, err := encodePoolBackupAuthority(auth, nil)
+// checkPoolBackupTerminalRoom refuses records that could not be replicated, and
+// pending records whose largest terminal outcome would not fit a page: a run or
+// receipt that cannot be settled would stay unresolved forever.
+func checkPoolBackupTerminalRoom(auth *protocol.PoolBackupAuthority) (*protocol.PoolBackupManifest, error) {
+	written, err := encodePoolBackupAuthority(auth, nil)
 	if err != nil {
-		return 0, false, fmt.Errorf("backup authority cannot be replicated: %w", err)
-	}
-	used := manifest.TotalBytes
-	cataloged := make(map[string]bool, len(auth.Catalog))
-	for _, point := range auth.Catalog {
-		cataloged[point.ID] = true
+		return nil, fmt.Errorf("backup authority cannot be replicated: %w", err)
 	}
 	for _, run := range auth.History {
-		if run.Status != "pending" && run.Status != "needs_attention" {
-			continue
-		}
-		body, _ := json.Marshal(run)
-		terminal := run
-		terminal.Status = "needs_attention"
-		terminal.Stage = "authority_transfer"
-		terminal.Error = strings.Repeat("\x00", 4096)
-		maximum, _ := json.Marshal(terminal)
-		if len(maximum)+5 > protocol.PoolBackupPageLimit {
-			return 0, false, errors.New("backup run has no room for its terminal outcome")
-		}
-		used += protocol.PoolBackupPageLimit - len(body) - 5
-		if (run.Kind == protocol.BackupKindBackupNow || run.Kind == protocol.BackupKindScheduled || run.Kind == protocol.BackupKindPolicyRunNow) &&
-			run.RecoveryPointID != "" && !cataloged[run.RecoveryPointID] {
-			used += protocol.PoolBackupPageLimit
+		if run.Status == "pending" || run.Status == "needs_attention" {
+			run.Status, run.Stage, run.Error = "needs_attention", "authority_transfer", strings.Repeat("\x00", 4096)
+			if maximum, _ := json.Marshal(run); len(maximum)+5 > protocol.PoolBackupPageLimit {
+				return nil, errors.New("backup run has no room for its terminal outcome")
+			}
 		}
 	}
 	for _, receipt := range auth.MetadataReceipts {
-		if receipt.Status != "pending" && receipt.Status != "needs_attention" {
-			continue
-		}
-		current, _ := json.Marshal(receipt)
-		terminal := receipt
-		terminal.Status = "needs_attention"
-		terminal.Error = strings.Repeat("\x00", 4096)
-		maximum, _ := json.Marshal(terminal)
-		if len(maximum)+5 > protocol.PoolBackupPageLimit {
-			return 0, false, errors.New("backup metadata receipt has no room for its terminal outcome")
-		}
-		if growth := len(maximum) - len(current) + 10; growth > 0 {
-			used += growth
+		if receipt.Status == "pending" || receipt.Status == "needs_attention" {
+			receipt.Status, receipt.Error = "needs_attention", strings.Repeat("\x00", 4096)
+			if maximum, _ := json.Marshal(receipt); len(maximum)+5 > protocol.PoolBackupPageLimit {
+				return nil, errors.New("backup metadata receipt has no room for its terminal outcome")
+			}
 		}
 	}
-	return used, manifest.Version == 2, nil
+	return written, nil
 }
 
 // poolBackupAuthorityEditAdds reports whether records an edit wrote into an
@@ -472,180 +437,116 @@ func refreshPoolBackupMemberStatus(s *Store, member protocol.PoolMember) (protoc
 
 // Each frame is a type byte, a four-byte big-endian JSON length, then exactly
 // one record. No frame crosses a page; no record or page exceeds 256 KiB.
-func encodePoolBackupAuthority(auth *protocol.PoolBackupAuthority, emit func([]byte) error) (*protocol.PoolBackupManifest, error) {
-	if auth == nil {
-		auth = &protocol.PoolBackupAuthority{}
+type poolBackupEncoder struct {
+	m     protocol.PoolBackupManifest
+	page  bytes.Buffer
+	whole hash.Hash
+	emit  func([]byte) error
+}
+
+func (e *poolBackupEncoder) flush() error {
+	if e.page.Len() == 0 {
+		return nil
 	}
+	data := e.page.Bytes()
+	e.m.PageCount++
+	e.m.TotalBytes += len(data)
+	_, _ = e.whole.Write(data)
+	if e.emit != nil {
+		if err := e.emit(data); err != nil {
+			return err
+		}
+	}
+	e.page.Reset()
+	return nil
+}
+
+func (e *poolBackupEncoder) add(kind byte, record any) error {
+	body, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if len(body)+5 > protocol.PoolBackupPageLimit {
+		return errors.New("backup authority record exceeds page limit")
+	}
+	if e.page.Len()+len(body)+5 > protocol.PoolBackupPageLimit {
+		if err := e.flush(); err != nil {
+			return err
+		}
+	}
+	e.page.WriteByte(kind)
+	var size [4]byte
+	binary.BigEndian.PutUint32(size[:], uint32(len(body)))
+	_, _ = e.page.Write(size[:])
+	_, _ = e.page.Write(body)
+	switch kind {
+	case 1:
+		e.m.Repositories++
+	case 2:
+		e.m.Definitions++
+	case 3:
+		e.m.History++
+	case 4:
+		e.m.Catalog++
+	case 5:
+		e.m.Pins++
+	case 6:
+		e.m.MetadataReceipts++
+	default:
+		return errors.New("backup authority record kind is invalid")
+	}
+	// Records content decides where a page ends, so one changed or inserted
+	// record leaves the other pages, and their reusable blobs, unchanged.
+	if sha256.Sum256(body)[0] == 0 {
+		return e.flush()
+	}
+	return nil
+}
+
+func (e *poolBackupEncoder) finish() (*protocol.PoolBackupManifest, error) {
+	if err := e.flush(); err != nil {
+		return nil, err
+	}
+	e.m.SHA256 = fmt.Sprintf("%x", e.whole.Sum(nil))
+	return &e.m, e.m.Valid()
+}
+
+func addPoolBackupRecords[T any](e *poolBackupEncoder, kind byte, records []T) error {
+	for _, record := range records {
+		if err := e.add(kind, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// encodePoolBackupAuthority frames an authority held in memory; an empty one is
+// a single marker page.
+func encodePoolBackupAuthority(auth *protocol.PoolBackupAuthority, emit func([]byte) error) (*protocol.PoolBackupManifest, error) {
 	if err := auth.Valid(); err != nil {
 		return nil, err
 	}
-	m := &protocol.PoolBackupManifest{
-		Repositories: len(auth.Repositories), Definitions: len(auth.Definitions), History: len(auth.History),
-		Catalog: len(auth.Catalog), Pins: len(auth.Pins), MetadataReceipts: len(auth.MetadataReceipts),
-	}
-	var page bytes.Buffer
-	whole := sha256.New()
-	flush := func() error {
-		if page.Len() == 0 {
-			return nil
-		}
-		data := page.Bytes()
-		m.TotalBytes += len(data)
-		m.PageCount++
-		if m.Version == 0 {
-			m.PageBytes = append(m.PageBytes, len(data))
-			m.PageSHA256 = append(m.PageSHA256, poolBackupHash(data))
-			if m.TotalBytes > poolBackupBundleLimit || len(m.PageBytes) > 1024 {
-				m.Version, m.PageBytes, m.PageSHA256 = 2, nil, nil
-			}
-		}
-		_, _ = whole.Write(data)
-		if emit != nil {
-			if err := emit(data); err != nil {
-				return err
-			}
-		}
-		page.Reset()
-		return nil
-	}
-	frame := func(kind byte, record any) error {
-		body, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		if len(body)+5 > protocol.PoolBackupPageLimit {
-			return errors.New("backup authority record exceeds page limit")
-		}
-		if page.Len()+len(body)+5 > protocol.PoolBackupPageLimit {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		page.WriteByte(kind)
-		var size [4]byte
-		binary.BigEndian.PutUint32(size[:], uint32(len(body)))
-		_, _ = page.Write(size[:])
-		_, _ = page.Write(body)
-		return nil
-	}
-	for _, record := range auth.Repositories {
-		if err := frame(1, record); err != nil {
-			return nil, err
-		}
-	}
-	for _, record := range auth.Definitions {
-		if err := frame(2, record); err != nil {
-			return nil, err
-		}
-	}
-	for _, record := range auth.History {
-		if err := frame(3, record); err != nil {
-			return nil, err
-		}
-	}
-	for _, record := range auth.Catalog {
-		if err := frame(4, record); err != nil {
-			return nil, err
-		}
-	}
-	for _, record := range auth.Pins {
-		if err := frame(5, record); err != nil {
-			return nil, err
-		}
-	}
-	for _, record := range auth.MetadataReceipts {
-		if err := frame(6, record); err != nil {
-			return nil, err
-		}
-	}
-	if m.TotalBytes == 0 && page.Len() == 0 {
-		_, _ = page.Write([]byte{0, 0, 0, 0, 0})
-	}
-	if err := flush(); err != nil {
+	e := &poolBackupEncoder{whole: sha256.New(), emit: emit}
+	if err := errors.Join(
+		addPoolBackupRecords(e, 1, auth.Repositories), addPoolBackupRecords(e, 2, auth.Definitions),
+		addPoolBackupRecords(e, 3, auth.History), addPoolBackupRecords(e, 4, auth.Catalog),
+		addPoolBackupRecords(e, 5, auth.Pins), addPoolBackupRecords(e, 6, auth.MetadataReceipts),
+	); err != nil {
 		return nil, err
 	}
-	if m.Version == 0 && (m.History > 100000 || m.Catalog > 100000 || m.Pins > 100000 || m.MetadataReceipts > 100000) {
-		m.Version, m.PageBytes, m.PageSHA256 = 2, nil, nil
+	if e.m.TotalBytes == 0 && e.page.Len() == 0 {
+		_, _ = e.page.Write([]byte{0, 0, 0, 0, 0})
 	}
-	if m.Version == 0 {
-		m.PageCount = 0
-	}
-	m.SHA256 = fmt.Sprintf("%x", whole.Sum(nil))
-	return m, m.Valid()
+	return e.finish()
 }
 
 func encodePoolBackupAuthorityFromStore(s *Store, emit func([]byte) error) (*protocol.PoolBackupManifest, error) {
-	m := &protocol.PoolBackupManifest{Version: 2}
-	var page bytes.Buffer
-	whole := sha256.New()
-	flush := func() error {
-		if page.Len() == 0 {
-			return nil
-		}
-		data := page.Bytes()
-		m.PageCount++
-		m.TotalBytes += len(data)
-		_, _ = whole.Write(data)
-		if emit != nil {
-			if err := emit(data); err != nil {
-				return err
-			}
-		}
-		page.Reset()
-		return nil
-	}
-	visit := func(kind byte, record any) error {
-		body, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		if len(body)+5 > protocol.PoolBackupPageLimit {
-			return errors.New("backup authority record exceeds page limit")
-		}
-		if page.Len()+len(body)+5 > protocol.PoolBackupPageLimit {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		page.WriteByte(kind)
-		var size [4]byte
-		binary.BigEndian.PutUint32(size[:], uint32(len(body)))
-		_, _ = page.Write(size[:])
-		_, _ = page.Write(body)
-		// Records content decides where a page ends, so one changed or inserted
-		// record leaves the other pages, and their reusable blobs, unchanged.
-		if sha256.Sum256(body)[0] == 0 {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		switch kind {
-		case 1:
-			m.Repositories++
-		case 2:
-			m.Definitions++
-		case 3:
-			m.History++
-		case 4:
-			m.Catalog++
-		case 5:
-			m.Pins++
-		case 6:
-			m.MetadataReceipts++
-		default:
-			return errors.New("backup authority record kind is invalid")
-		}
-		return nil
-	}
-	nonempty, err := walkPoolBackupAuthorityRecords(s, visit)
+	e := &poolBackupEncoder{whole: sha256.New(), emit: emit}
+	nonempty, err := walkPoolBackupAuthorityRecords(s, e.add)
 	if err != nil || !nonempty {
 		return nil, err
 	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	m.SHA256 = fmt.Sprintf("%x", whole.Sum(nil))
-	return m, m.Valid()
+	return e.finish()
 }
 
 const poolBackupCapacityCheck = "pool-backup-authority-capacity"
@@ -713,16 +614,20 @@ func PoolBackupAuthorityCapacityCheck(s *Store) []protocol.Check {
 	return []protocol.Check{check}
 }
 
-func poolBackupNeedsV2(m *protocol.PoolBackupManifest) bool {
-	return m.TotalBytes > poolBackupBundleLimit || m.History > 100000 || m.Catalog > 100000 ||
-		m.Pins > 100000 || m.MetadataReceipts > 100000
+// An authority is large once the stored records plus an edit pass the bundle
+// size or a record count at which growth must first be confirmed by every ready
+// member. The edit may repeat stored records, so this overestimates.
+func poolBackupAuthorityLarge(stored, edit *protocol.PoolBackupManifest) bool {
+	return stored.TotalBytes+edit.TotalBytes > poolBackupBundleLimit || stored.History+edit.History > 100000 ||
+		stored.Catalog+edit.Catalog > 100000 || stored.Pins+edit.Pins > 100000 ||
+		stored.MetadataReceipts+edit.MetadataReceipts > 100000
 }
 
-// stagePoolBackupAuthorityFromStore writes a v2 root's pages only when that
-// root is not already staged; a v1-sized authority writes nothing.
+// stagePoolBackupAuthorityFromStore writes a root's pages only when that root
+// is not already staged.
 func stagePoolBackupAuthorityFromStore(s *Store) (*protocol.PoolBackupManifest, error) {
 	m, err := encodePoolBackupAuthorityFromStore(s, nil)
-	if err != nil || m == nil || !poolBackupNeedsV2(m) || verifyPoolBackupAuthorityPages(s, m) == nil {
+	if err != nil || m == nil || verifyPoolBackupAuthorityPages(s, m) == nil {
 		return m, err
 	}
 	temporary, err := newPoolBackupStage(s)
@@ -766,92 +671,25 @@ func stagePoolBackupReplicaPages(s *Store, m *protocol.PoolBackupManifest) error
 	if m == nil || verifyPoolBackupAuthorityPages(s, m) == nil {
 		return nil
 	}
-	var staged *protocol.PoolBackupManifest
-	var err error
-	if m.Version == 2 {
-		staged, err = stagePoolBackupAuthorityFromStore(s)
-	} else {
-		var auth *protocol.PoolBackupAuthority
-		if auth, err = PoolBackupAuthorityRefs(s); err == nil {
-			staged, err = stagePoolBackupAuthority(s, auth)
-		}
-	}
+	staged, err := stagePoolBackupAuthorityFromStore(s)
 	if err == nil && (staged == nil || staged.SHA256 != m.SHA256) {
 		err = errors.New("backup authority changed while its pages were staged")
 	}
 	return err
 }
 
-func stagePoolBackupAuthority(s *Store, auth *protocol.PoolBackupAuthority) (*protocol.PoolBackupManifest, error) {
-	if auth == nil {
-		return nil, nil
-	}
-	parent := filepath.Join(s.dir, poolBackupPageDir)
-	temporary, err := newPoolBackupStage(s)
-	if err != nil {
-		return nil, err
-	}
-	defer releasePoolBackupStage(temporary)
-	index := 0
-	m, err := encodePoolBackupAuthority(auth, func(page []byte) error {
-		path := filepath.Join(temporary, fmt.Sprintf("%04d", index))
-		index++
-		return vmhost.AtomicWrite(path, page, 0600)
-	})
-	if err != nil {
-		return nil, err
-	}
-	destination := filepath.Join(parent, m.SHA256)
-	if err := verifyPoolBackupAuthorityPages(s, m); err == nil {
-		return m, nil
-	}
-	if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
-		if err := os.Rename(temporary, destination); err != nil {
-			return nil, err
-		}
-	} else {
-		if err != nil {
-			return nil, err
-		}
-		for index := 0; index < poolBackupPageCount(m); index++ {
-			page, readErr := os.ReadFile(filepath.Join(temporary, fmt.Sprintf("%04d", index)))
-			if readErr != nil {
-				return nil, readErr
-			}
-			if err := vmhost.AtomicWrite(poolBackupPageFile(s, m.SHA256, index), page, 0600); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if err := syncPoolBackupDirectory(parent); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
 func readPoolBackupPage(s *Store, m *protocol.PoolBackupManifest, index int) ([]byte, error) {
-	if m == nil || m.Valid() != nil || index < 0 || index >= poolBackupPageCount(m) {
+	if m == nil || m.Valid() != nil || index < 0 || index >= m.PageCount {
 		return nil, errors.New("backup authority page reference is invalid")
 	}
 	page, err := readBoundedPoolBackupFile(poolBackupPageFile(s, m.SHA256, index))
 	if err != nil {
 		return nil, err
 	}
-	if m.Version == 2 {
-		if len(page) == 0 || len(page) > protocol.PoolBackupPageLimit {
-			return nil, errors.New("backup authority page size is invalid")
-		}
-	} else if len(page) != m.PageBytes[index] || poolBackupHash(page) != m.PageSHA256[index] {
-		return nil, errors.New("backup authority page digest does not match")
+	if len(page) == 0 || len(page) > protocol.PoolBackupPageLimit {
+		return nil, errors.New("backup authority page size is invalid")
 	}
 	return page, nil
-}
-
-func poolBackupPageCount(m *protocol.PoolBackupManifest) int {
-	if m.Version == 2 {
-		return m.PageCount
-	}
-	return len(m.PageSHA256)
 }
 
 func decodePoolBackupPage(auth *protocol.PoolBackupAuthority, page []byte) error {
@@ -914,34 +752,22 @@ func decodePoolBackupPage(auth *protocol.PoolBackupAuthority, page []byte) error
 	return nil
 }
 
-func readPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, digest hash.Hash, auth *protocol.PoolBackupAuthority) error {
+func verifyPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) error {
+	if m == nil || m.Valid() != nil {
+		return errors.New("backup authority manifest is invalid")
+	}
+	digest := sha256.New()
 	total := 0
-	for index := 0; index < poolBackupPageCount(m); index++ {
+	for index := 0; index < m.PageCount; index++ {
 		page, err := readPoolBackupPage(s, m, index)
 		if err != nil {
 			return err
 		}
 		_, _ = digest.Write(page)
 		total += len(page)
-		if auth != nil {
-			if err := decodePoolBackupPage(auth, page); err != nil {
-				return err
-			}
-		}
 	}
 	if total != m.TotalBytes {
 		return errors.New("backup authority bundle size does not match")
-	}
-	return nil
-}
-
-func verifyPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) error {
-	if m == nil || m.Valid() != nil {
-		return errors.New("backup authority manifest is invalid")
-	}
-	digest := sha256.New()
-	if err := readPoolBackupAuthorityPages(s, m, digest, nil); err != nil {
-		return err
 	}
 	if fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 {
 		return errors.New("backup authority bundle digest does not match")
@@ -949,17 +775,27 @@ func verifyPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) er
 	return nil
 }
 
-func validatePoolBackupAuthorityPagesV2(s *Store, m *protocol.PoolBackupManifest) error {
-	if m == nil || m.Version != 2 || m.Valid() != nil {
-		return errors.New("backup authority v2 manifest is invalid")
+// walkPoolBackupAuthorityPages reads a staged root one page at a time, refusing
+// invalid or duplicate records, and hands each decoded page to visit. Only after
+// the last page do the root digest, size and record counts have to match, so a
+// caller must discard whatever visit built when it returns an error.
+func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visit func(*protocol.PoolBackupAuthority) error) error {
+	if m == nil || m.Valid() != nil {
+		return errors.New("backup authority manifest is invalid")
 	}
 	digest := sha256.New()
-	counts := [6]int{}
-	seen := [6]map[string]bool{}
-	for i := range seen {
-		seen[i] = map[string]bool{}
-	}
 	total := 0
+	var counts [6]int
+	seen := map[string]bool{}
+	note := func(kind int, id string) error {
+		key := fmt.Sprint(kind, id)
+		if seen[key] {
+			return errors.New("backup authority has a duplicate record")
+		}
+		seen[key] = true
+		counts[kind]++
+		return nil
+	}
 	for index := 0; index < m.PageCount; index++ {
 		page, err := readPoolBackupPage(s, m, index)
 		if err != nil {
@@ -969,74 +805,47 @@ func validatePoolBackupAuthorityPagesV2(s *Store, m *protocol.PoolBackupManifest
 		_, _ = digest.Write(page)
 		auth := &protocol.PoolBackupAuthority{}
 		if err := decodePoolBackupPage(auth, page); err != nil || auth.Valid() != nil {
-			return errors.New("backup authority v2 page has invalid records")
+			return errors.New("backup authority page has invalid records")
 		}
 		for _, repo := range auth.Repositories {
-			if seen[0][repo.ID] {
-				return errors.New("backup authority v2 has duplicate repository")
+			if err := note(0, repo.ID); err != nil {
+				return err
 			}
-			seen[0][repo.ID] = true
-			counts[0]++
 		}
 		for _, policy := range auth.Definitions {
-			if seen[1][policy.ID] {
-				return errors.New("backup authority v2 has duplicate policy")
+			if err := note(1, policy.ID); err != nil {
+				return err
 			}
-			seen[1][policy.ID] = true
-			counts[1]++
 		}
 		for _, run := range auth.History {
-			if seen[2][run.OperationID] {
-				return errors.New("backup authority v2 has duplicate run")
+			if err := note(2, run.OperationID); err != nil {
+				return err
 			}
-			seen[2][run.OperationID] = true
-			counts[2]++
 		}
 		for _, point := range auth.Catalog {
-			if seen[3][point.ID] {
-				return errors.New("backup authority v2 has duplicate point")
+			if err := note(3, point.ID); err != nil {
+				return err
 			}
-			seen[3][point.ID] = true
-			counts[3]++
 		}
 		for _, pin := range auth.Pins {
-			if seen[4][pin.OperationID] {
-				return errors.New("backup authority v2 has duplicate pin")
+			if err := note(4, pin.OperationID); err != nil {
+				return err
 			}
-			seen[4][pin.OperationID] = true
-			counts[4]++
 		}
 		for _, receipt := range auth.MetadataReceipts {
-			if seen[5][receipt.OperationID] {
-				return errors.New("backup authority v2 has duplicate receipt")
+			if err := note(5, receipt.OperationID); err != nil {
+				return err
 			}
-			seen[5][receipt.OperationID] = true
-			counts[5]++
+		}
+		if visit != nil {
+			if err := visit(auth); err != nil {
+				return err
+			}
 		}
 	}
 	if total != m.TotalBytes || fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 ||
 		counts != [6]int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts} {
-		return errors.New("backup authority v2 root or counts do not match")
+		return errors.New("backup authority root or counts do not match")
 	}
 	return nil
-}
-
-func loadPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest) (*protocol.PoolBackupAuthority, error) {
-	if m == nil || m.Valid() != nil {
-		return nil, errors.New("backup authority manifest is invalid")
-	}
-	auth := &protocol.PoolBackupAuthority{}
-	digest := sha256.New()
-	if err := readPoolBackupAuthorityPages(s, m, digest, auth); err != nil {
-		return nil, err
-	}
-	if fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 || auth.Valid() != nil {
-		return nil, errors.New("backup authority bundle is invalid")
-	}
-	if len(auth.Repositories) != m.Repositories || len(auth.Definitions) != m.Definitions ||
-		len(auth.History) != m.History || len(auth.Catalog) != m.Catalog || len(auth.Pins) != m.Pins ||
-		len(auth.MetadataReceipts) != m.MetadataReceipts {
-		return nil, errors.New("backup authority bundle counts do not match")
-	}
-	return auth, nil
 }

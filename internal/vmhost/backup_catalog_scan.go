@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -167,17 +168,20 @@ func ScanBackupRepositoryPoints(repoRoot, repositoryID, poolID string) ([]protoc
 	return out, nil
 }
 
-func validatePublishedBackupPoint(pointDir string, manifest protocol.BackupManifest) error {
-	for _, disk := range manifest.Disks {
-		sum, size, err := fileSHA256(filepath.Join(pointDir, disk.Filename))
-		if err != nil || sum != disk.SHA256 || size != disk.Size {
-			return errors.New("published backup disk digest mismatch")
-		}
-	}
+// backupArtifacts lists the disk and firmware artifacts a manifest names.
+func backupArtifacts(manifest protocol.BackupManifest) []protocol.BackupDiskArtifact {
+	artifacts := slices.Clone(manifest.Disks)
 	for _, fw := range manifest.Firmware {
-		sum, size, err := fileSHA256(filepath.Join(pointDir, fw.Filename))
-		if err != nil || sum != fw.SHA256 || size != fw.Size {
-			return errors.New("published backup firmware digest mismatch")
+		artifacts = append(artifacts, protocol.BackupDiskArtifact{Filename: fw.Filename, Size: fw.Size, SHA256: fw.SHA256})
+	}
+	return artifacts
+}
+
+func validatePublishedBackupPoint(pointDir string, manifest protocol.BackupManifest) error {
+	for _, artifact := range backupArtifacts(manifest) {
+		sum, size, err := fileSHA256(filepath.Join(pointDir, artifact.Filename))
+		if err != nil || sum != artifact.SHA256 || size != artifact.Size {
+			return errors.New("published backup artifact digest mismatch")
 		}
 	}
 	return nil
@@ -187,21 +191,10 @@ func validatePublishedBackupPoint(pointDir string, manifest protocol.BackupManif
 // manifest is a regular file of the recorded size. Only a published manifest,
 // written after its artifacts were verified, may rely on it; restore still hashes.
 func CheckPublishedBackupArtifactSizes(pointDir string, manifest protocol.BackupManifest) error {
-	check := func(name string, size int64) error {
-		info, err := os.Lstat(filepath.Join(pointDir, name))
-		if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+	for _, artifact := range backupArtifacts(manifest) {
+		info, err := os.Lstat(filepath.Join(pointDir, artifact.Filename))
+		if err != nil || !info.Mode().IsRegular() || info.Size() != artifact.Size {
 			return errors.New("published backup artifact is missing or changed size")
-		}
-		return nil
-	}
-	for _, disk := range manifest.Disks {
-		if err := check(disk.Filename, disk.Size); err != nil {
-			return err
-		}
-	}
-	for _, fw := range manifest.Firmware {
-		if err := check(fw.Filename, fw.Size); err != nil {
-			return err
 		}
 	}
 	return nil

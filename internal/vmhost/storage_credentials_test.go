@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost/vmhosttest"
 )
 
 func testCredentialHandoff() protocol.StorageCredentialHandoff {
@@ -327,7 +328,7 @@ func TestStorageCredentialIsSealedAndUnitLoadsItEncrypted(t *testing.T) {
 	t.Cleanup(func() { runSystemdCreds = previous })
 	runSystemdCreds = func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
 		calls = append(calls, name+" "+strings.Join(args[:3], " "))
-		return FakeSystemdCreds(ctx, stdin, name, args...)
+		return vmhosttest.FakeSystemdCreds(ctx, stdin, name, args...)
 	}
 	handoff := protocol.StorageCredentialHandoff{
 		Offer:       protocol.StorageCredentialOffer{RequestID: "req-1", RegistrationRequestID: "req-1", PoolID: "pool-1", HostID: "host-1"},

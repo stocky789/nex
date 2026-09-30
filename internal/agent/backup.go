@@ -94,7 +94,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				http.Error(w, "invalid SMB repository capability request", http.StatusBadRequest)
 				return
 			}
-			prepared, err := preparePeerSMBRepository(r.Context(), s, body.Repository, &body.ExpectedIdentity)
+			prepared, err := preparePeerRepository(r.Context(), s, body.Repository, &body.ExpectedIdentity)
 			if err != nil {
 				http.Error(w, "SMB repository capability unavailable", http.StatusConflict)
 				return
@@ -110,7 +110,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				http.Error(w, "invalid SFTP repository capability request", http.StatusBadRequest)
 				return
 			}
-			prepared, err := preparePeerSFTPRepository(r.Context(), s, repo)
+			prepared, err := preparePeerRepository(r.Context(), s, repo, nil)
 			if err != nil {
 				http.Error(w, "SFTP repository capability unavailable", http.StatusConflict)
 				return
@@ -126,7 +126,7 @@ func PoolBackupPeerHandler(s *Store) http.Handler {
 				http.Error(w, "invalid S3 repository capability request", http.StatusBadRequest)
 				return
 			}
-			prepared, err := preparePeerS3Repository(r.Context(), s, repo)
+			prepared, err := preparePeerRepository(r.Context(), s, repo, nil)
 			if err != nil {
 				http.Error(w, "S3 repository capability unavailable", http.StatusConflict)
 				return
@@ -511,7 +511,7 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 		}
 		poolBackupAuthorityMu.Unlock()
 		if receipt.Status == "pending" && !request.ReserveOnly &&
-			(cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild") {
+			isBackupCatalogKind(cmd.Kind) {
 			return finishBackupMetadataRequest(ctx, s, request, receipt)
 		}
 		if receipt.Status == "pending" && (request.PreparedCleanup != nil || request.PreparedVerification != nil) && !request.ReserveOnly {
@@ -583,7 +583,7 @@ func settleBackupMetadataResponse(s *Store, cmd protocol.Command, receipt protoc
 	if response.Result == nil {
 		terminal := errors.Is(response.Err, ErrBackupInvalid) || errors.Is(response.Err, ErrBackupNotFound) ||
 			(cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-policy-upsert") && errors.Is(response.Err, ErrBackupConflict)
-		if response.Err != nil && (terminal || cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild") {
+		if response.Err != nil && (terminal || isBackupCatalogKind(cmd.Kind)) {
 			poolBackupAuthorityMu.Lock()
 			writeErr := requirePoolAuthorityWritable(s)
 			if writeErr == nil {
@@ -610,7 +610,7 @@ func settleBackupMetadataResponse(s *Store, cmd protocol.Command, receipt protoc
 	if err != nil {
 		return BackupResponse{Err: err}
 	}
-	if cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" {
+	if isBackupCatalogKind(cmd.Kind) {
 		if err := reconcileCatalogMetadataJournal(s, cmd.OperationID); err != nil {
 			return BackupResponse{Err: err}
 		}
@@ -624,7 +624,7 @@ func settleBackupMetadataResponse(s *Store, cmd protocol.Command, receipt protoc
 func reconcileCatalogMetadataJournal(s *Store, id string) error {
 	entry, ok := s.State.Journal[id]
 	if !ok || entry.Command == nil ||
-		(entry.Command.Kind != "backup-catalog-import" && entry.Command.Kind != "backup-catalog-rebuild") ||
+		!isBackupCatalogKind(entry.Command.Kind) ||
 		(entry.Status != "pending" && entry.Status != "needs_attention") {
 		return nil
 	}
@@ -704,7 +704,7 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 				}
 				status := receipt.Status
 				if status == "pending" && !request.PeerStatus &&
-					receipt.Kind != "backup-catalog-import" && receipt.Kind != "backup-catalog-rebuild" {
+					!isBackupCatalogKind(receipt.Kind) {
 					status = "needs_attention"
 				}
 				return BackupResponse{Result: &protocol.Result{OperationID: receipt.OperationID, Status: status, Error: receipt.Error, ObservedAt: receipt.ObservedAt}}

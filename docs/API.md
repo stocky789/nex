@@ -369,7 +369,7 @@ restore-as-new from local copies. Authenticated host-local routes:
 | Method and route | Request and result |
 |---|---|
 | `GET /api/local/v1/pool/backup-repositories` | Master's durable repository list; NFS, SMB3, S3 and SFTP are advertised on current Core |
-| `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; Core accepts validated NFS, SMB3, S3 and SFTP sources when the matching destination capability is advertised; same-ID NFS source or observed filesystem identity replacement is refused to preserve retained points; a failed first NFS/SMB3 mount start cleans its new unit so a fresh operation may retry that ID after service recovery, while exact replay retains the failure; `200` with the saved repository or retained `Result` on replay |
+| `POST /api/local/v1/pool/backup-repositories` | `{operation_id,repository}`; Core accepts validated NFS, SMB3, S3 and SFTP sources; same-ID NFS source or observed filesystem identity replacement is refused to preserve retained points; a failed first NFS/SMB3 mount start cleans its new unit so a fresh operation may retry that ID after service recovery, while exact replay retains the failure; `200` with the saved repository or retained `Result` on replay |
 | `POST /api/local/v1/pool/backup-repositories/{id}/test` | `{operation_id}`; Core checks the selected registered backend's exact identity, access and ownership prerequisites |
 
 | `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
@@ -411,17 +411,9 @@ the opaque `credential_ref`; no credential material belongs in the DTO.
 The Core health worker can probe every registered kind and reports `health` with
 `observed_at`; a result older than two minutes is `unknown`. The
 `last_health_transition` is a historical event, not a fresh access result.
-Backend health probes do not establish product acceptance for an unadvertised
-kind. Schema validation alone does not advertise backend support. Controller can
-accept a non-NFS registration only when the fresh pool master advertises
-`backup-destination-<kind>-v1` and the request names a matching acknowledged
-Core credential receipt. Current Core advertises `backup-destination-smb3-v1`,
-`backup-destination-s3-v1` and `backup-destination-sftp-v1` alongside NFS.
-Registration, backup and restore still require the corresponding Core-side
-capability on the selected pool master and matching executing host.
-API impact for capability enablement: **existing contract**; the advertised
-values change, while routes and payload shapes remain the typed contracts
-defined above.
+Controller accepts a non-NFS registration only when the request names a matching
+acknowledged Core credential receipt; Core validates the destination itself and
+refuses what it cannot serve. No destination capability strings are advertised.
 In the SMB3 candidate, Core verifies the mounted source, owner and share marker
 before reading a retained point or copying restore artifacts. Those reads do
 not require a writable share; backup publication, deletion and repository
@@ -512,7 +504,7 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | Method and route | Request and result |
 |---|---|
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
-| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt and destination capability; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
+| `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
 | `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page |
 | `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page |
@@ -636,8 +628,8 @@ Malformed scope is `400`, an unauthenticated caller is `401`, and unavailable
 credential, access or identity is `409`; an older member without the route
 cannot run the work. SFTP is advertised in the current development build.
 On join, an authenticated member also pulls the current private credential
-projections from the master through `GET /api/v1/pool/backup/credentials` when
-`backup_credential_sync` in the join response requires it. The master
+projections from the master through `GET /api/v1/pool/backup/credentials`, which
+returns an empty list when the pool has none. The master
 addresses each projection to that member. Private receipt replacement and
 retirement are checked before local adoption, and a failed pull does not imply
 the member can use a credential-bearing destination. The member reads at most
@@ -712,18 +704,17 @@ owns `create_operation_id`; signed authority transfer retains the owner record,
 and fresh Controller adoption still reads the master's VM inventory. This is a Core peer
 contract change; no Controller route or state is added.
 
-For master takeover, the signed pool authority replica may carry
-`backup_manifest` in place of inline `backup_authority`. Version 0 keeps each
-page's exact byte length and SHA-256 in the manifest, with a 64 MiB bundle,
-1024-page limit and bounded record counts. Version 2 (`version: 2`) names an
-ordered `page_count`, total bytes, full SHA-256 root and counts of repositories,
-definitions, history, catalog, pins and metadata receipts. Its `page_sha256`
-and `page_bytes` are null. Version 2 permits authority growth past the version-0
-bundle and history bounds; a record still must fit one 256 KiB page. Version 2
-pages pack whole records and end where a record's content selects, so a
-changed or appended record resends only its own page.
+For master takeover, the signed pool authority replica carries `backup_manifest`
+whenever the pool has backup state. It names an ordered `page_count`, total bytes,
+full SHA-256 root and counts of repositories, definitions, history, catalog, pins and
+metadata receipts. There is no aggregate size or record-count bound; a record must
+still fit one 256 KiB page. Pages pack whole records and end where a record's content
+selects, so a changed or appended record resends only its own page. The former inline
+`backup_authority` and per-page-hash manifest (`version`, `page_sha256`, `page_bytes`)
+are removed. API impact: **changed contract**; replicas from a build that still sends
+them are refused.
 
-Both formats use authenticated `POST /api/v1/pool/replica/backup-page`, in
+Pages use authenticated `POST /api/v1/pool/replica/backup-page`, in
 push sessions. The master opens a session with `{replica,index:-1}`. The member
 verifies the signed replica, addressed target and generation once, keeps the
 manifest as a session that expires 10 minutes after its last accepted page (one session per member; a
@@ -731,15 +722,13 @@ new open replaces it), and returns `{next_index}`. Every page request then
 carries only `{manifest_sha256,index,data|reuse_sha256}` and is accepted only
 when the session is open for that manifest root and master, and the stored
 replica has not moved past its generation; otherwise it returns `409` and the
-master reopens on its next push. Version 0 also checks each page's length and
-SHA-256 against the verified manifest (`400` on mismatch). Version 2 keeps only
-a full-stream root, so it checks each page's nonempty size and verifies the
+master reopens on its next push. It checks each page's nonempty size and verifies the
 ordered full root, total bytes, valid frames, unique record identities and all
-declared counts before acknowledging the final replica. Version 2 can instead
+declared counts before acknowledging the final replica. A page request can instead
 send `reuse_sha256` with null `data` to link an existing durable page blob; a
-missing or corrupt blob returns `404` and the master sends its bytes. Version 0
-refuses reuse hints. `data` is base64 JSON bytes of at most 256 KiB. Staged
-pages grant no authority. Once every version-2 page exists, the open request
+missing or corrupt blob returns `404` and the master sends its bytes, and a malformed
+digest returns `400`. `data` is base64 JSON bytes of at most 256 KiB. Staged
+pages grant no authority. Once every page exists, the open request
 checks the full root; a content mismatch clears the staging and requests the
 first page again, while a read failure returns `500` and keeps it. Exact
 retries resume transfer without granting authority. The old per-page signed
@@ -751,13 +740,13 @@ points, restore pins or verification receipts (100,000 each) or authority bytes
 (64 MiB) reach 80% of the limit, otherwise `healthy`. Controller only displays
 it. Usage is measured once a minute from the durable stores.
 
-Before admitting growth beyond version-0 bounds, the master requires a fresh,
+Before admitting growth of an authority past 64 MiB or 100,000 history, catalog, pin or receipt records, the master requires a fresh,
 error-free observation that each member whose replica acknowledgement is
 required holds the current generation and digest. Missing, corrupt or
-conflicting pages refuse the replica without granting authority. Every Core
-accepts both formats; there is no page-version capability.
+conflicting pages refuse the replica without granting authority. There is no
+page-version capability.
 
-Source checks exercised version-2 history beyond 64 MiB. A disposable
+Source checks exercised paged history beyond 64 MiB. A disposable
 fence-verified promotion preserved 1,052 seeded runs and passed a bounded
 post-promotion NFS backup and restore; the broader destination recovery
 matrix remains open.
@@ -905,8 +894,8 @@ does not use it. Exact operation-ID replay still returns its original result.
 Scheduler defaults: store UTC occurrence plus IANA time zone/rule; nonexistent local time is
 missed; repeated local time runs once. After Core scheduler downtime, missed occurrences are
 recorded (bounded) without catch-up storm; **Run now** is offered. Controller absence alone is
-not scheduler downtime. Durable `backup_authority` on the signed pool authority replica
-carries repositories, full policy/schedule definitions, retained run history and catalog
+not scheduler downtime. Durable `backup_manifest` on the signed pool authority replica
+binds pages that carry repositories, full policy/schedule definitions, retained run history and catalog
 index entries for master takeover (NFS recovery-point payloads are never embedded). On
 fence-verified promotion the survivor materializes those stores before advertising backup
 ops; if the catalog index is empty but a registered repository mount is usable, Core

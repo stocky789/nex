@@ -131,7 +131,7 @@ func listPoolBackupMetadataReceipts(s *Store) ([]protocol.BackupMetadataReceipt,
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		receipt, err := loadPoolBackupMetadataReceipt(s, stringsTrimSuffixJSON(entry.Name()))
+		receipt, err := loadPoolBackupMetadataReceipt(s, strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
@@ -637,21 +637,18 @@ func TestPoolBackupRepositoryAccess(s *Store, id string) (protocol.BackupReposit
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	repo, err = checkBackupRepositoryAccessForStore(context.Background(), s, repo)
-	if err != nil {
-		return protocol.BackupRepository{}, err
-	}
+	repo = checkBackupRepositoryAccessForStore(context.Background(), s, repo)
 	return repo, savePoolBackupRepositoryAccess(s, repo)
 }
 
-func checkBackupRepositoryAccessForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
+func checkBackupRepositoryAccessForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) protocol.BackupRepository {
 	repo.Health = protocol.BackupRepositoryHealth{}
 	if err := probeBackupRepositoryForStore(ctx, s, repo); err != nil {
 		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: time.Now().UTC()}
 	} else {
 		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: time.Now().UTC()}
 	}
-	return repo, nil
+	return repo
 }
 
 func probeBackupRepositoryForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) error {
@@ -909,7 +906,7 @@ func listPoolBackupRuns(s *Store) ([]protocol.BackupRun, error) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		run, err := loadPoolBackupRun(s, stringsTrimSuffixJSON(entry.Name()))
+		run, err := loadPoolBackupRun(s, strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
@@ -922,10 +919,6 @@ func listPoolBackupRuns(s *Store) ([]protocol.BackupRun, error) {
 		return out[i].OperationID < out[j].OperationID
 	})
 	return out, nil
-}
-
-func stringsTrimSuffixJSON(name string) string {
-	return name[:len(name)-len(".json")]
 }
 
 // ReservePoolBackupRun persists the durable master run record before native effects.

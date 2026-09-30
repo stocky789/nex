@@ -27,10 +27,20 @@ import (
 
 type persistenceError struct{ error }
 
-var backupDestinationCapabilities = []string{
-	"backup-destination-smb3-v1",
-	"backup-destination-s3-v1",
-	"backup-destination-sftp-v1",
+func isBackupCatalogKind(kind string) bool {
+	return kind == "backup-catalog-import" || kind == "backup-catalog-rebuild"
+}
+
+// catalogAttentionResult is a catalog command's outcome when it did not start or did not finish.
+func catalogAttentionResult(operationID string, response BackupResponse) protocol.Result {
+	if response.Result != nil {
+		return *response.Result
+	}
+	result := protocol.Result{OperationID: operationID, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
+	if response.Err != nil {
+		result.Error = response.Err.Error()
+	}
+	return result
 }
 
 var peerBackupRequests sync.Map // *Store -> chan BackupRequest
@@ -549,7 +559,6 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	// defines the second CD drive either way, but the capability is the Controller's signal
 	// that it may send drive="drivers", and a strict v1 decoder must not be handed v2 names.
 	capabilities := []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.PowerQueueCapability, protocol.MediaCapability, protocol.ISODownloadCapability, protocol.UpdateCapability, protocol.VMTagsCapability, protocol.DeleteCapability, protocol.DriversDriveCapability, protocol.UsageHistoryCapability, protocol.CPUBaselineCapability, protocol.ManagementNetworkCapability, protocol.HostHardwareCapability}
-	capabilities = append(capabilities, backupDestinationCapabilities...)
 	if s.State.StorageProtocolLegacy {
 		version = protocol.LegacyVersion
 		capabilities = []string{protocol.ManagedVMCapability, protocol.ConsoleCapability, protocol.HostConsoleCapability, protocol.PowerCapability, protocol.MediaCapability, protocol.UpdateCapability, protocol.DeleteCapability, protocol.UsageHistoryCapability}
@@ -1026,7 +1035,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	reconcileCatalogReceipts := func() {
 		for id, entry := range s.State.Journal {
 			if entry.Command == nil || entry.Status != "pending" && entry.Status != "needs_attention" ||
-				entry.Command.Kind != "backup-catalog-import" && entry.Command.Kind != "backup-catalog-rebuild" {
+				!isBackupCatalogKind(entry.Command.Kind) {
 				continue
 			}
 			if err := reconcileCatalogMetadataJournal(s, id); err != nil {
@@ -1414,7 +1423,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			var prepared protocol.BackupRepository
 			var err error
 			if request.Command.Kind == "backup-repository-test" {
-				prepared, err = checkBackupRepositoryAccessForStore(work, s, repo)
+				prepared = checkBackupRepositoryAccessForStore(work, s, repo)
 			} else {
 				prepared, err = prepareBackupRequestRepository(work, s, request, repo)
 			}
@@ -1501,7 +1510,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	}
 	startBackupCatalog := func(request BackupRequest) BackupResponse {
 		if request.Command == nil || request.Command.CatalogImport == nil ||
-			(request.Command.Kind != "backup-catalog-import" && request.Command.Kind != "backup-catalog-rebuild") {
+			!isBackupCatalogKind(request.Command.Kind) {
 			return BackupResponse{Err: ErrBackupInvalid}
 		}
 		cmd := *request.Command
@@ -1614,7 +1623,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					}
 				} else if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" ||
 					cmd.Kind == "backup-policy-upsert" || cmd.Kind == "backup-policy-pause" || cmd.Kind == "backup-policy-run-now" ||
-					cmd.Kind == "backup-protect" || cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" ||
+					cmd.Kind == "backup-protect" || isBackupCatalogKind(cmd.Kind) ||
 					cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-test-cleanup" {
 					if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" {
 						if prepErr := startBackupPreparation(BackupRequest{Command: &cmd}, id); prepErr == nil {
@@ -1713,19 +1722,13 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 							continue
 						}
 					}
-					if cmd.Kind == "backup-catalog-import" || cmd.Kind == "backup-catalog-rebuild" {
+					if isBackupCatalogKind(cmd.Kind) {
 						response := startBackupCatalog(BackupRequest{Command: &cmd})
 						if response.Result != nil && response.Result.Status == "pending" {
 							preparingBackupRepo[id] = true
 							continue
 						}
-						result := protocol.Result{OperationID: id, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
-						if response.Result != nil {
-							result = *response.Result
-						} else if response.Err != nil {
-							result.Error = response.Err.Error()
-						}
-						if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
+						if err := completeBackgroundManagedCommand(s, managedCompletion{result: catalogAttentionResult(id, response), background: true}, cfg.history); err != nil {
 							return err
 						}
 						continue
@@ -1848,7 +1851,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
-			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
+			if request.Command != nil && isBackupCatalogKind(request.Command.Kind) {
 				request.Reply <- startBackupCatalog(request)
 				break
 			}
@@ -1899,7 +1902,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
-			if request.Command != nil && (request.Command.Kind == "backup-catalog-import" || request.Command.Kind == "backup-catalog-rebuild") {
+			if request.Command != nil && isBackupCatalogKind(request.Command.Kind) {
 				request.Reply <- startBackupCatalog(request)
 				break
 			}
@@ -1923,13 +1926,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			// A Controller command that joined a catalog run started elsewhere waits on it too.
 			if journalID := completion.command.OperationID; preparingBackupRepo[journalID] {
 				delete(preparingBackupRepo, journalID)
-				result := protocol.Result{OperationID: journalID, Status: "needs_attention", Error: "backup catalog recovery needs attention", ObservedAt: time.Now().UTC()}
-				if response.Result != nil {
-					result = *response.Result
-				} else if response.Err != nil {
-					result.Error = response.Err.Error()
-				}
-				if err := completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
+				if err := completeBackgroundManagedCommand(s, managedCompletion{result: catalogAttentionResult(journalID, response), background: true}, cfg.history); err != nil {
 					return err
 				}
 			}

@@ -48,32 +48,14 @@ func TestBackupPageValidationRejectsForeignAndDuplicateRows(t *testing.T) {
 		{OperationID: "run-1", Kind: protocol.BackupKindBackupNow, PoolID: "pool-1", RepositoryID: "repo-1", Stage: "failed", Status: "failed", CreatedAt: time.Now().UTC()},
 	}}
 	b, _ := json.Marshal(page)
-	if validBackupRelayPage(b, "pool-1", false, "") {
+	if validBackupRelayPage(b, "pool-1", false) {
 		t.Fatal("accepted duplicate backup run")
 	}
 	page.Items[1].OperationID = "run-2"
 	page.Items[1].PoolID = "other-pool"
 	b, _ = json.Marshal(page)
-	if validBackupRelayPage(b, "pool-1", false, "") {
+	if validBackupRelayPage(b, "pool-1", false) {
 		t.Fatal("accepted foreign-pool backup run")
-	}
-}
-
-func TestBackupPageValidationAcceptsCursorArithmetic(t *testing.T) {
-	point := protocol.BackupRecoveryPoint{ID: "point-1", RepositoryID: "repo-1", PoolID: "pool-1", SourceVMID: "vm-1", CapturedAt: time.Now().UTC(),
-		Consistency: "stopped", ManifestSHA256: strings.Repeat("b", 64)}
-	page := protocol.BackupCatalogPage{Generation: strings.Repeat("a", 64), Total: 66, Items: []protocol.BackupRecoveryPoint{point}, NextCursor: "65"}
-	b, _ := json.Marshal(page)
-	if !validBackupRelayPage(b, "pool-1", true, "64") {
-		t.Fatal("rejected a valid middle page")
-	}
-	page.NextCursor = ""
-	b, _ = json.Marshal(page)
-	if validBackupRelayPage(b, "pool-1", true, "64") {
-		t.Fatal("accepted a last page that stops before total")
-	}
-	if !validBackupRelayPage(b, "pool-1", true, "65") {
-		t.Fatal("rejected a valid last page")
 	}
 }
 

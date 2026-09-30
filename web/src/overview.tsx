@@ -10,7 +10,7 @@ import { unfinished } from "./dock";
 import { operationLabel, relativeTime } from "./labels";
 import { Icon } from "./icons";
 import { AttentionList, Badge, Meter, badgeTone, monotone, date } from "./ui";
-import { type BackupCatalogPage, type BackupRecoveryPoint, type BackupRun, type BackupRunPage } from "./backup-types";
+import { type BackupCatalogPage, type BackupRunPage } from "./backup-types";
 import "./overview.css";
 
 export { monotone };
@@ -53,9 +53,7 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const [range, setRange] = useState<ChartRange>("1D");
   const [histories, setHistories] = useState<StatsHistory[] | null>(null);
   const [members, setMembers] = useState<Report | null>(null);
-  const [catalog, setCatalog] = useState<BackupRecoveryPoint[] | null>(null);
   const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
-  const [backupRuns, setBackupRuns] = useState<BackupRun[] | null>(null);
   const [runPage, setRunPage] = useState<BackupRunPage | null>(null);
   const [backupError, setBackupError] = useState(false);
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
@@ -84,22 +82,18 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   }, [pool?.id]);
   useEffect(() => {
     if (!pool) {
-      setCatalog(null);
       setCatalogPage(null);
-      setBackupRuns(null);
       setRunPage(null);
       return;
     }
     let live = true;
     const load = () => {
       void api<BackupCatalogPage>(`pools/${encodeURIComponent(pool.id)}/backup-catalog`)
-        .then(response => { if (live) { setCatalog(response.items); setCatalogPage(response); setBackupError(false); } }, () => { if (live) { setCatalog(null); setCatalogPage(null); setBackupError(true); } });
+        .then(response => { if (live) { setCatalogPage(response); setBackupError(false); } }, () => { if (live) { setCatalogPage(null); setBackupError(true); } });
       void api<BackupRunPage>(`pools/${encodeURIComponent(pool.id)}/backup-runs`)
-        .then(response => { if (live) { setBackupRuns(response.items); setRunPage(response); } }, () => { if (live) { setBackupRuns(null); setRunPage(null); } });
+        .then(response => { if (live) { setRunPage(response); } }, () => { if (live) { setRunPage(null); } });
     };
-    setCatalog(null);
     setCatalogPage(null);
-    setBackupRuns(null);
     setRunPage(null);
     setBackupError(false);
     load();
@@ -144,9 +138,9 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const storageShare = capacity ? 100 * (capacity - free) / capacity : null;
 
   const attention = attentionItems(data, hosts, vms, storage, coreAvailable);
-  const failedBackups = runPage?.attention_count ?? backupRuns?.filter(r => ["failed", "missed", "needs_attention"].includes(r.status)).length ?? 0;
+  const failedBackups = runPage?.attention_count ?? 0;
   if (failedBackups) attention.push({ tone: "bad", title: `${failedBackups} backup or restore runs need attention`, detail: "Review Core run outcomes and errors.", href: "#/backups" });
-  const untestedPoints = catalogPage?.untested_count ?? catalog?.filter(p => p.last_test_result !== "passed").length ?? 0;
+  const untestedPoints = catalogPage?.untested_count ?? 0;
   if (untestedPoints) attention.push({ tone: "warn", title: `${untestedPoints} recovery points lack a passed restore test`, detail: "Test a point before relying on it.", href: "#/backups" });
 
   const sharedStorage = storage.filter(s => s.capabilities?.shared);
@@ -161,27 +155,24 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
   const running = ops.filter(o => unfinished.has(o.status)).length;
   const staleHosts = hosts.length - fresh.length;
   const memoryNow = last(usage.memory);
-  const backupPoints = catalog
-    ? [...catalog].sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""))
+  const backupPoints = catalogPage
+    ? [...catalogPage.items].sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || ""))
     : null;
   const lastBackup = backupPoints?.[0] || null;
-  const lastRun = runPage ? runPage.last_backup_run || null : backupRuns?.filter(r => ["backup-now", "backup-scheduled", "backup-policy-run-now"].includes(r.kind))
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] || null;
-  const lastRestoreTest = catalogPage ? catalogPage.last_restore_test ? { last_tested_at: catalogPage.last_restore_test.tested_at, last_test_result: catalogPage.last_restore_test.result } : null : backupPoints
-    ?.filter(p => p.last_tested_at)
-    .sort((a, b) => (b.last_tested_at || "").localeCompare(a.last_tested_at || ""))[0] || null;
+  const lastRun = runPage?.last_backup_run || null;
+  const lastRestoreTest = catalogPage?.last_restore_test || null;
   const nights = Array.from({ length: 14 }, (_, i) => {
     const day = new Date();
     day.setUTCHours(0, 0, 0, 0);
     day.setUTCDate(day.getUTCDate() - (13 - i));
     const key = day.toISOString().slice(0, 10);
-    return catalogPage ? catalogPage.backup_days_14.includes(key) : backupPoints?.some(p => (p.captured_at || "").slice(0, 10) === key) ?? false;
+    return catalogPage?.backup_days_14.includes(key) ?? false;
   });
   const backupsSummary = !pool
     ? "Choose a pool"
     : backupError
       ? "Backup catalog unavailable"
-      : catalog == null
+      : catalogPage == null
         ? "Loading…"
       : lastBackup
         ? `Last ${date(lastBackup.captured_at)}`
@@ -265,9 +256,9 @@ export function Overview({ data, site, pool, hosts, vms, api, coreAvailable, loa
         <span className="sr-only">Completed backups on {nights.filter(Boolean).length} of the last 14 UTC days.</span>
         <dl className="ov-kv">
           <dt>Last run</dt>
-          <dd>{!pool ? <span className="muted">Choose a pool</span> : lastRun ? <>{date(lastRun.updated_at)} · <Badge value={lastRun.status} /></> : backupRuns === null ? <span className="muted">Unavailable</span> : <span className="muted">Never</span>}</dd>
+          <dd>{!pool ? <span className="muted">Choose a pool</span> : lastRun ? <>{date(lastRun.updated_at)} · <Badge value={lastRun.status} /></> : runPage === null ? <span className="muted">Unavailable</span> : <span className="muted">Never</span>}</dd>
           <dt>Last restore test</dt>
-          <dd>{!pool ? <span className="muted">Choose a pool</span> : backupError ? <span className="muted">Unavailable</span> : catalog == null ? <span className="muted">Loading…</span> : lastRestoreTest ? <>{date(lastRestoreTest.last_tested_at)}{lastRestoreTest.last_test_result ? ` · ${lastRestoreTest.last_test_result}` : ""}</> : <span className="muted">Never</span>}</dd>
+          <dd>{!pool ? <span className="muted">Choose a pool</span> : backupError ? <span className="muted">Unavailable</span> : catalogPage == null ? <span className="muted">Loading…</span> : lastRestoreTest ? <>{date(lastRestoreTest.tested_at)}{lastRestoreTest.result ? ` · ${lastRestoreTest.result}` : ""}</> : <span className="muted">Never</span>}</dd>
         </dl>
       </Tile>
       <Tile {...tile("resilience")} title="Resilience"

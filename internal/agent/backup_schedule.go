@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -297,7 +298,7 @@ func ReservePolicyRunNow(s *Store, policyID, vmID, operationID string) (protocol
 	if err != nil {
 		return protocol.BackupRun{}, err
 	}
-	if vmID == "" || !containsString(policy.VMIDs, vmID) {
+	if vmID == "" || !slices.Contains(policy.VMIDs, vmID) {
 		return protocol.BackupRun{}, ErrBackupInvalid
 	}
 	vm, err := lookupPoolVMSpec(s, vmID)
@@ -364,13 +365,4 @@ func queuePolicyRunNowBackup(s *Store, cmd protocol.Command, policyID, vmID stri
 		return nil // Core-local member runs use the master's peer scheduler.
 	}
 	return applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}})
-}
-
-func containsString(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }

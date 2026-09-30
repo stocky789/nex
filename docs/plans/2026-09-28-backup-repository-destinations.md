@@ -1,7 +1,5 @@
 # Backup repository destinations and health
 
-Paused-work continuation: [remaining work and safe handover](2026-09-28-backup-repository-destinations-handover.md).
-
 Date: 2026-09-28. Status: implementation plan; no new destination or automatic
 repository health check is implemented by this document. Owner: project owner.
 
@@ -30,7 +28,7 @@ red/green source checks and independent review passed for a Controller fix.
 A later clean two-Core fixture ran a verified historical Controller through
 that exact acknowledged-result gap, then replaced only Controller with the
 current build. The original task settled from Core inventory without another
-fence or transfer; details are in the continuation handover and QA report.
+fence or transfer; details are in the QA report.
 A post-promotion NFS backup initially published a complete manifest and two
 matching artifacts while lagging-member authority admission left its run
 pending. BUG-0687's exact-replay fix settled that original operation without
@@ -131,130 +129,16 @@ on the same underlying storage as an independent backup.
 
 ## Implementation status and correction boundary
 
-The development worktree now contains typed NFS, SMB3, S3 and SFTP repository
-sources, Core destination storage implementations, credential handoff, health
-probes and Controller form changes. These are implementation candidates, not
-supported destinations. Source checks and selected service smoke checks are
-recorded in [destination QA](../qa/2026-09-28-backup-repository-destinations.md);
-bounded four-kind product backup and restore passed, while the complete
-per-kind fault and lifecycle acceptance matrix remains open.
-Native diagnostic probing found stale credential errors for transient S3/SFTP
-member preparation and SMB3 identity conflicts despite a matching share
-marker. Focused red/green source checks passed after persisting member-local
-registration before probe and comparing stable SMB share/marker identity.
-Matched native probes later reported the selected repositories readable and
-writable on both members after SFTP, S3 and SMB3 outages; broader expiry and
-browser recapture checks remain open.
-An SFTP cross-host restore was refused by the member after submission; its
-peer repository preparation source fix passed a focused regression. A later
-fresh request stayed pending because reconciliation polled a missing member
-operation; its peer 404 source fix passed focused red/green checks, while
-the fresh native cross-host restore later succeeded on both hosts with
-isolated disk-marker readback in a lab-only SFTP capability overlay. Broader
-interruption and recovery checks remain open. An earlier Controller-absent SMB3 scheduled
-run later settled succeeded with one catalog point in a selected disposable
-capability-only lab; broader schedule and recovery acceptance remain open.
-Later separate Controller-absent S3 and SFTP policy slots each published one
-point and one succeeded run on matched disposable Core guests. Those policies
-were paused afterward. Four-kind post-promotion dispatch later passed with
-Controller absent; missed Core-down slots and interrupted dispatch remain open.
-In a later service-down schedule check, S3 and SFTP each settled one failed
-run and no point while its destination was offline; both probes returned
-online after service recovery, and the existing 19 catalog points remained.
-This does not prove missed Core-down slots, interrupted publication or alert
-deduplication.
-Later Controller-absent policy Run now and `keep_latest=1` retention passed
-for all four kinds with protected older points retained. NFS and SMB3 passed
-selected missing-index catalog rebuilds. A larger S3 scan exposed BUG-0695:
-Core-local HTTP timed out and exact retry could not resume its pending receipt.
-The changed Core returns `202/pending` and runs the bounded scan independently
-of the request; the same S3 operation settled after a Core restart. Its
-missing index had already been restored before that retry. The older SFTP
-fixture contained incomplete delete records, so Core refused rebuild and the
-selected local index was restored. A later full-pool check passed a fresh
-missing-index S3 rebuild and a separate clean SFTP missing-index rebuild;
-their selected points returned byte-for-byte. Interrupted prune recovery
-remains open for the older SFTP repository.
-BUG-0698 then found a separate interrupted NFS/SMB3 prune gap: partial
-filesystem deletion blocked exact settlement and rebuild. A durable
-destination delete intent now lets Core finish only a recorded prune, while
-corrupt unrecorded points remain refused. Focused red/green and race checks,
-the full agent suite and independent source review passed. A new disposable
-fixture then used a documented ignored hook to stop Core with a partial NFS
-and SMB3 prune; after process death and restart on the clean current-source
-capability overlay, exact operations resumed once, rebuild passed and the
-new/protected points and source disk hashes survived. Broader interruption
-and final release proof remain open. API impact: **existing contract**
-for retention and catalog-rebuild retry behavior. State owner: **Core** catalog
-and run with a durable destination delete intent; guide impact: updated.
-At that checkpoint, the operator guide retained NFS instructions only; it now
-covers all four enabled destinations. Core's scheduled
-jobs already carry `repository_id`; no second selection mechanism is needed.
-
-Later bounded matched-build labs passed stopped two-disk backup and cross-host
-restore for all four kinds after the original disks were made unavailable;
-the NFS restore was repeated after the peer identity patch. Restored disks
-were read through an isolated read-only Linux guest. All five registered
-repositories, including two SMB3 shares, eventually reported both members
-readable and writable after selected service outages. The fixture's source
-VM disks were markers without a guest OS. A later selected low-resource lab
-used a bootable two-disk zero-NIC guest: NFS, S3, SFTP and SMB3 each passed
-online crash-consistent backup and independent cross-host restoration with
-both original disks unavailable. Read-only marker hashes matched and each
-isolated restored guest updated its boot marker. NFS also passed a bounded
-lost-HTTP-reply exact retry. BUG-0691 corrected S3/SFTP QEMU staging under a
-root-only path, and a deliberately inaccessible work-root failure settled one
-failed run with no point. BUG-0692 corrected transient S3 peer readback
-classification: the same member-completed restore later reconciled on the
-master without a second VM. These are bounded local checks and do not prove
-application recovery beyond the planted markers. The full per-kind lifecycle,
-fault, promotion, and installed-package gates below remain open. These labs
-used ignored capability overlays for SMB3, S3 and SFTP, and all selected
-fixture processes were stopped afterward.
-In a later matched Controller-absent fixture, all four kinds passed Core-local
-test restore, isolated boot and two-disk marker readback, recorded `passed`
-verification, and cleanup of the test VM and disks while retaining the point.
-The selected S3 guest needed an exact-ID force stop after ACPI shutdown timed
-out. Interrupted cleanup and application-level recovery beyond the planted
-markers remain open. A read-only native SFTP VM/disk absence receipt was saved
-after independent review identified that evidence gap.
-A later matched disposable S3 Controller policy Run now returned HTTP 202,
-settled succeeded and published one run/point; exact replay returned the same
-operation. A second request discarded its HTTP reply, and exact replay found
-the already dispatched operation, which also settled with one run/point.
-Controller Run now was then exercised for NFS, SMB3 and SFTP: each submission and
-exact replay settled one succeeded/published run and point. A live browser
-SMB3 policy switch submitted HTTP 202 and Core reported the new repository
-at revision 2. A separate live browser SFTP credential handoff returned
-HTTP 201, but the queued repository registration failed on Core with no new
-repository while a ready member guest was off. BUG-0694 traced the failure to
-mandatory pre-commit credential delivery to that member. After a red/green
-source fix and independent review, a matched disposable Core build passed a
-second live browser SFTP credential handoff and registration with that guest
-still off. The reconnecting guest later reported read/write access and a
-verified signed replica at the master's generation with a repository manifest.
-Credential rotation, broader post-promotion access faults and interruption
-recovery remain open;
-all fixture processes were stopped afterward.
-An independent review found that terminal capture/upload failures could retain
-full local staged disks. BUG-0693 now cleans up after a confirmed inactive
-native job; its partial-conversion regression failed before and passed after
-the fix. A selected disposable stopped NFS backup then injected a partial
-conversion failure: one failed run, no staged directory or recovery point,
-and exact failed-result replay. Online/interrupted-upload cleanup remains
-open; the fault hook and fixture processes were stopped.
-
-Existing SMB VM-storage mount and identity code is reused, but service mount
-smoke does not prove backup publication or recovery on CIFS. S3 and SFTP use
-remote object/file transfers and need selected server profiles that pass the
-publication, crash-durability, prune and restore checks below. The worktree's
-SFTP prune path has bounded lab evidence. Focused red-before/green-after
-checks cover an interrupted S3/SFTP deletion-record hole. Matched native
-permission faults after a durable delete record recovered exactly for S3 and
-SFTP; abrupt deletion and crash-durability retests remain open. A follow-up
-red/green SFTP check covers exact retry after a partially written completion
-marker, with native remote interruption proof still open. Do not infer support from a typed
-API, a visible form or a service probe.
+The tree holds typed NFS, SMB3, S3 and SFTP repository sources, Core destination
+storage, credential handoff, health probes and the Controller form changes. They are
+implementation candidates, not proven destinations. Bounded disposable-lab runs passed
+stopped and online two-disk backup, cross-host restore, test restore, retention and
+catalog rebuild for selected server profiles, but the complete per-kind fault and
+lifecycle matrix has not run on the current tree. Results, and which of them predate
+the BUG-0716 to BUG-0752 fixes, are in the [QA report](../qa/2026-09-28-backup-repository-destinations.md).
+Service smoke does not prove backup publication or recovery on CIFS, S3 or SFTP; do not
+infer support from a typed API, a visible form or a service probe. Core's scheduled jobs
+already carry `repository_id`, so no second selection mechanism is needed.
 
 ## Core state and changed contracts
 
@@ -493,27 +377,7 @@ host-key threat model equals systemd-creds' host key. Sealed files are host-boun
 host needs the credential redelivered. Calls pass `--no-ask-password`; test binaries refuse the
 real tool. **Needs real-host boot verification** (TPM2 and host-key hosts, reboot remount).
 
-## 2026-09-29 review and fix pass
-
-**Reviewed:** a second independent source review of the destination candidate
-covered the SFTP, S3 and NFS/SMB3 backends, member dispatch, backup flow
-(publication, retention, restore, catalog rebuild, history pages), backup
-authority replication and promotion, credentials and the Controller relay/UI.
-
-**Fixed:** BUG-0716 to BUG-0736 in the [bug ledger](../BUG_LEDGER.md), with
-change records dated 2026-09-29 under [`docs/changes/`](../changes/). In short:
-repository I/O no longer reads whole points under the pool lock, and S3/SFTP
-stalls are bounded; prune, protect and rebuild check sizes only; SFTP and S3
-recover partial markers, interrupted prunes and refused registrations; SMB3
-keeps its share identity through promotion and NFS/SMB3 mounts are
-`nosuid,nodev,noexec`; member runs that never started or need attention
-settle; retention keeps the point it settles and skips (and names) points it
-cannot delete; restores that fail before any effect settle failed; interrupted
-publication is reconciled rather than captured again; v2 authority replicates,
-settles and promotes at scale; joining or ejecting a host erases the former
-pool's backup credentials; Controller relays page errors correctly. A later
-cleanup removed the old-version handshakes and fallbacks (backup-v1, page
-support, hostname backfill, mirrored catalog/run arrays).
+## Decisions and remaining work
 
 **Owner decisions made:**
 
@@ -540,12 +404,6 @@ support, hostname backfill, mirrored catalog/run arrays).
   credential file and must be detached once. Open: after a reboot Core does not
   remount the SMB3 repository (the password is gone); it is remade only when
   Core prepares the repository again.
-
-**Evidence:** most fixes have focused Go or web tests shown failing against
-the prior source and passing now; the few without a dedicated test say so in
-their ledger entry or record. **None of these fixes has lab, native-server or
-forge CI evidence yet**; earlier native results in the
-[QA report](../qa/2026-09-28-backup-repository-destinations.md) predate them.
 
 **Open owner decisions:**
 
@@ -580,9 +438,11 @@ re-observed; probe loops read the live Store off the Run loop; the remaining
 older-Core pool capability gates, `ReadPoint`, the unbound restore allocation
 shim and `markLegacyPeerBackupJournal` await legacy cleanup.
 
-API impact of this section: **none** (it records decisions; each fix's record
-states its own impact). Guide impact: **none** here; the fix records name
-their guide pages.
+**Remaining gates:** run the common matrix above on the current tree, with a detached
+lab NFS/SMB3 mount unit from older builds; real-host boot verification of sealed SMB3
+credentials; the final enabled-build guide walkthrough and live browser review; a signed
+package/ISO component and source review before distribution; forge CI after an
+owner-authorized push. No CI run exists for this candidate.
 
 ## Delivery and acceptance
 

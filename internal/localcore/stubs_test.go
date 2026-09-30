@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"nex.local/nex/internal/vmhost"
+	"nex.local/nex/internal/vmhost/vmhosttest"
 )
 
 // TestMain keeps this package's tests off the developer's real hypervisor. Several paths shell
@@ -40,6 +41,6 @@ func runWithStubbedHostTools(m *testing.M) (int, error) {
 	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
 		return 0, err
 	}
-	vmhost.SetSystemdCredsRunner(vmhost.FakeSystemdCreds)
+	vmhost.SetSystemdCredsRunner(vmhosttest.FakeSystemdCreds)
 	return m.Run(), nil
 }

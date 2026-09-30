@@ -33,7 +33,7 @@ func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 	master, member := lab.host("master-1"), lab.host("member-1")
 	repo := testPeerSMBRepository(t, master)
 	portable := portablePeerRepository(repo)
-	if _, err := preparePeerSMBRepository(context.Background(), member, portable, repo.SMBIdentity); err == nil {
+	if _, err := preparePeerRepository(context.Background(), member, portable, repo.SMBIdentity); err == nil {
 		t.Fatal("member prepared SMB without its private receipt")
 	}
 	projection, err := exportPeerBackupCredential(master, repo, member.State.HostID)
@@ -50,13 +50,13 @@ func TestPeerSMBPreflightRequiresPrivateReceiptExactIdentity(t *testing.T) {
 		got.SMBIdentity = repo.SMBIdentity
 		return got, nil
 	}
-	prepared, err := preparePeerSMBRepository(context.Background(), member, portable, repo.SMBIdentity)
+	prepared, err := preparePeerRepository(context.Background(), member, portable, repo.SMBIdentity)
 	if err != nil || !samePeerSMBIdentity(prepared.SMBIdentity, repo.SMBIdentity) {
 		t.Fatalf("member SMB capability: %+v, %v", prepared, err)
 	}
 	wrongIdentity := *repo.SMBIdentity
 	wrongIdentity.MarkerID = strings.Repeat("b", 32)
-	if _, err := preparePeerSMBRepository(context.Background(), member, portable, &wrongIdentity); !errors.Is(err, ErrBackupConflict) {
+	if _, err := preparePeerRepository(context.Background(), member, portable, &wrongIdentity); !errors.Is(err, ErrBackupConflict) {
 		t.Fatalf("wrong share marker accepted: %v", err)
 	}
 }

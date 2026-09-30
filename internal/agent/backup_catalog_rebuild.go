@@ -188,16 +188,3 @@ func writeRetainedOriginal(s *Store, rec retainedOriginalRecord) error {
 	}
 	return vmhost.AtomicWrite(retainedOriginalPath(s, rec.OperationID), raw, 0600)
 }
-
-// LoadRetainedOriginal returns the recover-original path for a replace operation.
-func LoadRetainedOriginal(s *Store, operationID string) (retainedOriginalRecord, error) {
-	raw, err := os.ReadFile(retainedOriginalPath(s, operationID))
-	if err != nil {
-		return retainedOriginalRecord{}, err
-	}
-	var rec retainedOriginalRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return retainedOriginalRecord{}, err
-	}
-	return rec, nil
-}

@@ -2,7 +2,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import type { API, Data, Operation, Pool } from "./types";
 import { Panel, Section, Badge, date } from "./ui";
-import { availableBackupKinds, backupOpID, repositoryHealth, stableBody, type BackupRepository } from "./backup-types";
+import { backupOpID, repositoryHealth, stableBody, type BackupRepository } from "./backup-types";
 
 export type BackupPolicy = {
   id: string;
@@ -47,6 +47,7 @@ type Props = {
 };
 
 type Step = 1 | 2 | 3;
+type SwitchDraft = { policy: BackupPolicy; target: string; targetRepo: BackupRepository | null; confirmed: boolean; uncertain: boolean; taskStatus: string };
 
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -89,22 +90,16 @@ export function BackupPolicies({
   const [keepLatest, setKeepLatest] = useState(7);
   const [runVM, setRunVM] = useState<Record<string, string>>({});
   const [uncertain, setUncertain] = useState(false);
-  const [switching, setSwitching] = useState<BackupPolicy | null>(null);
-  const [switchTarget, setSwitchTarget] = useState("");
-  const [switchTargetRepo, setSwitchTargetRepo] = useState<BackupRepository | null>(null);
-  const [switchConfirmed, setSwitchConfirmed] = useState(false);
-  const [switchUncertain, setSwitchUncertain] = useState(false);
-  const [switchTaskStatus, setSwitchTaskStatus] = useState("");
+  const [switchDraft, setSwitchDraft] = useState<SwitchDraft | null>(null);
+  const patchSwitch = (values: Partial<SwitchDraft>) => setSwitchDraft(cur => cur && { ...cur, ...values });
+  const { policy: switching, target: switchTarget = "", targetRepo: switchTargetRepo, confirmed: switchConfirmed = false, uncertain: switchUncertain = false, taskStatus: switchTaskStatus = "" }: Partial<SwitchDraft> = switchDraft ?? {};
   const pendingPause = useRef<Record<string, { paused: boolean }>>({});
   const pendingSwitch = useRef<Record<string, ReturnType<typeof repositoryChangeBody>>>({});
   const poolVMs = useMemo(() => data.vms.filter(v => v.pool_id === pool.id && !v.protected), [data.vms, pool.id]);
   const selectedRepository = repos.find(r => r.id === repo);
   const selectedHealth = selectedRepository ? repositoryHealth(selectedRepository) : "unknown";
-  const master = data.hosts.find(h => h.id === pool.master_host_id);
-  const supportedKinds = availableBackupKinds(master?.connection, master?.capabilities);
-  const switchRepos = repos.filter(r => supportedKinds.includes(r.kind));
   const oldSwitchRepo = repos.find(r => r.id === switching?.repository_id);
-  const newSwitchRepo = switchUncertain ? switchTargetRepo : switchRepos.find(r => r.id === switchTarget);
+  const newSwitchRepo = switchUncertain ? switchTargetRepo : repos.find(r => r.id === switchTarget);
 
   const blocker = (() => {
     if (unavailable) return "Controller inventory could not be loaded.";
@@ -236,10 +231,7 @@ export function BackupPolicies({
       const reply = await requestRepositoryChange(api, pool.id, switching.id, body);
       clearRequest(key);
       delete pendingSwitch.current[key];
-      setSwitchUncertain(false);
-      setSwitchTaskStatus("");
-      setSwitching(null);
-      setSwitchTargetRepo(null);
+      setSwitchDraft(null);
       onNotice(`${switching.name}: repository change requested`, backupOpID(reply));
       await reload().catch(err => onError(err instanceof Error ? err.message : String(err)));
     } catch (err) {
@@ -247,8 +239,8 @@ export function BackupPolicies({
       if (status && status >= 400 && status < 500 && status !== 409) {
         clearRequest(key);
         delete pendingSwitch.current[key];
-        setSwitchUncertain(false);
-      } else setSwitchUncertain(true);
+        patchSwitch({ uncertain: false });
+      } else patchSwitch({ uncertain: true });
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       setWorking("");
@@ -265,23 +257,20 @@ export function BackupPolicies({
     try {
       const operations = await api<Operation[]>("operations");
       const task = operations.find(op => op.request_id === held.request_id && op.kind === "backup-policy-upsert");
-      if (!task) setSwitchTaskStatus("No matching recent task is reported. Keep this panel open and retry the exact request.");
+      if (!task) patchSwitch({ taskStatus: "No matching recent task is reported. Keep this panel open and retry the exact request." });
       else if (task.status === "succeeded") {
         clearRequest(key);
         delete pendingSwitch.current[key];
-        setSwitchUncertain(false);
-        setSwitching(null);
-        setSwitchTaskStatus("");
+        setSwitchDraft(null);
         onNotice(`${switching.name}: repository change completed`, task.id);
         await reload();
       } else if (task.status === "failed") {
         clearRequest(key);
         delete pendingSwitch.current[key];
-        setSwitchUncertain(false);
-        setSwitching(null);
+        setSwitchDraft(null);
         onError(task.error || "Policy change failed. Reload the policy before trying again.");
         await reload();
-      } else setSwitchTaskStatus(`Task ${task.status}. Keep this panel open or retry the exact request.`);
+      } else patchSwitch({ taskStatus: `Task ${task.status}. Keep this panel open or retry the exact request.` });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -294,11 +283,7 @@ export function BackupPolicies({
     const key = `repository-${switching.id}`;
     clearRequest(key);
     delete pendingSwitch.current[key];
-    setSwitching(null);
-    setSwitchTarget("");
-    setSwitchTargetRepo(null);
-    setSwitchConfirmed(false);
-    setSwitchTaskStatus("");
+    setSwitchDraft(null);
   };
 
   const toggleVM = (id: string) => {
@@ -332,7 +317,7 @@ export function BackupPolicies({
               <td className="muted">{p.next_dispatch_at ? date(p.next_dispatch_at) : "—"}</td>
               <td>{p.paused ? <Badge value="paused" /> : p.enabled ? <Badge value="enabled" /> : <Badge value="disabled" />}</td>
               <td className="row-actions">
-                <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy || !p.revision || !switchRepos.some(r => r.id !== p.repository_id)} onClick={() => { setSwitching(p); setSwitchTarget(""); setSwitchTargetRepo(null); setSwitchConfirmed(false); setSwitchUncertain(false); setSwitchTaskStatus(""); onError(""); }}>Change repository</button>
+                <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy || !p.revision || !repos.some(r => r.id !== p.repository_id)} onClick={() => { setSwitchDraft({ policy: p, target: "", targetRepo: null, confirmed: false, uncertain: false, taskStatus: "" }); onError(""); }}>Change repository</button>
                 <button type="button" className="sm" disabled={Boolean(working) || unavailable || busy} onClick={() => pause(p, !p.paused)}>
                   {pendingPause.current[`pause-${p.id}`] ? "Retry request" : p.paused ? "Resume" : "Pause"}
                 </button>
@@ -359,12 +344,12 @@ export function BackupPolicies({
           <dt>Current repository</dt><dd>{oldSwitchRepo?.name || switching.repository_id} · {oldSwitchRepo ? repositoryHealth(oldSwitchRepo) : "unknown"} · Last check: {date(oldSwitchRepo?.health?.observed_at)}</dd>
           <dt>New repository</dt><dd>{newSwitchRepo ? `${newSwitchRepo.name} · ${repositoryHealth(newSwitchRepo)} · Last check: ${date(newSwitchRepo.health?.observed_at)}` : "Select a repository"}</dd>
         </dl>
-        <label>New repository<select required value={switchTarget} disabled={switchUncertain} onChange={e => { setSwitchTarget(e.target.value); setSwitchTargetRepo(switchRepos.find(r => r.id === e.target.value) || null); setSwitchConfirmed(false); }}>
+        <label>New repository<select required value={switchTarget} disabled={switchUncertain} onChange={e => patchSwitch({ target: e.target.value, targetRepo: repos.find(r => r.id === e.target.value) || null, confirmed: false })}>
           <option value="">Select…</option>
-          {switchRepos.filter(r => r.id !== switching.repository_id).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          {repos.filter(r => r.id !== switching.repository_id).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select></label>
         {newSwitchRepo && repositoryHealth(newSwitchRepo) !== "online" && <p className="why" role="status">{newSwitchRepo.name} is {repositoryHealth(newSwitchRepo) === "offline" ? "offline" : "not confirmed online"}. Core will check access before a backup runs.</p>}
-        <label className="check" style={{ justifyContent: "flex-start" }}><input type="checkbox" required checked={switchConfirmed} disabled={!newSwitchRepo || switchUncertain} onChange={e => setSwitchConfirmed(e.target.checked)} />I confirm this policy should use {newSwitchRepo?.name || "the selected repository"}</label>
+        <label className="check" style={{ justifyContent: "flex-start" }}><input type="checkbox" required checked={switchConfirmed} disabled={!newSwitchRepo || switchUncertain} onChange={e => patchSwitch({ confirmed: e.target.checked })} />I confirm this policy should use {newSwitchRepo?.name || "the selected repository"}</label>
         <div className="actions">
           <button type="submit" className="sm primary" disabled={!newSwitchRepo || !switchConfirmed || Boolean(working) || unavailable || busy}>Save repository change</button>
           <button type="button" className="sm" disabled={Boolean(working)} onClick={closeSwitch}>Cancel</button>

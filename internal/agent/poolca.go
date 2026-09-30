@@ -103,10 +103,7 @@ type poolBootAuthorityConfirmation struct {
 	BootID string
 }
 
-type poolRehome struct {
-	PoolID, PoolName     string
-	BackupCredentialSync bool
-}
+type poolRehome struct{ PoolID, PoolName string }
 
 type poolJoinOffer struct {
 	Digest, PoolID, Master, HostID, CSRHash string

@@ -12,12 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,21 +41,18 @@ const s3MultipartProofMaxAge = time.Hour
 // Process-local proof expires; restart or a credential change rechecks it.
 var s3MultipartProof sync.Map
 
-type s3BackupDeleteRecord struct {
+// s3BackupManifestRecord is the abort tombstone; a delete record adds the keys.
+type s3BackupManifestRecord struct {
 	Repository  string          `json:"repository"`
 	Pool        string          `json:"pool"`
 	Point       string          `json:"point"`
 	ManifestSHA string          `json:"manifest_sha256"`
 	Manifest    json.RawMessage `json:"manifest"`
-	Keys        []string        `json:"keys"`
 }
 
-type s3BackupAbortTombstone struct {
-	Repository  string          `json:"repository"`
-	Pool        string          `json:"pool"`
-	Point       string          `json:"point"`
-	ManifestSHA string          `json:"manifest_sha256"`
-	Manifest    json.RawMessage `json:"manifest"`
+type s3BackupDeleteRecord struct {
+	s3BackupManifestRecord
+	Keys []string `json:"keys"`
 }
 
 type s3BackupArtifactTombstone struct {
@@ -89,25 +86,6 @@ var newBackupS3Client = func(options s3.Options) *s3.Client { return s3.New(opti
 // operation forever while a slow upload keeps going.
 var s3BackupReadTimeout = 2 * time.Minute
 
-// s3ProgressConn renews the deadline on every read and write. The response is
-// read only after the whole request body is sent, so the reader waiting for it
-// stays alive for as long as the upload makes progress.
-type s3ProgressConn struct{ net.Conn }
-
-func (c s3ProgressConn) Read(p []byte) (int, error) {
-	if err := c.SetDeadline(time.Now().Add(s3BackupReadTimeout)); err != nil {
-		return 0, err
-	}
-	return c.Conn.Read(p)
-}
-
-func (c s3ProgressConn) Write(p []byte) (int, error) {
-	if err := c.SetDeadline(time.Now().Add(s3BackupReadTimeout)); err != nil {
-		return 0, err
-	}
-	return c.Conn.Write(p)
-}
-
 func newS3BackupRepositoryStorage(s *Store, repo protocol.BackupRepository) (backupRepositoryStorage, error) {
 	credential, err := ResolveBackupCredential(s, repo)
 	if err != nil {
@@ -137,7 +115,7 @@ func newS3BackupStorageWithCredential(s *Store, repo protocol.BackupRepository, 
 				if err != nil {
 					return nil, err
 				}
-				return s3ProgressConn{conn}, nil
+				return progressConn{conn, s3BackupReadTimeout}, nil
 			}
 		}),
 		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
@@ -205,8 +183,7 @@ func (b *s3BackupStorage) Identity(ctx context.Context) (protocol.BackupRemoteId
 }
 
 func (b *s3BackupStorage) remoteIdentity() protocol.BackupRemoteIdentity {
-	sum := sha256.Sum256(b.ownerBytes())
-	return protocol.BackupRemoteIdentity{Fingerprint: hex.EncodeToString(sum[:])}
+	return protocol.BackupRemoteIdentity{Fingerprint: sha256Hex(b.ownerBytes())}
 }
 
 func (b *s3BackupStorage) Verify(ctx context.Context) error {
@@ -225,7 +202,7 @@ func (b *s3BackupStorage) Verify(ctx context.Context) error {
 func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err error) {
 	key := b.key(s3BackupOwnerKey)
 	raw, err := b.read(ctx, key, 4096)
-	if isS3Code(err, "NoSuchKey", "NotFound") && b.repo.RemoteIdentity == nil {
+	if isS3Missing(err) && b.repo.RemoteIdentity == nil {
 		if err := requirePoolAuthorityWritable(b.s); err != nil {
 			return false, err
 		}
@@ -236,7 +213,7 @@ func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err er
 			if ownerErr == nil {
 				return false, ErrBackupConflict
 			}
-			if !isS3Code(ownerErr, "NoSuchKey", "NotFound") {
+			if !isS3Missing(ownerErr) {
 				return false, ownerErr
 			}
 		}
@@ -252,7 +229,7 @@ func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err er
 		}
 		_, putErr := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
 			Key: aws.String(key), Body: bytes.NewReader(b.ownerBytes()), IfNoneMatch: aws.String("*")})
-		if putErr != nil && !isS3Code(putErr, "PreconditionFailed", "ConditionalRequestConflict") {
+		if putErr != nil && !isS3Precondition(putErr) {
 			return false, putErr
 		}
 		raw, err = b.read(ctx, key, 4096)
@@ -286,20 +263,8 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 	key := b.key(".nex-probe-" + hex.EncodeToString(nonce))
 	payload := []byte("nex backup probe")
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, err := b.client.DeleteObject(cleanup, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)})
-		if err != nil && probeErr == nil {
+		if err := b.removeProbe(key); err != nil && probeErr == nil {
 			probeErr = err
-		}
-		keys, err := b.list(cleanup, key)
-		if err != nil && probeErr == nil {
-			probeErr = err
-		}
-		for _, found := range keys {
-			if found == key && probeErr == nil {
-				probeErr = errors.New("S3 probe deletion is not visible")
-			}
 		}
 	}()
 	// Probe writes carry the same checksum header as publication writes.
@@ -307,7 +272,7 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 		return err
 	}
 	if _, err := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
-		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(payload))}); !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+		Body: bytes.NewReader(payload), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(payload))}); !isS3Precondition(err) {
 		return errors.New("S3 conditional create is not proven")
 	}
 	raw, err := b.read(ctx, key, 128)
@@ -317,7 +282,7 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 	// Cleanup relies on conditional deletion to avoid removing an object that
 	// changed after its contents were verified.
 	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
-		Key: aws.String(key), IfMatch: aws.String("\"nex-wrong-etag\"")}); !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+		Key: aws.String(key), IfMatch: aws.String("\"nex-wrong-etag\"")}); !isS3Precondition(err) {
 		return errors.New("S3 conditional delete is not proven")
 	}
 	if got, err := b.read(ctx, key, 128); err != nil || !bytes.Equal(got, payload) {
@@ -327,22 +292,33 @@ func (b *s3BackupStorage) Probe(ctx context.Context) (probeErr error) {
 	if err != nil {
 		return err
 	}
-	found := false
-	for _, listed := range keys {
-		if listed == key {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.Contains(keys, key) {
 		return errors.New("S3 listing after write is not proven")
 	}
 	return b.ensureMultipartProfile(ctx)
 }
 
+// removeProbe deletes a probe object on a fresh context, so a cancelled probe
+// still cleans up, and checks the deletion is visible.
+func (b *s3BackupStorage) removeProbe(key string) error {
+	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := b.client.DeleteObject(cleanup, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)}); err != nil {
+		return err
+	}
+	keys, err := b.list(cleanup, key)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(keys, key) {
+		return errors.New("S3 probe deletion is not visible")
+	}
+	return nil
+}
+
 func (b *s3BackupStorage) multipartProofKey() string {
 	material := string(b.ownerBytes()) + "\x00" + b.repo.CredentialRef + "\x00" + b.s.State.HostID
-	sum := sha256.Sum256([]byte(material))
-	return hex.EncodeToString(sum[:])
+	return sha256Hex([]byte(material))
 }
 
 func (b *s3BackupStorage) ensureMultipartProfile(ctx context.Context) error {
@@ -370,20 +346,8 @@ func (b *s3BackupStorage) probeMultipart(ctx context.Context, key string) (probe
 	payload := make([]byte, 5<<20+1)
 	uploader := manager.NewUploader(b.client)
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, err := b.client.DeleteObject(cleanup, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)})
-		if err != nil && probeErr == nil {
+		if err := b.removeProbe(key); err != nil && probeErr == nil {
 			probeErr = err
-		}
-		keys, err := b.list(cleanup, key)
-		if err != nil && probeErr == nil {
-			probeErr = err
-		}
-		for _, listed := range keys {
-			if listed == key && probeErr == nil {
-				probeErr = errors.New("S3 multipart probe deletion is not visible")
-			}
 		}
 	}()
 	input := &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
@@ -397,7 +361,7 @@ func (b *s3BackupStorage) probeMultipart(ctx context.Context, key string) (probe
 	if abortErr := b.abortFailedMultipart(err, key); abortErr != nil {
 		return abortErr
 	}
-	if !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+	if !isS3Precondition(err) {
 		return errors.New("S3 conditional multipart completion is not proven")
 	}
 	payload[0] = 0
@@ -431,6 +395,18 @@ func (b *s3BackupStorage) read(ctx context.Context, key string, limit int64) ([]
 	return raw, nil
 }
 
+// requireAbsent fails with ErrBackupConflict when an object exists at key.
+func (b *s3BackupStorage) requireAbsent(ctx context.Context, key string, limit int64) error {
+	_, err := b.read(ctx, key, limit)
+	if err == nil {
+		return ErrBackupConflict
+	}
+	if !isS3Missing(err) {
+		return err
+	}
+	return nil
+}
+
 func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protocol.BackupManifest, string, error) {
 	if !protocol.ValidSnapshotOperationID(pointID) {
 		return protocol.BackupManifest{}, "", ErrBackupInvalid
@@ -438,19 +414,15 @@ func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protoc
 	if err := b.Verify(ctx); err != nil {
 		return protocol.BackupManifest{}, "", err
 	}
-	if _, err := b.read(ctx, b.key(s3BackupAbortPrefix+pointID), 1<<20); err == nil {
-		return protocol.BackupManifest{}, "", ErrBackupConflict
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	if err := b.requireAbsent(ctx, b.key(s3BackupAbortPrefix+pointID), 1<<20); err != nil {
 		return protocol.BackupManifest{}, "", err
 	}
-	if _, err := b.read(ctx, b.pointKey(pointID, s3BackupDeleteKey), 16<<10); err == nil {
-		return protocol.BackupManifest{}, "", ErrBackupConflict
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	if err := b.requireAbsent(ctx, b.pointKey(pointID, s3BackupDeleteKey), 16<<10); err != nil {
 		return protocol.BackupManifest{}, "", err
 	}
 	raw, err := b.read(ctx, b.pointKey(pointID, "manifest.json"), 2<<20)
 	if err != nil {
-		if isS3Code(err, "NoSuchKey", "NotFound") {
+		if isS3Missing(err) {
 			keys, listErr := b.list(ctx, b.pointKey(pointID, ""))
 			if listErr != nil {
 				return protocol.BackupManifest{}, "", listErr
@@ -477,42 +449,34 @@ func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protoc
 		manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
 		return protocol.BackupManifest{}, "", ErrBackupConflict
 	}
-	for _, disk := range manifest.Disks {
-		if err := b.statArtifact(ctx, pointID, disk.Filename, disk.Size); err != nil {
+	for _, artifact := range manifestArtifacts(manifest) {
+		if err := b.statArtifact(ctx, pointID, artifact.Filename, artifact.Size); err != nil {
 			return protocol.BackupManifest{}, "", err
 		}
 	}
-	for _, fw := range manifest.Firmware {
-		if err := b.statArtifact(ctx, pointID, fw.Filename, fw.Size); err != nil {
-			return protocol.BackupManifest{}, "", err
-		}
-	}
-	sum := sha256.Sum256(raw)
-	return manifest, hex.EncodeToString(sum[:]), nil
+	return manifest, sha256Hex(raw), nil
 }
 
 func (b *s3BackupStorage) abortTombstone(id string, manifestRaw []byte) []byte {
-	sum := sha256.Sum256(manifestRaw)
-	raw, _ := json.Marshal(s3BackupAbortTombstone{Repository: b.repo.ID, Pool: b.repo.PoolID,
-		Point: id, ManifestSHA: hex.EncodeToString(sum[:]), Manifest: manifestRaw})
+	raw, _ := json.Marshal(s3BackupManifestRecord{Repository: b.repo.ID, Pool: b.repo.PoolID,
+		Point: id, ManifestSHA: sha256Hex(manifestRaw), Manifest: manifestRaw})
 	return raw
 }
 
-func (b *s3BackupStorage) parseAbortTombstone(id string, raw []byte) (s3BackupAbortTombstone, bool) {
-	var tombstone s3BackupAbortTombstone
+func (b *s3BackupStorage) parseAbortTombstone(id string, raw []byte) (s3BackupManifestRecord, bool) {
+	var tombstone s3BackupManifestRecord
 	if json.Unmarshal(raw, &tombstone) != nil || tombstone.Repository != b.repo.ID ||
 		tombstone.Pool != b.repo.PoolID || tombstone.Point != id || len(tombstone.ManifestSHA) != 64 {
-		return s3BackupAbortTombstone{}, false
+		return s3BackupManifestRecord{}, false
 	}
 	if _, err := hex.DecodeString(tombstone.ManifestSHA); err != nil {
-		return s3BackupAbortTombstone{}, false
+		return s3BackupManifestRecord{}, false
 	}
-	sum := sha256.Sum256(tombstone.Manifest)
-	if hex.EncodeToString(sum[:]) != tombstone.ManifestSHA {
-		return s3BackupAbortTombstone{}, false
+	if sha256Hex(tombstone.Manifest) != tombstone.ManifestSHA {
+		return s3BackupManifestRecord{}, false
 	}
 	if _, ok := b.recordedManifest(id, tombstone.Manifest); !ok {
-		return s3BackupAbortTombstone{}, false
+		return s3BackupManifestRecord{}, false
 	}
 	canonical, _ := json.Marshal(tombstone)
 	return tombstone, bytes.Equal(raw, canonical)
@@ -553,7 +517,7 @@ func (b *s3BackupStorage) hasIncompleteMarker(ctx context.Context, id string) (b
 		if err == nil {
 			return true, nil
 		}
-		if !isS3Code(err, "NoSuchKey", "NotFound") {
+		if !isS3Missing(err) {
 			return false, err
 		}
 	}
@@ -566,12 +530,11 @@ func (b *s3BackupStorage) verifyArtifact(ctx context.Context, pointID, name stri
 		return err
 	}
 	defer out.Body.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(out.Body, size+1))
+	n, sum, err := hashLimited(out.Body, size)
 	if err != nil {
 		return err
 	}
-	if n != size || hex.EncodeToString(h.Sum(nil)) != digest {
+	if n != size || sum != digest {
 		return ErrBackupConflict
 	}
 	return nil
@@ -612,15 +575,12 @@ func (b *s3BackupStorage) Publish(ctx context.Context, manifest protocol.BackupM
 		}
 		_, digest, err := b.StatPoint(ctx, manifest.RecoveryPointID)
 		return digest, err
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	} else if !isS3Missing(err) {
 		return "", err
 	}
 	expected := make(map[string]protocol.BackupDiskArtifact)
-	for _, disk := range manifest.Disks {
-		expected[disk.Filename] = disk
-	}
-	for _, fw := range manifest.Firmware {
-		expected[fw.Filename] = protocol.BackupDiskArtifact{Filename: fw.Filename, Size: fw.Size, SHA256: fw.SHA256}
+	for _, artifact := range manifestArtifacts(manifest) {
+		expected[artifact.Filename] = artifact
 	}
 	if len(stageFiles) != len(expected) {
 		return "", ErrBackupInvalid
@@ -653,14 +613,12 @@ func (b *s3BackupStorage) Publish(ctx context.Context, manifest protocol.BackupM
 	} else if deleting {
 		return "", ErrBackupConflict
 	}
-	if _, err := b.read(ctx, b.key(s3BackupAbortPrefix+manifest.RecoveryPointID), 1<<20); err == nil {
-		return "", ErrBackupConflict
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	if err := b.requireAbsent(ctx, b.key(s3BackupAbortPrefix+manifest.RecoveryPointID), 1<<20); err != nil {
 		return "", err
 	}
 	_, err = b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(manifestKey),
 		Body: bytes.NewReader(raw), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(raw))})
-	if err != nil && !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+	if err != nil && !isS3Precondition(err) {
 		// A lost reply is ambiguous: only the exact published bytes can settle it.
 		old, readErr := b.read(ctx, manifestKey, 2<<20)
 		if readErr != nil || !bytes.Equal(old, raw) {
@@ -684,7 +642,7 @@ func (b *s3BackupStorage) Publish(ctx context.Context, manifest protocol.BackupM
 func (b *s3BackupStorage) putExactMarker(ctx context.Context, key string, raw []byte) error {
 	_, err := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
 		Key: aws.String(key), Body: bytes.NewReader(raw), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(raw))})
-	if err != nil && !isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+	if err != nil && !isS3Precondition(err) {
 		return err
 	}
 	stored, readErr := b.read(ctx, key, 2<<20)
@@ -697,15 +655,17 @@ func (b *s3BackupStorage) putExactMarker(ctx context.Context, key string, raw []
 	return nil
 }
 
-func (b *s3BackupStorage) deleteExactMarker(ctx context.Context, key string, expected []byte) error {
+// deleteExact removes the object at key only if matches accepts its content
+// and the ETag is unchanged. An absent object is already deleted.
+func (b *s3BackupStorage) deleteExact(ctx context.Context, key string, matches func(io.Reader) (bool, error)) error {
 	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)})
-	if isS3Code(err, "NoSuchKey", "NotFound") {
+	if isS3Missing(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(out.Body, int64(len(expected))+1))
+	ok, readErr := matches(out.Body)
 	closeErr := out.Body.Close()
 	if readErr != nil {
 		return readErr
@@ -713,14 +673,14 @@ func (b *s3BackupStorage) deleteExactMarker(ctx context.Context, key string, exp
 	if closeErr != nil {
 		return closeErr
 	}
-	if !bytes.Equal(raw, expected) || out.ETag == nil || *out.ETag == "" {
+	if !ok || out.ETag == nil || *out.ETag == "" {
 		return ErrBackupConflict
 	}
 	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
 		Key: aws.String(key), IfMatch: out.ETag}); err != nil {
 		return err
 	}
-	if _, err := b.read(ctx, key, int64(len(expected))+1); !isS3Code(err, "NoSuchKey", "NotFound") {
+	if _, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)}); !isS3Missing(err) {
 		if err != nil {
 			return err
 		}
@@ -729,38 +689,18 @@ func (b *s3BackupStorage) deleteExactMarker(ctx context.Context, key string, exp
 	return nil
 }
 
+func (b *s3BackupStorage) deleteExactMarker(ctx context.Context, key string, expected []byte) error {
+	return b.deleteExact(ctx, key, func(r io.Reader) (bool, error) {
+		raw, err := io.ReadAll(io.LimitReader(r, int64(len(expected))+1))
+		return bytes.Equal(raw, expected), err
+	})
+}
+
 func (b *s3BackupStorage) deleteExactArtifact(ctx context.Context, key string, size int64, digest string) error {
-	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)})
-	if isS3Code(err, "NoSuchKey", "NotFound") {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	h := sha256.New()
-	n, readErr := io.Copy(h, io.LimitReader(out.Body, size+1))
-	closeErr := out.Body.Close()
-	if readErr != nil {
-		return readErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if n != size || hex.EncodeToString(h.Sum(nil)) != digest || out.ETag == nil || *out.ETag == "" {
-		return ErrBackupConflict
-	}
-	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket),
-		Key: aws.String(key), IfMatch: out.ETag}); err != nil {
-		return err
-	}
-	if check, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key)}); !isS3Code(err, "NoSuchKey", "NotFound") {
-		if err != nil {
-			return err
-		}
-		_ = check.Body.Close()
-		return ErrBackupConflict
-	}
-	return nil
+	return b.deleteExact(ctx, key, func(r io.Reader) (bool, error) {
+		n, sum, err := hashLimited(r, size)
+		return n == size && sum == digest, err
+	})
 }
 
 // AbortIncomplete removes only exact artifacts bound to this operation's
@@ -803,17 +743,10 @@ func (b *s3BackupStorage) AbortIncomplete(ctx context.Context, id string) error 
 	// The committed tombstone fences publication, so the exact-content artifact
 	// reads below run without holding the authority transition lock.
 	artifacts := make(map[string]protocol.BackupDiskArtifact)
-	for _, disk := range manifest.Disks {
-		artifacts[b.pointKey(id, disk.Filename)] = disk
+	for _, artifact := range manifestArtifacts(manifest) {
+		artifacts[b.pointKey(id, artifact.Filename)] = artifact
 	}
-	for _, fw := range manifest.Firmware {
-		artifacts[b.pointKey(id, fw.Filename)] = protocol.BackupDiskArtifact{Size: fw.Size, SHA256: fw.SHA256}
-	}
-	artifactKeys := make([]string, 0, len(artifacts))
-	for key := range artifacts {
-		artifactKeys = append(artifactKeys, key)
-	}
-	sort.Strings(artifactKeys)
+	artifactKeys := slices.Sorted(maps.Keys(artifacts))
 	for _, key := range artifactKeys {
 		name := strings.TrimPrefix(key, b.pointKey(id, ""))
 		artifact := artifacts[key]
@@ -822,7 +755,7 @@ func (b *s3BackupStorage) AbortIncomplete(ctx context.Context, id string) error 
 		if readErr == nil && bytes.Equal(stored, tombstone) {
 			continue
 		}
-		if readErr != nil && !errors.Is(readErr, ErrBackupInvalid) && !isS3Code(readErr, "NoSuchKey", "NotFound") {
+		if readErr != nil && !errors.Is(readErr, ErrBackupInvalid) && !isS3Missing(readErr) {
 			return readErr
 		}
 		if err := b.deleteExactArtifact(ctx, key, artifact.Size, artifact.SHA256); err != nil {
@@ -833,7 +766,7 @@ func (b *s3BackupStorage) AbortIncomplete(ctx context.Context, id string) error 
 		}
 	}
 	expectedKeys := append(artifactKeys, manifestKey)
-	sort.Strings(expectedKeys)
+	slices.Sort(expectedKeys)
 	if remaining, err := b.list(ctx, b.pointKey(id, "")); err != nil {
 		return err
 	} else if !slices.Equal(remaining, expectedKeys) {
@@ -884,16 +817,16 @@ func (b *s3BackupStorage) claimAbort(ctx context.Context, id string) ([]byte, bo
 	}
 	manifestKey := b.pointKey(id, "manifest.json")
 	remoteManifest, manifestErr := b.read(ctx, manifestKey, 2<<20)
-	if manifestErr != nil && !isS3Code(manifestErr, "NoSuchKey", "NotFound") {
+	if manifestErr != nil && !isS3Missing(manifestErr) {
 		return nil, false, manifestErr
 	}
 	intentKey, abortKey := b.key(s3BackupIntentPrefix+id), b.key(s3BackupAbortPrefix+id)
 	intent, intentErr := b.read(ctx, intentKey, 1<<20)
-	if intentErr != nil && !isS3Code(intentErr, "NoSuchKey", "NotFound") {
+	if intentErr != nil && !isS3Missing(intentErr) {
 		return nil, false, intentErr
 	}
 	abort, abortErr := b.read(ctx, abortKey, 1<<20)
-	if abortErr != nil && !isS3Code(abortErr, "NoSuchKey", "NotFound") {
+	if abortErr != nil && !isS3Missing(abortErr) {
 		return nil, false, abortErr
 	}
 	keys, err := b.list(ctx, b.pointKey(id, ""))
@@ -951,21 +884,18 @@ func sha256Base64(raw []byte) string {
 }
 
 func (b *s3BackupStorage) putArtifact(ctx context.Context, pointID, name, path string, size int64, digest string) error {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	f, err := openNoFollow(path, syscall.O_RDONLY)
 	if err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
 		return ErrBackupInvalid
 	}
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, sum, err := hashLimited(f, size); err != nil {
 		return err
-	}
-	if hex.EncodeToString(h.Sum(nil)) != digest {
+	} else if sum != digest {
 		return ErrBackupConflict
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -975,7 +905,7 @@ func (b *s3BackupStorage) putArtifact(ctx context.Context, pointID, name, path s
 	// key conflicts, before transferring the artifact again.
 	if err := b.statArtifact(ctx, pointID, name, size); err == nil {
 		return b.verifyArtifact(ctx, pointID, name, size, digest)
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	} else if !isS3Missing(err) {
 		return err
 	}
 	key := b.pointKey(pointID, name)
@@ -1020,82 +950,34 @@ func (b *s3BackupStorage) CopyArtifacts(ctx context.Context, pointID, localDir s
 	if err != nil {
 		return err
 	}
-	if !backupManifestArtifactsEqual(stored, manifest) {
+	// Compare encodings: DeepEqual fails on time.Time after a JSON round trip.
+	storedJSON, _ := json.Marshal(stored)
+	manifestJSON, _ := json.Marshal(manifest)
+	if !bytes.Equal(storedJSON, manifestJSON) {
 		return ErrBackupConflict
 	}
 	if err := os.MkdirAll(localDir, 0700); err != nil {
 		return err
 	}
-	for _, disk := range manifest.Disks {
-		if err := b.copyArtifact(ctx, pointID, disk.Filename, localDir, disk.Size, disk.SHA256); err != nil {
-			return err
-		}
-	}
-	for _, fw := range manifest.Firmware {
-		if err := b.copyArtifact(ctx, pointID, fw.Filename, localDir, fw.Size, fw.SHA256); err != nil {
+	for _, artifact := range manifestArtifacts(manifest) {
+		if err := b.copyArtifact(ctx, pointID, artifact.Filename, localDir, artifact.Size, artifact.SHA256); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func backupManifestArtifactsEqual(a, b protocol.BackupManifest) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
-	return bytes.Equal(x, y)
-}
-
-func (b *s3BackupStorage) copyArtifact(ctx context.Context, pointID, name, localDir string, size int64, digest string) (err error) {
+func (b *s3BackupStorage) copyArtifact(ctx context.Context, pointID, name, localDir string, size int64, digest string) error {
 	if !filepath.IsAbs(localDir) {
 		return ErrBackupInvalid
 	}
-	path := filepath.Join(localDir, name)
-	if info, statErr := os.Lstat(path); statErr == nil {
-		if info.Mode().IsRegular() && info.Size() == size {
-			local, openErr := os.Open(path)
-			if openErr != nil {
-				return openErr
-			}
-			h := sha256.New()
-			_, readErr := io.Copy(h, local)
-			closeErr := local.Close()
-			if readErr == nil && closeErr == nil && hex.EncodeToString(h.Sum(nil)) == digest {
-				return nil
-			}
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return statErr
-	}
-	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, name))})
-	if err != nil {
-		return err
-	}
-	defer out.Body.Close()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = f.Close()
+	return copyVerifiedToLocal(func() (io.ReadCloser, error) {
+		out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, name))})
 		if err != nil {
-			_ = os.Remove(path)
+			return nil, err
 		}
-	}()
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(out.Body, size+1))
-	if err != nil {
-		return err
-	}
-	if n != size || hex.EncodeToString(h.Sum(nil)) != digest {
-		return ErrBackupConflict
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return f.Close()
+		return out.Body, nil
+	}, filepath.Join(localDir, name), size, digest)
 }
 
 func (b *s3BackupStorage) list(ctx context.Context, prefix string) ([]string, error) {
@@ -1158,12 +1040,7 @@ func (b *s3BackupStorage) Entries(ctx context.Context) ([]string, error) {
 			seen[pointID] = true
 		}
 	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 func (b *s3BackupStorage) Scan(ctx context.Context) ([]protocol.BackupRecoveryPoint, error) {
@@ -1191,7 +1068,7 @@ func (b *s3BackupStorage) Scan(ctx context.Context) ([]protocol.BackupRecoveryPo
 // readProtectMarker returns the marker's bytes and ETag, or nil when the point is unprotected.
 func (b *s3BackupStorage) readProtectMarker(ctx context.Context, pointID string) ([]byte, *string, error) {
 	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, ".nex-protected"))})
-	if isS3Code(err, "NoSuchKey", "NotFound") {
+	if isS3Missing(err) {
 		return nil, nil, nil
 	}
 	if err != nil {
@@ -1253,7 +1130,7 @@ func (b *s3BackupStorage) SetProtected(ctx context.Context, pointID string, prot
 		}
 		_, err = b.client.PutObject(ctx, put)
 	}
-	if isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict") {
+	if isS3Precondition(err) {
 		return ErrBackupConflict
 	}
 	return err
@@ -1322,12 +1199,11 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256(manifestRaw)
-		if hex.EncodeToString(sum[:]) != digest {
+		if sha256Hex(manifestRaw) != digest {
 			return ErrBackupConflict
 		}
-		record = s3BackupDeleteRecord{Repository: b.repo.ID, Pool: b.repo.PoolID, Point: pointID, ManifestSHA: digest,
-			Manifest: manifestRaw, Keys: b.manifestKeys(manifest)}
+		record = s3BackupDeleteRecord{s3BackupManifestRecord{Repository: b.repo.ID, Pool: b.repo.PoolID, Point: pointID,
+			ManifestSHA: digest, Manifest: manifestRaw}, b.manifestKeys(manifest)}
 		keys, listErr := b.list(ctx, b.pointKey(pointID, ""))
 		if listErr != nil {
 			return listErr
@@ -1339,7 +1215,7 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 		key := b.pointKey(pointID, s3BackupDeleteKey)
 		_, putErr := b.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(key),
 			Body: bytes.NewReader(raw), IfNoneMatch: aws.String("*"), ChecksumSHA256: aws.String(sha256Base64(raw))})
-		if putErr != nil && !isS3Code(putErr, "PreconditionFailed", "ConditionalRequestConflict") {
+		if putErr != nil && !isS3Precondition(putErr) {
 			return putErr
 		}
 		stored, readErr := b.read(ctx, key, 2<<20)
@@ -1347,18 +1223,13 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 			return ErrBackupConflict
 		}
 	}
-	allowed := make(map[string]bool, len(record.Keys)+1)
-	for _, key := range record.Keys {
-		allowed[key] = true
-	}
 	deleteKey := b.pointKey(pointID, s3BackupDeleteKey)
-	allowed[deleteKey] = true
 	keys, err := b.list(ctx, b.pointKey(pointID, ""))
 	if err != nil {
 		return err
 	}
 	for _, key := range keys {
-		if !allowed[key] {
+		if key != deleteKey && !slices.Contains(record.Keys, key) {
 			return ErrBackupConflict
 		}
 	}
@@ -1392,7 +1263,7 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 		if err := b.deleteExactMarker(ctx, intentKey, record.Manifest); err != nil {
 			return err
 		}
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	} else if !isS3Missing(err) {
 		return err
 	}
 	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(deleteKey)}); err != nil {
@@ -1410,7 +1281,7 @@ func (b *s3BackupStorage) Delete(ctx context.Context, pointID string) error {
 
 func (b *s3BackupStorage) readDeleteRecord(ctx context.Context, pointID string) (s3BackupDeleteRecord, bool, error) {
 	raw, err := b.read(ctx, b.pointKey(pointID, s3BackupDeleteKey), 2<<20)
-	if isS3Code(err, "NoSuchKey", "NotFound") {
+	if isS3Missing(err) {
 		return s3BackupDeleteRecord{}, false, nil
 	}
 	if err != nil {
@@ -1419,11 +1290,10 @@ func (b *s3BackupStorage) readDeleteRecord(ctx context.Context, pointID string) 
 	var record s3BackupDeleteRecord
 	if json.Unmarshal(raw, &record) != nil || record.Repository != b.repo.ID || record.Pool != b.repo.PoolID ||
 		record.Point != pointID || len(record.ManifestSHA) != 64 || len(record.Keys) < 2 || len(record.Keys) > 35 ||
-		!sort.StringsAreSorted(record.Keys) {
+		!slices.IsSorted(record.Keys) {
 		return s3BackupDeleteRecord{}, false, ErrBackupConflict
 	}
-	sum := sha256.Sum256(record.Manifest)
-	if hex.EncodeToString(sum[:]) != record.ManifestSHA {
+	if sha256Hex(record.Manifest) != record.ManifestSHA {
 		return s3BackupDeleteRecord{}, false, ErrBackupConflict
 	}
 	manifest, ok := b.recordedManifest(pointID, record.Manifest)
@@ -1445,11 +1315,10 @@ func (b *s3BackupStorage) readDeleteRecord(ctx context.Context, pointID string) 
 	}
 	manifestRaw, err := b.read(ctx, manifestKey, 1<<20)
 	if err == nil {
-		sum := sha256.Sum256(manifestRaw)
-		if hex.EncodeToString(sum[:]) != record.ManifestSHA {
+		if sha256Hex(manifestRaw) != record.ManifestSHA {
 			return s3BackupDeleteRecord{}, false, ErrBackupConflict
 		}
-	} else if !isS3Code(err, "NoSuchKey", "NotFound") {
+	} else if !isS3Missing(err) {
 		return s3BackupDeleteRecord{}, false, err
 	}
 	return record, true, nil
@@ -1457,14 +1326,17 @@ func (b *s3BackupStorage) readDeleteRecord(ctx context.Context, pointID string) 
 
 func (b *s3BackupStorage) manifestKeys(manifest protocol.BackupManifest) []string {
 	keys := []string{b.pointKey(manifest.RecoveryPointID, "manifest.json")}
-	for _, disk := range manifest.Disks {
-		keys = append(keys, b.pointKey(manifest.RecoveryPointID, disk.Filename))
+	for _, artifact := range manifestArtifacts(manifest) {
+		keys = append(keys, b.pointKey(manifest.RecoveryPointID, artifact.Filename))
 	}
-	for _, fw := range manifest.Firmware {
-		keys = append(keys, b.pointKey(manifest.RecoveryPointID, fw.Filename))
-	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
+}
+
+func isS3Missing(err error) bool { return isS3Code(err, "NoSuchKey", "NotFound") }
+
+func isS3Precondition(err error) bool {
+	return isS3Code(err, "PreconditionFailed", "ConditionalRequestConflict")
 }
 
 func isS3Code(err error, codes ...string) bool {

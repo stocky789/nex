@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Agents never commit: leave each task's changes unstaged for the project owner and report the suggested commit message.
 
 Date: 2026-09-23
-Status: implemented — Tasks 1–13 complete and reviewed, awaiting the project owner's commit; evidence in the [QA checks](../qa/controller-ui-modernization/checks.md), history in the [handover](2026-09-23-controller-ui-modernization-handover.md). Owner: project owner.
+Status: implemented — Tasks 1–13 complete and reviewed, awaiting the project owner's commit; evidence in the [QA checks](../qa/controller-ui-modernization/checks.md). Owner: project owner.
 
 **Goal:** Replace the Controller web UI's dated visual layer and vertical layout with a token-driven, flat, brand-correct design that keeps every workflow, the desktop-console navigation model and the honest state handling exactly as they are.
 
@@ -1419,6 +1419,10 @@ State: **none**. See the change record's reason for the two `localStorage` prefe
 - `phase1.py --browser` passes with the moved menu groups; the guide's manage-controller, vm-power and vm-console pages describe the delivered chrome.
 - Independent review of the batch against scope, behaviour, accessibility, privacy and the actual evidence, with corrections verified.
 - Left explicitly open: no vector brand lockup exists yet, so the sign-in and top-bar marks remain crops of the approved raster board; Console connections are not exercised by the fixture harness (the console QA reports cover them); no real hardware or storage is touched by any of this.
+
+## Remaining work
+
+Open minor findings from review: `storage.tsx` `ZFSPoolLines` renders a raw `badge warn` span outside `Badge`; the "Creation ${status}" sentence in `main.tsx` and `HostHealthSummary` show raw values, and `pool-member-join` and `pool-storage-reconcile` use the fallback label; the multi-failure notice logic in `reload()` has no unit test and no test pins the delete-VM notice text quoted by `docs/guide/delete-virtual-machine.md`; `ui_review_browser.py` does not URL-decode query values; at 390 px the icon toolbar takes two rows; console status text built from an API error can lack its full stop.
 
 ## Out of scope
 

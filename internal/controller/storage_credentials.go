@@ -299,7 +299,7 @@ func (c *Controller) storageCredentials(w http.ResponseWriter, r *http.Request, 
 			err = errors.New("backup credential must be delivered to the pool master")
 		}
 		if err == nil {
-			err = c.backupDestinationHost(tx, v.PoolID, master, strings.Split(v.RegistrationRequestID, ":")[1])
+			err = c.backupHost(tx, v.PoolID, master)
 		}
 	} else {
 		err = c.storageRepositoryHost(tx, v.PoolID, v.HostID)

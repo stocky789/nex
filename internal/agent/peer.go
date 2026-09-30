@@ -34,9 +34,8 @@ type peerJoinRequest struct {
 	Hostname              string `json:"hostname,omitempty"`
 }
 type peerJoinResponse struct {
-	CertificatePEM       string                  `json:"certificate_pem"`
-	Membership           protocol.PoolMembership `json:"membership"`
-	BackupCredentialSync bool                    `json:"backup_credential_sync,omitempty"`
+	CertificatePEM string                  `json:"certificate_pem"`
+	Membership     protocol.PoolMembership `json:"membership"`
 }
 
 // initPoolMaster makes this Core the ready master of its own pool. A Core that has not
@@ -469,10 +468,6 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if state.CAKeyPEM == "" || state.Membership.Valid() != nil {
 		return peerJoinResponse{}, errors.New("not a pool master")
 	}
-	backupCredentialSync, err := poolHasBackupCredentials(s)
-	if err != nil {
-		return peerJoinResponse{}, err
-	}
 	// The membership write itself, checked against the bytes it is about to rewrite: an
 	// invitation issued before a master change must not admit a member during one.
 	if err = poolAuthorityWritable(state); err != nil {
@@ -509,7 +504,7 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 		}
 		for _, member := range state.Membership.Members {
 			if member.HostID == request.HostID && member.CertificateSHA256 == hash && member.Status == "ready" {
-				return peerJoinResponse{CertificatePEM: offer.CertificatePEM, Membership: state.Membership, BackupCredentialSync: backupCredentialSync}, nil
+				return peerJoinResponse{CertificatePEM: offer.CertificatePEM, Membership: state.Membership}, nil
 			}
 		}
 		return peerJoinResponse{}, errors.New("issued membership is unavailable")
@@ -559,20 +554,7 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 	if err = savePoolPeer(s, state); err != nil {
 		return peerJoinResponse{}, err
 	}
-	return peerJoinResponse{CertificatePEM: cert, Membership: state.Membership, BackupCredentialSync: backupCredentialSync}, nil
-}
-
-func poolHasBackupCredentials(s *Store) (bool, error) {
-	state, err := loadPoolBackupRepositories(s)
-	if err != nil {
-		return false, err
-	}
-	for _, repo := range state.Repositories {
-		if backupCredentialKind(repo.Kind) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return peerJoinResponse{CertificatePEM: cert, Membership: state.Membership}, nil
 }
 
 func nextPoolSanlockHostID(membership *protocol.PoolMembership) (uint64, error) {
@@ -1014,7 +996,7 @@ func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer str
 	state.CAPEM, state.CertificatePEM, state.KeyPEM, state.Membership, state.MasterURL = poolCAPEM, joined.CertificatePEM, key, joined.Membership, u.String()
 	state.CAKeyPEM, state.Offers = "", map[string]poolJoinOffer{}
 	state.PendingKeyPEM, state.PendingCSRPEM = "", ""
-	state.PendingRehome = &poolRehome{PoolID: joined.Membership.PoolID, PoolName: decoded.PoolName, BackupCredentialSync: joined.BackupCredentialSync}
+	state.PendingRehome = &poolRehome{PoolID: joined.Membership.PoolID, PoolName: decoded.PoolName}
 	if err = savePoolPeer(s, state); err != nil {
 		return err
 	}
@@ -1066,7 +1048,7 @@ func ResumePoolRehome(ctx context.Context, s *Store) error {
 			if err == nil {
 				err = eraseForeignBackupCredentials(s)
 			}
-			if err == nil && pending.BackupCredentialSync {
+			if err == nil {
 				if err = pullPeerBackupCredentials(ctx, s, state.MasterURL); err != nil {
 					return err
 				}

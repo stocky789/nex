@@ -258,8 +258,3 @@ func failReplaceRun(store *Store, cmd protocol.Command, observed time.Time, mess
 	removeRestoreStaging(store, cmd.OperationID)
 	return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: message, ObservedAt: observed}
 }
-
-// SimulateInPlaceOverwriteRequest is used by tests to assert the safety refusal.
-func SimulateInPlaceOverwriteRequest(originalPath, restoreDir string) error {
-	return refuseInPlaceOverwrite(originalPath, restoreDir)
-}
