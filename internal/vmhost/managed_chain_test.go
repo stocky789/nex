@@ -364,3 +364,37 @@ func TestPoolVMRecoveryReservationsOnFreshHost(t *testing.T) {
 		t.Fatalf("fresh host reservations=%v err=%v", got, err)
 	}
 }
+
+// A snapshot delete unlinks the overlay its snapshot-create journal still names; the VM
+// delete that follows must not treat that gone file as an unavailable disk (X-R1).
+func TestDeleteDiskSetSkipsOverlayUnlinkedBySnapshotDelete(t *testing.T) {
+	storageRoot := t.TempDir()
+	vm := managedTestVM()
+	vmDir := filepath.Join(storageRoot, "nex-vms", vm.ID)
+	if err := os.MkdirAll(vmDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	base, overlay := filepath.Join(vmDir, "disk-0.qcow2"), filepath.Join(vmDir, "snap.qcow2")
+	if err := os.WriteFile(base, []byte("qcow2"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	storage := protocol.StorageRegistration{ID: "s", PoolID: vm.PoolID, HostID: vm.HostID, Path: storageRoot, Kind: protocol.StorageKindLocal}
+	storageJournal := managedJournal{Command: protocol.Command{Kind: "storage-register", Storage: &storage}, Result: protocol.Result{Status: "succeeded"}}
+	created := managedJournal{Command: protocol.Command{Kind: "snapshot-create", VM: &vm}, Result: protocol.Result{Status: "succeeded"}, Disks: []string{overlay}, DiskChains: [][]string{{overlay, base}}, Targets: []string{"vda"}}
+	current := managedJournal{Command: protocol.Command{Kind: "vm-create", VM: &vm}, Result: protocol.Result{Status: "succeeded"}, Disks: []string{base}, DiskChains: [][]string{{base}}, Targets: []string{"vda"}}
+	js := []managedJournal{storageJournal, created, current}
+	paths := managedDeleteDiskPaths(js, current)
+	if len(paths) != 1 || paths[0] != base {
+		t.Fatalf("delete disk set = %v, want only the existing base", paths)
+	}
+	previousReady := managedStorageReadyFn
+	managedStorageReadyFn = func(_ context.Context, _ protocol.StorageRegistration, _ uint64) (storageAccess, error) {
+		return storageAccess{Path: storageRoot, Total: 1 << 40, Available: 1 << 40}, nil
+	}
+	t.Cleanup(func() { managedStorageReadyFn = previousReady })
+	fakeCommand(t, "virsh", `case "$3" in list) echo "`+vm.ID+`";; *) exit 2;; esac`)
+	del := managedJournal{Command: protocol.Command{Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: vm.ID, DeleteDisks: true}}, Retained: paths, Stage: "undefining"}
+	if err := NewManaged(t.TempDir()).verifyManagedDeleteFiles(context.Background(), js, del); err != nil {
+		t.Fatalf("delete refused after snapshot delete unlinked its overlay: %v", err)
+	}
+}

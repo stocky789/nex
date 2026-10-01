@@ -94,7 +94,7 @@ func prepareBackupRequestRepository(ctx context.Context, s *Store, request Backu
 		repo.SMBIdentity = request.PeerSMBIdentity
 		return prepareBackupRepositoryForAdoption(ctx, s, repo)
 	}
-	return prepareBackupRepositoryForRegistration(ctx, s, repo, request.Command.OperationID)
+	return prepareBackupRepositoryForRegistration(ctx, s, repo, request.Command.OperationID, request.Command.ReplaceRepository)
 }
 
 func terminalBackupMetadataResponse(s *Store, request BackupRequest) (BackupResponse, bool) {
@@ -1200,6 +1200,15 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	publishedBackupDone := make(chan managedCompletion, 1)
 	peerCleanupDone := make(chan peerCleanupCompletion, 1)
 	peerCleanupReconcileActive := false
+	cleanupBlocked := make(chan string, 8)
+	cleanupUnreachable := func(id string) func() {
+		return func() {
+			select {
+			case cleanupBlocked <- id:
+			default:
+			}
+		}
+	}
 	deferredBackupRetry := make(chan string, 8)
 	restoreReconcileActive := false
 	// ponytail: one whole-point retry at a time; use per-repository workers if recovery throughput matters.
@@ -1266,6 +1275,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				// pushes the signed replica to every ready member that is behind. It is
 				// single-flight and never awaited: a member that cannot be reached is
 				// caught up on a later tick, and nothing waits on a replica.
+				if poolAuthorityHandedOff(s) {
+					return
+				}
 				runWork.Add(1)
 				go func() {
 					defer runWork.Done()
@@ -1508,12 +1520,19 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 		}()
 		return nil
 	}
+	// Catalog import/rebuild and orphan cleanup can run for up to 10 minutes; do that work
+	// off Run's select loop so heartbeats and other completions keep moving.
 	startBackupCatalog := func(request BackupRequest) BackupResponse {
-		if request.Command == nil || request.Command.CatalogImport == nil ||
-			!isBackupCatalogKind(request.Command.Kind) {
+		if request.Command == nil {
 			return BackupResponse{Err: ErrBackupInvalid}
 		}
 		cmd := *request.Command
+		switch {
+		case isBackupCatalogKind(cmd.Kind) && cmd.CatalogImport != nil:
+		case cmd.Kind == "backup-orphan-cleanup" && cmd.OrphanCleanup != nil:
+		default:
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
 		reserved := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd, ReserveOnly: true})
 		if reserved.Err != nil || reserved.Result == nil || reserved.Result.Status != "pending" {
 			return reserved
@@ -1548,7 +1567,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 	for {
 		joined := false
 		if active == "" {
-			if id := nextManagedCommand(s.State.Journal, activeSnapshot, peerBackupNext.skipping(preparingBackupRepo, time.Now())); id != "" {
+			id := nextManagedCommand(s.State.Journal, activeSnapshot, peerBackupNext.skipping(preparingBackupRepo, time.Now()))
+			noteQueuedBackupBlockers(s, id, activeSnapshot)
+			if id != "" {
 				// applyResponse already persisted the full command and admission order.
 				if cmd := dispatchCommand(s.State.Journal[id], s.State.Journal); snapshotCommand(cmd.Kind) {
 					activeSnapshot = id
@@ -1597,6 +1618,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 								continue
 							}
 							peerBackupNext.observed(id, workErr.Error(), time.Now())
+							noteBlocker(s, id, workErr.Error())
 							log.Printf("member backup dispatch will retry: %v", workErr)
 						} else {
 							runWork.Add(1)
@@ -1614,15 +1636,18 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 						runWork.Add(1)
 						go func() {
 							defer runWork.Done()
-							result, workErr := executeBackupCommand(probeCtx, s.dir, identity, cmd)
+							completion := runLocalBackupWithDeadline(probeCtx, &Store{dir: s.dir, State: identity}, run, func() managedCompletion {
+								result, workErr := executeBackupCommand(probeCtx, s.dir, identity, cmd)
+								return managedCompletion{result: result, err: workErr, background: true}
+							})
 							select {
-							case completed <- managedCompletion{result: result, err: workErr, background: true}:
+							case completed <- completion:
 							case <-probeCtx.Done():
 							}
 						}()
 					}
 				} else if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" || cmd.Kind == "backup-repository-forget" || cmd.Kind == "backup-orphan-cleanup" ||
-					cmd.Kind == "backup-policy-upsert" || cmd.Kind == "backup-policy-pause" || cmd.Kind == "backup-policy-run-now" ||
+					cmd.Kind == "backup-policy-upsert" || cmd.Kind == "backup-policy-pause" || cmd.Kind == "backup-policy-delete" || cmd.Kind == "backup-policy-run-now" ||
 					cmd.Kind == "backup-protect" || isBackupCatalogKind(cmd.Kind) ||
 					cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-test-cleanup" {
 					if cmd.Kind == "backup-repository-register" || cmd.Kind == "backup-repository-test" {
@@ -1656,7 +1681,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 							runWork.Add(1)
 							go func() {
 								defer runWork.Done()
-								result, workErr := waitPeerCleanup(probeCtx, work)
+								result, workErr := waitPeerCleanup(probeCtx, work, cleanupUnreachable(id))
 								select {
 								case peerCleanupDone <- peerCleanupCompletion{work: work, result: result, err: workErr}:
 								case <-probeCtx.Done():
@@ -1722,7 +1747,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 							continue
 						}
 					}
-					if isBackupCatalogKind(cmd.Kind) {
+					if isBackupCatalogKind(cmd.Kind) || cmd.Kind == "backup-orphan-cleanup" {
 						response := startBackupCatalog(BackupRequest{Command: &cmd})
 						if response.Result != nil && response.Result.Status == "pending" {
 							preparingBackupRepo[id] = true
@@ -1851,7 +1876,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
-			if request.Command != nil && isBackupCatalogKind(request.Command.Kind) {
+			if request.Command != nil && (isBackupCatalogKind(request.Command.Kind) || request.Command.Kind == "backup-orphan-cleanup") {
 				request.Reply <- startBackupCatalog(request)
 				break
 			}
@@ -1902,7 +1927,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					break
 				}
 			}
-			if request.Command != nil && isBackupCatalogKind(request.Command.Kind) {
+			if request.Command != nil && (isBackupCatalogKind(request.Command.Kind) || request.Command.Kind == "backup-orphan-cleanup") {
 				request.Reply <- startBackupCatalog(request)
 				break
 			}
@@ -2022,6 +2047,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					return nil
 				}
 			}
+		case id := <-cleanupBlocked:
+			noteCleanupBlocker(s, id, peerBackupUnreachable)
 		case completion := <-peerCleanupDone:
 			peerCleanupReconcileActive = false
 			id := completion.work.command.OperationID
@@ -2031,6 +2058,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				var permanent permanentPeerBackupError
 				if !errors.As(completion.err, &permanent) {
 					log.Printf("member test cleanup remains pending: %v", completion.err)
+					noteCleanupBlocker(s, id, peerBackupUnreachable)
 					break
 				}
 				result = protocol.Result{OperationID: id, Status: "needs_attention", Error: completion.err.Error(), ObservedAt: time.Now().UTC()}
@@ -2078,14 +2106,17 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 				}()
 			}
 			reconcileCatalogReceipts()
-			if err := rehydratePendingTestCleanup(s); err != nil && ctx.Err() == nil {
-				log.Printf("pending test cleanup could not be recovered: %v", err)
-			}
-			if err := reconcileTerminalBackupRestorePins(s); err != nil && ctx.Err() == nil {
-				log.Printf("terminal backup restore pins could not be reconciled: %v", err)
-			}
-			if _, err := ApplyBackupScheduleTick(s, now); err != nil && ctx.Err() == nil {
-				log.Printf("backup schedule tick did not complete")
+			// A master that handed its authority over writes none of it, so these would only fail.
+			if !poolAuthorityHandedOff(s) {
+				if err := rehydratePendingTestCleanup(s); err != nil && ctx.Err() == nil {
+					log.Printf("pending test cleanup could not be recovered: %v", err)
+				}
+				if err := reconcileTerminalBackupRestorePins(s); err != nil && ctx.Err() == nil {
+					log.Printf("terminal backup restore pins could not be reconciled: %v", err)
+				}
+				if _, err := ApplyBackupScheduleTick(s, now); err != nil && ctx.Err() == nil {
+					log.Printf("backup schedule tick did not complete")
+				}
 			}
 			if !peerCleanupReconcileActive {
 				for _, entry := range s.State.Journal {
@@ -2100,7 +2131,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 					runWork.Add(1)
 					go func() {
 						defer runWork.Done()
-						result, err := waitPeerCleanupReadOnly(probeCtx, work)
+						result, err := waitPeerCleanupReadOnly(probeCtx, work, cleanupUnreachable(work.command.OperationID))
 						select {
 						case peerCleanupDone <- peerCleanupCompletion{work: work, result: result, err: err}:
 						case <-probeCtx.Done():
@@ -2195,19 +2226,16 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 						peerBackupNext.waiting(entry.Command.OperationID, now) {
 						continue
 					}
-					run, runErr := loadPoolBackupRun(s, entry.Command.OperationID)
-					if runErr != nil || run.HostID == "" || run.HostID == s.State.HostID {
-						continue
-					}
-					if run.Status == "succeeded" || run.Status == "failed" {
-						// The pool record already settled, possibly by a master that took over.
-						err = completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
-							OperationID: run.OperationID, Status: run.Status, Error: run.Error, ObservedAt: time.Now().UTC(),
-						}, background: true}, cfg.history)
-						if err != nil {
+					if result, settled := journalBackupSettlement(s, entry); settled {
+						// The pool record already settled it, possibly by a master that took over, or there is none.
+						if err = completeBackgroundManagedCommand(s, managedCompletion{result: result, background: true}, cfg.history); err != nil {
 							return err
 						}
 						break
+					}
+					run, runErr := loadPoolBackupRun(s, entry.Command.OperationID)
+					if runErr != nil || run.HostID == "" || run.HostID == s.State.HostID {
+						continue
 					}
 					work, workErr := peerBackupWorkForCommand(s, *entry.Command, run)
 					if workErr != nil {
@@ -2247,14 +2275,14 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) error {
 			}
 		case completion := <-peerBackupDone:
 			peerBackupActive = false
-			peerBackupNext.observed(completion.run.OperationID, peerBackupAnswer(completion), time.Now())
+			notePeerBackupAnswer(s, peerBackupNext, completion)
 			if status := completion.reply.Result.Status; completion.err == nil && (status == "succeeded" || status == "failed") {
 				delete(peerBackupNext, completion.run.OperationID)
 			}
 		case done := <-directPeerDone:
 			directPeerReconcileActive = false
 			peer := done.peer
-			peerBackupNext.observed(peer.run.OperationID, peerBackupAnswer(peer), time.Now())
+			notePeerBackupAnswer(s, peerBackupNext, peer)
 			if peerBackupNotStarted(peer.err) {
 				peer.reply = poolBackupPeerResponse{Result: protocol.Result{OperationID: peer.run.OperationID, Status: "failed", Error: peer.err.Error(), ObservedAt: time.Now().UTC()}}
 				peer.err = nil
@@ -2414,7 +2442,13 @@ func completeManagedCommand(s *Store, active string, done managedCompletion, his
 		if done.result.OperationID != id || (done.result.Status != "succeeded" && done.result.Status != "failed" && done.result.Status != "needs_attention") {
 			return active, errors.New("invalid local managed command completion")
 		}
+		// A run still unresolved after its deadline keeps the deadline explanation
+		// instead of the latest raw observation error.
+		keepDeadline := entry.Status == "needs_attention" && entry.Error == stalledRunReason() && done.result.Status == "needs_attention"
 		entry.Status, entry.Error, entry.ObservedAt = done.result.Status, done.result.Error, done.result.ObservedAt
+		if keepDeadline {
+			entry.Error = stalledRunReason()
+		}
 		forgetDeletedVM(history, entry)
 	}
 	if done.background {
@@ -2558,6 +2592,8 @@ func managedCommandVMID(cmd *protocol.Command) string {
 		return cmd.Power.VMID
 	case cmd.VMMedia != nil:
 		return cmd.VMMedia.VMID
+	case cmd.ReleaseRetained != nil:
+		return cmd.ReleaseRetained.VMID
 	case cmd.Delete != nil:
 		return cmd.Delete.VMID
 	default:
@@ -2604,7 +2640,7 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 	for _, id := range ids {
 		entry := journal[id]
 		cmd := entry.Command
-		if seen[id] || cmd == nil || entry.PeerDispatched || !managedCommand(cmd.Kind) {
+		if seen[id] || cmd == nil || entry.PeerDispatched && (entry.Status != "pending" || entry.Error == "") || !managedCommand(cmd.Kind) {
 			continue
 		}
 		outcome := protocol.ManagedOutcome{OperationID: id, Kind: cmd.Kind, Status: entry.Status, Error: resultError(entry.Error)}
@@ -2633,6 +2669,8 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 			outcome.ID = cmd.OrphanCleanup.RepositoryID
 		case cmd.BackupPolicy != nil:
 			outcome.ID, outcome.Name = cmd.BackupPolicy.ID, cmd.BackupPolicy.Name
+		case cmd.PolicyDelete != nil:
+			outcome.ID = cmd.PolicyDelete.PolicyID
 		case cmd.BackupProtect != nil:
 			outcome.ID = cmd.BackupProtect.RecoveryPointID
 		case cmd.CatalogImport != nil:
@@ -2653,6 +2691,8 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 			outcome.ID = cmd.Power.VMID
 		case cmd.VMMedia != nil:
 			outcome.ID = cmd.VMMedia.VMID
+		case cmd.ReleaseRetained != nil:
+			outcome.ID = cmd.ReleaseRetained.VMID
 		default:
 			continue
 		}

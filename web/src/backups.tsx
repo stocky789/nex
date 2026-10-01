@@ -23,8 +23,8 @@ type Props = {
   flow?: string;
 };
 
-type BackupNowStep = 1 | 2 | 3;
-type RestoreStep = 1 | 2 | 3;
+type BackupNowStep = 1 | 2;
+type RestoreStep = 1 | 2;
 type RestoreMode = "new" | "replace" | "test";
 type RestoreDraft = { name: string; host: string; storage: string; vmID: string; confirmation: string };
 const restoreKey = (mode: RestoreMode, pointID: string) => `${mode}-${pointID}`;
@@ -97,8 +97,13 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [filterVM, setFilterVM] = useState(vmFilter);
   const [filterRepo, setFilterRepo] = useState("");
   const [selectedID, setSelectedID] = useState("");
+  const [selectedPoint, setSelectedPoint] = useState<BackupRecoveryPoint | null>(null);
+  const [view, setView] = useState<"jobs" | "points">(flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(flow === "backup-now");
   const [policyOpen, setPolicyOpen] = useState(flow === "create-policy");
+  const [repositoryPanelOpen, setRepositoryPanelOpen] = useState(false);
   const [backupStep, setBackupStep] = useState<BackupNowStep>(1);
   const [backupVM, setBackupVM] = useState(vmFilter);
   const [backupRepo, setBackupRepo] = useState("");
@@ -117,6 +122,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const pendingBackup = useRef<Record<string, { vm_id: string; repository_id: string; consistency: string }>>({});
   const pendingProtect = useRef<Record<string, { repository_id: string; recovery_point_id: string; protected: boolean }>>({});
   const restoreDrafts = useRef<Record<string, RestoreDraft>>({});
+  const presentationDrafts = useRef<Record<string, RestoreDraft>>({});
   const inventoryLoad = useLatestLoad();
   const catalogLoad = useLatestLoad();
   const runLoad = useLatestLoad();
@@ -136,7 +142,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const poolVMs = useMemo(() => data.vms.filter(v => !poolID || v.pool_id === poolID), [data.vms, poolID]);
   const poolStorage = useMemo(() => data.storage.filter(s => !poolID || s.pool_id === poolID), [data.storage, poolID]);
   const repoByID = useMemo(() => new Map((repos || []).map(r => [r.id, r])), [repos]);
-  const selected = points?.find(p => p.id === selectedID) || null;
+  const reportedPoint = points?.find(p => p.id === selectedID);
+  const selected = reportedPoint || (selectedPoint?.id === selectedID ? selectedPoint : null);
   const restoreOriginal = replacementTarget(selected, poolVMs);
   const uncertainRestore = Boolean(selected && restoreDrafts.current[restoreKey(restoreMode, selected.id)]);
   const activeTests = activeTestRestores(runs, selected, data.vms, poolID);
@@ -163,7 +170,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       setCatalogError("");
     } catch (err) {
       if (stale()) return;
-      setCatalogPage(null);
       setCatalogError(`Recovery points unavailable: ${String(err)}`);
     }
   };
@@ -240,11 +246,19 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   };
 
   useEffect(() => {
-    if (pendingBackup.current["backup-now"]) return;
+    if (reportedPoint) setSelectedPoint(reportedPoint);
+  }, [reportedPoint]);
+
+  useEffect(() => {
+    if (pendingBackup.current["backup-now"] || Object.keys(restoreDrafts.current).length || working || repositoryPanelOpen || policyOpen) return;
+    saveRestoreDraft();
     setFilterVM(vmFilter);
     setBackupVM(vmFilter);
-    if (flow === "backup-now") setBackupOpen(true);
-    if (flow === "create-policy") setPolicyOpen(true);
+    setSelectedID("");
+    setRestoreOpen(false);
+    setView(flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
+    setBackupOpen(flow === "backup-now");
+    setPolicyOpen(flow === "create-policy");
   }, [vmFilter, flow]);
 
   useEffect(() => {
@@ -260,6 +274,10 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setRunError("");
     setPageNotice("");
     setSelectedID("");
+    setSelectedPoint(null);
+    setRestoreOpen(false);
+    setView(flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
+    presentationDrafts.current = {};
     selectedIDRef.current = "";
     runLoading.current = "";
     setBackupUncertain(false);
@@ -310,26 +328,55 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     .sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
   const pointTotal = catalogPage?.total ?? filtered.length;
 
-  // View points filters the list below to one VM and brings it into view.
+  const panelLocked = Boolean(working) || backupUncertain || uncertainRestore || repositoryPanelOpen;
+  const saveRestoreDraft = () => {
+    if (selected && restoreOpen && !uncertainRestore) presentationDrafts.current[restoreKey(restoreMode, selected.id)] = {
+      name: restoreName, host: restoreHost, storage: restoreStorage, vmID: restoreVMID, confirmation: replaceConfirm,
+    };
+  };
+  const inspectPoint = (point: BackupRecoveryPoint) => {
+    if (panelLocked) return;
+    saveRestoreDraft();
+    setBackupOpen(false);
+    setPolicyOpen(false);
+    setSelectedPoint(point);
+    setSelectedID(point.id);
+    setRestoreOpen(false);
+    setCleanupConfirm({});
+  };
+  const switchView = (next: "jobs" | "points") => {
+    if (panelLocked || policyOpen) return;
+    saveRestoreDraft();
+    setRestoreOpen(false);
+    setBackupOpen(false);
+    setView(next);
+  };
   const viewPoints = (vmID: string) => {
+    if (panelLocked || policyOpen) return;
+    switchView("points");
     setFilterVM(vmID);
-    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-    document.getElementById("recovery-points")?.scrollIntoView({ behavior, block: "start" });
   };
 
   const openRestore = (point: BackupRecoveryPoint, mode: RestoreMode = "new") => {
-    if (working) return;
-    const draft = restoreDrafts.current[restoreKey(mode, point.id)];
+    if (panelLocked) return;
+    saveRestoreDraft();
+    const key = restoreKey(mode, point.id);
+    const pending = restoreDrafts.current[key];
+    const draft = pending || presentationDrafts.current[key];
     const source = replacementTarget(point, poolVMs);
     if (mode === "replace" && !source) return;
+    setBackupOpen(false);
+    setPolicyOpen(false);
+    setSelectedPoint(point);
     setSelectedID(point.id);
+    setRestoreOpen(true);
     setRestoreMode(mode);
-    setRestoreStep(draft ? 3 : 1);
-    setRestoreName(draft?.name || (mode === "replace" ? source!.name : defaultRestoreName(point)));
-    setRestoreStorage(draft?.storage || "");
-    setRestoreHost(draft?.host || source?.host_id || pool?.master_host_id || "");
-    setRestoreVMID(draft?.vmID || crypto.randomUUID());
-    setReplaceConfirm(draft?.confirmation || "");
+    setRestoreStep(pending ? 2 : 1);
+    setRestoreName(draft?.name ?? (mode === "replace" ? source!.name : defaultRestoreName(point)));
+    setRestoreStorage(draft?.storage ?? "");
+    setRestoreHost(draft?.host ?? source?.host_id ?? pool?.master_host_id ?? "");
+    setRestoreVMID(draft?.vmID ?? crypto.randomUUID());
+    setReplaceConfirm(draft?.confirmation ?? "");
     setCleanupConfirm({});
   };
 
@@ -446,6 +493,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       const reply = await api<{ operation?: { id?: string } }>(path, "POST", body);
       clearRequest(key);
       delete restoreDrafts.current[key];
+      delete presentationDrafts.current[key];
+      setRestoreOpen(false);
       const label = restoreMode === "replace" ? "restore replace" : restoreMode === "test" ? "test restore" : "restore as new";
       onNotice(`${restoreName.trim() || selected.source_vm_name || selected.id}: ${label} requested`, backupOpID(reply));
       setSelectedID("");
@@ -525,79 +574,34 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     return <><h1 className="sr-only">Backups</h1><p className="empty">Choose a pool in the scope menu to see its backups.</p></>;
   }
 
-  return <>
+  return <div className="backup-workspace">
     <h1 className="sr-only">Backups</h1>
-    <BackupPolicies key={pool.id} onViewPoints={viewPoints}
-      api={api} data={data} pool={pool} repos={repos || []} policies={policies} runs={jobRuns} error={error || policyError}
-      busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
-      onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
-      requestID={requestID} clearRequest={clearRequest}
-      openCreate={policyOpen} onOpenCreate={() => setPolicyOpen(true)} onCloseCreate={() => setPolicyOpen(false)}
-    />
-    <div id="recovery-points"><Section icon="backup" title="Recovery points" count={pointTotal} actions={<>
-      <button type="button" className="sm primary" disabled={unavailable || busy || Boolean(working)} onClick={() => { setBackupOpen(true); setBackupStep(1); }}>
-        <Icon kind="backup" />Back up now
-      </button>
-      <button type="button" className="sm" disabled={unavailable || busy || Boolean(working) || !selected || pointRuns === null} title={selected ? undefined : "Select a recovery point first"} onClick={() => selected && openRestore(selected, "test")}>Test restore</button>
-      <button type="button" className="sm" onClick={() => { location.hash = "/settings/backups"; }}>Repositories</button>
-    </>}>
-      {(error || catalogError || repositoryError) && <p className="why" role="alert">{error || catalogError || repositoryError}</p>}
-      {runError && <p className="why" role="alert">{runError}</p>}
-      {selected && pointRuns === null && !runError && <p className="muted" role="status">Loading complete test restore history…</p>}
-      {pageNotice && <p className="why" role="status">{pageNotice}</p>}
-      <div className="toolbar">
-        <input type="search" aria-label="Search recovery points" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search VM, repository or ID" />
-        <select aria-label="VM" value={filterVM} onChange={e => setFilterVM(e.target.value)}>
-          <option value="">All VMs</option>
-          {poolVMs.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-          {(points || []).filter((p, i, all) => !poolVMs.some(v => v.id === p.source_vm_id) && all.findIndex(x => x.source_vm_id === p.source_vm_id) === i).map(p =>
-            <option key={p.source_vm_id} value={p.source_vm_id}>{p.source_vm_name || p.source_vm_id} (unavailable)</option>)}
-        </select>
-        <select aria-label="Repository" value={filterRepo} onChange={e => setFilterRepo(e.target.value)}>
-          <option value="">All repositories</option>
-          {(repos || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-      </div>
-      {points === null && !catalogError ? <p className="muted">Loading…</p> : null}
-      {points && filtered.length === 0 ? <p className="empty">{filterVM || filterRepo || query.trim() ? "No recovery points match." : repos?.length ? "No recovery points yet. Back up a VM to create one." : "No backup repositories. Create a destination in Settings first."}</p> : null}
-      {filtered.length > 0 ? <div className="table-scroll"><table className="records">
-        <thead><tr><th>VM</th><th>Captured</th><th>Repository</th><th>Consistency</th><th>Protected</th><th>Last test</th><th><span className="sr-only">Actions</span></th></tr></thead>
-        <tbody>
-          {filtered.map(p => {
-            const repo = repoByID.get(p.repository_id);
-            const live = replacementTarget(p, poolVMs);
-            return <tr key={p.id} className={p.id === selectedID ? "sel" : undefined} onClick={() => openRestore(p, "new")}>
-              <td>
-                <strong>{live ? <a href={`#/vms/${encodeURIComponent(live.id)}`} onClick={e => e.stopPropagation()}>{live.name}</a> : (p.source_vm_name || p.source_vm_id)}</strong>
-                {!live ? <small className="muted">Source VM unavailable</small> : null}
-              </td>
-              <td><span className="muted">{date(p.captured_at)}</span></td>
-              <td>{repo?.name || <span className="mono">{p.repository_id}</span>}</td>
-              <td><Badge value={p.consistency} tone={p.consistency === "crash" ? "warn" : "ok"} /></td>
-              <td>{p.protected ? <Badge value="protected" tone="info" /> : <span className="muted">—</span>}</td>
-              <td>{p.last_test_result ? <Badge value={p.last_test_result} /> : <span className="muted">—</span>}</td>
-              <td><div className="row-actions inline">
-                <button type="button" className="sm" disabled={Boolean(working)} onClick={e => { e.stopPropagation(); openRestore(p, "new"); }}>Restore as new</button>
-                {live && <button type="button" className="sm" disabled={Boolean(working)} onClick={e => { e.stopPropagation(); openRestore(p, "replace"); }}>Replace</button>}
-                <button type="button" className="sm" disabled={Boolean(working) || busy || unavailable} onClick={e => { e.stopPropagation(); void toggleProtect(p); }}>
-                  {working === `protect-${p.id}` ? "…" : pendingProtect.current[`protect-${p.id}`] ? "Retry request" : p.protected ? "Unprotect" : "Protect"}
-                </button>
-              </div></td>
-            </tr>;
-          })}
-        </tbody>
-      </table></div> : null}
-      {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {pointTotal} recovery points.</p>}
-      {catalogPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreCatalog()}>{loadingMore === "catalog" ? "Loading…" : "Load more recovery points"}</button>}
-    </Section></div>
-
-    {backupOpen && <section className="panel form-panel" aria-label="Back up now">
-      <div className="section-heading">
-        <h2>Back up now · step {backupStep} of 3</h2>
-        <button type="button" disabled={Boolean(working)} onClick={closeBackup}>Close</button>
-      </div>
+    <div className="backup-tabs" role="tablist" aria-label="Backup views" onKeyDown={e => {
+      if (panelLocked || policyOpen || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const next = e.key === "Home" ? "jobs" : e.key === "End" ? "points" : view === "jobs" ? "points" : "jobs";
+      switchView(next);
+      document.getElementById(`backup-${next}-tab`)?.focus();
+    }}>
+      <button type="button" role="tab" id="backup-jobs-tab" tabIndex={view === "jobs" ? 0 : -1} aria-controls="backup-jobs-view" aria-selected={view === "jobs"} disabled={panelLocked || policyOpen} onClick={() => switchView("jobs")}>Backup jobs</button>
+      <button type="button" role="tab" id="backup-points-tab" tabIndex={view === "points" ? 0 : -1} aria-controls="recovery-points" aria-selected={view === "points"} disabled={panelLocked || policyOpen} onClick={() => switchView("points")}>Recovery points</button>
+    </div>
+    {[error, catalogError, repositoryError, policyError, runError].filter(Boolean).map((message, index) => <p key={index} className="why" role="alert">{message}</p>)}
+    {backupOpen && <Panel wide icon="backup" title="Back up now" onClose={closeBackup} closeDisabled={Boolean(working) || backupUncertain}
+      footer={<>
+        {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}
+        <div className="actions">
+          {backupStep === 1 ? <button type="submit" form="backup-now-destination" className="primary" disabled={!backupVM || !backupRepo || Boolean(working)}>Review backup</button> :
+            <><button type="button" disabled={Boolean(working) || backupUncertain} onClick={() => setBackupStep(1)}>Back</button><button type="button" className="primary" disabled={Boolean(backupBlocker) || Boolean(working)} onClick={() => void submitBackup()}>{working === "backup-now" ? "Working…" : backupUncertain ? "Retry backup request" : "Back up now"}</button></>}
+          <button type="button" disabled={Boolean(working) || backupUncertain} onClick={closeBackup}>Cancel</button>
+        </div>
+      </>}>
+      {error && <p className="why" role="alert">{error}</p>}
+      {repositoryError && <p className="why" role="alert">{repositoryError}</p>}
+      {repos === null && !repositoryError && <p className="muted" role="status">Loading backup repositories…</p>}
+      <ol className="backup-steps"><li aria-current={backupStep === 1 ? "step" : undefined}>Destination</li><li aria-current={backupStep === 2 ? "step" : undefined}>Review and submit</li></ol>
       {backupUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same backup request.</p>}
-      {backupStep === 1 && <form className="stack" onSubmit={e => { e.preventDefault(); if (backupVM && backupRepo) setBackupStep(2); }}>
+      {backupStep === 1 && <form id="backup-now-destination" className="stack" onSubmit={e => { e.preventDefault(); if (backupVM && backupRepo) setBackupStep(2); }}>
         <label>Virtual machine<select required value={backupVM} disabled={Boolean(working) || backupUncertain} onChange={e => { setBackupVM(e.target.value); setBackupMode("stopped"); clearRequest("backup-now"); }}>
           <option value="">Select VM</option>
           {poolVMs.filter(v => !v.protected).map(v => <option key={v.id} value={v.id}>{v.name}{v.state !== "shut off" ? ` · ${v.state}` : ""}</option>)}
@@ -606,68 +610,130 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
           <option value="">Select repository</option>
           {(repos || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select></label>
+        {repos !== null && repos.length === 0 && <p className="why">Create a backup repository in <a href="#/settings/backups">Settings → Backups</a> before backing up a VM.</p>}
         {backupRunning && <label>Mode<select value={backupMode === "stopped" ? "crash" : backupMode} onChange={e => { setBackupMode(e.target.value as "crash" | "quiesced"); clearRequest("backup-now"); }} disabled={Boolean(working) || backupUncertain}>
           <option value="crash">Crash-consistent</option>
           <option value="quiesced">Quiesced</option>
         </select></label>}
-        <div className="actions">
-          <button type="submit" className="primary" disabled={!backupVM || !backupRepo || Boolean(working)}>Next</button>
-          <button type="button" disabled={Boolean(working)} onClick={closeBackup}>Cancel</button>
-        </div>
       </form>}
       {backupStep === 2 && <div className="stack">
-        <dl className="details">
+        <dl className="details backup-summary">
           <dt>VM</dt><dd>{backupTarget?.name || backupVM}</dd>
           <dt>Repository</dt><dd>{repoByID.get(backupRepo)?.name || backupRepo}</dd>
           <dt>Mode</dt><dd>{backupConsistency === "stopped" ? "Stopped full backup" : backupConsistency === "crash" ? "Online crash-consistent" : "Online quiesced"}</dd>
           <dt>Disks</dt><dd>{backupTarget?.spec?.disks?.length ? backupTarget.spec.disks.map(d => d.name).join(", ") : "From Core definition"}</dd>
         </dl>
-        {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}
-        <div className="actions">
-          <button type="button" className="primary" disabled={Boolean(backupBlocker) || Boolean(working)} onClick={() => setBackupStep(3)}>Next</button>
-          <button type="button" disabled={Boolean(working)} onClick={() => setBackupStep(1)}>Back</button>
-        </div>
       </div>}
-      {backupStep === 3 && <div className="stack">
-        <p>Submit a {backupConsistency === "stopped" ? "stopped" : "online"} full backup of <strong>{backupTarget?.name}</strong> to <strong>{repoByID.get(backupRepo)?.name || backupRepo}</strong>.</p>
-        {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}
-        <div className="actions">
-          <button type="button" className="primary" disabled={Boolean(backupBlocker) || Boolean(working)} onClick={() => void submitBackup()}>
-            {working === "backup-now" ? "Working…" : "Back up now"}
-          </button>
-          <button type="button" disabled={Boolean(working) || backupUncertain} onClick={() => setBackupStep(2)}>Back</button>
-        </div>
-      </div>}
-    </section>}
+    </Panel>}
 
-    {selected && <Panel icon="backup" title={selected.source_vm_name || selected.source_vm_id} badge={<Badge value={selected.consistency} tone={selected.consistency === "crash" ? "warn" : "ok"} />}
-      onClose={() => { if (!working) setSelectedID(""); }}
+    <div id="backup-jobs-view" role="tabpanel" aria-labelledby="backup-jobs-tab" hidden={view !== "jobs"}>
+    <BackupPolicies key={pool.id} onViewPoints={viewPoints}
+      api={api} data={data} pool={pool} repos={repos} policies={policies} runs={jobRuns} error={error || policyError || repositoryError}
+      busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
+      onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
+      requestID={requestID} clearRequest={clearRequest}
+      onRepositoryPanelChange={setRepositoryPanelOpen}
+      openCreate={policyOpen} onOpenCreate={() => { if (!panelLocked) { saveRestoreDraft(); setSelectedID(""); setRestoreOpen(false); setBackupOpen(false); setPolicyOpen(true); } }} onCloseCreate={() => setPolicyOpen(false)}
+    />
+    </div>
+    <div id="recovery-points" role="tabpanel" aria-labelledby="backup-points-tab" hidden={view !== "points"}><Section icon="backup" title="Recovery points" count={catalogPage?.total} actions={<>
+      <button type="button" className="sm primary" disabled={unavailable || busy || panelLocked || policyOpen} onClick={() => { saveRestoreDraft(); setSelectedID(""); setRestoreOpen(false); setBackupOpen(true); setBackupStep(1); }}>
+        <Icon kind="backup" />Back up now
+      </button>
+      <button type="button" className="sm" onClick={() => { location.hash = "/settings/backups"; }}>Repositories</button>
+    </>}>
+      {pageNotice && <p className="why" role="status">{pageNotice}</p>}
+      <button type="button" className="backup-filter-toggle" aria-expanded={filtersOpen} aria-controls="backup-point-filters" onClick={() => setFiltersOpen(open => !open)}>Filters</button>
+      <div className="backup-layout">
+      <aside id="backup-point-filters" className={`backup-filters${filtersOpen ? " open" : ""}`} aria-label="Recovery point filters">
+        <label>Search<input type="search" value={query} disabled={panelLocked} onChange={e => setQuery(e.target.value)} placeholder="VM, repository or ID" /></label>
+        <label>VM<select value={filterVM} disabled={panelLocked} onChange={e => setFilterVM(e.target.value)}>
+          <option value="">All VMs</option>
+          {poolVMs.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          {(points || []).filter((p, i, all) => !poolVMs.some(v => v.id === p.source_vm_id) && all.findIndex(x => x.source_vm_id === p.source_vm_id) === i).map(p =>
+            <option key={p.source_vm_id} value={p.source_vm_id}>{p.source_vm_name || p.source_vm_id} (unavailable)</option>)}
+        </select></label>
+        <label>Repository<select value={filterRepo} disabled={panelLocked} onChange={e => setFilterRepo(e.target.value)}>
+          <option value="">All repositories</option>
+          {(repos || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select></label>
+        <button type="button" disabled={panelLocked || !(filterVM || filterRepo || query)} onClick={() => { setFilterVM(""); setFilterRepo(""); setQuery(""); }}>Clear filters</button>
+      </aside>
+      <div className="backup-list">
+      {points === null && !catalogError ? <p className="backup-loading muted" role="status">Loading recovery points…</p> : null}
+      {points && filtered.length === 0 ? <p className="empty">{filterVM || filterRepo || query.trim() ? "No recovery points match." : repos === null ? repositoryError || "Loading backup repositories…" : repos.length ? "No recovery points yet. Back up a VM to create one." : "No backup repositories. Create a destination in Settings first."}</p> : null}
+      {filtered.length > 0 ? <div className="table-scroll"><table className="records backup-points">
+        <thead><tr><th>VM / recovery point</th><th className="backup-secondary">Captured</th><th className="backup-secondary">Repository</th><th className="backup-secondary">Consistency</th><th className="backup-secondary">Protected</th><th>Last test</th><th><span className="sr-only">Details</span></th></tr></thead>
+        <tbody>
+          {filtered.map(p => {
+            const repo = repoByID.get(p.repository_id);
+            const live = replacementTarget(p, poolVMs);
+            return <tr key={p.id} className={p.id === selectedID ? "sel" : undefined} onClick={() => inspectPoint(p)}>
+              <td>
+                <strong className="backup-primary">{live ? <a href={`#/vms/${encodeURIComponent(live.id)}`} onClick={e => e.stopPropagation()}>{live.name}</a> : (p.source_vm_name || p.source_vm_id)}</strong>
+                {!live ? <small className="muted">Source VM unavailable</small> : null}
+                <span className="backup-row-detail">{date(p.captured_at)}</span>
+              </td>
+              <td className="backup-secondary"><span className="backup-meta">{date(p.captured_at)}</span></td>
+              <td className="backup-secondary">{repo?.name || <span className="mono">{p.repository_id}</span>}</td>
+              <td className="backup-secondary"><Badge value={p.consistency} tone={p.consistency === "crash" ? "warn" : "ok"} /></td>
+              <td className="backup-secondary">{p.protected ? <Badge value="protected" tone="info" /> : <span className="muted">—</span>}</td>
+              <td>{p.last_test_result ? <Badge value={p.last_test_result} /> : <span className="backup-meta">Not tested</span>}</td>
+              <td><button type="button" className="sm backup-row-open" disabled={panelLocked} aria-label={`Inspect ${live?.name || p.source_vm_name || p.source_vm_id} (${date(p.captured_at)})`} onClick={e => { e.stopPropagation(); inspectPoint(p); }}>Details</button></td>
+            </tr>;
+          })}
+        </tbody>
+      </table></div> : null}
+      {catalogPage && <p className="muted" role="status">Showing {filtered.length} of {pointTotal} recovery points.</p>}
+      {catalogPage?.next_cursor && <button type="button" className="sm" disabled={Boolean(loadingMore)} onClick={() => void loadMoreCatalog()}>{loadingMore === "catalog" ? "Loading…" : "Load more recovery points"}</button>}
+      </div></div>
+    </Section></div>
+
+    {selected && view === "points" && !backupOpen && !policyOpen && <Panel wide icon="backup" title={restoreOpen ? "Restore recovery point" : selected.source_vm_name || selected.source_vm_id} badge={<Badge value={selected.consistency} tone={selected.consistency === "crash" ? "warn" : "ok"} />}
+      closeDisabled={panelLocked}
+      onClose={() => { if (!panelLocked) { saveRestoreDraft(); setSelectedID(""); setRestoreOpen(false); } }}
       sub={<>Captured {date(selected.captured_at)} · {repoByID.get(selected.repository_id)?.name || selected.repository_id}</>}
-      actions={<>
-        <button type="button" className="sm" disabled={Boolean(working)} onClick={() => openRestore(selected, "new")}>As new</button>
-        {restoreOriginal && <button type="button" className="sm" disabled={Boolean(working)} onClick={() => openRestore(selected, "replace")}>Replace</button>}
-        <button type="button" className="sm" disabled={Boolean(working)} onClick={() => openRestore(selected, "test")}>Test</button>
-        <button type="button" className="sm" disabled={Boolean(working) || busy || unavailable} onClick={() => void toggleProtect(selected)}>{pendingProtect.current[`protect-${selected.id}`] ? "Retry request" : selected.protected ? "Unprotect" : "Protect"}</button>
-      </>}>
+      footer={restoreOpen ? <>
+        {restoreBlocker && <p className="why" role="status">{restoreBlocker}</p>}
+        <div className="actions">
+          {restoreStep === 1 ? <button type="submit" form="backup-restore-destination" className="primary" disabled={Boolean(restoreBlocker) || Boolean(working)}>Review restore</button> :
+            <><button type="button" disabled={panelLocked} onClick={() => setRestoreStep(1)}>Back</button><button type="button" className={`primary${restoreMode === "replace" ? " danger" : ""}`} disabled={Boolean(restoreBlocker) || Boolean(working)} onClick={() => void submitRestore()}>{working ? "Working…" : uncertainRestore ? "Retry restore request" : restoreMode === "replace" ? "Replace original VM" : restoreMode === "test" ? "Create test restore" : "Restore as new"}</button></>}
+          <button type="button" disabled={panelLocked} onClick={() => { saveRestoreDraft(); setRestoreOpen(false); }}>Back to recovery point</button>
+        </div>
+      </> : undefined}
+      actions={!restoreOpen ? <>
+        <button type="button" className="sm primary" disabled={panelLocked || busy || unavailable} onClick={() => openRestore(selected)}>Restore…</button>
+        <button type="button" className="sm" disabled={panelLocked || busy || unavailable} onClick={() => void toggleProtect(selected)}>{pendingProtect.current[`protect-${selected.id}`] ? "Retry protection request" : selected.protected ? "Unprotect from deletion" : "Protect from deletion"}</button>
+      </> : undefined}>
       {error && <p className="why" role="alert">{error}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
+      {!reportedPoint && <p className="why" role="status">This recovery point is outside the currently loaded results. Showing the last reported details; this does not mean it was deleted.</p>}
       {pageNotice && <p className="why" role="status">{pageNotice}</p>}
       {retentionWarnings(runs).map(run => <p key={run.operation_id} className="why" role="status">Backup succeeded, but retention could not remove some older recovery points ({date(run.updated_at)}): {run.error}</p>)}
       {!restoreOriginal && <p className="why" role="status">Replace unavailable: the original VM is not in this pool. Use Restore as new.</p>}
+      {!restoreOpen && pointRuns === null && !runError && <p className="backup-loading muted" role="status">Loading complete test restore history…</p>}
+      {!restoreOpen && (busy || unavailable) && <p className="why" role="status">{unavailable ? "Controller inventory could not be loaded." : "Another task is already in progress."}</p>}
       <section className="tile" aria-label="Recovery point">
-        <dl className="details">
+        <dl className="details backup-summary">
           <dt>Recovery point</dt><dd className="mono">{selected.id}</dd>
-          <dt>Source VM</dt><dd className="mono">{selected.source_vm_id}</dd>
+          <dt>Source VM</dt><dd>{selected.source_vm_name || selected.source_vm_id}<br /><span className="mono">{selected.source_vm_id}</span></dd>
           <dt>Repository</dt><dd>{repoByID.get(selected.repository_id)?.name || selected.repository_id}</dd>
           <dt>Captured</dt><dd>{date(selected.captured_at)}</dd>
           <dt>Consistency</dt><dd><Badge value={selected.consistency} tone={selected.consistency === "crash" ? "warn" : "ok"} /></dd>
-          <dt>Protected</dt><dd>{selected.protected ? "Yes" : "No"}</dd>
-          <dt>Last test</dt><dd>{selected.last_test_result || "—"}</dd>
+          <dt>Protected from deletion</dt><dd>{selected.protected ? "Yes" : "No"}</dd>
+          <dt>Last test</dt><dd>{selected.last_test_result || "Not tested"}</dd>
         </dl>
       </section>
-      <section className="tile" aria-label="Restore">
-        <h2>{restoreMode === "replace" ? "Restore replace" : restoreMode === "test" ? "Test restore" : "Restore as new"} · step {restoreStep} of 3</h2>
-        {restoreStep === 1 && <form className="stack" onSubmit={(e: FormEvent) => { e.preventDefault(); if (!restoreBlocker) setRestoreStep(2); }}>
+      {restoreOpen && <section className="backup-panel" aria-label="Restore">
+        <ol className="backup-steps"><li aria-current={restoreStep === 1 ? "step" : undefined}>Destination</li><li aria-current={restoreStep === 2 ? "step" : undefined}>Review and submit</li></ol>
+        {uncertainRestore && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same request with these selections. The destination and restore choice are frozen.</p>}
+        <fieldset disabled={panelLocked || restoreStep === 2}>
+          <legend>Restore choice</legend>
+          <label className="backup-choice"><input type="radio" name="backup-restore-mode" checked={restoreMode === "new"} onChange={() => openRestore(selected, "new")} /><span><strong>Restore as new</strong><small className="backup-meta">Create a separate VM with new identity. The original VM is unchanged.</small></span></label>
+          <label className="backup-choice"><input type="radio" name="backup-restore-mode" checked={restoreMode === "replace"} disabled={!restoreOriginal} onChange={() => openRestore(selected, "replace")} /><span><strong>Replace original VM</strong><small className="backup-meta">Replace the original VM's disks after exact-name confirmation. Requires a freshly observed shut-off VM.</small></span></label>
+          <label className="backup-choice"><input type="radio" name="backup-restore-mode" checked={restoreMode === "test"} onChange={() => openRestore(selected, "test")} /><span><strong>Test restore</strong><small className="backup-meta">Create an isolated VM, inspect its data, then record the result and clean it up.</small></span></label>
+        </fieldset>
+        {restoreStep === 1 && <form id="backup-restore-destination" className="stack" onSubmit={(e: FormEvent) => { e.preventDefault(); if (!restoreBlocker) setRestoreStep(2); }}>
           {restoreMode !== "replace" && <label>New VM name<input required maxLength={100} value={restoreName} disabled={Boolean(working) || uncertainRestore} onChange={e => setRestoreName(e.target.value)} /></label>}
           {restoreMode === "replace" && restoreOriginal && <p className="note">Replaces <strong>{restoreOriginal.name}</strong> ({selected.source_vm_id}). Original disks retained until exclusive cutover. Guest must be shut off.</p>}
           {restoreMode === "replace" && restoreOriginal && <label>Type original VM name to confirm<input required value={replaceConfirm} disabled={Boolean(working) || uncertainRestore} onChange={e => setReplaceConfirm(e.target.value)} /></label>}
@@ -680,35 +746,17 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
             {restoreStorageOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select></label>
           {restoreMode !== "replace" && <p className="note">New UUID and MACs. Guest starts stopped with NICs disconnected.</p>}
-          {restoreMode === "replace" && restoreBlocker && <p className="why" role="status">{restoreBlocker}</p>}
-          <div className="actions">
-            <button type="submit" className="primary" disabled={Boolean(restoreBlocker) || Boolean(working)}>Next</button>
-          </div>
         </form>}
         {restoreStep === 2 && <div className="stack">
-          <dl className="details">
+          <dl className="details backup-summary">
             {restoreMode === "replace" ? <><dt>Original VM</dt><dd>{restoreOriginal?.name || selected.source_vm_id} · {selected.source_vm_id}</dd></> : <><dt>New name</dt><dd>{restoreName}</dd><dt>New VM ID</dt><dd className="mono">{restoreVMID}</dd></>}
             <dt>Host</dt><dd>{data.hosts.find(h => h.id === restoreHost)?.hostname || restoreHost}</dd>
             <dt>Storage</dt><dd>{poolStorage.find(s => s.id === restoreStorage)?.name || restoreStorage}</dd>
-            <dt>Power / network</dt><dd>Stopped · disconnected</dd>
+            <dt>Power / network</dt><dd>{restoreMode === "replace" ? "Stopped · current NICs and MACs retained" : "Stopped · disconnected"}</dd>
           </dl>
-          <div className="actions">
-            <button type="button" className="primary" disabled={Boolean(working)} onClick={() => setRestoreStep(3)}>Next</button>
-            <button type="button" disabled={Boolean(working)} onClick={() => setRestoreStep(1)}>Back</button>
-          </div>
         </div>}
-        {restoreStep === 3 && <div className="stack">
-          {uncertainRestore && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same request with these selections.</p>}
-          {restoreBlocker && <p className="why" role="status">{restoreBlocker}</p>}
-          <div className="actions">
-            <button type="button" className="primary" disabled={Boolean(restoreBlocker) || Boolean(working)} onClick={() => void submitRestore()}>
-              {working.includes(selected.id) ? "Working…" : restoreMode === "replace" ? "Replace" : restoreMode === "test" ? "Test restore" : "Restore as new"}
-            </button>
-            <button type="button" disabled={Boolean(working)} onClick={() => setRestoreStep(2)}>Back</button>
-          </div>
-        </div>}
-      </section>
-      {activeTests.length > 0 && <section className="tile" aria-label="Test restore verification">
+      </section>}
+      {!restoreOpen && activeTests.length > 0 && <section className="tile" aria-label="Test restore verification">
         <h2>Verify test restore</h2>
         <p className="note">Inspect each isolated test VM, confirm boot and application data, then record its result for this recovery point.</p>
         {activeTests.map(({ run, vm }) => {
@@ -727,5 +775,5 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
         })}
       </section>}
     </Panel>}
-  </>;
+  </div>;
 }

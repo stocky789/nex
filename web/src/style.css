@@ -250,7 +250,8 @@ body.slideover-resizing .slideover-body { pointer-events: none; }
 .confirm-dialog button.danger, .form-dialog button.danger { background: var(--danger); color: var(--on-danger); border-color: var(--danger); }
 .confirm-dialog h2 { margin: 0 0 8px; font-size: 15px; }
 .confirm-dialog p { margin: 0 0 10px; }
-.confirm-dialog .actions { justify-content: flex-end; }
+.confirm-dialog .actions { justify-content: flex-end; margin-top: 16px; }
+.confirm-dialog label .mono { display: block; margin-top: 6px; }
 .storage-browser { width: min(620px, calc(100vw - 32px)); }
 .storage-browser-path { padding: 6px 8px; border: 1px solid var(--line); background: var(--select); overflow-wrap: anywhere; }
 .storage-browser-list { max-height: min(48vh, 360px); margin: 10px 0; padding: 0; overflow: auto; border: 1px solid var(--line); list-style: none; }

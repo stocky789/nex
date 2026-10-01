@@ -103,6 +103,7 @@ export function resubmitLink(o: Operation, data: Pick<Data, "hosts" | "vms" | "s
   if (data.networks.some(r => r.operation_id === o.id)) return { href: "#/networks", label: "Open Networks" };
   if (data.media.some(r => r.operation_id === o.id)) return { href: "#/storage", label: "Open the ISO library" };
   if (o.kind.startsWith("backup-repository-") || o.kind === "backup-orphan-cleanup") return { href: "#/settings/backups", label: "Open Backup repositories" };
+  if (o.kind.startsWith("backup-")) return { href: "#/backups", label: "Open Backups" };
   return { href: `#/hosts/${encodeURIComponent(o.host_id)}`, label: `Open ${data.hosts.find(h => h.id === o.host_id)?.hostname || o.host_id}` };
 }
 export function Tasks({ data, upload, onCancelUpload }: { data: Data; upload: Upload | null; onCancelUpload: () => void }) {
@@ -123,7 +124,7 @@ export function Tasks({ data, upload, onCancelUpload }: { data: Data; upload: Up
                   <td>
                     {dot(o.status)}<strong>{operationLabel(o.kind)}</strong>
                     <small><a href={`#/hosts/${o.host_id}`}>{hosts.find((h) => h.id === o.host_id)?.hostname || o.host_id}</a> · <span className="mono">{o.id}</span></small>
-                    {o.error && <p className="task-error">{o.error}</p>}
+                    {o.error && (o.status === "dispatched" ? <small>Waiting: {o.error}</small> : <p className="task-error">{o.error}</p>)}
                     {(o.status === "failed" || o.status === "needs_attention") && (link => <small><a href={link.href}>{link.label}</a> to send it again.</small>)(resubmitLink(o, data))}
                   </td>
                   <td>{o.actor}</td>

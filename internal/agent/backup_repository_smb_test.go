@@ -38,24 +38,24 @@ func TestSMBBackupRegistrationRequiresOperationBoundCredentialAndExactSource(t *
 		got.SMBIdentity = &protocol.SMBStorageIdentity{Server: repo.SMBSource.Server, Share: repo.SMBSource.Share, MarkerID: strings.Repeat("a", 32)}
 		return got, nil
 	}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-other"); err == nil || called != 0 {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-other", ""); err == nil || called != 0 {
 		t.Fatalf("wrong registration operation reached mount: %v, calls=%d", err, called)
 	}
 	invalid := repo
 	invalid.SMBSource = &protocol.SMBStorageSource{Server: "smb.example.test", Share: "../backups"}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, invalid, "register-1"); err == nil || called != 0 {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, invalid, "register-1", ""); err == nil || called != 0 {
 		t.Fatalf("invalid SMB share reached mount: %v, calls=%d", err, called)
 	}
-	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1")
+	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "")
 	if err != nil || called != 1 {
 		t.Fatalf("prepare: %+v, %v, calls=%d", prepared, err, called)
 	}
 	changed := prepared
 	changed.SMBIdentity = &protocol.SMBStorageIdentity{Server: "other.example.test", Share: "backups", MarkerID: strings.Repeat("a", 32)}
-	if _, err := upsertPoolBackupRepositoryPrepared(s, repo, changed); err == nil {
+	if _, err := upsertPoolBackupRepositoryPrepared(s, repo, changed, false); err == nil {
 		t.Fatal("changed prepared SMB identity was accepted")
 	}
-	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
 	if err != nil {
 		t.Fatalf("durable SMB registration: %+v, %v", saved, err)
 	}

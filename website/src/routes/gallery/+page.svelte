@@ -1,46 +1,53 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script lang="ts">
   import "../../app.css";
+  import ThemeSlider from "$lib/ThemeSlider.svelte";
 
   const screenshots = [
     {
-      file: "desktop-shell.png",
+      stem: "desktop-shell",
       title: "Pool overview",
       description: "Host and VM counts, placement and recent tasks share one workspace.",
       alt: "Nex Controller Overview with a labelled navigation rail, five pool summary cards, three fictional VMs on the master host and recent successful tasks."
     },
     {
-      file: "vms-desktop.png",
+      stem: "vms-desktop",
       title: "Virtual machines in the pool",
       description: "Filterable VMs with their assigned host, observed state and resources.",
       alt: "Nex Controller VMs screen listing three fictional running VMs, with status, pool, host, guest OS, CPU, memory and filter controls."
     },
     {
-      file: "vm-general-desktop.png",
+      stem: "vms-by-tag-desktop",
+      title: "Group VMs by tag",
+      description: "Colour-coded tags label VMs; group the list by tag or filter on one.",
+      alt: "Nex Controller VMs screen grouped by tag, with colour-coded production, web, internal, database and backup tags, each heading listing the fictional VMs that carry it."
+    },
+    {
+      stem: "vm-general-desktop",
       title: "A virtual machine in detail",
       description: "A slide-over keeps the VM list visible beside state and controls.",
       alt: "Nex Controller VMs screen with the fictional web-01 VM selected in a slide-over panel, showing its running state, console preview, configuration and power controls."
     },
     {
-      file: "create-vm-desktop.png",
+      stem: "create-vm-desktop",
       title: "Create a VM, reviewed first",
       description: "A six-step wizard that summarises the whole guest before anything is created.",
       alt: "Nex Controller Create VM wizard on step 6 of 6, Review, summarising the fictional build-01 guest's name, CPU, memory, disk, network, firmware, install ISO and boot order above the lifecycle options and the Create stopped VM button."
     },
     {
-      file: "networking-desktop.png",
+      stem: "networking-desktop",
       title: "Pool networks",
       description: "See each network, its host access and attached VMs.",
       alt: "Nex Controller Networks screen showing the fictional Guest network, its uplink, accessible host, three attached VMs and registration result."
     },
     {
-      file: "storage-desktop.png",
+      stem: "storage-desktop",
       title: "Pool storage and media",
       description: "Review repository health, host access and the ISO library.",
       alt: "Nex Controller Storage screen showing a healthy fictional local repository with capacity and host access, plus an uploaded installation ISO."
     },
     {
-      file: "activity-desktop.png",
+      stem: "activity-desktop",
       title: "Recent task activity",
       description: "Open the activity menu to check recent tasks from any screen.",
       alt: "Nex Controller Overview with the top-bar activity menu open, showing recent successful VM, media and network tasks."
@@ -112,6 +119,7 @@
 </script>
 
 <svelte:head>
+  <script src="/theme-slider.js" defer></script>
   <title>Gallery — Nex Controller</title>
   <meta name="description" content="Explore the Nex Controller interface and the Nex Core installer: hosts, virtual machines, networking, storage, activity and host installation, shown with fictional demo data." />
 </svelte:head>
@@ -143,22 +151,23 @@
     <p class="eyebrow"><span class="small-line"></span> Inside Nex Controller</p>
     <h1 id="gallery-title">Nex Controller.<br /><span>A closer look.</span></h1>
     <p class="gallery-description">Hosts, virtual machines, networking, storage and activity in one workspace.</p>
-    <p class="gallery-note">Development screenshots with fictional demo data. Captured 24 September 2026 from a real Controller build; the host inventory and its virtual machines are a simulated demo fixture, not a running production system.</p>
+    <p class="gallery-note">Drag across any Controller screenshot to compare the light and dark themes. Development screenshots with fictional demo data. Captured 1 October 2026 from a real Controller build; the host inventory and its virtual machines are a simulated demo fixture, not a running production system.</p>
   </section>
 
   <section class="gallery-grid" aria-label="Controller screenshots">
     {#each screenshots as screenshot, index}
       <figure class="gallery-card">
-        <a class="screenshot-link" href={`/gallery/${screenshot.file}`} aria-label={`Open full-size screenshot: ${screenshot.title}`}>
-          <img src={`/gallery/${screenshot.file}`} alt={screenshot.alt} width="1440" height="1000" loading={index === 0 ? "eager" : "lazy"} />
-        </a>
+        <ThemeSlider stem={screenshot.stem} alt={screenshot.alt} eager={index === 0} />
         <figcaption>
           <div>
             <p class="eyebrow">0{index + 1} / Controller</p>
             <h2>{screenshot.title}</h2>
             <p class="caption-description">{screenshot.description}</p>
           </div>
-          <a class="text-link" href={`/gallery/${screenshot.file}`}>View full size <span aria-hidden="true">↗</span></a>
+          <span class="full-size">
+            <a class="text-link" href={`/gallery/${screenshot.stem}-light.png`}>Light full size <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href={`/gallery/${screenshot.stem}-dark.png`}>Dark full size <span aria-hidden="true">↗</span></a>
+          </span>
         </figcaption>
       </figure>
     {/each}
@@ -217,6 +226,8 @@
   figcaption { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 22px 0 0; border-top: 0; font-family: inherit; color: #17233b; }
   figcaption h2 { margin-top: 10px; font-size: 28px; }
   .caption-description { margin-top: 10px; color: var(--muted); font-size: 14px; }
+  .full-size { display: grid; gap: 6px; justify-items: end; }
+  .full-size .text-link { margin-top: 0; }
   figcaption .text-link { white-space: nowrap; font-size: 12px; margin-top: 24px; }
   @media (max-width: 800px) {
     .site-header { flex-wrap: wrap; padding-block: 24px; gap: 24px; }

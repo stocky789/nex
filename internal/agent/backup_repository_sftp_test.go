@@ -128,7 +128,7 @@ func TestSFTPPublishReportsReadOnlyRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	storage := sftpBackupStorage{repo: protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
-	if err := storage.claimOwner(client); err == nil || errors.Is(err, ErrBackupConflict) || !strings.Contains(strings.ToLower(err.Error()), "permission") {
+	if _, err := storage.claimOwner(client); err == nil || errors.Is(err, ErrBackupConflict) || !strings.Contains(strings.ToLower(err.Error()), "permission") {
 		t.Fatalf("read-only owner claim returned %v instead of a permission failure", err)
 	}
 	manifest := protocol.BackupManifest{RecoveryPointID: "point-1"}
@@ -745,15 +745,15 @@ func TestSFTPOwnerClaimRejectsForeignOwner(t *testing.T) {
 	stubSFTPSync(t, false)
 	root := t.TempDir()
 	storage := sftpBackupStorage{repo: protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
-	if err := storage.claimOwner(client); err != nil {
+	if _, err := storage.claimOwner(client); err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.claimOwner(client); err != nil {
+	if _, err := storage.claimOwner(client); err != nil {
 		t.Fatal("exact claim retry:", err)
 	}
 	foreign := storage
 	foreign.repo.PoolID = "pool-2"
-	if err := foreign.claimOwner(client); err == nil {
+	if _, err := foreign.claimOwner(client); err == nil {
 		t.Fatal("foreign pool claimed repository")
 	}
 	owner, err := storage.readFile(client, filepath.Join(root, "owner.json"), 4096)
@@ -767,11 +767,53 @@ func TestSFTPAdoptionDoesNotClaimMissingOwner(t *testing.T) {
 	root := t.TempDir()
 	storage := sftpBackupStorage{repo: protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1",
 		SFTPSource: &protocol.BackupSFTPSource{Root: root}, RemoteIdentity: &protocol.BackupRemoteIdentity{Fingerprint: strings.Repeat("a", 64)}}}
-	if err := storage.claimOwner(client); err == nil {
+	if _, err := storage.claimOwner(client); err == nil {
 		t.Fatal("adoption claimed a missing SFTP owner")
 	}
 	if _, err := client.Lstat(filepath.Join(root, "owner.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("adoption left an owner marker: %v", err)
+	}
+}
+
+// Refused registration must release owner.json so a corrected retry under a new
+// repository ID can claim the same root.
+func TestSFTPRefusedRegistrationReleasesOwner(t *testing.T) {
+	oldFileSync, oldDirSync, oldSyncSupported := syncSFTPFile, syncSFTPDir, sftpSyncSupported
+	syncSFTPFile = func(*sftp.File) error { return nil }
+	syncSFTPDir = func(*sftp.Client, string) error { return nil }
+	var rootChecks int
+	sftpSyncSupported = func(*sftp.Client) bool {
+		rootChecks++
+		// Succeed checkRoot before the claim; fail verify's checkRoot afterward.
+		return rootChecks == 1
+	}
+	t.Cleanup(func() { syncSFTPFile, syncSFTPDir, sftpSyncSupported = oldFileSync, oldDirSync, oldSyncSupported })
+
+	hostKey := testSSHSigner(t)
+	port := startTestSFTPServer(t, hostKey)
+	root := t.TempDir()
+	cred := protocol.StorageCredentials{Username: "backup", SSHPrivateKey: testSSHPrivateKey(t)}
+	source := &protocol.BackupSFTPSource{Host: "127.0.0.1", Port: port, Root: root, HostKeySHA256: ssh.FingerprintSHA256(hostKey.PublicKey())}
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindSFTP, SFTPSource: source}
+	if _, err := prepareSFTPBackupRepository(context.Background(), repo, t.TempDir(), cred); err == nil {
+		t.Fatal("registration without durable sync proof succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "owner.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("refused registration kept its owner claim")
+	}
+
+	// The in-process server cannot prove rename non-overwrite, so the corrected
+	// retry is checked at the claim that would otherwise remain blocked.
+	sftpSyncSupported = func(*sftp.Client) bool { return true }
+	repo.ID = "repo-2"
+	storage := sftpBackupStorage{repo: repo, credentials: cred, stateDir: t.TempDir()}
+	client, closeAll, err := storage.connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAll()
+	if _, err := storage.claimOwner(client); err != nil {
+		t.Fatalf("corrected claim refused: %v", err)
 	}
 }
 
@@ -781,7 +823,7 @@ func TestSFTPRegistrationRefusesMemberBeforePreparation(t *testing.T) {
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: member.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindSFTP,
 		SFTPSource:    &protocol.BackupSFTPSource{Host: "sftp.example.test", Root: "/backups", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 		CredentialRef: "credential-1"}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), member, repo, "register-1"); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), member, repo, "register-1", ""); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("member reached SFTP preparation: %v", err)
 	}
 }
@@ -802,7 +844,7 @@ func TestSFTPRegistrationPreparationSerializesWithFreeze(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-1")
+		_, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-1", "")
 		done <- err
 	}()
 	<-started
@@ -831,7 +873,7 @@ func TestSFTPRegistrationPreparationSerializesWithFreeze(t *testing.T) {
 	if !locked {
 		t.Fatal("transfer freeze lock was not held through SFTP preparation")
 	}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-2"); err == nil {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), master, repo, "register-2", ""); err == nil {
 		t.Fatal("frozen master prepared a new SFTP registration")
 	}
 }
@@ -1478,7 +1520,7 @@ func TestSFTPEmptyMarkersRecover(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := storage.claimOwner(client); err != nil {
+	if _, err := storage.claimOwner(client); err != nil {
 		t.Fatal("empty owner claim was not finished:", err)
 	}
 	if err := storage.abortIncompleteOnClient(context.Background(), client, "point-2"); err != nil {

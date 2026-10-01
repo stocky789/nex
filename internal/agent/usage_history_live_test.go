@@ -188,7 +188,7 @@ func TestLiveSlowVirshSkipsTicksWithoutOverlap(t *testing.T) {
 	})
 	start := time.Now()
 	liveQuery(t, h, "/stats?object=vm&id="+vmID+"&range=live")
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond) // inside the 400ms lease, or the view ends and the ring is empty
 	calls := 0
 	_, got := liveQuery(t, h, "/stats?object=vm&id="+vmID+"&range=live")
 	for _, s := range got.Series {

@@ -140,10 +140,16 @@ func (c *Controller) replayResource(w http.ResponseWriter, tx *sql.Tx, requestID
 		switch {
 		case cmd.BackupPolicy != nil:
 			targetMatches = cmd.BackupPolicy.ID == pool[1]
+		case cmd.PolicyDelete != nil:
+			targetMatches = cmd.PolicyDelete.PolicyID == pool[1]
 		case cmd.BackupRepository != nil:
 			targetMatches = cmd.BackupRepository.ID == pool[1]
 		case cmd.VM != nil:
 			targetMatches = cmd.VM.ID == pool[1]
+		case cmd.ForgetRepository != nil:
+			targetMatches = cmd.ForgetRepository.RepositoryID == pool[1]
+		case cmd.OrphanCleanup != nil:
+			targetMatches = cmd.OrphanCleanup.RepositoryID == pool[1]
 		default:
 			targetMatches = false
 		}
@@ -183,6 +189,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return map[string]any{"vm_id": cmd.Power.VMID, "action": cmd.Power.Action, "operation": op}
 	case cmd.Delete != nil:
 		return map[string]any{"vm_id": cmd.Delete.VMID, "delete_disks": cmd.Delete.DeleteDisks, "operation": op}
+	case cmd.ReleaseRetained != nil:
+		return map[string]any{"vm_id": cmd.ReleaseRetained.VMID, "operation": op}
 	case cmd.VMMedia != nil:
 		return map[string]any{"vm_id": cmd.VMMedia.VMID, "action": cmd.VMMedia.Action, "media_id": cmd.VMMedia.MediaID, "operation": op}
 	case cmd.StorageLifecycle != nil:
@@ -220,6 +228,8 @@ func resourceResponse(cmd protocol.Command, op protocol.Operation) any {
 		return response
 	case cmd.BackupRepository != nil:
 		return map[string]any{"repository_id": cmd.BackupRepository.ID, "name": cmd.BackupRepository.Name, "operation": op}
+	case cmd.PolicyDelete != nil:
+		return map[string]any{"policy_id": cmd.PolicyDelete.PolicyID, "operation": op}
 	case cmd.BackupPolicy != nil:
 		out := map[string]any{"policy_id": cmd.BackupPolicy.ID, "name": cmd.BackupPolicy.Name, "operation": op}
 		if cmd.VM != nil {
@@ -1001,7 +1011,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 	for _, o := range m.Outcomes {
 		settled = append(settled, "adopt-outcome:"+host+":"+o.OperationID)
 	}
-	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ('snapshot-create','snapshot-revert','snapshot-delete','snapshot-metadata','backup-now','backup-restore-as-new','backup-restore-replace','backup-test-restore','backup-repository-register','backup-repository-test','backup-repository-forget','backup-policy-upsert','backup-policy-pause','backup-policy-run-now','backup-protect','backup-catalog-import','backup-catalog-rebuild','backup-test-verify','backup-test-cleanup') AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+	if _, err := tx.Exec("UPDATE operations SET status='succeeded',error='',updated_at=? WHERE host_id=? AND status='needs_attention' AND kind NOT IN ("+settleExcludedKinds()+") AND request_id LIKE ? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", settled...); err != nil {
+		return err
+	}
+	// A Core-queued mirror stays dispatched only while Core reports it. Once Core has been
+	// silent for a grace period its outcome is unknown, not succeeded: flag it for the
+	// operator and leave the Core journal as the authority.
+	silent := append([]any{stamp(), host, "adopt-outcome:" + host + ":%", time.Now().UTC().Add(-adoptedQueuedGrace).Format(time.RFC3339Nano)}, settled[3:]...)
+	if _, err := tx.Exec("UPDATE operations SET status='needs_attention',error='Core no longer reports this queued operation; check the host history for its outcome',updated_at=? WHERE host_id=? AND status='dispatched' AND request_id LIKE ? AND updated_at<? AND request_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(m.Outcomes)), ",")+")", silent...); err != nil {
 		return err
 	}
 	for _, o := range m.Outcomes {
@@ -1027,6 +1044,13 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		// the same path when this Controller issued the operation id.
 		if knownOwnOperation && o.Status != "queued" {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", o.Status, clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
+				return err
+			}
+		}
+		// A still-queued outcome carries why Core is holding the work; show it on the task and clear it
+		// once Core stops reporting one. Only the reason text changes, never the status.
+		if knownOwnOperation && o.Status == "queued" {
+			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status='dispatched' AND error<>?", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind, clip(o.Error, 4096)); err != nil {
 				return err
 			}
 		}
@@ -1059,8 +1083,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 				continue
 			}
 		}
+		// Core already holds a queued outcome, so the mirror is never Controller-queued:
+		// that would make the agent's result for it a 409 and block the host's queue.
+		status := o.Status
+		if status == "queued" {
+			status = "dispatched"
+		}
 		now := stamp()
-		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, o.Status, clip(o.Error, 4096), now, now, "system"); err != nil {
+		if _, err = tx.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", controllerID, host, o.Kind, requestID, status, clip(o.Error, 4096), now, now, "system"); err != nil {
 			return err
 		}
 		known[controllerID], known[requestID] = true, true
@@ -1081,17 +1111,26 @@ func adoptedBackupOperationID(host, coreOperationID string) string {
 	return "backup-" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func snapshotOutcomeKind(kind string) bool {
-	return kind == "snapshot-create" || kind == "snapshot-revert" || kind == "snapshot-delete" || kind == "snapshot-metadata"
+var snapshotOutcomeKinds = []string{"snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata"}
+
+var backupOutcomeKinds = []string{
+	"backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore",
+	"backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup",
+	"backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now",
+	"backup-protect", "backup-catalog-import", "backup-catalog-rebuild",
+	"backup-test-verify", "backup-test-cleanup",
 }
 
-func backupOutcomeKind(kind string) bool {
-	return kind == "backup-now" || kind == "backup-restore-as-new" ||
-		kind == "backup-restore-replace" || kind == "backup-test-restore" ||
-		kind == "backup-repository-register" || kind == "backup-repository-test" || kind == "backup-repository-forget" || kind == "backup-orphan-cleanup" ||
-		kind == "backup-policy-upsert" || kind == "backup-policy-pause" || kind == "backup-policy-run-now" ||
-		kind == "backup-protect" || kind == "backup-catalog-import" || kind == "backup-catalog-rebuild" ||
-		kind == "backup-test-verify" || kind == "backup-test-cleanup"
+func snapshotOutcomeKind(kind string) bool { return slices.Contains(snapshotOutcomeKinds, kind) }
+
+func backupOutcomeKind(kind string) bool { return slices.Contains(backupOutcomeKinds, kind) }
+
+// adoptedQueuedGrace is how long Core may stay silent about a queued mirror before it needs attention.
+const adoptedQueuedGrace = 10 * time.Minute
+
+// settleExcludedKinds is the SQL list of kinds a missing host observation never settles.
+func settleExcludedKinds() string {
+	return "'" + strings.Join(append(slices.Clone(snapshotOutcomeKinds), backupOutcomeKinds...), "','") + "'"
 }
 
 // adoptAppliances rebuilds the appliances rows from the host's deploy journal. A row is
@@ -1167,7 +1206,7 @@ func (c *Controller) adoptAppliances(tx *sql.Tx, host, pool string, inv *protoco
 
 func managedKind(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "network-register", "network-remove", "network-update", "iso-import", "media-remove", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "management-network":
 		return true
 	}
 	return false

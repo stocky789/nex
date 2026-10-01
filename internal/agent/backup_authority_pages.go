@@ -492,6 +492,8 @@ func (e *poolBackupEncoder) add(kind byte, record any) error {
 		e.m.Pins++
 	case 6:
 		e.m.MetadataReceipts++
+	case 7:
+		e.m.OrphanCleanups++
 	default:
 		return errors.New("backup authority record kind is invalid")
 	}
@@ -531,6 +533,7 @@ func encodePoolBackupAuthority(auth *protocol.PoolBackupAuthority, emit func([]b
 		addPoolBackupRecords(e, 1, auth.Repositories), addPoolBackupRecords(e, 2, auth.Definitions),
 		addPoolBackupRecords(e, 3, auth.History), addPoolBackupRecords(e, 4, auth.Catalog),
 		addPoolBackupRecords(e, 5, auth.Pins), addPoolBackupRecords(e, 6, auth.MetadataReceipts),
+		addPoolBackupRecords(e, 7, auth.OrphanCleanups),
 	); err != nil {
 		return nil, err
 	}
@@ -745,6 +748,12 @@ func decodePoolBackupPage(auth *protocol.PoolBackupAuthority, page []byte) error
 				return errors.New("backup receipt frame is invalid")
 			}
 			auth.MetadataReceipts = append(auth.MetadataReceipts, value)
+		case 7:
+			var value protocol.BackupOrphanCleanup
+			if json.Unmarshal(body, &value) != nil {
+				return errors.New("backup orphan cleanup frame is invalid")
+			}
+			auth.OrphanCleanups = append(auth.OrphanCleanups, value)
 		default:
 			return errors.New("backup authority frame type is invalid")
 		}
@@ -785,7 +794,7 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 	}
 	digest := sha256.New()
 	total := 0
-	var counts [6]int
+	var counts [7]int
 	seen := map[string]bool{}
 	note := func(kind int, id string) error {
 		key := fmt.Sprint(kind, id)
@@ -837,6 +846,11 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 				return err
 			}
 		}
+		for _, cleanup := range auth.OrphanCleanups {
+			if err := note(6, cleanup.OperationID); err != nil {
+				return err
+			}
+		}
 		if visit != nil {
 			if err := visit(auth); err != nil {
 				return err
@@ -844,7 +858,7 @@ func walkPoolBackupAuthorityPages(s *Store, m *protocol.PoolBackupManifest, visi
 		}
 	}
 	if total != m.TotalBytes || fmt.Sprintf("%x", digest.Sum(nil)) != m.SHA256 ||
-		counts != [6]int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts} {
+		counts != [7]int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts, m.OrphanCleanups} {
 		return errors.New("backup authority root or counts do not match")
 	}
 	return nil

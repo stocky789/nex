@@ -1354,7 +1354,7 @@ func TestHandedOffActivateFailureNamesRecovery(t *testing.T) {
 	if record == nil || !record.HandedOff {
 		t.Fatalf("hand-off record = %#v", record)
 	}
-	if record.LastError == "" || !strings.Contains(record.LastError, "handed to member-1") || !strings.Contains(record.LastError, "cancel the transfer") || !strings.Contains(record.LastError, "powering off") {
+	if record.LastError == "" || !strings.Contains(record.LastError, "handed to member-1") || !strings.Contains(record.LastError, "wait") || !strings.Contains(record.LastError, "do not power off") {
 		t.Fatalf("handed-off activation error = %q", record.LastError)
 	}
 }
@@ -1473,7 +1473,7 @@ func TestInheritedPendingBackupNeedsAttentionAndKeepsPin(t *testing.T) {
 	if authority.History[0].Status != "pending" || authority.MetadataReceipts[0].Status != "pending" {
 		t.Fatal("signed source authority was changed")
 	}
-	if err := unsettledBackupTransferRefusal(s); err != nil {
+	if err := unsettledBackupTransferRefusal(s, "promote", "member-1"); err != nil {
 		t.Fatalf("retained uncertain history blocked a later planned transfer: %v", err)
 	}
 }

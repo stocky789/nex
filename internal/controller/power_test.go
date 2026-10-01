@@ -181,7 +181,7 @@ func TestHostQueueAdoptedWithoutRedispatch(t *testing.T) {
 		}
 		var ops []protocol.Operation
 		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
-		want := "queued"
+		want := "dispatched"
 		if i >= 2 {
 			want = "succeeded"
 		}

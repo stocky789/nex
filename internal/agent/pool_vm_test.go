@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2420,5 +2422,20 @@ func TestPoolVMUpdateCommitKeepsTagsInMasterRecord(t *testing.T) {
 	}
 	if got := mustLoadPoolVMs(t, s).VMs[vm].Spec.Tags; !slices.Equal(got, next.Tags) {
 		t.Fatalf("master record tags = %v", got)
+	}
+}
+
+func TestUnacknowledgedMasterReservationStaysRetryable(t *testing.T) {
+	saved := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("snapshot state was saved but is not yet acknowledged by every ready member"))}
+	if err := snapshotReservationRefusal(saved, "refused"); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("saved-but-unacknowledged reservation must stay retryable: %v", err)
+	}
+	lost := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("reply lost"))}
+	if err := snapshotReservationRefusal(lost, "refused"); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("a server error may follow a saved reservation and must stay retryable: %v", err)
+	}
+	refused := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("another snapshot recovery operation is pending"))}
+	if err := snapshotReservationRefusal(refused, "refused"); errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+		t.Fatalf("a plain refusal must not be retryable: %v", err)
 	}
 }

@@ -535,3 +535,35 @@ func TestFenceBackedCancelIsPassedThroughAndReadsAsSuccess(t *testing.T) {
 		t.Fatalf("a performed cancellation was not projected as a success with its reason: %+v", last)
 	}
 }
+
+// The old master's planned-change receipt can be reported needs_attention first and then
+// succeeded once Core sees the new master; the Controller must take the later result.
+func TestMasterChangeReceiptRecoversFromAttention(t *testing.T) {
+	l := newTransferLab(t)
+	var accepted transferAcceptance
+	read(t, l.a.call("POST", l.masterPath(), map[string]any{"request_id": "recover-1", "host_id": l.member.id, "confirmation": l.poolName(t)}, nil, 202), &accepted)
+	commands := l.send(&l.master, nil).Commands
+	report := func(status string) {
+		l.send(&l.master, func(r *protocol.ReportRequest) {
+			r.Results = []protocol.Result{{OperationID: commands[0].OperationID, Status: status, ObservedAt: time.Now().UTC()}}
+		})
+	}
+	state := func() string {
+		var ops []protocol.Operation
+		read(t, l.a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		for _, op := range ops {
+			if op.ID == accepted.Operation.ID {
+				return op.Status
+			}
+		}
+		return ""
+	}
+	report("needs_attention")
+	if got := state(); got != "needs_attention" {
+		t.Fatalf("status = %q", got)
+	}
+	report("succeeded")
+	if got := state(); got != "succeeded" {
+		t.Fatalf("status after Core settled it = %q", got)
+	}
+}

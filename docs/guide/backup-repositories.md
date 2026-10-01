@@ -20,7 +20,10 @@ when Core must rediscover retained points.
   every host that may run a backup or restore; pool registration alone does not
   establish member access.
 - NFS: an existing writable NFSv4 export separate from VM disk storage. Core and
-  QEMU accounts on intended hosts must be able to use it.
+  QEMU accounts on intended hosts must be able to use it. Core writes as root, so
+  export it with `no_root_squash`, or with an export option that maps root to the
+  directory's owner; on a root-squashed export registration fails with a bare
+  `permission denied` and the task gives no hint about the squash.
 - SMB3: an existing share that supports SMB 3.1.1 with encryption, a dedicated
   account and writable directory. Keep the account available while its recovery
   points are retained.
@@ -44,7 +47,10 @@ when Core must rediscover retained points.
 
 1. Choose the pool in the top-bar scope menu. Open **Settings** → **Backup repositories**
    (`#/settings/backups`) and select **Create**.
-2. Enter **Name** and choose **Destination type**. Fill the fields for that type:
+2. Enter **Name**. Leave **Repository ID** empty for a new repository (Core generates one);
+   to bring a forgotten destination back, or to replace a lost credential or an SFTP host key,
+   enter the repository's original ID as described in [Reuse a repository ID](#reuse-a-repository-id).
+   Choose **Destination type** and fill the fields for that type:
    - **NFS:** **NFS server**, **Export path**, and optional **Directory within export**.
    - **SMB3:** **SMB server**, **Share**, optional **Directory within share**,
      **Username**, **Password** and, for a domain account, **Domain**.
@@ -55,20 +61,29 @@ when Core must rediscover retained points.
    - **SFTP:** **Server**, optional **Port** (default 22), **Repository root**,
      **Pinned SSH host key fingerprint**, **Username** and **SSH private key**.
 
-   **Save** stays unavailable until the fields have a form Core accepts: an S3
-   endpoint is `https://host` with no path, bucket and share names contain no
+   For SMB3, S3 and SFTP, **Save** stays unavailable until the fields have a form Core
+   accepts: an S3 endpoint is `https://host` with no path, bucket and share names contain no
    `/`, directories and prefixes are relative without `..`, an SFTP root is an
    absolute path, the fingerprint is `SHA256:` plus 43 characters, an SMB3
    username has no `=`, and an SMB3 domain is a plain name with no spaces,
    commas, `=`, `\`, `/` or other punctuation. The secret is not sent until the destination is valid.
+   The form does not check every value: an NFS **Export path** without a leading `/`
+   shows the browser's own format message when you select **Save**, and other values,
+   such as an S3 endpoint with a port of 0 or a server name with a `:port`, are sent
+   to Core, which refuses them. Core's reason stays above the form until you change it
+   or close the form, so read it before retrying.
 3. Select **Save** and follow the task until Core reports success or refusal. An
    HTTP 202 only means Controller queued the request. For SMB3, S3 and SFTP,
    Controller hands the secret to Core once and clears it from the form.
 4. On the repository row, select **Test access**. Check fresh **Health** and **Host
-   access** for the master and each intended member. Create a disposable two-disk
+   access** for the master and each intended member. A new repository can show
+   members as errors for about a minute, and **Test access** does not refresh member
+   access: the pool master delivers the repository to each member on its next health
+   pass, and their access follows then, so wait and reload before treating it as a fault. Create a disposable two-disk
    backup, restore it to another compatible host, and verify both disks before
    relying on the repository.
-5. Open **Policies** to select the repository for a schedule, or use **Backups** →
+5. Select **Backup jobs** (it opens **Backups**, where the **Backup jobs** section has
+   **Create backup job**) to select the repository for a schedule, or use **Backups** →
    **Back up now** for one VM. Core keeps the selected repository ID on each job.
 
 ### Forget a repository
@@ -87,12 +102,43 @@ longer use it. Forgetting never deletes anything from the destination.
 Core forgets the repository, its recovery points and its run history, and removes its
 mount and saved credential from the pool master and each member. A protected recovery
 point is forgotten too, once you have confirmed the counts shown. Core refuses, changing
-nothing, while a backup job uses the repository, a backup, restore, test restore or catalog
+nothing, while a backup job uses the repository (move each such job with **Change repository**;
+a job that lists a deleted VM has the deleted VM removed when you save the change), a backup, restore, test restore or catalog
 operation on it is running, a recovery point of it is held by an unfinished restore or test
-restore, the name is wrong, or the recovery points changed since the dialog counted them;
-the task shows the reason, and for an unfinished restore it names the operation and the test VM so you can finish or clean it up. Members also drop any repository record the pool master no longer holds. Sending the same request again returns the same outcome. To use
-the destination again, register it again as a new repository, then select **Import
-points** to bring its recovery points back.
+restore, an orphaned-backup cleanup or retention pass is running on it, the name is wrong, or the recovery points changed since the dialog counted them. Core also refuses,
+changing nothing, when a host cannot remove the repository's mount; wait for the mount to be idle and
+send the request again. The task shows the reason, and for an unfinished restore it names the operation and the test VM so you can finish or clean it up. Members also drop any repository record the pool master no longer holds. Sending the same request again returns the same outcome.
+
+To use a forgotten destination again, register it again with its **original repository
+ID** (see [Reuse a repository ID](#reuse-a-repository-id)), then select **Import points** to
+bring its recovery points back. Read the ID from the repository row before you forget it (it
+is shown under the name). Registering the same destination under a new ID is refused with
+"backup request conflicts with retained work", because its owner marker names the original ID.
+
+### Reuse a repository ID
+
+The **Create** form has an optional **Repository ID**. Core keeps a repository's identity,
+recovery points and history under its ID, so reuse the ID whenever the destination is the
+same one:
+
+- **Forgotten repository:** enter its original ID, the destination's fields and a credential,
+  then **Save**. Core verifies the destination's owner marker, recreates the repository with
+  that ID, and you select **Import points**.
+- **Credential lost or rotated, or the SFTP server's host key changed:** enter the existing
+  repository's ID. The form recognises it, warns that saving replaces its credential and, for
+  SFTP, its pinned host key, and asks you to type the repository ID to confirm. Enter the
+  new credential (and, for SFTP, the new **Pinned SSH host key fingerprint**), leave the host,
+  port, root and every other destination field as they were, and **Save**. Core checks the
+  destination's owner marker with the new key instead of claiming the destination, keeps the
+  repository's recovery points, history and creation time, and members adopt the new key and
+  credential on their next health pass. Check the new fingerprint against the server yourself
+  first: pinning an attacker's key would trust it.
+
+Core refuses, changing nothing, a replacement that names a different kind, host, port, root,
+bucket, share or export, an ID it does not hold, or a destination whose owner marker names another
+repository. The typed ID is only a confirmation; it never lets Core adopt a destination it cannot
+verify. Without the typed confirmation, registering an existing ID with a different working
+credential or host key is refused, as before.
 
 ### Delete orphaned backups
 
@@ -104,14 +150,23 @@ space. Retention does not remove them once no backup job covers the VM.
    its recovery points, how many are protected, their size, and the newest and oldest. A VM
    on an offline host is still in the inventory, so it is never listed. If Core cannot read
    its VM inventory it says so and lists nothing; nothing can be deleted then.
-2. Read any warning about a backup job that still lists a missing VM, and change that job.
+2. Read any warning about a backup job that still lists a missing VM. **Change repository**
+   drops the deleted VMs from that job when you save it; a job whose VMs are all deleted cannot be
+   changed from the UI. There is no delete-job action in the UI: use
+   `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` with corrected `vm_ids`.
 3. Select the VMs to clean up. Tick **Include protected recovery points** only if their
    protected points must go too; otherwise protected points are kept.
-4. Type the text shown, such as `delete 5 recovery points`. With protected points included
-   it states how many are protected, such as `delete 5 recovery points including 2 protected`.
-   Select **Delete recovery points**.
+4. Type the text shown, such as `delete 5 recovery points`. The number counts every point of
+   the VMs you selected, including protected points that will be kept because **Include
+   protected recovery points** is off; the line above the field says how many will be deleted.
+   With protected points included the text states how many are protected, such as
+   `delete 5 recovery points including 2 protected`. Core's wording is fixed, so a single point
+   reads `delete 1 recovery points`. Select **Delete recovery points**.
 5. The panel follows Core's record: each recovery point ends deleted, skipped with the reason,
-   or failed. Skipped points stay in the repository and the catalog.
+   or failed, listed with its VM's name. Skipped points stay in the repository and the catalog.
+   When some points could not be deleted the panel still shows every point's result with Core's
+   error above it. If the panel cannot read the result for about 30 seconds it says so and points
+   to **Tasks**; the cleanup may still be running.
 
 Deleting removes each recovery point's data from the destination and then its catalog entry, the
 same way retention does; this cannot be undone. Core skips protected points unless included, points
@@ -159,19 +214,21 @@ and test restore read every artifact and verify its digest.
   that still removes an object is unsafe and Core refuses it. A refused
   registration releases the prefix, so correct the provider and register again.
   Core refuses a prefix of `.` and a prefix inside another repository's prefix.
-- Core refuses a destination field with control characters, a server name with a
-  `:port` (SFTP has its own **Port**; an IPv6 address is accepted), a directory or
-  prefix of `.`, or an S3 endpoint port outside 1-65535.
+- Core refuses a destination field with control characters, an SMB3, SFTP or S3 server name
+  with a `:port` (SFTP has its own **Port**; an IPv6 address is accepted), a directory or
+  prefix of `.`, or an S3 endpoint port outside 1-65535. It does not refuse an NFS server
+  with a `:port`; the mount then fails to resolve the name, so enter the bare host name or address.
 - SFTP registration fails: verify the root exists, the pinned host key matches,
   the key/account has the needed rights, and the server supports durable sync and
   exclusive rename. Core refuses a missing owner on adoption rather than claiming
   an established repository as new.
-- To move a target or rotate SMB3/S3/SFTP credentials, create and test a **new
+- To rotate SMB3/S3/SFTP credentials or change an SFTP host key on the same destination,
+  [reuse the repository ID](#reuse-a-repository-id). To move a target, create and test a **new
   repository ID** at a separate directory, prefix or root. Use **Change repository**
   on each policy and select the new ID for new jobs. Verify a new backup and restore.
   Keep the old target and credentials for its retained points, then forget the old
   repository when you no longer need them; Core refuses
-  same-ID source replacement, and credential replacement while it can still read the old one. External credential revocation can
+  same-ID source replacement, and credential replacement without the typed confirmation while it can still read the old one. External credential revocation can
   make old points unavailable once existing sessions end.
 - The host check **backup-credentials** says a receipt is unreadable: Core still
   uses and reports every other credential. Recreate the credential for the
@@ -180,10 +237,11 @@ and test restore read every artifact and verify its digest.
   host; register the repository again with its credentials" when the pool master can no longer
   open its credential (for example the sealing key was lost). Other repositories are
   unaffected. To recover, create a new credential and register the repository again
-  with the **same repository ID and the same destination**. Core replaces
-  the credential only because it cannot read the old one, keeps the ID, recovery points and history,
-  and refuses a different destination. Registering again while Core can still read the
-  credential is refused with "this repository already has a working credential; forget the repository before registering it with a different one".
+  with the **same repository ID and the same destination**: enter the ID in **Create**
+  (see [Reuse a repository ID](#reuse-a-repository-id)). Core replaces
+  the credential because it cannot read the old one, keeps the ID, recovery points and history,
+  and refuses a different destination with "a repository with this ID already exists for a different destination". Registering again while Core can still read the
+  credential is refused with "this repository already has a working credential; confirm replacing it with the repository ID, or forget the repository first" unless you type the repository ID to confirm the replacement.
   Members receive the new credential, the new credential reference and the repository name from the master on their next
   health pass; until then the member's access shows why delivery failed. If a credential request ID is reused after the key was lost, the credential request is refused with that reason (send the credential again with a new request ID). Only S3 has been exercised for this. If the destination is gone
   or its identity changed, [forget the repository](#forget-a-repository) and register the
@@ -195,20 +253,19 @@ and test restore read every artifact and verify its digest.
 - A host that joins another pool or is ejected unmounts and forgets the backup
   repositories of the pool it left and erases their backup credentials; its new
   pool delivers its own. Data on the share stays.
-- Every Core stores backup credentials encrypted; nothing readable is kept on
-  disk. An SMB3 password is sealed with the host's TPM2 chip (or, without one, the
-  host key) and the repository's mount unit decrypts it each time it starts, so an
-  SMB3 repository remounts after a host reboot without Core preparing it again.
-  Sealed passwords only decrypt on the same host: after rebuilding or replacing a
-  host, recreate its SMB3 credentials. A credential file that is not encrypted or
-  was altered is refused: the **backup-credentials** check fails and you
-  recreate that repository credential. The encryption key for these credentials is
-  itself sealed with the host key (or TPM2 when present) in its own root-only
-  directory (`backup-credential-key`) beside the Core state, and the service loads
-  it at start. A copy of the state directory alone therefore does not open the
-  credentials on another host; root access on this host still does. If the key is
-  lost the check reports it missing instead of making a new one; recreate the
-  credentials.
+- Every Core stores backup credentials encrypted under a host-local sealing key;
+  Core never keeps the cleartext secret beside the repository record. For SMB3,
+  after Core accepts the sealed credential it also writes a root-only
+  `mount.cifs` credentials file under `backup-smb-credentials/` and points the
+  mount unit at it with `credentials=`. systemd 257 cannot pass a decrypted
+  systemd credential into a `.mount` helper, so the remount path uses that
+  private file rather than TPM-unsealed material at each start. The sealing key
+  for Core's encrypted backup receipts lives in a root-only
+  `backup-credential-key` directory beside Core state; a copy of the state
+  directory alone does not open the credentials on another host, while root on
+  this host still can. After rebuilding or replacing a host, recreate its SMB3
+  credentials. A damaged or unreadable sealed receipt marks only that repository
+  offline until you register it again.
 - If Core stopped in the middle of removing a protection marker, a `.nex-protected.rm-*`
   file may remain beside the recovery point. Core puts it back when the point has no
   marker, and removes it when it matches the current one; any other leftover is kept for
@@ -230,5 +287,7 @@ records bounded native registration, backup, restore, outage, replay, member,
 retention and authority checks for all four kinds. The [NFS product lab](../qa/2026-09-27-phase6-product-backup-lab.md)
 and [backup browser report](../qa/2026-09-27-phase6-backup-browser.md) record
 older NFS workflows. Later live candidate browser checks covered SMB3 policy
-switch and SFTP credential handoff. A final browser walkthrough on the tracked
+switch and SFTP credential handoff. Reusing a repository ID (the **Repository ID** field,
+typed confirmation and SFTP host-key replacement) is covered by Core, Controller and web unit
+checks only; it has not been walked in a browser or against a real destination. A final browser walkthrough on the tracked
 enabled build and the real two-slot missed-schedule check remain open.

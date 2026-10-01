@@ -699,15 +699,12 @@ func (e *ManagedEngine) observeManagedSnapshot(ctx context.Context, js []managed
 	if !validSnapshotObservationMode(mode) {
 		return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("snapshot observation mode is invalid")
 	}
-	stateOut, err := managedVirsh(ctx, "domstate", vm.ID)
+	stateOut, err := managedSnapshotProbe(ctx, "domstate", vm.ID)
 	state := strings.TrimSpace(string(stateOut))
 	running := protocol.SnapshotModeRunning(mode)
 	switch {
 	case err != nil:
-		if running {
-			return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("VM must be confirmed running before running snapshot creation")
-		}
-		return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("VM must be confirmed stopped before snapshot creation")
+		return managedSnapshotObservation{}, managedDomain{}, nil, err
 	case running && state == "running":
 	case !running && state == "shut off":
 	default:
@@ -716,17 +713,20 @@ func (e *ManagedEngine) observeManagedSnapshot(ctx context.Context, js []managed
 		}
 		return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("VM must be confirmed stopped before snapshot creation")
 	}
-	info, err := managedVirsh(ctx, "dominfo", vm.ID)
-	if err != nil || !autostartDisabled(info) {
+	info, err := managedSnapshotProbe(ctx, "dominfo", vm.ID)
+	if err != nil {
+		return managedSnapshotObservation{}, managedDomain{}, nil, err
+	}
+	if !autostartDisabled(info) {
 		return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("VM native autostart must be confirmed disabled before snapshot creation")
 	}
 	dumpArgs := []string{"dumpxml", vm.ID}
 	if !running {
 		dumpArgs = append(dumpArgs, "--inactive")
 	}
-	raw, err := managedVirsh(ctx, dumpArgs...)
+	raw, err := managedSnapshotProbe(ctx, dumpArgs...)
 	if err != nil {
-		return managedSnapshotObservation{}, managedDomain{}, nil, errors.New("persistent VM definition is unavailable for snapshot creation")
+		return managedSnapshotObservation{}, managedDomain{}, nil, err
 	}
 	if !running {
 		if err = validateManagedDefinition(raw, current.Domain); err != nil {
@@ -790,23 +790,23 @@ func snapshotFirmwareSources(ctx context.Context, domain managedDomain, vmID, fi
 			return nil, errors.New("UEFI VM has no inspectable NVRAM state")
 		}
 		if err := firmwareVariablesFile(domain.OS.NVRAM.Path); err != nil {
-			return nil, err
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 		}
 		destination := filepath.Join(firstDiskRoot, "snapshot-"+operationID+"-nvram")
 		manifest, err := managedSnapshotManifest(ctx, domain.OS.NVRAM.Path)
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 		}
 		artifacts = append(artifacts, managedSnapshotFirmwareArtifact{Kind: "nvram", SourcePath: domain.OS.NVRAM.Path, SnapshotPath: destination, SourceManifest: manifest})
 	}
 	if domain.Devices.TPM != nil && domain.Devices.TPM.Backend.Type == "emulator" {
 		source, err := managedTPMStateSource(domain, vmID)
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 		}
 		manifest, err := managedSnapshotManifest(ctx, source)
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 		}
 		destination := filepath.Join(firstDiskRoot, "snapshot-"+operationID+"-swtpm")
 		artifacts = append(artifacts, managedSnapshotFirmwareArtifact{Kind: "swtpm", SourcePath: source, SnapshotPath: destination, SourceManifest: manifest})
@@ -854,7 +854,7 @@ type managedNativeSnapshotXML struct {
 }
 
 func readManagedNativeSnapshotXML(ctx context.Context, vmID, name string) (managedNativeSnapshotXML, []byte, error) {
-	b, err := managedVirsh(ctx, "snapshot-dumpxml", vmID, name)
+	b, err := managedSnapshotProbe(ctx, "snapshot-dumpxml", vmID, name)
 	if err != nil {
 		return managedNativeSnapshotXML{}, nil, err
 	}
@@ -933,7 +933,7 @@ func managedSnapshotXMLDigest(ctx context.Context, vmID, name string, record man
 }
 
 func managedSnapshotAbsent(ctx context.Context, vmID, name string) (bool, error) {
-	b, err := managedVirsh(ctx, "snapshot-list", vmID, "--name")
+	b, err := managedSnapshotProbe(ctx, "snapshot-list", vmID, "--name")
 	if err != nil {
 		return false, err
 	}
@@ -1049,7 +1049,7 @@ func managedSnapshotOperationLock(ctx context.Context, stateDir, vmID string) (*
 	path := filepath.Join(stateDir, "snapshot-"+hex.EncodeToString(digest[:12])+".lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 	}
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -1058,7 +1058,7 @@ func managedSnapshotOperationLock(ctx context.Context, stateDir, vmID string) (*
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			_ = f.Close()
-			return nil, err
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -1459,7 +1459,22 @@ func (e *ManagedEngine) removePreflightSnapshot(ctx context.Context, operationID
 	return syncManagedDir(e.stateDir)
 }
 
+// managedSnapshotProbe runs a read-only libvirt query. A failure proves nothing about the VM
+// (libvirt may be restarting), so it is ErrOwnershipUnconfirmed and retryable, never a refusal.
+func managedSnapshotProbe(ctx context.Context, args ...string) ([]byte, error) {
+	b, err := managedVirsh(ctx, args...)
+	if err != nil {
+		return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+	}
+	return b, nil
+}
+
 func (e *ManagedEngine) failSnapshotPreflight(ctx context.Context, result protocol.Result, operationID string, cause error) (protocol.Result, error) {
+	if errors.Is(cause, ErrOwnershipUnconfirmed) {
+		// Transient (for example a libvirt restart): keep the preflight journal so the same ID re-drives.
+		result.Status, result.Error = "needs_attention", "Core could not yet confirm the VM state and keeps this operation; repeat the same operation ID ("+cause.Error()+")"
+		return result, nil
+	}
 	if cleanupErr := e.removePreflightSnapshot(ctx, operationID); cleanupErr != nil {
 		result.Status, result.Error = "needs_attention", errors.Join(cause, cleanupErr).Error()
 	} else {
@@ -1471,7 +1486,12 @@ func (e *ManagedEngine) failSnapshotPreflight(ctx context.Context, result protoc
 // abortSnapshotLocalIntent removes a local-intent journal that never received a master
 // reservation. Leaving needs_attention here permanently fences the VM; no native effects
 // exist yet, so the operator can submit a new request after the refusal is reported.
+// A reservation the master may have saved is the exception: dropping the intent would
+// strand the master's copy, so the intent stays and the caller re-drives the exact request.
 func (e *ManagedEngine) abortSnapshotLocalIntent(ctx context.Context, j managedJournal, cause error) (protocol.Result, error) {
+	if errors.Is(cause, ErrSnapshotReservationUnconfirmed) {
+		return e.snapshotAttention(ctx, j, errors.New("the pool master has not confirmed the snapshot reservation; Core keeps this operation and retries it, or repeat the same operation ID once the pool master and members are reachable ("+cause.Error()+")"))
+	}
 	result := protocol.Result{OperationID: j.Command.OperationID, Status: "failed", Error: cause.Error(), ObservedAt: time.Now().UTC()}
 	if j.RecoveryReservation != nil || j.RecoverySettled || j.RecoveryStage != "local-intent" {
 		return e.snapshotAttention(ctx, j, errors.Join(cause, errors.New("snapshot journal is not a removable local intent")))

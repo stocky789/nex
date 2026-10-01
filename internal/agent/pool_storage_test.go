@@ -1467,3 +1467,30 @@ func TestPoolStorageReservationIsRefusedDuringVMRecovery(t *testing.T) {
 		t.Fatalf("refused reservation was recorded: %#v", state.Reservations[storage.ID])
 	}
 }
+
+// PoolStorageMemberAccess once held poolStorageMu while taking poolPeerMu, the reverse of
+// every other path (peer then storage), so the two deadlocked the master.
+func TestPoolStorageMemberAccessKeepsPeerBeforeStorageLockOrder(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	poolPeerMu.Lock()
+	returned := make(chan struct{})
+	go func() {
+		PoolStorageMemberAccess(master, nil)
+		close(returned)
+	}()
+	time.Sleep(100 * time.Millisecond) // let it block on the peer lock
+	locked := make(chan struct{})
+	go func() {
+		poolStorageMu.Lock() // a peer-then-storage caller already holds peer, then needs storage
+		poolStorageMu.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(2 * time.Second):
+		poolPeerMu.Unlock() // release so the leaked goroutines finish
+		t.Fatal("deadlock: PoolStorageMemberAccess holds poolStorageMu while waiting for poolPeerMu")
+	}
+	poolPeerMu.Unlock()
+	<-returned
+}

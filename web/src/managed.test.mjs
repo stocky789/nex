@@ -121,6 +121,10 @@ assert.match(tasks(downloadHost), /Download progress for guest\.iso/);
 assert.doesNotMatch(tasks({ ...downloadHost, connection: "stale" }), /Download progress for/);
 assert.doesNotMatch(tasks(downloadHost, { ...operation, status: "succeeded" }), /Download progress for/);
 assert.match(tasks({ ...downloadHost, inventory: { managed: { iso_downloads: [{ ...downloading, total_bytes: 0 }] } } }), /size unknown/);
+// A dispatched task shows why Core is holding it, as a note rather than a failure.
+const waiting = tasks(downloadHost, { ...operation, kind: "backup-now", error: "member unreachable" });
+assert.match(waiting, /<small>Waiting: member unreachable<\/small>/);
+assert.doesNotMatch(waiting, /task-error/);
 
 // BUG-0203: only an import that never became host-held media can be discarded. The confirmation
 // action uses the existing DELETE contract, reconciles an ambiguous response, then reloads.

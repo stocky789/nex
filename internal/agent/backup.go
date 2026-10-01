@@ -275,7 +275,7 @@ func backupCommand(kind string) bool {
 
 func backupMetadataCommand(kind string) bool {
 	switch kind {
-	case "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause",
+	case "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete",
 		"backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild",
 		"backup-test-verify", "backup-test-cleanup":
 		return true
@@ -519,6 +519,9 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 			}
 		}
 		poolBackupAuthorityMu.Unlock()
+		if receipt.Status == "pending" && !request.ReserveOnly && cmd.Kind == "backup-policy-delete" {
+			return retryPolicyDelete(ctx, s, cmd, receipt)
+		}
 		if receipt.Status == "pending" && !request.ReserveOnly &&
 			(isBackupCatalogKind(cmd.Kind) || cmd.Kind == "backup-orphan-cleanup") {
 			return finishBackupMetadataRequest(ctx, s, request, receipt)
@@ -570,6 +573,13 @@ func acceptBackupRequest(ctx context.Context, s *Store, request BackupRequest) B
 		poolBackupAuthorityMu.Unlock()
 		return BackupResponse{Err: err}
 	}
+	if cmd.Kind == "backup-policy-delete" && cmd.PolicyDelete != nil {
+		// A pending delete receipt then always means the policy existed, so a retry that finds it gone succeeded.
+		if _, err := GetPoolBackupPolicy(s, cmd.PolicyDelete.PolicyID); err != nil {
+			poolBackupAuthorityMu.Unlock()
+			return BackupResponse{Err: err}
+		}
+	}
 	receipt = protocol.BackupMetadataReceipt{OperationID: cmd.OperationID, Kind: cmd.Kind,
 		IntentSHA256: intent, Status: "pending", ObservedAt: time.Now().UTC()}
 	err = savePoolBackupMetadataReceipt(s, receipt)
@@ -591,6 +601,7 @@ func finishBackupMetadataRequest(ctx context.Context, s *Store, request BackupRe
 func settleBackupMetadataResponse(s *Store, cmd protocol.Command, receipt protocol.BackupMetadataReceipt, response BackupResponse) BackupResponse {
 	if response.Result == nil {
 		terminal := errors.Is(response.Err, ErrBackupInvalid) || errors.Is(response.Err, ErrBackupNotFound) ||
+			errors.Is(response.Err, ErrBackupPolicyNotFound) || errors.Is(response.Err, ErrBackupRepoNotFound) ||
 			(cmd.Kind == "backup-test-verify" || cmd.Kind == "backup-policy-upsert") && errors.Is(response.Err, ErrBackupConflict)
 		if response.Err != nil && (terminal || isBackupCatalogKind(cmd.Kind)) {
 			poolBackupAuthorityMu.Lock()
@@ -715,7 +726,7 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 				return BackupResponse{Err: ErrBackupInvalid}
 			}
 			entry, ok := s.State.Journal[request.OperationID]
-			if !ok || entry.Command == nil || !backupCommand(entry.Command.Kind) {
+			if !ok || entry.Command == nil || !backupCommand(entry.Command.Kind) && entry.Command.Kind != "vm-release-retained" {
 				receipt, err := loadPoolBackupMetadataReceipt(s, request.OperationID)
 				if err != nil {
 					return BackupResponse{Err: ErrBackupNotFound}
@@ -831,13 +842,13 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 		}
 		prepared := request.PreparedRepository
 		if prepared == nil {
-			result, err := prepareBackupRepositoryForRegistration(ctx, s, repo, cmd.OperationID)
+			result, err := prepareBackupRepositoryForRegistration(ctx, s, repo, cmd.OperationID, cmd.ReplaceRepository)
 			if err != nil {
 				return BackupResponse{Err: err}
 			}
 			prepared = &result
 		}
-		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, *prepared)
+		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, *prepared, cmd.ReplaceRepository != "")
 		if err != nil {
 			return BackupResponse{Err: err}
 		}
@@ -918,6 +929,19 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			Result: &protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()},
 			Policy: &saved,
 		}
+	case "backup-policy-delete":
+		if cmd.PolicyDelete == nil || cmd.PolicyDelete.Valid() != nil {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
+		result := protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()}
+		if err := deletePoolBackupPolicy(s, *cmd.PolicyDelete); err != nil {
+			var refusal backupRefusal
+			if !errors.As(err, &refusal) {
+				return BackupResponse{Err: err}
+			}
+			result.Status, result.Error = "failed", err.Error()
+		}
+		return BackupResponse{Result: &result}
 	case "backup-policy-pause":
 		if cmd.BackupPolicy == nil || !protocol.ValidSnapshotOperationID(cmd.BackupPolicy.ID) {
 			return BackupResponse{Err: ErrBackupInvalid}
@@ -1034,7 +1058,10 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			Result: &protocol.Result{OperationID: cmd.OperationID, Status: "succeeded", ObservedAt: time.Now().UTC()},
 		}
 	}
-	if !backupCommand(cmd.Kind) {
+	if cmd.Kind == "vm-release-retained" && cmd.ReleaseRetained != nil {
+		// A local caller names only the VM; the release always runs on this host.
+		cmd.ReleaseRetained.PoolID, cmd.ReleaseRetained.HostID = s.State.PoolID, s.State.HostID
+	} else if !backupCommand(cmd.Kind) {
 		return BackupResponse{Err: ErrBackupInvalid}
 	}
 	if old, ok := s.State.Journal[cmd.OperationID]; ok {
@@ -1244,6 +1271,24 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			return BackupResponse{Err: persistenceError{err}}
 		}
 		return BackupResponse{Result: backupResult(cmd.OperationID, s.State.Journal[cmd.OperationID])}
+	case "vm-release-retained":
+		if cmd.ReleaseRetained == nil || cmd.ReleaseRetained.Valid() != nil {
+			return BackupResponse{Err: ErrBackupInvalid}
+		}
+		// Core, not the Controller, refuses a release while the VM has unfinished work.
+		vmID := cmd.ReleaseRetained.VMID
+		if busy, err := restoreTargetBusy(s, vmID, cmd.OperationID); err != nil {
+			return BackupResponse{Err: err}
+		} else if busy || pendingVMCommand(s.State.Journal, vmID) != "" {
+			return BackupResponse{Err: ErrBackupConflict}
+		}
+		if _, err := AdmitPoolVMExecution(ctx, s, *cmd); err != nil {
+			return BackupResponse{Err: fmt.Errorf("%w: %s", ErrBackupConflict, err)}
+		}
+		if err := applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{*cmd}}); err != nil {
+			return BackupResponse{Err: persistenceError{err}}
+		}
+		return BackupResponse{Result: backupResult(cmd.OperationID, s.State.Journal[cmd.OperationID])}
 	default:
 		return BackupResponse{Err: ErrBackupInvalid}
 	}
@@ -1263,6 +1308,8 @@ func sameBackupRequest(stored, incoming *protocol.Command) bool {
 		return reflect.DeepEqual(stored.RestoreReplace, incoming.RestoreReplace)
 	case protocol.BackupKindTestRestore:
 		return reflect.DeepEqual(stored.TestRestore, incoming.TestRestore)
+	case "vm-release-retained":
+		return reflect.DeepEqual(stored.ReleaseRetained, incoming.ReleaseRetained)
 	default:
 		return false
 	}
@@ -1446,6 +1493,35 @@ func reconcilePublishedBackupNow(ctx context.Context, store *Store, cmd protocol
 	}
 	result.Error = "published recovery point is absent"
 	return result
+}
+
+// journalBackupSettlement settles a needs_attention backup command that no reconcile loop can
+// observe: the pool record already settled it, (backup-now) this master has no record of it,
+// or the member that ran it left the pool.
+func journalBackupSettlement(s *Store, entry JournalEntry) (protocol.Result, bool) {
+	if entry.Status != "needs_attention" || entry.Command == nil || !backupCommand(entry.Command.Kind) {
+		return protocol.Result{}, false
+	}
+	id := entry.Command.OperationID
+	run, err := loadPoolBackupRun(s, id)
+	switch {
+	case err == nil && (run.Status == "succeeded" || run.Status == "failed"):
+		return protocol.Result{OperationID: id, Status: run.Status, Error: run.Error, ObservedAt: time.Now().UTC()}, true
+	case errors.Is(err, os.ErrNotExist) && entry.Command.Kind == protocol.BackupKindBackupNow && masterBackupPool(s, "") == nil:
+		return protocol.Result{OperationID: id, Status: "failed", ObservedAt: time.Now().UTC(),
+			Error: "the pool has no record of this backup, so its outcome is unknown; check the repository catalog before retrying"}, true
+	case err == nil && run.Status == "needs_attention" && run.HostID != s.State.HostID:
+		// The member that ran it left the pool, so nothing will ever settle it.
+		if membership, err := Membership(s); err == nil && membership.MasterHostID == s.State.HostID {
+			if reason := abandonedPeerBackupReason(membership, s.State.HostID, run, nil, time.Now()); reason != "" {
+				run.Status, run.Stage, run.Error = "failed", "peer_dispatch", reason
+				if settlePoolBackupRun(context.Background(), s, run, nil) == nil {
+					return protocol.Result{OperationID: id, Status: "failed", Error: reason, ObservedAt: time.Now().UTC()}, true
+				}
+			}
+		}
+	}
+	return protocol.Result{}, false
 }
 
 func publishedLocalBackupNeedsReconcile(s *Store, entry JournalEntry) bool {
@@ -1676,7 +1752,10 @@ func executeRestoreAsNew(ctx context.Context, store *Store, cmd protocol.Command
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	if err := requestBackupRestorePlacement(ctx, store, spec, cmd.OperationID); err != nil {
-		if restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
+		// A member's staging directory exists by now, so only the master's definite
+		// refusal proves the restore was never placed.
+		var refused poolVMPlacementRefusal
+		if errors.As(err, &refused) || restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
 			return failRestoreRun(store, cmd, observed, err.Error()), nil
 		}
 		return attentionRestoreRun(store, cmd, observed, err.Error()), nil
@@ -1975,6 +2054,10 @@ func adoptPeerBackupRepository(s *Store, request BackupRequest, repo, prepared p
 		return err
 	}
 	oldRepo, hadOldRepo := state.Repositories[repo.ID]
+	if hadOldRepo && oldRepo.Kind == protocol.BackupRepoKindSFTP && sameSFTPDestination(oldRepo.SFTPSource, repo.SFTPSource) {
+		// The master re-pinned or re-credentialed the destination; the prepared repository verified it.
+		oldRepo.SFTPSource, oldRepo.RemoteIdentity = repo.SFTPSource, repo.RemoteIdentity
+	}
 	if hadOldRepo && (oldRepo.Kind != repo.Kind ||
 		!reflect.DeepEqual(oldRepo.Source, repo.Source) || !reflect.DeepEqual(oldRepo.Identity, repo.Identity) ||
 		!reflect.DeepEqual(oldRepo.SMBSource, repo.SMBSource) || !reflect.DeepEqual(oldRepo.S3Source, repo.S3Source) ||

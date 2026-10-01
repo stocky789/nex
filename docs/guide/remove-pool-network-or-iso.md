@@ -65,7 +65,7 @@ A pool VLAN network the pool master **refused** to register was never created on
 If a host has since reported that registration as applied, the discard is refused with *a host
 reports this registration as applied, so it is not a failed request record; remove it on the host
 instead of discarding it* — and the row stays. That is the guard that stops a discard deleting a
-live pool resource's row. A refused storage registration is not listed at all; its reason is in **Tasks**. A repository a host does hold is removed with **Detach**, never with a
+live pool resource's row. A refused storage registration is not listed at all and has no Discard button; its reason is in **Tasks**. A repository a host does hold is removed with **Detach**, never with a
 discard.
 
 ### Remove a pool VLAN network
@@ -89,7 +89,7 @@ discard.
    repositories. **About removing ISOs**, below the ISO table, summarises the rules below.
 2. On a row whose transfer task shows `succeeded`, select **Remove ISO**. (A **failed** import is
    only a Controller request record; it keeps the separate **Discard failed import** action, which
-   asks no host to do anything — the same model a refused network or storage registration now
+   asks no host to do anything — the same model a refused network registration now
    follows, see [Discard a registration the pool master refused](#discard-a-registration-the-pool-master-refused).)
 3. The dialog **Remove ISO `<name>`?** states that the pool master deletes this ISO file from its
    storage, that Nex Core refuses while the ISO is in any VM's CD drive, running or stopped, and

@@ -37,12 +37,12 @@ HOSTNAME = 'nex-core-01'
 # A current Nex Core advertises every managed capability; omitting any renders the demo
 # host as outdated ("upgrade Nex Core") and disables the power controls in the capture.
 CAPABILITIES = ['managed-vm-v1', 'vm-update-v1', 'vm-power-v1', 'console-v1',
-                'host-console-v1', 'vm-media-v1', 'storage-repositories-v1']
+                'host-console-v1', 'vm-media-v1', 'storage-repositories-v1', 'vm-tags-v1']
 STORAGE_NAME, STORAGE_PATH = 'Local NVMe storage', '/var/lib/nex/storage'
 NETWORK_NAME, ISO_NAME = 'Guest network', 'debian-13-netinst.iso'
-DEMO_VMS = [('web-01', 'Public web front end', 2, 4096, 40),
-            ('app-01', 'Internal application server', 4, 8192, 80),
-            ('db-01', 'Database server', 4, 16384, 200)]
+DEMO_VMS = [('web-01', 'Public web front end', 2, 4096, 40, ['production', 'web']),
+            ('app-01', 'Internal application server', 4, 8192, 80, ['production', 'web', 'internal']),
+            ('db-01', 'Database server', 4, 16384, 200, ['production', 'database', 'backup'])]
 
 
 def assert_public_text(text):
@@ -215,9 +215,14 @@ def capture(lab, args):
             assert_public_text(page.locator('body').inner_text())
             assert password.read_text() not in page.content() and token not in page.content()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-            path = args.output / filename
-            page.screenshot(path=str(path))
-            hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
+            # Each screen is captured in both themes for the website's light/dark slider.
+            stem = filename.removesuffix('.png')
+            for scheme in ('dark', 'light'):
+                page.emulate_media(color_scheme=scheme)
+                expect(page.locator('html')).to_have_attribute('data-theme', scheme)
+                path = args.output / f'{stem}-{scheme}.png'
+                page.screenshot(path=str(path))
+                hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
         def vms():
             # Reload so the list renders resources registered after sign-in.
@@ -258,9 +263,9 @@ def capture(lab, args):
         with lab.http.open(upload, timeout=60) as response:
             media = json.load(response)
         settled(media['operation_id'])
-        for name, description, cpus, memory_mib, disk_gib in DEMO_VMS:
+        for name, description, cpus, memory_mib, disk_gib, tags in DEMO_VMS:
             created = lab.api('/api/v1/vms', {**common, 'request_id': 'gallery-' + name, 'name': name,
-                'description': description, 'guest_os': 'linux', 'media_id': media['id'],
+                'description': description, 'tags': tags, 'guest_os': 'linux', 'media_id': media['id'],
                 'cpu': {'count': cpus, 'sockets': 1, 'cores': cpus, 'threads': 1, 'model': 'host-passthrough'},
                 'memory': {'mode': 'dedicated', 'size_mib': memory_mib},
                 'disks': [{'storage_id': storage['id'], 'name': 'system', 'size_gib': disk_gib,
@@ -304,6 +309,10 @@ def capture(lab, args):
         for name, *_ in DEMO_VMS:
             expect(table.get_by_role('link', name=name, exact=True)).to_be_visible()
         shot('vms-desktop.png')
+        page.get_by_role('group', name='Group by', exact=True).get_by_role('button', name='Tag', exact=True).click()
+        expect(table.locator('tr.group').first).to_be_visible()
+        shot('vms-by-tag-desktop.png')
+        page.get_by_role('group', name='Group by', exact=True).get_by_role('button', name='None', exact=True).click()
         table.get_by_role('link', name=DEMO_VMS[0][0], exact=True).click()
         vm_panel = page.get_by_role('region', name=DEMO_VMS[0][0], exact=True)
         expect(vm_panel.get_by_role('tab', name='Overview', exact=True)).to_have_attribute('aria-selected', 'true')
@@ -355,7 +364,7 @@ def capture(lab, args):
         assert not errors, errors
         version = browser.version
         browser.close()
-    lab.passed('seven populated console screens, neutral rendered identity, no credential fields or browser errors')
+    lab.passed('eight populated console screens, each in light and dark, neutral rendered identity, no credential fields or browser errors')
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps({
         'date_utc': datetime.now(timezone.utc).isoformat(), 'results': lab.results,

@@ -277,12 +277,21 @@ func (c *Controller) enqueueBackupMasterSync(w http.ResponseWriter, pool, user, 
 		return
 	}
 	defer tx.Rollback()
-	if c.replayResource(w, tx, requestID, kind, payload, pool) {
+	scope := []string{pool}
+	switch {
+	case cmd.ForgetRepository != nil:
+		scope = append(scope, cmd.ForgetRepository.RepositoryID)
+	case cmd.OrphanCleanup != nil:
+		scope = append(scope, cmd.OrphanCleanup.RepositoryID)
+	case cmd.PolicyDelete != nil:
+		scope = append(scope, cmd.PolicyDelete.PolicyID)
+	}
+	if c.replayResource(w, tx, requestID, kind, payload, scope...) {
 		return
 	}
 	var master string
-	if tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master) != nil || master == "" {
-		fail(w, 503, "pool master is unavailable")
+	if err = tx.QueryRow("SELECT master_host_id FROM pools WHERE id=?", pool).Scan(&master); err != nil || master == "" {
+		failPoolMaster(w, err)
 		return
 	}
 	if err = c.backupHost(tx, pool, master); err != nil {

@@ -267,7 +267,7 @@ func TestQueuedAdoptedSnapshotOutcomesAreNotDispatched(t *testing.T) {
 	for _, operation := range operations {
 		if operation.RequestID == "adopt-outcome:"+host.HostID+":core-queued-snap" {
 			found = true
-			if operation.Status != "queued" || operation.ID != adoptedSnapshotOperationID(host.HostID, "core-queued-snap") {
+			if operation.Status != "dispatched" || operation.ID != adoptedSnapshotOperationID(host.HostID, "core-queued-snap") {
 				t.Fatalf("adopted queued snapshot %#v", operation)
 			}
 		}

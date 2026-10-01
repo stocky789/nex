@@ -388,3 +388,121 @@ func TestAdoptPoolBackupAuthorityAndRebuildFromMount(t *testing.T) {
 		t.Fatalf("NFS payload must survive rollback: %v", err)
 	}
 }
+
+// One repository that fails Verify is marked offline; catalog import still runs for the rest.
+func TestReconcileSkipsUnreachableVerifyAndImportsOthers(t *testing.T) {
+	s := seedBackupMaster(t)
+	okMount := t.TempDir()
+	setTestPromotionBackupMount(t, okMount)
+	seedPublishedPoint(t, okMount, "repo-ok", "pool-1", "point-ok")
+	ok := protocol.BackupRepository{ID: "repo-ok", PoolID: "pool-1", Name: "OK", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/ok"}, MountPath: okMount,
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/ok", FilesystemID: "test-nfs-ok"}}
+	bad := protocol.BackupRepository{ID: "repo-bad", PoolID: "pool-1", Name: "Bad", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/bad"}, MountPath: filepath.Join(t.TempDir(), "missing"),
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/bad", FilesystemID: "test-nfs-bad"}}
+	if err := savePoolBackupRepositories(s, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{
+		ok.ID: ok, bad.ID: bad,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	record := &poolTransferRecord{OperationID: "promote-skip-bad", Action: "promote", Role: "candidate",
+		Stage: "catalog-rebuild", TargetHostID: s.State.HostID}
+	if err := savePoolTransfer(s, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcilePoolBackupCatalogAfterAuthorityAdopt(context.Background(), s, record); err != nil {
+		t.Fatalf("unreachable verify blocked reconcile: %v", err)
+	}
+	if status := PoolTransferReport(s); status == nil || status.Stage != "repoint" {
+		t.Fatalf("reconcile did not advance: %#v", status)
+	}
+	got, err := GetPoolBackupRepository(s, bad.ID)
+	if err != nil || got.Access.Status != "failed" || got.Health.Status != "offline" {
+		t.Fatalf("bad repository not marked unreachable: %+v %v", got, err)
+	}
+	catalog, err := loadPoolBackupCatalog(s)
+	if err != nil || len(catalog) != 1 || catalog[0].ID != "point-ok" {
+		t.Fatalf("reachable repository catalog missing: %#v %v", catalog, err)
+	}
+}
+
+// Staging adopts an unreachable repository as offline and still stages a reachable peer.
+func TestStageActivationContinuesPastUnreachableRepository(t *testing.T) {
+	s := seedBackupMaster(t)
+	okMount := t.TempDir()
+	setTestPromotionBackupMount(t, okMount)
+	previous := prepareBackupRepositoryNative
+	t.Cleanup(func() { prepareBackupRepositoryNative = previous })
+	prepareBackupRepositoryNative = func(_ context.Context, repo protocol.BackupRepository) (protocol.BackupRepository, error) {
+		if repo.ID == "repo-bad" {
+			return protocol.BackupRepository{}, ErrBackupUnavailable
+		}
+		identity := &protocol.NFSStorageIdentity{Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs"}
+		repo.MountPath = okMount
+		repo.Identity = identity
+		return repo, nil
+	}
+	ok := protocol.BackupRepository{ID: "repo-ok", PoolID: "pool-1", Name: "OK", Kind: protocol.BackupRepoKindNFS,
+		Source:   protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/ok"},
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/ok", FilesystemID: "test-nfs"}}
+	bad := protocol.BackupRepository{ID: "repo-bad", PoolID: "pool-1", Name: "Bad", Kind: protocol.BackupRepoKindNFS,
+		Source:   protocol.NFSStorageSource{Server: "nfs.down.test", Export: "/export/bad"},
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.down.test", Export: "/export/bad", FilesystemID: "test-nfs-bad"}}
+	root, _, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{ok, bad}}, 4)
+	if err != nil {
+		t.Fatalf("one unreachable repository blocked staging: %v", err)
+	}
+	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(s.dir, root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adopted.Repositories[bad.ID]; got.Access.Status != "failed" || got.Health.Status != "offline" {
+		t.Fatalf("unreachable repository not offline: %+v", got)
+	}
+	if got := adopted.Repositories[ok.ID]; got.MountPath == "" || got.Access.Status == "failed" {
+		t.Fatalf("reachable repository was not staged: %+v", got)
+	}
+}
+
+// Promotion adopts a repository the new master cannot reach, records its access failed and
+// does not stall the catalog import on it.
+func TestPromotionAdoptsUnreachableRepository(t *testing.T) {
+	s := seedBackupMaster(t)
+	previous := prepareBackupRepositoryNative
+	t.Cleanup(func() { prepareBackupRepositoryNative = previous })
+	prepareBackupRepositoryNative = func(context.Context, protocol.BackupRepository) (protocol.BackupRepository, error) {
+		return protocol.BackupRepository{}, ErrBackupUnavailable
+	}
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source:   protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
+		Identity: &protocol.NFSStorageIdentity{Server: "nfs.example.test", Export: "/export/backups", FilesystemID: "test-nfs"}}
+	root, _, err := stagePoolBackupAuthorityActivation(s, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{repo}}, 3)
+	if err != nil {
+		t.Fatalf("unreachable repository blocked promotion: %v", err)
+	}
+	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(s.dir, root)})
+	got := adopted.Repositories[repo.ID]
+	if err != nil || got.Access.Status != "failed" || got.Health.Status != "offline" || got.MountPath != "" {
+		t.Fatalf("adopted repository = %+v, %v", got, err)
+	}
+	if err := savePoolBackupRepositories(s, adopted); err != nil {
+		t.Fatal(err)
+	}
+	record := &poolTransferRecord{OperationID: "promote-unreachable", Action: "promote", Role: "candidate", Stage: "catalog-rebuild", TargetHostID: s.State.HostID}
+	if err := savePoolTransfer(s, record); err != nil {
+		t.Fatal(err)
+	}
+	previousImport := importPoolBackupCatalogForActivation
+	t.Cleanup(func() { importPoolBackupCatalogForActivation = previousImport })
+	importPoolBackupCatalogForActivation = func(context.Context, *Store, string) ([]protocol.BackupRecoveryPoint, error) {
+		t.Fatal("imported the catalog of an unreachable repository")
+		return nil, nil
+	}
+	if err := advancePoolPromotion(context.Background(), s, record, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if status := PoolTransferReport(s); status == nil || status.Stage != "repoint" {
+		t.Fatalf("promotion did not proceed: %#v", status)
+	}
+}

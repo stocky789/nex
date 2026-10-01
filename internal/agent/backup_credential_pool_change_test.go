@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -177,5 +178,76 @@ func TestEjectedHostErasesBackupCredentials(t *testing.T) {
 	}
 	if names := backupCredentialNames(t, ejected); len(names) != 0 {
 		t.Fatalf("ejected host kept backup receipts: %v", names)
+	}
+}
+
+// A former pool's receipt is wiped from readable sealed metadata even when the sealing key is
+// gone and the ciphertext is damaged.
+func TestEraseForeignBackupCredentialsWithoutDecrypt(t *testing.T) {
+	s := seedBackupMaster(t)
+	foreignRef := poolChangeCredential(t, s, "credential-old", protocol.BackupRepoKindSMB3, "repo-old", "old-pool-secret")
+	s.State.PoolID = "pool-2"
+	currentRef := poolChangeCredential(t, s, "credential-new", protocol.BackupRepoKindS3, "repo-new", "new-pool-secret")
+	dir, err := backupCredentialDir(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignPath := ""
+	for _, name := range backupCredentialNames(t, s) {
+		path := filepath.Join(dir, name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sealed sealedBackupCredential
+		if err := json.Unmarshal(raw, &sealed); err != nil {
+			t.Fatal(err)
+		}
+		if sealed.Reference != foreignRef {
+			continue
+		}
+		foreignPath = path
+		sealed.Ciphertext[0] ^= 0xff
+		damaged, err := json.Marshal(sealed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, damaged, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if foreignPath == "" {
+		t.Fatal("foreign receipt missing")
+	}
+	if err := os.RemoveAll(filepath.Join(s.dir, "backup-credential-key")); err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	previous := removeBackupSMBCredentialNative
+	removeBackupSMBCredentialNative = func(reference string) error {
+		removed = append(removed, reference)
+		return nil
+	}
+	t.Cleanup(func() { removeBackupSMBCredentialNative = previous })
+	if err := eraseForeignBackupCredentials(s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(foreignPath); !os.IsNotExist(err) {
+		t.Fatalf("damaged foreign receipt survived without a key: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != foreignRef {
+		t.Fatalf("SMB credential file not erased: %v", removed)
+	}
+	listed, err := BackupCredentialReceipts(s)
+	if !errors.Is(err, errBackupCredentialKeyMissing) {
+		t.Fatalf("current receipt listing without key: %+v %v", listed, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, backupCredentialNames(t, s)[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sealed sealedBackupCredential
+	if err := json.Unmarshal(raw, &sealed); err != nil || sealed.Reference != currentRef {
+		t.Fatalf("current-pool receipt was wiped: %+v %v", sealed, err)
 	}
 }

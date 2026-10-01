@@ -353,6 +353,9 @@ func RefuseOnlineBackupAdmission(consistency string, vm protocol.VMCreateSpec, d
 		if vm.Boot.Firmware == "uefi" {
 			return "online backup is not supported for UEFI guests in this development slice"
 		}
+		if vm.Boot.TPMEnabled() {
+			return "online backup is not supported for guests with a TPM; shut the VM off and back it up stopped"
+		}
 		return ""
 	default:
 		return "backup consistency is invalid"

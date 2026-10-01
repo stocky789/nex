@@ -1,0 +1,55 @@
+{
+  "summary": "Explicit same-ID repository re-registration (replace credential or SFTP host key with a typed confirmation, optional Repository ID field) and a Release retained original action for the disks and vTPM state restore replace keeps.",
+  "paths": [
+    "internal/protocol/protocol.go",
+    "internal/protocol/vm_release_retained.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/backup.go",
+    "internal/agent/run.go",
+    "internal/agent/managed.go",
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_backup_restore.go",
+    "internal/controller/backups.go",
+    "internal/controller/managed.go",
+    "internal/controller/controller.go",
+    "internal/controller/release_retained.go",
+    "internal/localcore/backup.go",
+    "internal/localcore/service.go",
+    "web/src/backup-repositories.tsx",
+    "web/src/release-retained.tsx",
+    "web/src/managed.tsx",
+    "web/src/labels.ts",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/local-openapi.json",
+    "docs/api/index.html",
+    "docs/api/local.html",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/restore-replace.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-repository-id-reuse-and-release-retained.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators can now reuse a repository ID from the Create form and release retained originals from a VM; both pages previously called these API-only or impossible.",
+    "pages": ["docs/guide/backup-repositories.md", "docs/guide/restore-replace.md"]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "createBackupRepository and the local register route gain replace_confirmation (Command.replace_repository); new releaseRetainedOriginals routes and the vm-release-retained command.",
+    "pages": ["docs/API.md", "docs/api/openapi.json", "docs/api/local-openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Owner-approved product decisions inside the existing backup and restore phase; no gate changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "Repository identity, credential reference and pin stay in the pool master's pool-backup-repositories.json; members adopt them on their access probe. The release is a managed journal entry on the VM's host listing the released paths.",
+    "reason": "Controller stores only its queued operation row. A fresh Controller re-reads the repository list from the pool master and the release outcome from the host's reported outcomes; nothing is re-entered."
+  },
+  "verification": {
+    "method": "Focused Go tests (agent, vmhost, controller), web typecheck and tests, api contract tests; no browser walkthrough and no lab run.",
+    "evidence": ["internal/agent/backup_repository_identity_test.go", "internal/agent/backup_release_retained_test.go", "internal/vmhost/managed_release_retained_test.go", "internal/controller/release_retained_test.go", "internal/controller/backup_adoption_test.go", "web/src/release-retained.test.mjs", "web/src/backup-repositories.test.mjs"]
+  }
+}

@@ -39,24 +39,28 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 		return "", nil, err
 	}
 	defer os.RemoveAll(temporary)
-	stage := *s
-	stage.dir = temporary
+	stage := &Store{dir: temporary, State: s.State} // Not *s: Store holds a lock.
 	repos := poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{}}
 	policies := poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{}}
 	pins := poolBackupPinsState{Pins: map[string]protocol.BackupRestorePin{}}
 	visit := func(page *protocol.PoolBackupAuthority) error {
 		for _, repo := range page.Repositories {
 			repo.MountPath, repo.Access, repo.MemberAccess = "", protocol.StorageAccess{}, nil
+			// A repository this host cannot reach or read does not block promotion: the
+			// record is adopted and its access is recorded failed for the operator.
+			var prepared protocol.BackupRepository
+			var prepErr error
 			if backupCredentialKind(repo.Kind) {
-				if _, err := localBackupCredential(s, repo); err != nil {
-					return errors.New("promoted backup credential is unavailable")
-				}
+				_, prepErr = localBackupCredential(s, repo)
 			}
-			work, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			prepared, prepErr := prepareBackupRepositoryForAdoption(work, s, repo)
-			cancel()
+			if prepErr == nil {
+				work, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				prepared, prepErr = prepareBackupRepositoryForAdoption(work, s, repo)
+				cancel()
+			}
 			if prepErr != nil {
-				return errors.New("the promoted host cannot access a replicated backup repository")
+				prepared = repo
+				markBackupRepositoryUnreachable(&prepared)
 			}
 			repos.Repositories[repo.ID] = prepared
 		}
@@ -69,17 +73,22 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 				run.Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
 				run.UpdatedAt = time.Now().UTC()
 			}
-			if err := savePoolBackupRun(&stage, run); err != nil {
+			if err := savePoolBackupRun(stage, run); err != nil {
 				return err
 			}
 		}
 		for _, point := range page.Catalog {
-			if err := writePoolBackupCatalogEntry(&stage, point); err != nil {
+			if err := writePoolBackupCatalogEntry(stage, point); err != nil {
 				return err
 			}
 		}
 		for _, pin := range page.Pins {
 			pins.Pins[pin.OperationID] = pin
+		}
+		for _, cleanup := range page.OrphanCleanups {
+			if err := saveOrphanCleanup(stage, cleanup); err != nil {
+				return err
+			}
 		}
 		for _, receipt := range page.MetadataReceipts {
 			if receipt.Status == "pending" {
@@ -87,7 +96,7 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 				receipt.Error = "backup outcome was unresolved when pool authority moved; inspect the target before retrying"
 				receipt.ObservedAt = time.Now().UTC()
 			}
-			if err := savePoolBackupMetadataReceipt(&stage, receipt); err != nil {
+			if err := savePoolBackupMetadataReceipt(stage, receipt); err != nil {
 				return err
 			}
 		}
@@ -98,13 +107,13 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 			return "", nil, err
 		}
 	}
-	if err := savePoolBackupRepositories(&stage, repos); err != nil {
+	if err := savePoolBackupRepositories(stage, repos); err != nil {
 		return "", nil, err
 	}
-	if err := savePoolBackupPolicies(&stage, policies); err != nil {
+	if err := savePoolBackupPolicies(stage, policies); err != nil {
 		return "", nil, err
 	}
-	if err := savePoolBackupPins(&stage, pins); err != nil {
+	if err := savePoolBackupPins(stage, pins); err != nil {
 		return "", nil, err
 	}
 	if err := syncPoolBackupTree(temporary); err != nil {
@@ -128,6 +137,13 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 			_ = os.RemoveAll(destination)
 		}
 	}, nil
+}
+
+func markBackupRepositoryUnreachable(repo *protocol.BackupRepository) {
+	now := time.Now().UTC()
+	reason := "the new pool master could not reach or read this repository; check its network path and credentials from this host"
+	repo.Health = protocol.BackupRepositoryHealth{Status: "offline", Error: reason, ObservedAt: now}
+	repo.Access = protocol.StorageAccess{Status: "failed", Error: reason, ObservedAt: now}
 }
 
 func syncPoolBackupDirectory(path string) error {
@@ -170,9 +186,22 @@ func reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store
 		return fail(err)
 	}
 	for _, repo := range repos.Repositories {
+		if repo.Access.Status == "failed" {
+			continue // Adopted unreachable; its catalog imports with catalog-rebuild once it is reachable.
+		}
 		backend, err := openBackupRepositoryStorage(s, repo)
-		if err != nil || backend.Verify(ctx) != nil {
-			return fail(errors.New("promoted backup repository is unavailable for catalog import"))
+		if err == nil {
+			// One unreachable repository must not outlast the activate step.
+			work, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err = backend.Verify(work)
+			cancel()
+		}
+		if err != nil {
+			markBackupRepositoryUnreachable(&repo)
+			if saveErr := savePoolBackupRepositoryAccess(s, repo); saveErr != nil {
+				return fail(saveErr)
+			}
+			continue
 		}
 		if _, err := importPoolBackupCatalogForActivation(ctx, s, repo.ID); err != nil {
 			return fail(fmt.Errorf("promoted backup catalog import failed: %w", err))

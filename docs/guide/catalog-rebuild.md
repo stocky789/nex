@@ -20,13 +20,17 @@ discarding their catalog evidence.
 2. **Controller API (rebuild after catalog loss):**
    `POST /api/v1/pools/{id}/backup-catalog/rebuild` with
    `{request_id,repository_id}`. Use `.../import` to merge without clearing existing entries.
-3. **Core CLI** on the pool master:
+3. **Core CLI** on the pool master, as root. The binary is `/usr/lib/nex/nex-core-local`
+   and is not on `PATH`. It needs the state directory to itself, so stop the service first
+   (`systemctl stop nex-core-local`) and start it again afterwards; while the service runs the
+   command fails with "another agent process owns the state directory":
    ```text
-   nex-core-local rebuild-backup-catalog \
+   /usr/lib/nex/nex-core-local rebuild-backup-catalog \
      --agent-state-dir /var/lib/nex-core-agent \
      --repository-id <repository-id>
    ```
-   Prints JSON with `imported` count and imported points. Exit nonzero on failure.
+   Prints JSON with `imported` count and imported points. Exit nonzero on failure, for
+   example `backup repository not found` for an unknown repository ID.
 4. **Authenticated local API:**
    `POST /api/local/v1/pool/backup-catalog/rebuild` or `.../import` with
    `{operation_id,repository_id}`. A `202/pending` response means Core accepted
@@ -45,6 +49,10 @@ protection. Active restore pins on the same master remain and block prune.
 
 ## Troubleshooting
 
+- A rebuild or import for a repository ID Core does not hold fails on the first attempt with
+  `backup repository not found` (Controller: failed). The operation ID stays failed even after
+  you register the repository, so check the ID on the repository row and submit a new request
+  with a new operation ID.
 - Empty import: check repository mount, owner marker, and that point directories contain
   complete `manifest.json` plus disk files of the recorded sizes.
 - Missing keys / incomplete manifests: refused; fix the repository payload, then rebuild again.

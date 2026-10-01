@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Separate from nginx's RuntimeDirectory so proxy restarts cannot remove the socket.
+d /run/nex-demo 0700 nex-demo nex-demo -

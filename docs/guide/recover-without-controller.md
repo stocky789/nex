@@ -19,6 +19,9 @@ catalog rebuild; the local web page provides login, not a backup management cons
 2. Status: `GET /api/local/v1/pool/backup-status` — repositories, catalog and runs.
 3. Restore as new: `POST /api/local/v1/pool/backup-restore` with
    `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`.
+   The local restore runs on the pool master, so the restored VM is placed on the master,
+   not on the host of the VM the point came from, even for a member VM's point. Choose
+   `storage_id` on the master.
 4. Restore replace: `POST /api/local/v1/pool/backup-restore-replace` with
    `{operation_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace:true}`.
 5. Protect: `POST /api/local/v1/pool/backup-protect` with

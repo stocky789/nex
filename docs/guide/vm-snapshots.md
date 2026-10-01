@@ -130,7 +130,13 @@ saved removal in the background when its safety checks permit, even with Control
 Snapshot reservation and completion also wait for acknowledgement from every ready pool
 member so a replacement master retains their records. If a member is unavailable, the
 snapshot may remain unresolved even when local capture finished; restore connectivity and
-retry the original operation ID rather than requesting another capture.
+retry the original operation ID rather than requesting another capture. The owning host keeps
+the operation and retries it every few seconds on its own, including after a restart, so it
+settles once the pool master and members are reachable again, without Controller. While it
+cannot, the task shows `needs_attention` with the reason; the VM cannot be deleted or moved
+until it settles, and repeating the same operation ID is the supported way to prompt another
+attempt. A deleted snapshot that the master has already removed from its catalog still
+completes on the owning host the same way.
 
 The development promotion correction lets surviving hosts continue after Core has verified
 and recorded the fencing of an unavailable member. That host remains a pool member; it must
@@ -151,6 +157,12 @@ separate backup/disaster-recovery workflow or physical fencing hardware.
   Inspect the original operation; do not choose a new ID to bypass its protection.
 - **503 or a lost response:** availability or acceptance may be uncertain. Query the same operation
   ID and retry the exact original request. Never infer that no effect occurred from a timeout.
+- **`needs_attention` with "cannot confirm VM or domain storage state":** libvirt was briefly unavailable (for example during a restart) so Core could not check the VM's power state, autostart setting, definition, snapshots or storage while preparing or running a snapshot create, delete or revert. Core keeps the operation; repeat the same operation ID once the host is back.
+- **`needs_attention` with "the pool master has not confirmed the snapshot reservation":**
+  the owning host holds the operation and keeps retrying. Check that the pool master and every
+  ready member are reachable; no new request or manual cleanup is needed. When it appears for a
+  few seconds during back-to-back snapshots and then ends `succeeded`, a pool replica push was
+  busy; the snapshot list can also trail a just-succeeded create by about a second.
 - **`needs_attention`:** retain the original ID. An exact retry requests reconciliation of the
   saved intent and observed native state; it does not authorize blind repetition of an uncertain
   disk operation. Conflicting work remains held until Core proves the outcome.

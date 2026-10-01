@@ -310,6 +310,7 @@ type PoolBackupAuthority struct {
 	Catalog          []BackupRecoveryPoint   `json:"catalog,omitempty"`
 	Pins             []BackupRestorePin      `json:"pins,omitempty"`
 	MetadataReceipts []BackupMetadataReceipt `json:"metadata_receipts,omitempty"`
+	OrphanCleanups   []BackupOrphanCleanup   `json:"orphan_cleanups,omitempty"`
 	// Compact refs stay for observation and older readers; derived from Definitions/History.
 	Policies []BackupPolicyRef `json:"policies,omitempty"`
 	Runs     []BackupRunRef    `json:"runs,omitempty"`
@@ -335,12 +336,13 @@ type PoolBackupManifest struct {
 	Catalog          int    `json:"catalog"`
 	Pins             int    `json:"pins"`
 	MetadataReceipts int    `json:"metadata_receipts"`
+	OrphanCleanups   int    `json:"orphan_cleanups"`
 }
 
 func (m PoolBackupManifest) Valid() error {
 	if !lowerSHA256(m.SHA256) || m.TotalBytes <= 0 ||
 		m.Repositories < 0 || m.Repositories > PoolBackupMaxRepositories || m.Definitions < 0 || m.Definitions > PoolBackupMaxDefinitions ||
-		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 ||
+		m.History < 0 || m.Catalog < 0 || m.Pins < 0 || m.MetadataReceipts < 0 || m.OrphanCleanups < 0 ||
 		m.PageCount <= 0 || m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
 		(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
@@ -357,6 +359,20 @@ type BackupPolicyRef struct {
 	Paused     bool      `json:"paused"`
 	Name       string    `json:"name"`
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+}
+
+// DeleteBackupPolicyRequest removes a backup policy definition from the pool master.
+// Confirmation is the policy name. Recovery points, run history and repository data are kept.
+type DeleteBackupPolicyRequest struct {
+	PolicyID     string `json:"policy_id"`
+	Confirmation string `json:"confirmation"`
+}
+
+func (r DeleteBackupPolicyRequest) Valid() error {
+	if !ValidSnapshotOperationID(r.PolicyID) || len(r.Confirmation) > 256 {
+		return errors.New("delete backup policy request is invalid")
+	}
+	return nil
 }
 
 // BackupRunRef is a compact committed or unresolved run reference for observation.
@@ -412,6 +428,13 @@ func (a PoolBackupAuthority) Valid() error {
 			return errors.New("backup authority metadata receipt is invalid")
 		}
 		seenReceipt[receipt.OperationID] = true
+	}
+	seenCleanup := map[string]bool{}
+	for _, cleanup := range a.OrphanCleanups {
+		if cleanup.Valid() != nil || seenCleanup[cleanup.OperationID] {
+			return errors.New("backup authority orphan cleanup is invalid")
+		}
+		seenCleanup[cleanup.OperationID] = true
 	}
 	seenP, seenR := map[string]bool{}, map[string]bool{}
 	for _, p := range a.Policies {

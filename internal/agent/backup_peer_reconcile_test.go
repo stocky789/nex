@@ -228,6 +228,9 @@ func memberRunLab(t *testing.T) (master, member *Store, run protocol.BackupRun, 
 	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: vm.PoolID, VMID: vm.ID, HostID: vm.HostID, State: "stopped", Spec: vm}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := UpsertPoolBackupPolicy(master, testPolicy()); err != nil {
+		t.Fatal(err)
+	}
 	run = protocol.BackupRun{OperationID: "schedule-1", Kind: protocol.BackupKindScheduled, PoolID: "pool-1", VMID: vm.ID,
 		RepositoryID: "repo-1", RecoveryPointID: "schedule-1", PolicyID: "pol-1", ScheduleID: "sch-1", OccurrenceID: "schedule-1",
 		PolicyRevision: 1, OccurrenceAt: time.Now().UTC(), CaptureMode: protocol.BackupCaptureStopped, Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}
@@ -421,7 +424,7 @@ func TestCredentialDeliveryDoesNotHoldBackupAuthority(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 	setMemberPeerOrigin(t, master, member.State.HostID, server.URL)
-	if _, err := upsertPoolBackupRepositoryPrepared(master, repo, repo); err != nil {
+	if _, err := upsertPoolBackupRepositoryPrepared(master, repo, repo, false); err != nil {
 		t.Fatal(err)
 	}
 	if !delivered.Load() || heldAuthority.Load() {

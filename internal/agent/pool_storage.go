@@ -418,6 +418,8 @@ func poolStorageAccess(s *Store) map[string]map[string]protocol.PoolStorageAcces
 }
 
 func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) []protocol.StorageRegistration {
+	// Lock order is peer before storage: read membership before taking poolStorageMu.
+	membership, _ := Membership(s)
 	poolStorageMu.Lock()
 	defer poolStorageMu.Unlock()
 	accesses := poolStorageAccess(s)
@@ -427,7 +429,6 @@ func PoolStorageMemberAccess(s *Store, storage []protocol.StorageRegistration) [
 		s.poolStorageAccess = map[string]map[string]protocol.PoolStorageAccess{}
 		accesses = s.poolStorageAccess
 	}
-	membership, _ := Membership(s)
 	out := append([]protocol.StorageRegistration(nil), storage...)
 	for i := range out {
 		// Member access is this process's observation, never a journaled or

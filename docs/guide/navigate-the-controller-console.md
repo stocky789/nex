@@ -119,8 +119,8 @@ flows are available in matching development builds.
    Home) to restore the default width. Press Escape or select the close button (×) to close the
    panel; the list stays where it was and, on **VMs**, the keyboard focus returns to the row. A
    panel link can be copied and opened directly.
-9. On **VMs**, use the filter sidebar: search by name, IP address or tag, the **Group by host**
-   switch, the **Status**, **Pool**, **Host**, **Guest OS**, **Network** and **Tags** facets with counts,
+9. On **VMs**, use the filter sidebar: search by name, IP address or tag, the **Group by**
+   buttons (**None**, **Host** or **Tag**; a VM with several tags appears under each), the **Status**, **Pool**, **Host**, **Guest OS**, **Network** and **Tags** facets with counts,
    **Clear filters**, and **Customize columns**. The view buttons **All**, **Running**,
    **Needs attention** and **Stopped** show their counts. See [Control VM power](vm-power.md)
    for the checkbox bulk actions and [Tag virtual machines](tag-virtual-machines.md) for tags.
@@ -137,7 +137,10 @@ flows are available in matching development builds.
     progress and a **Cancel** button while it runs. There is no retry button: a failed task links
     to where its action can be sent again (*Open <VM>*, **Open Storage**, **Open Networks**,
     **Open the ISO library** or the host it ran on). Notices after a request carry a **Tasks**
-    link, and **Overview** → **Recent tasks** has **History**.
+    link, and **Overview** → **Recent tasks** has **History**. A task that is still dispatched
+    but not moving, such as a backup waiting for its member, shows *Waiting:* and the last
+    reason Core reported (for example *member unreachable* or *waiting for an earlier backup of
+    this VM to finish*); it clears when the work moves on.
 12. Select **Events** for recorded changes and health transitions with **Event**, **Source**,
     **When** and **Result**. Each panel's **Activity** tab shows the same history for that one
     VM or host.

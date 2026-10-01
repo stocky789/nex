@@ -30,6 +30,8 @@ import { rememberSignedIn, signedInBefore } from "./session";
 import { applyTheme, themeKey, watchSystemTheme } from "./theme";
 import type { API, Audit, Data, Host, Operation, Pool, Session, Site } from "./types";
 
+declare const __NEX_DEMO__: boolean;
+
 export type { API, Audit, Check, Data, Host, Operation, Pool, Site } from "./types";
 
 // The scope the top bar filters by: a site and an optional pool; "*" explicitly means all pools.
@@ -484,10 +486,10 @@ function App() {
         if (failures.length === 1) {
           const o = failures[0];
           const verb = o.status === "failed" ? "failed" : "needs attention";
-          setNotice(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
+          setActionError(`${operationLabel(o.kind)} on ${hostnameOf(o)} ${verb} (task ${o.id}). ${o.error ?? ""}`.trim());
         } else if (failures.length > 1) {
           const items = failures.map((o) => `${operationLabel(o.kind)} on ${hostnameOf(o)} (${o.id})`).join(", ");
-          setNotice(`${failures.length} tasks failed: ${items}.`);
+          setActionError(`${failures.length} tasks failed: ${items}.`);
         }
         previousOperations.current = operations || [];
         const next = {
@@ -677,9 +679,16 @@ function App() {
       <main className="login">
         <Brand />
         <div className="login-card">
-          <p className="eyebrow">NEX CONTROLLER</p>
-          <h1>Connect to Nex Controller</h1>
-          <p>Sign in to manage your sites, pools and hosts.</p>
+          <p className="eyebrow">{__NEX_DEMO__ ? "NEX CONTROLLER DEMO" : "NEX CONTROLLER"}</p>
+          <h1>{__NEX_DEMO__ ? "Explore the Nex demo" : "Connect to Nex Controller"}</h1>
+          <p>{__NEX_DEMO__ ? "Browse fictional sites, pools and hosts. This demo is read-only." : "Sign in to manage your sites, pools and hosts."}</p>
+          {__NEX_DEMO__ && <aside className="demo-login-credentials" aria-label="Demo login credentials">
+            <strong>Sign in with these demo credentials</strong>
+            <dl>
+              <dt>Username</dt><dd><code>demo</code></dd>
+              <dt>Password</dt><dd><code>demo</code></dd>
+            </dl>
+          </aside>}
           {(error || actionError) && (
             <p className="alert" role="alert">
               {actionError || error}
@@ -722,7 +731,7 @@ function App() {
             </button>
           </form>
           <p className="help">
-            Use the administrator account created on your controller.
+            {__NEX_DEMO__ ? "No registration needed. Use demo for both fields above." : "Use the administrator account created on your controller."}
           </p>
         </div>
         <footer>

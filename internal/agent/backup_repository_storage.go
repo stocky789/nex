@@ -515,6 +515,14 @@ func (b filesystemBackupStorage) sweepDeleteIntents(pins map[string]bool) {
 	}
 }
 
+// SweepDeleteMarkers drops the intents of points the last delete removed from the catalog;
+// Delete itself runs before the catalog entry goes, so they would wait for the next delete.
+func (b filesystemBackupStorage) SweepDeleteMarkers(context.Context) {
+	if pins, err := ActiveBackupRestorePins(b.s); err == nil {
+		b.sweepDeleteIntents(pins)
+	}
+}
+
 // pendingDeletes returns the recorded delete intents; their points must not be read or listed.
 func (b filesystemBackupStorage) pendingDeletes() (map[string]filesystemDeleteIntent, error) {
 	entries, err := os.ReadDir(b.repo.MountPath)

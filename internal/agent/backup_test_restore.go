@@ -75,7 +75,10 @@ func executeTestRestore(ctx context.Context, store *Store, cmd protocol.Command,
 	}
 	engine := vmhost.NewManaged(filepath.Join(store.dir, "managed-vms"))
 	if err := requestTestRestorePlacement(ctx, store, spec, cmd.OperationID); err != nil {
-		if restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
+		// Staging already exists, so only the master's definite refusal proves
+		// nothing was placed: fail clean, do not leave needs_attention with a pin.
+		var refused poolVMPlacementRefusal
+		if errors.As(err, &refused) || restorePlacementHasNoEffects(store, cmd.OperationID, spec.ID) {
 			return failTestRestoreRun(store, cmd, observed, err.Error()), nil
 		}
 		return attentionTestRestoreRun(store, cmd, observed, err.Error()), nil

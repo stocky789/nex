@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { bundleTestModule } from "./test-helpers.mjs";
 
 const { repositoryHealth, repositoryTarget } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "repository-health"));
-const { backupSource, forgetBody, hostAccess, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
+const { backupSource, forgetBody, hostAccess, validRepositoryID, validSMBDomain } = await import(bundleTestModule(new URL("./backup-repositories.tsx", import.meta.url), "repository-host-access", true));
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: "2026-09-28T09:59:00Z" } }), "online");
 assert.equal(repositoryHealth({ health: { status: "offline", observed_at: "2026-09-28T09:59:00Z" } }), "offline");
 assert.equal(repositoryHealth({ health: { status: "online", observed_at: new Date(Date.now() + 3_600_000).toISOString() } }), "online", "a master clock ahead of the browser does not hide Core's health");
@@ -25,6 +25,7 @@ assert.deepEqual(hostAccess(repo, [{ ...hosts[0], connection: "stale" }], "maste
 const member = { repository_id: repo.id, host_id: "member", readable: true, writable: true, observed_at: new Date().toISOString() };
 const withMember = { ...repo, member_access: [member] };
 assert.deepEqual(lights(withMember)[1], ["member", "ok", "Accessible"], "backup probe reports read/write without storage identity, QEMU or locking fields");
+assert.deepEqual(lights({ ...withMember, health: { status: "unknown" } })[1], ["member", "unknown", "Unknown"], "the master's stale report is never shown as member access");
 assert.deepEqual(lights({ ...withMember, member_access: [{ ...member, writable: false }] })[1], ["member", "bad", "No access"]);
 assert.deepEqual(lights({ ...withMember, member_access: [{ ...member, error: "probe failed" }] })[1], ["member", "bad", "Error"]);
 assert.deepEqual(lights({ ...withMember, member_access: [{ ...member, repository_id: "repo-other" }] })[1], ["member", "warn", "Pending"]);
@@ -52,7 +53,10 @@ for (const [label, fields] of [
 const source = readFileSync(new URL("./backup-repositories.tsx", import.meta.url), "utf8");
 const create = source.split("const onCreate = ")[1]?.split("const onTest = ")[0];
 assert.ok(create, "repository create handler exists");
-assert.ok(create.includes('createID.current ||= rid("brepo")'), "a lost reply retains the repository ID");
+assert.ok(create.includes('createID.current ||= repoID.trim() || rid("brepo")'), "a lost reply retains the repository ID, chosen or generated");
+assert.ok(create.includes("replace_confirmation: existing.id"), "an existing repository is replaced only with its typed ID");
+for (const good of ["brepo1", "repo-1_a", "A".repeat(64)]) assert.ok(validRepositoryID(good), `${good} is a valid repository ID`);
+for (const bad of ["", "-repo", "repo id", "repo/1", "A".repeat(65)]) assert.ok(!validRepositoryID(bad), `${bad} is not a valid repository ID`);
 assert.ok(create.includes('const registrationID = requestID(createKey, "brepo")'), "a lost reply retains the request ID");
 assert.ok(create.includes('const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred")'), "credential handoff has a stable retry ID");
 assert.ok(create.indexOf('"storage/credentials", "POST"') < create.indexOf('"POST", {\n        request_id: registrationID'), "secret handoff precedes registration");

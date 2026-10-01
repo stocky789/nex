@@ -154,6 +154,45 @@ type BackupOrphanCleanup struct {
 	UpdatedAt   time.Time                 `json:"updated_at"`
 }
 
+func (c BackupOrphanCleanup) Valid() error {
+	if !ValidSnapshotOperationID(c.OperationID) || c.Request.Valid() != nil ||
+		!orphanCleanupStatusOK(c.Status) || len(c.Error) > 4096 || c.UpdatedAt.IsZero() {
+		return errors.New("orphaned backup cleanup is invalid")
+	}
+	for _, point := range c.Points {
+		if point.Valid() != nil {
+			return errors.New("orphaned backup cleanup is invalid")
+		}
+	}
+	return nil
+}
+
+func orphanCleanupStatusOK(status string) bool {
+	switch status {
+	case "running", "succeeded", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p BackupOrphanPointResult) Valid() error {
+	if !ValidSnapshotOperationID(p.RecoveryPointID) || p.VMID == "" || len(p.VMID) > 128 ||
+		!orphanCleanupPointStatusOK(p.Status) || len(p.Reason) > 4096 {
+		return errors.New("orphaned backup cleanup point is invalid")
+	}
+	return nil
+}
+
+func orphanCleanupPointStatusOK(status string) bool {
+	switch status {
+	case "pending", "deleted", "skipped", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
 // TestRestoreRequest restores as a new VM marked for verification and later cleanup.
 type TestRestoreRequest struct {
 	HostID          string `json:"host_id,omitempty"`

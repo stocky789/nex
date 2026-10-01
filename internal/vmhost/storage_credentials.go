@@ -2,6 +2,7 @@
 package vmhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -20,8 +22,12 @@ import (
 
 const credentialDirectory = "storage-credentials"
 
-// The receipt file holds metadata only; the secret lives solely in the private credentials file.
-type storedCredential = protocol.StorageCredentialReceipt
+// The receipt JSON holds metadata and a Core-local proof of the credentials body. The secret
+// itself lives solely in the private credentials file named by the receipt.
+type storedCredential struct {
+	protocol.StorageCredentialReceipt
+	Proof string `json:"proof,omitempty"`
+}
 
 func credentialPath(stateDir, requestID string) string {
 	h := sha256.Sum256([]byte(requestID))
@@ -112,10 +118,19 @@ func openMountCredential(path string) (string, error) {
 	return string(b), err
 }
 
+func credentialBodyProof(c protocol.StorageCredentials) (string, error) {
+	body, err := smbAuthFileBody(c.Username, c.Secret, c.Domain)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:]), nil
+}
+
 // materializeMountCredential writes the mount.cifs credentials file once per receipt: root-only
 // in the private credential directory, because systemd 257 cannot hand a credential to a .mount
-// unit's helper. The file is addressed by the receipt; an existing one must decrypt to the same credential, which is how a replayed
-// handoff with a different secret is refused.
+// unit's helper. An exclusive matching file is left alone; anything else is repaired from the
+// receipt-bound handoff secret that SaveStorageCredential already proved.
 func materializeMountCredential(stateDir, receipt string, c protocol.StorageCredentials) error {
 	if !storageID.MatchString(receipt) {
 		return errors.New("storage credential cannot be used by the native mount")
@@ -129,17 +144,35 @@ func materializeMountCredential(stateDir, receipt string, c protocol.StorageCred
 		return err
 	}
 	path := filepath.Join(root, receipt)
-	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0600 {
-		// A file holding a different credential is a conflicting replay; anything
-		// unreadable is damage, repaired below by writing again.
-		if existing, err := openMountCredential(path); err == nil && parseSMBAuthFile(existing).Secret != "" {
-			if subtle.ConstantTimeCompare([]byte(existing), []byte(body)) != 1 {
-				return errors.New("storage credential replay conflicts with existing receipt")
-			}
-			return nil
-		}
+	current, err := mountCredentialCurrent(path, []byte(body))
+	if err != nil {
+		return err
+	}
+	if current {
+		return nil
 	}
 	return atomicWrite(path, []byte(body))
+}
+
+// mountCredentialCurrent accepts only the exact private file atomicWrite would create.
+// Hardlinks, wrong owners, and mode/content damage take the repair path.
+func mountCredentialCurrent(path string, want []byte) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode() != 0600 || info.Size() != int64(len(want)) || !ok || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return false, nil
+	}
+	got, err := readSmall(path, int64(len(want)))
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(got, want), nil
 }
 
 // SaveStorageCredential is the only path that persists an offered credential. The receipt is
@@ -152,6 +185,10 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 	if _, err := credentialDir(stateDir); err != nil {
 		return empty, err
 	}
+	proof, err := credentialBodyProof(h.Credentials)
+	if err != nil {
+		return empty, err
+	}
 	path := credentialPath(stateDir, h.Offer.RequestID)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -162,7 +199,7 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 			return empty, err
 		}
 		var old storedCredential
-		if err = json.Unmarshal(b, &old); err != nil || old.RequestID != h.Offer.RequestID || old.PoolID != h.Offer.PoolID || old.HostID != h.Offer.HostID || old.RepositoryID != h.Offer.RepositoryID || old.RegistrationRequestID != h.Offer.RegistrationRequestID {
+		if err = json.Unmarshal(b, &old); err != nil || old.RequestID != h.Offer.RequestID || old.PoolID != h.Offer.PoolID || old.HostID != h.Offer.HostID || old.RepositoryID != h.Offer.RepositoryID || old.RegistrationRequestID != h.Offer.RegistrationRequestID || subtle.ConstantTimeCompare([]byte(old.Proof), []byte(proof)) != 1 {
 			return empty, errors.New("storage credential replay conflicts with existing receipt")
 		}
 		if old.Status != "ready" {
@@ -171,7 +208,7 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 		if err = materializeMountCredential(stateDir, old.Receipt, h.Credentials); err != nil {
 			return empty, err
 		}
-		return old, nil
+		return old.StorageCredentialReceipt, nil
 	} else if !os.IsNotExist(err) {
 		return empty, err
 	}
@@ -180,16 +217,21 @@ func SaveStorageCredential(stateDir string, h protocol.StorageCredentialHandoff)
 		return empty, err
 	}
 	receipt := protocol.StorageCredentialReceipt{Receipt: id, RequestID: h.Offer.RequestID, PoolID: h.Offer.PoolID, HostID: h.Offer.HostID, RepositoryID: h.Offer.RepositoryID, RegistrationRequestID: h.Offer.RegistrationRequestID, CreatedAt: time.Now().UTC(), Status: "ready"}
-	b, err := json.Marshal(receipt)
+	stored := storedCredential{StorageCredentialReceipt: receipt, Proof: proof}
+	b, err := json.Marshal(stored)
 	if err != nil {
 		return empty, err
 	}
 	// The secret lands first: a crash before the receipt leaves only an orphaned
-	// credentials file, never a receipt without its credential.
+	// credentials file, never a receipt without its credential. A failed receipt write
+	// removes it, since no receipt would ever let it be retired.
 	if err = materializeMountCredential(stateDir, id, h.Credentials); err != nil {
 		return empty, err
 	}
 	if err = atomicWrite(path, b); err != nil {
+		if dir, dirErr := credentialDir(stateDir); dirErr == nil {
+			_ = os.Remove(filepath.Join(dir, id))
+		}
 		return empty, err
 	}
 	return receipt, nil
@@ -297,7 +339,7 @@ func StorageCredentialReceipts(stateDir string) ([]protocol.StorageCredentialRec
 		if err = json.Unmarshal(b, &stored); err != nil || stored.Receipt == "" || stored.RequestID == "" || stored.PoolID == "" || stored.HostID == "" {
 			return nil, errors.New("credential receipt is invalid")
 		}
-		out = append(out, stored)
+		out = append(out, stored.StorageCredentialReceipt)
 	}
 	return out, nil
 }

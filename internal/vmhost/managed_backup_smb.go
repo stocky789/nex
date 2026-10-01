@@ -50,10 +50,20 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 	_, unitPath := remoteUnitPath(registration)
 	mounted := false
 	if unit, err := os.ReadFile(unitPath); err == nil {
-		if !strings.HasPrefix(string(unit), nexMountMarker) || !unitHasSMBCredential(unit, path) {
-			return protocol.BackupRepository{}, errors.New("backup repository SMB credential rotation requires the mount to be detached")
+		if strings.HasPrefix(string(unit), nexMountMarker) && unitHasSMBCredential(unit, path) {
+			mounted = true
+		} else {
+			// Another credential reference replaces the old one, as when the credential key
+			// was lost and the repository is registered again: drop the old mount and its file.
+			if err := detachRemote(ctx, registration); err != nil {
+				return protocol.BackupRepository{}, err
+			}
+			if _, rest, ok := strings.Cut(string(unit), ",credentials="); ok {
+				if old, _, _ := strings.Cut(rest, ","); filepath.Dir(old) == root {
+					_ = os.Remove(old)
+				}
+			}
 		}
-		mounted = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return protocol.BackupRepository{}, err
 	}

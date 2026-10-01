@@ -17,6 +17,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Minor Feature
 
+- A public, read-only Controller demo now uses the current interface with fictional
+  VMs, storage and backup inventory. Container deployment rebuilds and checks the
+  demo from Git before publishing, without connecting visitors to real hosts. Its
+  login card displays the demo credentials, with expanded VM/host inventory, colorful
+  workload tags and clearly simulated pool quorum details.
+- Backups now separates backup jobs from recovery points. Inspect a point before
+  choosing how to restore it, with searchable filters and compact phone layouts.
+- Backup and restore panels now have named steps, a fixed action footer and clearer
+  restore choices. Expanded jobs keep Pause, repository changes and per-VM actions
+  together; drafts and exact retry selections stay intact while navigating.
 - A backup repository can now be forgotten from Settings. Nex removes the repository, its
   recovery-point list, its run history and its saved credentials from the pool; nothing is
   deleted from the destination, and registering it again brings its recovery points back.
@@ -33,6 +43,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Forgetting a repository now names the restore operation and test VM that hold it, cleaning up a
   test restore that failed or never started now succeeds, and members drop repository records the
   pool master no longer holds.
+- Backup panels now show refusal and repository-read errors inside the form.
+  Unavailable repository inventory is no longer presented as an empty destination list.
 
 ## [0.4.17] — 2026-09-28
 

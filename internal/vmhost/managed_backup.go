@@ -25,6 +25,7 @@ const (
 	backupStagingPrefix    = ".staging-"
 	maxBackupManifestBytes = 1 << 20
 	maxBackupDiskArtifacts = 32
+	backupNFSHardeningOpts = ",nosuid,nodev,noexec"
 )
 
 var ErrBackupPublishUncertain = errors.New("backup publication outcome is uncertain")
@@ -37,7 +38,7 @@ type backupRepositoryOwner struct {
 // prepareBackupSMB claims and probes the repository inside SMB preparation, so a failed first
 // registration removes its new mount unit. Backup repositories hold only data files.
 var prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRegistration, repositoryID string) (storageAccess, error) {
-	return prepareSMBWithAdmission(ctx, registration, ",nosuid,nodev,noexec", func(root string) error {
+	return prepareSMBWithAdmission(ctx, registration, backupNFSHardeningOpts, func(root string) error {
 		if err := claimBackupRepositoryOwnerExact(root, repositoryID, registration.PoolID); err != nil {
 			return err
 		}
@@ -47,6 +48,36 @@ var prepareBackupSMB = func(ctx context.Context, registration protocol.StorageRe
 var inspectBackupSMB = inspectSMB
 var probeBackupQEMUAccess = qemuStorageAccess
 var probeBackupPublication = probeBackupFilesystemPublication
+
+// nfsRootSquash explains the one refusal an operator cannot otherwise diagnose: Core writes as
+// root, so an export that squashes root denies every write.
+func nfsRootSquash(err error) error {
+	if err != nil && (errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "permission denied")) {
+		return errors.New("the NFS export denied access to the repository directory: root_squash is not supported, export it with no_root_squash (" + err.Error() + ")")
+	}
+	return err
+}
+
+// allowBackupNFSHardeningRemount lets Prepare rewrite a pre-hardening NFS backup unit when the
+// only Options change is adding nosuid,nodev,noexec. Other mount changes still require the
+// dependency-safe remount path.
+func allowBackupNFSHardeningRemount(ctx context.Context, s protocol.StorageRegistration) context.Context {
+	if s.Source.NFS == nil {
+		return ctx
+	}
+	_, unitPath := remoteUnitPath(s)
+	old, err := os.ReadFile(unitPath)
+	if err != nil {
+		return ctx
+	}
+	source := s.Source.NFS.Server + ":" + s.Source.NFS.Export
+	path := remoteMountPath(s)
+	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
+	if string(old) != string(legacy) {
+		return ctx
+	}
+	return allowStorageRemount(ctx)
+}
 
 func backupStorageRegistration(repo protocol.BackupRepository) protocol.StorageRegistration {
 	sum := sha256.Sum256([]byte(repo.ID))
@@ -77,7 +108,9 @@ func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	var err error
 	switch repo.Kind {
 	case protocol.BackupRepoKindNFS:
-		access, err = prepareNFS(ctx, registration, ",nosuid,nodev,noexec")
+		ctx = allowBackupNFSHardeningRemount(ctx, registration)
+		access, err = prepareNFS(ctx, registration, backupNFSHardeningOpts)
+		err = nfsRootSquash(err)
 	case protocol.BackupRepoKindSMB3:
 		if repo.CredentialRef == "" {
 			return protocol.BackupRepository{}, errors.New("backup repository SMB credentials are unavailable")
@@ -106,6 +139,9 @@ func PrepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 		repo.Identity = access.Observed.NFS
 	}
 	if err := claimBackupRepositoryOwnerExact(repo.MountPath, repo.ID, repo.PoolID); err != nil {
+		if repo.Kind == protocol.BackupRepoKindNFS {
+			err = nfsRootSquash(err)
+		}
 		return protocol.BackupRepository{}, err
 	}
 	return repo, nil
@@ -117,9 +153,12 @@ func DetachBackupRepository(ctx context.Context, repo protocol.BackupRepository)
 	if repo.Kind != protocol.BackupRepoKindNFS && repo.Kind != protocol.BackupRepoKindSMB3 {
 		return nil
 	}
-	if err := detachRemote(ctx, backupStorageRegistration(repo)); err != nil {
+	registration := backupStorageRegistration(repo)
+	if err := detachRemote(ctx, registration); err != nil {
 		return err
 	}
+	// The unit is gone, so the mountpoint is an empty directory; a non-empty one is left alone.
+	_ = os.Remove(remoteMountPath(registration))
 	if repo.Kind == protocol.BackupRepoKindSMB3 {
 		return RemoveBackupSMBCredential(repo.CredentialRef)
 	}

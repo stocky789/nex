@@ -102,23 +102,27 @@ export function saveSlideoverWidth(px: number | null, store?: Pick<Storage, "set
 // closing returns focus to whatever opened it (normally the row).
 // Its tabs are one tab stop: the arrow keys, Home and End move between them and select.
 // Drag the left edge (or focus it and use the arrows) to widen or narrow; double-click resets.
-export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide, onClose, children }: {
+export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide, footer, closeDisabled = false, onClose, children }: {
   icon: IconKind; title: ReactNode; badge?: ReactNode; sub?: ReactNode; actions?: ReactNode;
-  tabs?: readonly string[]; tab?: string; onTab?: (tab: string) => void; wide?: boolean; onClose: () => void; children: ReactNode;
+  tabs?: readonly string[]; tab?: string; onTab?: (tab: string) => void; wide?: boolean;
+  footer?: ReactNode; closeDisabled?: boolean; onClose: () => void; children: ReactNode;
 }) {
   const panel = useRef<HTMLElement>(null);
   const load = useContext(LoadError);
   const id = useId();
   const close = useRef(onClose);
   close.current = onClose;
+  const closingDisabled = useRef(closeDisabled);
+  closingDisabled.current = closeDisabled;
+  // Capture before commit: opening a panel can disable its triggering control.
+  const [opener] = useState(() => typeof document === "undefined" ? null : document.activeElement as HTMLElement | null);
   const [width, setWidth] = useState<number | null>(() => loadSlideoverWidth());
   const widthRef = useRef(width);
   widthRef.current = width;
   useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
     panel.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector("dialog[open]") && !document.body.classList.contains("console-focus")) close.current();
+      if (e.key === "Escape" && !closingDisabled.current && !e.defaultPrevented && !document.querySelector("dialog[open]") && !document.body.classList.contains("console-focus")) close.current();
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); opener?.focus(); };
@@ -198,7 +202,7 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
     />
     <header>
       <h2><Icon kind={icon} size={18} />{title}{badge}</h2>
-      <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><Icon kind="close" size={18} /></button>
+      <button type="button" className="icon-button" aria-label="Close" disabled={closeDisabled} onClick={onClose}><Icon kind="close" size={18} /></button>
     </header>
     {sub && <div className="sub">{sub}</div>}
     {actions && <div className="quick">{actions}</div>}
@@ -213,6 +217,7 @@ export function Panel({ icon, title, badge, sub, actions, tabs, tab, onTab, wide
       {tabs.map((name, i) => <button key={name} id={`${id}-tab-${i}`} type="button" role="tab" aria-selected={name === tab} aria-controls={`${id}-body`} tabIndex={name === tab ? 0 : -1} onClick={() => onTab?.(name)}>{name}</button>)}
     </div>}
     <div className="slideover-body" id={`${id}-body`} role={tabs ? "tabpanel" : undefined} aria-labelledby={tabs ? `${id}-tab-${tabs.indexOf(tab || "")}` : undefined}>{load.error && <LoadErrorAlert {...load} />}{children}</div>
+    {footer != null && <div className="slideover-footer">{footer}</div>}
   </section>;
 }
 

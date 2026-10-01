@@ -20,13 +20,17 @@ exclusive cutover is covered separately in [Restore a backup over an existing VM
 
 ## Steps
 
-1. Open **Backups**. Filter by VM or repository if needed. Select a recovery point
-   (or **Restore as new** on its row).
-2. Step 1: enter a **New VM name**, choose a **Host** and **Storage**. The UI implies a new UUID
-   and MACs; the guest will be stopped with NICs disconnected.
-3. Step 2: review name, new VM ID, host, storage and power/network defaults.
-4. Step 3: submit **Restore as new**. Follow the task; when it succeeds, open the new
-   VM from **VMs** before connecting networks.
+1. Open **Backups** → **Recovery points**. Use Search, VM or Repository in the
+   sidebar if needed; on a smaller screen, open **Filters** first.
+2. Select a recovery point or its **Details** button. Inspect its source, capture
+   time, repository, consistency, deletion protection and last test. Selection
+   only opens details; it does not submit a restore.
+3. Select **Restore…** and keep the default **Restore as new** choice.
+   In **Destination**, enter a **New VM name** and choose **Host** and **Storage**,
+   then select **Review restore**.
+4. In **Review and submit**, check name, new VM ID, host, storage and the stopped,
+   disconnected-network defaults. Select **Restore as new** in the fixed footer.
+   Follow the task; when it succeeds, open the new VM from **VMs** before connecting networks.
 
 ## Expected result
 
@@ -55,6 +59,10 @@ choice after inspection.
   operation ID, and inspect the host task. The original Core can resume the
   exact retained allocation after restart and verify the result. Do not submit
   a changed target or assume a promoted master can repeat native work.
+- An uncertain reply freezes the destination and restore choice. Inspect **Tasks**
+  before **Retry restore request**, which resends the same target and request
+  identity. Back and Close remain disabled; do not create another VM to resolve
+  the original outcome.
 - Static guest IPs or hostnames inside the image are unchanged; review before attaching
   production networks.
 - Replace existing VM: [Restore a backup over an existing VM](restore-replace.md).
@@ -73,3 +81,8 @@ been walked through with a guest OS and sealed application data. A later
 the original UEFI/vTPM operation on a disposable member and reached UEFI
 firmware with matching pre-start disk/NVRAM/TPM artifacts. The blank disk did
 not prove OS boot or application recovery.
+
+The [backup workspace review](../qa/2026-10-01-backup-ui/README.md) exercised
+inspection without a write, the two-step restore flow, retained drafts, missing
+source handling and exact retry with fictional API responses. Queued replies in
+that review are not proof of native restore, guest boot or application recovery.

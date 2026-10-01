@@ -24,4 +24,8 @@ assert.ok(source.includes("Include protected recovery points"), "protected point
 assert.ok(!source.includes("localStorage"), "nothing about the cleanup is kept in browser storage");
 assert.ok(source.includes('className="check" style={{ justifyContent: "flex-start"'), "the protected checkbox sits beside its text");
 assert.ok(source.includes('op.status === "queued"'), "the record is not requested before Core has planned the cleanup");
-assert.ok(source.includes('op.status === "failed") { setRefusal('), "a refused cleanup takes its error from the operation and never requests the missing record");
+assert.ok(source.includes('if (found) setRecord(found)'), "a failed cleanup with a record still shows per-point results");
+assert.ok(source.includes('else if (op.status === "failed") setRefusal('), "refusal is only for a pre-plan 404 / no record");
+assert.ok(source.includes('if (op.status === "failed") return null;'), "a failed cleanup still reads its record; 404 means a pure refusal");
+assert.ok(source.includes("misses.current >= 15"), "the poll gives up with an error instead of waiting forever");
+assert.ok(source.includes('misses.current = 0; setPollError("");'), "a successful poll clears the earlier give-up error");

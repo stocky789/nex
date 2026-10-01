@@ -272,6 +272,12 @@ Do this with the current pool master still working. It is a planned hand-over, n
    only go forward.
 7. When the change finishes, the master row moves to the new host by itself, from the hosts' own
    reports. There is nothing to confirm and nothing to re-enter.
+8. A backup repository the new master cannot reach or read does not stop the change. The
+   repository is kept, and **Settings** → **Backup repositories** shows it **offline** with the reason.
+   Fix the network path or credentials from the new master. Any repository, including a
+   network-share (NFS or SMB3) one, returns online by itself at the next health check once the new
+   master can reach it; nothing needs registering again.
+   Recovery points of a repository that was unreachable are listed after **Catalog rebuild**.
 
 ### Eject a host from a pool
 
@@ -807,6 +813,11 @@ Nothing is ever cancelled by a timeout, and a cancellation is never offered as a
 finished change. A cancelled master change is recorded as *the pool master change was cancelled by
 an operator*; a cancelled eject as *the pool member eject was cancelled by an operator*.
 
+A master change that was never confirmed to you is settled as succeeded only by its own hand-over.
+If the same host became master through a different operation, the unconfirmed change keeps
+needing attention and says *the target became master through another operation, not this master
+change*; check the pool master shown in inventory rather than treating that change as done.
+
 ## Expected result
 
 - Every fresh member of a healthy pool settles at **current** within about one reporting interval
@@ -939,6 +950,22 @@ change** panel in its own words. What each one means:
   ejected host has released its pool resources. Follow that host's own transfer row: `leave` means
   it is still working, and `needs_attention` names a local VM or other blocker. Once the cause is
   cleared, the host resumes and finishes by itself, with no master connection or manual state edit.
+- **"backup operation is unresolved; finish or reconcile it before changing pool authority."**
+  A backup, restore or other backup work is still running, unresolved or waiting on a metadata
+  receipt, on the master or on a member (an accepted **Run now** counts). The master change is
+  refused as failed and nothing moves. Let the work finish or reconcile it in **Tasks**, then
+  request the change again; do not expect the change to interrupt a running backup. The message
+  names the operation. A metadata receipt that has made no progress for 12 hours no longer counts:
+  the next change attempt marks it **needs attention** with its reason and goes ahead, and so does
+  a stale task entry whose operation already finished.
+- **"Pool authority was handed to `<host>` but its activation is not confirmed yet."** The new
+  master has not answered in time, usually while it checks a backup repository it cannot reach.
+  Wait: this host refuses authority writes meanwhile and settles the task to **succeeded** by itself
+  once it sees the new master, even after either host restarts. Do not power off either host.
+- **"Pool authority kept changing while it was being frozen; nothing was changed, so start the
+  master change again."** Something wrote to the pool's authority (for example a backup cleanup
+  finishing) while the old master was freezing it. The master change was not started and the
+  master did not move; request it again.
 - **"Pool authority was handed to another host; this host is no longer the pool master."** You
   addressed a host that has already given the authority away. Select **Refresh** in the
   **Members** section.

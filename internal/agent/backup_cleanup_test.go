@@ -38,6 +38,19 @@ func TestOrdinaryCredentialRetireDoesNotWaitForBackupAuthority(t *testing.T) {
 	}
 }
 
+// A missing backup sealing key must not block ordinary storage credential retirement.
+func TestOrdinaryCredentialRetireWithoutBackupSealingKey(t *testing.T) {
+	s := seedBackupMaster(t)
+	poolChangeCredential(t, s, "credential-1", protocol.BackupRepoKindS3, "repo-1", "example-secret")
+	if err := os.RemoveAll(filepath.Join(s.dir, "backup-credential-key")); err != nil {
+		t.Fatal(err)
+	}
+	handled, err := RetireUnusedBackupCredential(s, "storage-receipt-1", s.State.PoolID, s.State.HostID)
+	if handled || err != nil {
+		t.Fatalf("missing sealing key blocked ordinary retirement: %t, %v", handled, err)
+	}
+}
+
 // An ejected host unmounts and forgets the repositories of the pool it left.
 // Regression for BUG-0741: the unmount runs outside the pool backup lock, and a
 // retry after a failed unmount keeps the new pool identity the first attempt took.

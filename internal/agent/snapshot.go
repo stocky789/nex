@@ -66,6 +66,12 @@ func executeStoppedSnapshot(ctx context.Context, dir string, identity State, cmd
 	}
 	store := &Store{dir: dir, State: identity}
 	engine := vmhost.NewManaged(filepath.Join(dir, "managed-vms"))
+	// The master drops a snapshot from its catalog once it settles the delete, so a
+	// re-drive that only the owner's settlement is missing must keep its journaled target.
+	if journaled, ok := engine.JournaledCommand(cmd.OperationID); ok && snapshotTargetCommand(cmd.Kind) && cmd.Snapshot != nil && cmd.Snapshot.Target == nil &&
+		journaled.Snapshot != nil && journaled.Snapshot.Target != nil && journaled.Snapshot.SnapshotID == cmd.Snapshot.SnapshotID {
+		cmd.Snapshot = journaled.Snapshot
+	}
 	if snapshotTargetCommand(cmd.Kind) && (cmd.Snapshot == nil || cmd.Snapshot.Target == nil) {
 		if cmd.Snapshot == nil || !protocol.ValidSnapshotOperationID(cmd.Snapshot.SnapshotID) {
 			return protocol.Result{OperationID: cmd.OperationID, Status: "failed", Error: "snapshot target is unavailable", ObservedAt: time.Now().UTC()}, nil
@@ -131,8 +137,18 @@ func executeStoppedSnapshot(ctx context.Context, dir string, identity State, cmd
 	if result.OperationID != cmd.OperationID {
 		return protocol.Result{OperationID: cmd.OperationID}, errors.New("snapshot executor returned a mismatched operation identity")
 	}
+	if result.Status == "needs_attention" {
+		// Run re-drives a needs_attention snapshot as soon as this returns; space the
+		// attempts so an unreachable pool master is not hammered.
+		select {
+		case <-ctx.Done():
+		case <-time.After(snapshotRedriveDelay):
+		}
+	}
 	return result, err
 }
+
+var snapshotRedriveDelay = 5 * time.Second
 
 func executeSnapshotMetadata(ctx context.Context, store *Store, cmd protocol.Command) (protocol.Result, error) {
 	observed := time.Now().UTC()

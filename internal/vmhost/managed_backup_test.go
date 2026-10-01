@@ -2,8 +2,8 @@
 package vmhost
 
 import (
-	"bytes"
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,6 +53,80 @@ func TestVerifyBackupRepositoryRejectsWrongMountedSource(t *testing.T) {
 	}
 	if err := VerifyBackupRepository(context.Background(), repo); err == nil {
 		t.Fatal("backup repository must reject a different mounted NFS source")
+	}
+}
+
+func TestPrepareBackupRepositoryMigratesLegacyNFSHardeningOptions(t *testing.T) {
+	oldRun, oldMount, oldUnit := nativeRun, storageMountRoot, storageUnitRoot
+	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
+	root := t.TempDir()
+	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	repo := protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Backups", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"},
+	}
+	registration := backupStorageRegistration(repo)
+	path := remoteMountPath(registration)
+	unit, unitPath := remoteUnitPath(registration)
+	source := repo.Source.Server + ":" + repo.Source.Export
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev")
+	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	restarted := false
+	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte(source + " nfs4 rw,vers=4,hard,nosuid,nodev,noexec " + path + "\n"), nil
+		case "systemctl":
+			if len(args) > 0 && args[0] == "restart" && args[len(args)-1] == unit {
+				restarted = true
+			}
+			return nil, nil
+		}
+		return nil, nil
+	}
+	ctx := allowBackupNFSHardeningRemount(context.Background(), registration)
+	if !storageRemountAllowed(ctx) {
+		t.Fatal("legacy hardening-only unit did not allow remount")
+	}
+	if _, err := prepareRemote(ctx, registration, source, "nfs4", "vers=4,hard,_netdev"+backupNFSHardeningOpts); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
+		t.Fatalf("legacy unit was not migrated: %s, %v", got, err)
+	}
+	if !restarted {
+		t.Fatal("hardening migrate did not restart the mount unit")
+	}
+	if err := os.WriteFile(unitPath, legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+	restarted = false
+	_, _ = PrepareBackupRepository(context.Background(), repo)
+	got, err = os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(got), "Options=vers=4,hard,_netdev,nosuid,nodev,noexec\n") {
+		t.Fatalf("PrepareBackupRepository did not migrate legacy hardening options: %s, %v", got, err)
+	}
+	if !restarted {
+		t.Fatal("PrepareBackupRepository did not remount the migrated hardening unit")
+	}
+	foreign := remoteUnit(source, path, "nfs4", "vers=4,hard,_netdev,soft")
+	if err := os.WriteFile(unitPath, foreign, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if storageRemountAllowed(allowBackupNFSHardeningRemount(context.Background(), registration)) {
+		t.Fatal("non-hardening option change allowed remount")
+	}
+	if _, err := PrepareBackupRepository(context.Background(), repo); err == nil || !strings.Contains(err.Error(), "block repository dependencies") {
+		t.Fatalf("non-hardening option change was migrated: %v", err)
 	}
 }
 
@@ -1083,10 +1158,10 @@ func TestBuildRestoreAsNewSpecUsesNewIdentityAndDisconnectedNICs(t *testing.T) {
 	}
 }
 
-func TestBuildRestoreReplaceSpecKeepsIdentityAndDisconnectsNICs(t *testing.T) {
+func TestBuildRestoreReplaceSpecKeepsIdentityAndCurrentNICs(t *testing.T) {
 	current := managedTestVM()
 	current.Revision = 3
-	current.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio"}}
+	current.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: "52:54:00:aa:bb:01"}}
 	captured := managedTestVM()
 	captured.Boot.Firmware = "bios"
 	captured.MediaID = ""
@@ -1104,8 +1179,8 @@ func TestBuildRestoreReplaceSpecKeepsIdentityAndDisconnectsNICs(t *testing.T) {
 	if got.ID != current.ID || got.Name != current.Name || got.HostID != current.HostID || got.PoolID != current.PoolID {
 		t.Fatalf("must keep original identity: %#v", got)
 	}
-	if got.Revision != 4 || len(got.NICs) != 0 || got.StartAfterCreate || got.Autostart || got.MediaID != "" {
-		t.Fatalf("replace must bump revision and disconnect: %#v", got)
+	if got.Revision != 4 || !reflect.DeepEqual(got.NICs, current.NICs) || got.StartAfterCreate || got.Autostart || got.MediaID != "" {
+		t.Fatalf("replace must bump revision and keep the current NICs and MAC: %#v", got)
 	}
 	if got.Disks[0].StorageID != req.StorageID {
 		t.Fatalf("storage remap: %#v", got.Disks)
@@ -1121,6 +1196,7 @@ func TestApplyExclusiveReplaceCutoverPlacesNewDisksAndRetainsOriginals(t *testin
 	vm := managedTestVM()
 	vm.Boot.Firmware = "bios"
 	vm.MediaID = ""
+	vm.NICs = []protocol.VMNIC{{NetworkID: "n", Model: "virtio", MAC: "52:54:00:aa:bb:cc"}}
 	vm.Boot.MediaBootOrder = 0
 	vm.Disks = []protocol.VMDisk{{StorageID: "s", Name: "disk", SizeGiB: 1, Bus: "virtio", BootOrder: 1}}
 	vmDir := filepath.Join(storageRoot, "nex-vms", vm.ID)
@@ -1135,6 +1211,13 @@ func TestApplyExclusiveReplaceCutoverPlacesNewDisksAndRetainsOriginals(t *testin
 	if err := e.save(managedJournal{
 		Command:        protocol.Command{OperationID: "storage-1", Kind: "storage-register", Storage: &storage},
 		AppliedStorage: &storage, Result: protocol.Result{OperationID: "storage-1", Status: "succeeded"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	network := protocol.NetworkRegistration{ID: "n", PoolID: vm.PoolID, HostID: vm.HostID, Kind: "network", Source: "guest-net"}
+	if err := e.save(managedJournal{
+		Command: protocol.Command{OperationID: "network-1", Kind: "network-register", Network: &network},
+		Result:  protocol.Result{OperationID: "network-1", Status: "succeeded"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1182,6 +1265,7 @@ domstate) echo 'shut off';;
 define) exit 0;;
 autostart) exit 0;;
 dominfo) echo 'Autostart: disable';;
+net-list) echo guest-net;;
 *) exit 0;;
 esac`)
 	fakeCommand(t, "qemu-img", `case "$*" in
@@ -1244,8 +1328,8 @@ esac`)
 	if !foundRetained {
 		t.Fatalf("original must be listed as retained: %#v", cur.Retained)
 	}
-	if len(cur.Command.VM.NICs) != 0 {
-		t.Fatalf("NICs must be disconnected: %#v", cur.Command.VM.NICs)
+	if len(cur.Command.VM.NICs) != 1 || cur.Command.VM.NICs[0].MAC != "52:54:00:aa:bb:cc" || !strings.Contains(string(cur.Domain), "52:54:00:aa:bb:cc") {
+		t.Fatalf("replace must keep the NIC and MAC end to end: %#v", cur.Command.VM.NICs)
 	}
 }
 
@@ -1354,6 +1438,10 @@ func TestRefuseOnlineBackupAdmissionUEFIAndQuiesced(t *testing.T) {
 	}
 	if reason := RefuseOnlineBackupAdmission(protocol.BackupCaptureOnline, vm, "running"); reason != "" {
 		t.Fatal(reason)
+	}
+	vm.Boot.TPM = protocol.TPM20
+	if reason := RefuseOnlineBackupAdmission(protocol.BackupCaptureOnline, vm, "running"); reason == "" {
+		t.Fatal("online backup of a BIOS guest with a TPM must be refused")
 	}
 }
 

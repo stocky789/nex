@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -65,10 +66,14 @@ func TestPeerBackupCredentialScopeAndPromotion(t *testing.T) {
 	if got, err := ResolveBackupCredential(member, repo); err != nil || got.Secret != "private-example-secret" {
 		t.Fatalf("member credential: %v", err)
 	}
-	if _, _, err := stagePoolBackupAuthorityActivation(member, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{
-		func() protocol.BackupRepository { r := repo; r.CredentialRef = "missing"; return r }(),
-	}}, 3); err == nil {
-		t.Fatal("promotion accepted missing private receipt")
+	missing := repo
+	missing.CredentialRef = "missing"
+	root, _, err := stagePoolBackupAuthorityActivation(member, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{missing}}, 3)
+	if err != nil {
+		t.Fatalf("missing private receipt blocked promotion: %v", err)
+	}
+	if adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(member.dir, root)}); err != nil || adopted.Repositories[repo.ID].Access.Status != "failed" {
+		t.Fatalf("missing private receipt not recorded as failed access: %+v, %v", adopted.Repositories[repo.ID], err)
 	}
 
 	// The master is authoritative: a replacement credential for the same repository is accepted.
@@ -180,14 +185,14 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	missing.ID, missing.CredentialRef = "repo-missing", "missing-receipt"
 	missingPrepared := missing
 	missingPrepared.RemoteIdentity = prepared.RemoteIdentity
-	if _, err := upsertPoolBackupRepositoryPrepared(master, missing, missingPrepared); !errors.Is(err, ErrBackupUnavailable) {
+	if _, err := upsertPoolBackupRepositoryPrepared(master, missing, missingPrepared, false); !errors.Is(err, ErrBackupUnavailable) {
 		t.Fatalf("missing master credential committed: %v", err)
 	}
 	if _, err := GetPoolBackupRepository(master, missing.ID); !errors.Is(err, ErrBackupRepoNotFound) {
 		t.Fatalf("missing master credential left a repository: %v", err)
 	}
 	lab.drop(offline.State.HostID, "!"+poolBackupPeerPath+"/credential")
-	saved, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared)
+	saved, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false)
 	if err != nil {
 		t.Fatalf("offline member blocked master registration: %+v, %v", saved, err)
 	}
@@ -197,10 +202,15 @@ func TestBackupRepositoryRegistrationWithOfflineMember(t *testing.T) {
 	if got, err := localBackupCredential(online, saved); err != nil || got.Credentials.Secret != "private-example-secret" {
 		t.Fatalf("online member lost credential: %v", err)
 	}
-	if _, _, err := stagePoolBackupAuthorityActivation(offline, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{saved}}, 3); err == nil || err.Error() != "promoted backup credential is unavailable" {
-		t.Fatalf("unprepared member was promotable: %v", err)
+	root, _, err := stagePoolBackupAuthorityActivation(offline, &protocol.PoolBackupAuthority{Repositories: []protocol.BackupRepository{saved}}, 3)
+	if err != nil {
+		t.Fatalf("an unreadable repository blocked promotion: %v", err)
 	}
-	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared); err != nil || replay.CredentialRef != saved.CredentialRef || !replay.CreatedAt.Equal(saved.CreatedAt) {
+	adopted, err := loadPoolBackupRepositories(&Store{dir: filepath.Join(offline.dir, root)})
+	if got := adopted.Repositories[saved.ID]; err != nil || got.Access.Status != "failed" || got.Access.Error == "" || got.Health.Status != "offline" {
+		t.Fatalf("promotion did not record the unreachable repository: %+v, %v", got, err)
+	}
+	if replay, err := upsertPoolBackupRepositoryPrepared(master, repo, prepared, false); err != nil || replay.CredentialRef != saved.CredentialRef || !replay.CreatedAt.Equal(saved.CreatedAt) {
 		t.Fatalf("exact registration retry changed identity: %+v, %v", replay, err)
 	}
 	lab.drop(offline.State.HostID, "")

@@ -1,0 +1,42 @@
+{
+  "summary": "Record why blocked backup runs and test cleanups are waiting, keep the stalled-run deadline reason on the operation, and fix the documentation records so the docs gate passes.",
+  "paths": [
+    "internal/agent/run.go",
+    "internal/agent/backup_blocker.go",
+    "internal/agent/backup_blocker_test.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "docs/guide/backup-now.md",
+    "docs/guide/navigate-the-controller-console.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-backup-docs-destination-honesty.json",
+    "docs/changes/2026-10-01-master-change-receipt-and-run-deadline.json"
+  ],
+  "api": {
+    "impact": "none",
+    "reason": "The reason text travels in the existing queued ManagedOutcome error field; no endpoint, field or schema changes."
+  },
+  "guide": {
+    "impact": "updated",
+    "pages": [
+      "docs/guide/backup-now.md",
+      "docs/guide/navigate-the-controller-console.md"
+    ],
+    "reason": "Operators see Waiting reasons for blocked backups and test cleanups and a kept deadline explanation."
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "No milestone changes."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The reason is the Core agent journal entry's error field, already reported to the Controller as an outcome.",
+    "record": "Core agent managed-command journal entry error (pool master and member); a fresh Controller re-reads it from the host's reported outcomes."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent and the full internal/agent suite; docs gate. No lab run.",
+    "evidence": [
+      "internal/agent/backup_blocker_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

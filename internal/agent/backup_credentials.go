@@ -309,16 +309,33 @@ func (r backupCredentialReceipt) valid() bool {
 func eraseForeignBackupCredentials(s *Store) error {
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
-	files, _, err := loadBackupCredentials(s)
+	if _, err := os.Lstat(filepath.Join(s.dir, clusterSecretDirectory, "backup")); os.IsNotExist(err) {
+		return nil
+	}
+	dir, err := backupCredentialDir(s)
 	if err != nil {
 		return err
 	}
-	for _, file := range files {
-		r := file.stored.Receipt
-		if r.PoolID == s.State.PoolID && r.HostID == s.State.HostID {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		// Scope fields stay readable without the sealing key. A lost key or damaged
+		// ciphertext must not abort the wipe or leave a former pool's receipt behind.
+		raw, err := readClusterSecret(path)
+		var sealed sealedBackupCredential
+		if err != nil || json.Unmarshal(raw, &sealed) != nil {
+			continue // unreadable garbage cannot be attributed to a pool; leave it
+		}
+		if sealed.PoolID == s.State.PoolID && sealed.HostID == s.State.HostID {
 			continue
 		}
-		if err := os.Remove(file.path); err != nil {
+		// Foreign by readable metadata: delete even when ciphertext cannot be opened.
+		if err := removeBackupSMBCredentialNative(sealed.Reference); err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}
@@ -573,6 +590,11 @@ func RetireUnusedBackupCredential(s *Store, reference, poolID, hostID string) (b
 	clusterSecretMu.Lock()
 	file, err := findBackupCredential(s, reference)
 	clusterSecretMu.Unlock()
+	if errors.Is(err, errBackupCredentialKeyMissing) {
+		// No backup receipt can be opened: treat as an ordinary storage receipt so missing
+		// sealing keys never block storage credential retirement.
+		return false, nil
+	}
 	if file == nil || err != nil {
 		return false, err
 	}
@@ -583,6 +605,9 @@ func RetireUnusedBackupCredential(s *Store, reference, poolID, hostID string) (b
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
 	file, err = findBackupCredential(s, reference)
+	if errors.Is(err, errBackupCredentialKeyMissing) {
+		return false, nil
+	}
 	if file == nil || err != nil {
 		return false, err
 	}

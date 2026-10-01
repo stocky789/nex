@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -2751,5 +2752,51 @@ func TestEjectCleanupReapplySelectsTheNewestMembershipCycle(t *testing.T) {
 	}
 	if media := appliedMediaProjection(mediaJS); len(media) != 1 || media[0].ID != "iso-1" {
 		t.Fatalf("media receipt rewrite projection = %#v", media)
+	}
+}
+
+func TestManagedDeleteAllowedAfterEverySnapshotIsDeleted(t *testing.T) {
+	vm := managedTestVM()
+	settled := func(command protocol.Command) managedJournal {
+		return managedJournal{
+			Command: command, Result: protocol.Result{OperationID: command.OperationID, Status: "succeeded"},
+			RecoveryStage: "completed", RecoveryOutcome: "completed", RecoverySettled: true,
+		}
+	}
+	created := settled(protocol.Command{OperationID: "snapshot-create-op", Kind: "snapshot-create", VM: &vm})
+	deleted := settled(protocol.Command{
+		OperationID: "snapshot-delete-op", Kind: "snapshot-delete", VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{SnapshotID: "snapshot-create-op"},
+	})
+	if err := retainedSnapshotDeleteRefusal([]managedJournal{created}, vm.ID); err == nil {
+		t.Fatal("a retained snapshot must block VM delete")
+	}
+	if err := retainedSnapshotDeleteRefusal([]managedJournal{created, deleted}, vm.ID); err != nil {
+		t.Fatalf("delete refused after every snapshot was deleted: %v", err)
+	}
+}
+
+// JournaledCommand runs once per outcome; it must read only that operation's journal,
+// not every journal in the directory (O(outcomes x journals) pinned a member's CPU).
+func TestJournaledCommandReadsOnlyItsOwnJournal(t *testing.T) {
+	e := NewManaged(t.TempDir())
+	c := protocol.Command{OperationID: "op-wanted", Kind: "network-register", Network: &protocol.NetworkRegistration{ID: "net", PoolID: "pool", HostID: "host", Kind: "network", Source: "default"}}
+	if err := e.save(managedJournal{Command: c, Result: protocol.Result{OperationID: c.OperationID, Status: "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	// An unreadable journal fails a directory scan, so a lookup that still succeeds read none of them.
+	for i := 0; i < 500; i++ {
+		if err := os.WriteFile(filepath.Join(e.stateDir, fmt.Sprintf("other-%d.json", i)), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, ok := e.JournaledCommand("op-wanted"); !ok || got.OperationID != "op-wanted" {
+		t.Fatalf("JournaledCommand = %+v, %v", got, ok)
+	}
+	if _, ok := e.JournaledCommand("op-missing"); ok {
+		t.Fatal("missing journal reported as journaled")
+	}
+	if _, ok := e.JournaledCommand("../op-wanted"); ok {
+		t.Fatal("path-like operation ID accepted")
 	}
 }

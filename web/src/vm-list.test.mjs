@@ -64,7 +64,7 @@ const props = { data, vms: data.vms, pool: data.pools[0], api: async () => ({}),
 const list = renderToStaticMarkup(createElement(VMList, props));
 assert.match(list, /<span class="badge warn">Unknown<\/span>/, "the stale VM row says Unknown");
 assert.match(list, /Needs attention<span class="count warn">1<\/span>/);
-assert.match(list, /<span class="tag">web<\/span>/);
+assert.match(list, /<span class="tag" style="--tag-hue:\d+">web<\/span>/);
 assert.match(list, /Tags<svg/, "the Tags facet is offered");
 
 // The panel keeps phase-gated actions visible and disabled, and a stale host's VM says why.
@@ -86,5 +86,10 @@ const many = Array.from({ length: 50 }, (_, i) => vm(`vm-${i}`));
 const virt = renderToStaticMarkup(createElement(VMList, { ...props, vms: many, data: { ...data, vms: many, hosts: [host] } }));
 assert.match(virt, /class="virtual-pad"/, "large lists use virtual spacer rows");
 assert.ok((virt.match(/<tr>/g) || []).length < 60, "not every VM row is in the markup");
+
+// Group by offers None, Host and Tag; the same tag always gets the same colour.
+const markup = renderToStaticMarkup(createElement(VMList, { ...props, vms: [web], data: { ...data, vms: [web], hosts: [host] } }));
+assert.match(markup, /aria-label="Group by"[\s\S]*>None<[\s\S]*>Host<[\s\S]*>Tag</);
+assert.equal(markup.match(/--tag-hue:(\d+)/)[1], renderToStaticMarkup(createElement(VMList, { ...props, vms: [web], data: { ...data, vms: [web], hosts: [host] } })).match(/--tag-hue:(\d+)/)[1]);
 
 console.log("vm-list ok");

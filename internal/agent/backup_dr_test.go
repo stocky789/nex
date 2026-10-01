@@ -1825,3 +1825,69 @@ func TestCatalogImportReportsPinDurabilityFailure(t *testing.T) {
 		t.Fatalf("catalog changed before pin validation: %v", err)
 	}
 }
+
+// Catalog import must not hold poolBackupAuthorityMu across protect-marker I/O.
+func TestCatalogImportReleasesLockDuringProtectMarker(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-protected")
+	point, err := vmhost.ScanBackupRepositoryPoints(mount, "repo-1", "pool-1")
+	if err != nil || len(point) != 1 {
+		t.Fatalf("seed scan: %+v %v", point, err)
+	}
+	point[0].Protected = true
+	if err := savePoolBackupCatalogEntry(s, point[0]); err != nil {
+		t.Fatal(err)
+	}
+	previous := writeImportedBackupProtectMarker
+	var heldLock bool
+	writeImportedBackupProtectMarker = func(path string, protected bool) error {
+		if !poolBackupAuthorityMu.TryLock() {
+			heldLock = true
+			return previous(path, protected)
+		}
+		poolBackupAuthorityMu.Unlock()
+		return previous(path, protected)
+	}
+	t.Cleanup(func() { writeImportedBackupProtectMarker = previous })
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	if heldLock {
+		t.Fatal("import held poolBackupAuthorityMu during protect-marker write")
+	}
+}
+
+// A cancelled import must not delete stale catalog entries that were not re-imported.
+func TestCatalogRebuildCancelSkipsStaleDeletion(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-keep")
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-stale")
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(mount, "point-stale")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := RebuildPoolBackupCatalogFromRepository(ctx, s, "repo-1"); err == nil {
+		t.Fatal("cancelled rebuild reported success")
+	}
+	if _, err := getCatalogPoint(s, "repo-1", "point-stale"); err != nil {
+		t.Fatalf("cancelled rebuild deleted a not-yet-reimported point: %v", err)
+	}
+}

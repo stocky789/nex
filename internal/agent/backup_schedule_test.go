@@ -41,6 +41,9 @@ func TestScheduledMemberDispatchSendsPortableRepository(t *testing.T) {
 	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: vm.PoolID, VMID: vm.ID, HostID: vm.HostID, State: "stopped", Spec: vm}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := UpsertPoolBackupPolicy(master, testPolicy()); err != nil {
+		t.Fatal(err)
+	}
 	run := protocol.BackupRun{OperationID: "schedule-1", Kind: protocol.BackupKindScheduled, PoolID: "pool-1", VMID: vm.ID,
 		RepositoryID: "repo-1", RecoveryPointID: "schedule-1", PolicyID: "pol-1", ScheduleID: "sch-1", OccurrenceID: "schedule-1",
 		PolicyRevision: 1, OccurrenceAt: time.Now().UTC(), CaptureMode: protocol.BackupCaptureStopped, Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}
@@ -471,7 +474,7 @@ func TestMemberCleanupPeerBindsExactReceipt(t *testing.T) {
 			}
 		}
 	}()
-	result, err := waitPeerCleanup(context.Background(), work)
+	result, err := waitPeerCleanup(context.Background(), work, func() {})
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("cleanup receipt round trip: %+v err=%v", result, err)
 	}
@@ -578,6 +581,79 @@ func TestApplyBackupScheduleTickHonorsHostLimitAndVMOverride(t *testing.T) {
 	}
 	if statuses["vm-1"] != "pending" || statuses["vm-2"] != "skipped_overlap" {
 		t.Fatalf("host limit was not enforced: %v", statuses)
+	}
+}
+
+func TestApplyBackupScheduleTickDoesNotClobberConcurrentCASUpsert(t *testing.T) {
+	s := seedBackupMaster(t)
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	policy.Retention.KeepLatest = 7
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	previous := scheduleTickBeforePolicySave
+	t.Cleanup(func() { scheduleTickBeforePolicySave = previous })
+	scheduleTickBeforePolicySave = func(store *Store) {
+		current, err := GetPoolBackupPolicy(store, policy.ID)
+		if err != nil {
+			t.Errorf("load policy for concurrent upsert: %v", err)
+			return
+		}
+		rev := current.Revision
+		upd := current
+		upd.ExpectedRevision = &rev
+		upd.Name = "operator-edit"
+		upd.Retention.KeepLatest = 99
+		if _, err := UpsertPoolBackupPolicy(store, upd); err != nil {
+			t.Errorf("concurrent ExpectedRevision upsert: %v", err)
+		}
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := GetPoolBackupPolicy(s, policy.ID)
+	if err != nil || stored.Name != "operator-edit" || stored.Retention.KeepLatest != 99 || stored.Revision != 2 {
+		t.Fatalf("schedule tick clobbered CAS upsert: %+v err=%v", stored, err)
+	}
+}
+
+func TestApplyBackupScheduleTickAdvancesCursorsWhenUncontended(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	wantDispatch := time.Date(2026, 9, 27, 2, 0, 0, 0, time.UTC)
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := GetPoolBackupPolicy(s, policy.ID)
+	if err != nil || !stored.LastDispatchAt.Equal(wantDispatch) || !stored.NextDispatchAt.After(wantDispatch) {
+		t.Fatalf("uncontended tick must persist schedule cursors: %+v err=%v", stored, err)
 	}
 }
 

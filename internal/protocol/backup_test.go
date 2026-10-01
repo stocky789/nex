@@ -99,11 +99,29 @@ func TestBackupRepositoryRejectsUnsafeRemoteSources(t *testing.T) {
 		"S3 oversized prefix":  func(r *BackupRepository) { r.S3Source.Prefix = strings.Repeat("p", 1025) },
 		"S3 bad fingerprint":   func(r *BackupRepository) { r.RemoteIdentity = &BackupRemoteIdentity{Fingerprint: "NOT-HEX"} },
 		"S3 oversized health":  func(r *BackupRepository) { r.Health.Error = strings.Repeat("e", 4097) },
-		"SMB host with port": func(r *BackupRepository) {
-			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test:445", Share: "b"}
+		"SMB shell metachar in server": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "evil;rm", Share: "backups"}
+		},
+		"SMB backtick in server": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "host`id`", Share: "backups"}
+		},
+		"SMB pipe in server": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "a|b", Share: "backups"}
+		},
+		"SMB dollar paren in server": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "x$(y)", Share: "backups"}
 		},
 		"SMB control in share": func(r *BackupRepository) {
 			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test", Share: "b\x1b"}
+		},
+		"SMB slash in share": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test", Share: "vms/share"}
+		},
+		"SMB quote in share": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test", Share: `VM "Files$"`}
+		},
+		"SMB leading space share": func(r *BackupRepository) {
+			r.Kind, r.S3Source, r.SMBSource = BackupRepoKindSMB3, nil, &SMBStorageSource{Server: "smb.example.test", Share: " backups"}
 		},
 		"NFS with credential": func(r *BackupRepository) {
 			r.Kind, r.S3Source, r.Source = BackupRepoKindNFS, nil, NFSStorageSource{Server: "nfs.example.test", Export: "/b"}
@@ -122,6 +140,11 @@ func TestBackupRepositoryRejectsUnsafeRemoteSources(t *testing.T) {
 		if repo.Valid() == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+	smb := base
+	smb.Kind, smb.SMBSource = BackupRepoKindSMB3, &SMBStorageSource{Server: "smb.example.test", Share: "VM Files$"}
+	if err := smb.Valid(); err != nil {
+		t.Fatalf("safe SMB share with space and $ refused: %v", err)
 	}
 	ipv6 := base
 	ipv6.Kind, ipv6.SFTPSource = BackupRepoKindSFTP, &BackupSFTPSource{Host: "fd00::1", Root: "/b", HostKeySHA256: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}

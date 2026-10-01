@@ -10927,3 +10927,609 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: at the end of each repository probe pass the master sends its held repository IDs to each ready member (`POST /api/v1/pool/backup/retain`), which drops the rest with the existing member forget.
 - Regression: `TestMasterDropsMemberRecordsItNoLongerHolds` (fails without the fix): `go test ./internal/agent -count=1`.
 - Avoid: One-shot best-effort cleanup with no later reconciliation.
+
+## BUG-0860 — Forget and orphan-cleanup replay ignored the repository in the URL
+
+- Date: 2026-09-30
+- Symptom: `POST .../repositories/B/orphan-cleanups` (or `/forget`) with the `request_id` and body of an accepted request for repository A answered `200` with A's operation and queued nothing for B; the cleanup record read under B's URL returned A's record; an unknown pool answered `503`.
+- Root cause: the repository is only in the path, so the stored payload was the body alone and `replayResource` skipped its target check for these kinds; the record relay never compared `request.repository_id`; `enqueueBackupMasterSync` mapped every lookup error to 503.
+- Fix: `enqueueBackupMasterSync` scopes forget and cleanup by repository, `replayResource` matches them on `RepositoryID` (a changed repository is `409`), the record relay returns `404` for another repository's record, and `failPoolMaster` gives `404` for an unknown pool.
+- Regression: `TestForgetAndOrphanCleanupReplayIsScopedToRepository` (confirmed failing with the scope check removed: replay to repo-b returned 200): `go test ./internal/controller -count=1`.
+- Avoid: Identity carried only in the URL and left out of the stored request.
+
+## BUG-0861 — An adopted needs_attention orphan-cleanup outcome settled as succeeded
+
+- Date: 2026-09-30
+- Symptom: after Controller replacement, a Core-reported `needs_attention` `backup-orphan-cleanup` that Core stopped reporting turned `succeeded`.
+- Root cause: the settle statement's hard-coded `NOT IN` list of kinds missed `backup-orphan-cleanup`, added to `backupOutcomeKind` later.
+- Fix: the list is built from `snapshotOutcomeKinds` and `backupOutcomeKinds`, the same slices `snapshotOutcomeKind` and `backupOutcomeKind` use.
+- Regression: `TestMissingObservationNeverSettlesBackupOutcomes` runs every backup kind through the adoption and settle path: `go test ./internal/controller -count=1`. It shares the kind list with the fix, so it guards drift; it was not run against the old hard-coded list.
+- Avoid: Two hand-maintained lists of the same kinds.
+
+## BUG-0862 — Backup UI lost errors, hid results and mislabelled actions
+
+- Date: 2026-09-30
+- Symptom: a refused repository registration's error vanished at the next 15 s refresh; **Back up now** opened below the fold; an orphan cleanup with undeletable points showed one line and no per-point results, and could poll forever; a member showed **Accessible** from a stale master report; a job listing a deleted VM could not change repository; failed tasks used the green notice and sent backup tasks to the host page.
+- Root cause: the list refresh cleared the shared error state; the panel never scrolled; the cleanup poll returned on `failed` before reading the record and swallowed every error; the member branch skipped the health check the master branch made; the change body sent `vm_ids` unfiltered; failures were set as notices.
+- Fix: form errors have their own state, the panel scrolls into view, the poll reads the record of a failed cleanup and stops with an error after 15 misses, stale health makes member access Unknown, deleted VMs are dropped from a repository change, failures use the alert, `backup-*` tasks link to Backups, per-target `aria-label` on row buttons.
+- Regression: `web/src/backup-orphans.test.mjs` and `web/src/backup-repositories.test.mjs` (source and `hostAccess` checks), `npm test` in `web`. No browser walkthrough was run for these fixes.
+- Avoid: One shared error state cleared by a background refresh.
+
+## BUG-0863 — Guide described behaviour the backup UI and Core do not have
+
+- Date: 2026-09-30
+- Symptom: the guide implied a repository ID field, a Save button disabled for every invalid value, an NFS `:port` refusal, fresh member access after **Test access**, a **Policies** control, and a Core CLI on `PATH`; it omitted the root-squash requirement, the master-change refusal while a backup is unresolved and that Core-local restore-as-new runs on the master.
+- Root cause: pages written from the design, not walked against the running build.
+- Fix: the pages state the real behaviour, including the API-only re-registration of a forgotten destination.
+- Regression: none possible for prose; `python3 scripts/check_docs.py --worktree` checks structure only.
+- Avoid: Documenting a control without exercising it.
+
+## BUG-0840 — A VM could not be deleted after every snapshot on it was deleted
+
+- Date: 2026-09-30
+- Symptom: `DELETE /api/v1/vms/{id}` failed with "VM has retained snapshots" after the last snapshot was deleted (empty catalog).
+- Root cause: the host delete gate counted every settled snapshot-create journal and never subtracted deleted ones.
+- Fix: `retainedSnapshotDeleteRefusal` ignores snapshots that have a settled, completed snapshot-delete journal.
+- Regression: `TestManagedDeleteAllowedAfterEverySnapshotIsDeleted`: `go test ./internal/vmhost -count=1`. Not confirmed to fail on the old code by a run; the old function has no subtraction.
+- Avoid: Deriving "retained" from creation history instead of the current set.
+
+## BUG-0841 — Restore-replace dropped the VM's NICs and MAC
+
+- Date: 2026-09-30
+- Symptom: after restore-replace the definition had no NICs, so a MAC-bound guest lost its identity.
+- Root cause: `BuildRestoreReplaceSpec` set `NICs = nil` although the current VM's NICs are known.
+- Fix: the replaced definition keeps the current VM's NICs and MACs.
+- Regression: `TestBuildRestoreReplaceSpecKeepsIdentityAndCurrentNICs` (fails without the fix): `go test ./internal/vmhost -count=1`.
+- Avoid: Reusing the restore-as-new rule (no NICs) for a replace that keeps the VM identity.
+
+## BUG-0842 — Cleanup of a failed test restore retried forever
+
+- Date: 2026-09-30
+- Symptom: `backup-test-cleanup` for a test restore that failed before its journal was saved, or whose VM was removed by other means, stayed needs_attention and retried every 30 s.
+- Root cause: `CleanupTestRestoredVM` demanded the creator journal or an exact delete receipt even when nothing existed to delete.
+- Fix: with only an identity, cleanup settles when no creator journal exists or the native VM and disks are proven absent. Still open: `internal/agent/backup.go` `testRestoreOwner` refuses a member-executed failed run on the master.
+- Regression: `TestCleanupOfFailedTestRestoreWithoutJournalSettles` (real engine, fails without the fix) and `TestCleanupTestRestoredVMSettlesWhenNothingWasRegistered`: `go test ./internal/agent ./internal/vmhost -count=1`. Both passed after the fix; failing-before not confirmed by a run.
+- Avoid: Testing cleanup only through a stub of the native engine.
+
+## BUG-0843 — Online backup admitted a BIOS guest with a TPM
+
+- Date: 2026-09-30
+- Symptom: a running BIOS guest with a vTPM was backed up online; live swtpm state was copied after the disks with no consistency check.
+- Root cause: `RefuseOnlineBackupAdmission` refused only UEFI guests.
+- Fix: online backup is refused for any guest with a TPM; stopped backup still works.
+- Regression: `TestRefuseOnlineBackupAdmissionUEFIAndQuiesced` (TPM case, fails without the fix): `go test ./internal/vmhost -count=1`.
+- Avoid: Assuming a TPM implies UEFI.
+
+## BUG-0844 — Stranded master snapshot reservation after an unacknowledged reserve
+
+- Date: 2026-09-30
+- Symptom: a snapshot delete failed "pool master refused snapshot delete reservation" and the master kept `pending_recovery`, blocking every later snapshot operation and the VM delete.
+- Root cause: the master saves a reservation, then fails the request when a ready member does not acknowledge the replica push; the requester treated that as a definite refusal, aborted its journal, and the stored failure was replayed, so the exact retry the master waits for never came.
+- Fix (partial): the requester side now marks that outcome `vmhost.ErrSnapshotReservationUnconfirmed`. Still open: `abortSnapshotLocalIntent` callers in `managed_snapshot*.go` must keep the journal (needs_attention, retried by the run loop) for that error.
+- Regression: `TestUnacknowledgedMasterReservationStaysRetryable`: `go test ./internal/agent -count=1`. End-to-end retry not covered until the vmhost half lands.
+- Avoid: Treating a non-200 from an action that already saved state as a clean refusal.
+
+## BUG-0820 — Orphan cleanup deleted without authority, reported unconfirmed deletes, dropped protection
+
+- Date: 2026-09-30
+- Symptom: a resumed or long cleanup on a deposed or frozen master kept deleting; a point missing from the catalog was recorded "deleted" although the destination still held it; an include-protected cleanup left a point unprotected when its delete failed or was skipped.
+- Root cause: authority was checked only when planning; `deleteOrphanedPoint` treated `ErrBackupNotFound` as success and lifted protection before a delete that could fail.
+- Fix: `orphanAuthority` before every point; not-in-catalog points are "deleted" only when `StatPoint` says the destination is gone, else "skipped"; pins are checked before protection is lifted and protection is restored unless the point is gone.
+- Regression: `TestOrphanCleanupResumeStopsWithoutAuthority`, `TestOrphanPointNotInCatalogIsNotReportedDeleted`, `TestOrphanCleanupKeepsProtectionWhenDeleteFails`, `TestOrphanCleanupKeepsPinnedProtectedPoint`: `go test ./internal/agent -run Orphan -count=1`. Passed after the fix; failing-before not confirmed by a run.
+- Avoid: Treating "no catalog entry" as proof the destination copy is gone.
+
+## BUG-0821 — Forget raced cleanup, dropped the record before the mount, retain sweep used a stale list
+
+- Date: 2026-09-30
+- Symptom: Forget during an orphan cleanup made it report points deleted; a failed unmount left an orphaned mount unit no later forget or retain retried; a slow sweep could make a member forget a repository registered mid-sweep.
+- Root cause: Forget did not take `poolBackupRetentionMu`, retired the credential and deleted the record before detaching, and the retain list was built once for all members with no member-side in-flight check.
+- Fix: Forget uses `TryLock` on `poolBackupRetentionMu` and refuses while a cleanup or retention pass runs; master and member detach before retiring the credential and deleting the record; the retain list is read per member; a member refuses to forget a repository its own non-terminal journal entry uses; a lost credential key no longer blocks Forget (`dropUnreadableBackupCredential`).
+- Regression: `TestForgetRefusedWhileCleanupHoldsRetention`, `TestForgetKeepsRecordWhenDetachFails`, `TestMemberKeepsRepositoryUsedByItsOwnJournal`, `TestForgetWorksAfterCredentialKeyLoss`: `go test ./internal/agent -run 'Forget|Member' -count=1`. Passed after the fix; failing-before not confirmed by a run.
+- Avoid: Deleting the record that drives a retry before the step that can fail.
+
+## BUG-0822 — Delete markers and the mountpoint directory outlived the last delete and Forget
+
+- Date: 2026-09-30
+- Symptom: `.nex-delete-*` and `.nex-deleted-*` markers (with a VM spec) stayed on NFS, SMB and SFTP after the last orphan delete; Forget left an empty `/var/lib/nex-storage/backup-<hash>` directory.
+- Root cause: markers were swept only by the next delete, which runs before the catalog entry goes; detach never removed the mountpoint.
+- Fix: cleanup calls `SweepDeleteMarkers` on the backend after its last delete; `DetachBackupRepository` removes the empty mountpoint.
+- Regression: `TestOrphanCleanupSweepsDeleteMarkers` (filesystem): `go test ./internal/agent -run Orphan -count=1`. SFTP sweep and mountpoint removal have no unit test.
+- Avoid: Relying on a later operation to collect what an operation leaves behind.
+
+## BUG-0823 — Plaintext SMB credential files outlived a pool change; storage credential write failure orphaned one
+
+- Date: 2026-09-30
+- Symptom: a host that left a pool kept the old pool's plaintext CIFS credentials file; a failed storage receipt write left an unretirable plaintext file; SMB re-register with a new credential reference was refused while the old mount unit existed.
+- Root cause: `eraseForeignBackupCredentials` removed only the receipt and skipped damaged ones; `SaveStorageCredential` did not clean up its file; `PrepareBackupRepositorySMB` refused any changed reference.
+- Fix: erase reads receipt scope without the key, removes the mount credentials file and receipt of every foreign or damaged foreign receipt; the storage credential file is removed when its receipt write fails; a mount using another reference is detached and its file removed before the new one is prepared.
+- Regression: `TestLeavingAPoolErasesSMBCredentialFile`, `TestPrepareBackupRepositorySMBReplacesMountOfAnotherCredential`; `go test ./internal/agent ./internal/vmhost -count=1`. The storage credential cleanup has no test. Existing `TestPrepareBackupRepositorySMBRejectsCredentialRotationBeforeWritingMaterial` now passes only because the unstubbed `systemctl` fails.
+- Avoid: Erasing a secret through the receipt that may be the one thing damaged.
+
+## BUG-0824 — Orphan query always timed out at scale; damaged points had raw reasons; root_squash unexplained
+
+- Date: 2026-09-30
+- Symptom: the orphan query returned 504 above about 180 points (30 s sizing budget against a 10 s Controller relay wait and a 30 s HTTP write timeout); missing artifacts or manifests were reported as raw AWS errors or "conflicts with retained work"; NFS registration on a root-squashed export failed with a bare "permission denied".
+- Root cause: `queryBackupOrphans` budget was 30 s; S3 `StatPoint` returned `ErrBackupConflict` or the raw HEAD error.
+- Fix: `orphanSizingBudget` is 6 s; S3 `StatPoint` returns `backupPointDamaged` naming the point and the missing part (still `errors.Is` `ErrBackupConflict`); NFS permission refusals say root_squash is unsupported.
+- Regression: `TestOrphanSizingBudgetStaysInsideTheRelayWait`, `TestDamagedBackupPointNamesItsPointAndStaysAConflict`, `TestNFSRootSquashRefusalIsExplained`, `TestOrphanGroupsHaveStableOrder`. No S3 or NFS end-to-end test.
+- Avoid: A sizing budget longer than any timeout between the caller and the answer.
+
+## BUG-0900 — Master deadlock: storage lock taken before peer lock
+
+- Symptom: on a pool master, a snapshot delete or VM delete froze Core (about 768 goroutines blocked on `poolPeerMu` and `poolStorageMu`); only a restart recovered it.
+- Root cause: `PoolStorageMemberAccess` held `poolStorageMu` and then called `Membership`, which takes `poolPeerMu`. Every other path (for example resource-removal reservation) takes peer then storage.
+- Fix: `PoolStorageMemberAccess` reads membership before taking `poolStorageMu`, keeping the VM, peer, storage order.
+- Regression: `TestPoolStorageMemberAccessKeepsPeerBeforeStorageLockOrder` (fails on the old order with a deadlock report, passes now), run with `go test -count=1 ./internal/agent`; it needs no forge workflow change because the agent suite already runs there.
+- Avoid: Calling a helper that takes another package lock while holding a lock that sits later in the documented order.
+
+## BUG-0901 — Stale test expected an unretryable uncertain backup reservation
+
+- Symptom: `TestReportRestoreMissingPointFailsBeforeReservation` expected `needs_attention` for a backup-now whose run record was never written.
+- Root cause: the master is the authority for the run record; with no record, nothing ever ran, so `journalBackupSettlement` correctly settles it failed ("no record of this backup"). The test predated that behavior. No duplicate execution is possible because execution starts only after the run record exists.
+- Fix: test now asserts the failed settlement and message.
+- Regression: same test, `go test -count=1 ./internal/agent`.
+- Avoid: Leaving a command needs_attention forever when the authoritative record proves it never started.
+
+## BUG-0920 — VM delete after a snapshot was created and deleted needs attention
+
+- Symptom: deleting a VM whose only snapshot was already deleted settled `needs_attention` with `managed delete disk is unavailable`.
+- Root cause: `managedDeleteDiskPaths` collected every path named by earlier journals, including the snapshot overlay the snapshot delete had already unlinked; the delete's file check then found it missing. The earlier `retainedSnapshotDeleteRefusal` change only cleared the retained-snapshot gate.
+- Fix: paths from earlier journals that no longer exist are dropped; the current chain must still exist.
+- Regression: `TestDeleteDiskSetSkipsOverlayUnlinkedBySnapshotDelete` (fails with the overlay listed when the filter is removed), `go test -count=1 ./internal/vmhost`.
+- Avoid: Treating the union of historical journal paths as files that must all exist.
+
+## BUG-0921 — Restore-replace of a VM with NICs failed at definition
+
+- Symptom: replace settled `needs_attention` with `allocating: domain devices do not match the requested VM`.
+- Root cause: the replace spec keeps the current VM's NICs but `ApplyExclusiveReplaceCutover` built the domain with no resolved networks.
+- Fix: resolve and verify each NIC's network before `managedDomainXML`, as create does.
+- Regression: `TestApplyExclusiveReplaceCutoverPlacesNewDisksAndRetainsOriginals` now carries a NIC with a fixed MAC through the real cutover and asserts it in the definition (fails with the lab error when the networks are dropped), `go test -count=1 ./internal/vmhost`.
+- Avoid: Testing only `BuildRestoreReplaceSpec` and not the apply path that consumes its output.
+
+## BUG-0922 — Test-restore cleanup settled succeeded with no journal and no native check
+
+- Symptom: `CleanupTestRestoredVM` returned succeeded for any identity whose creator journal was absent, even if the VM still existed.
+- Root cause: `testRestoreGone` treated a missing journal as proof of absence.
+- Fix: a missing journal now also requires the domain to be listed absent and no TPM state for that VM ID.
+- Regression: `TestCleanupTestRestoredVMSettlesWhenNothingWasRegistered` (refuses while the domain exists), `go test -count=1 ./internal/vmhost`.
+- Avoid: Inferring "nothing to clean" from a missing record without observing the native state.
+
+## BUG-0923 — Unconfirmed snapshot delete reservation abandoned on a transient member failure
+
+- Symptom: member-owned snapshot delete failed `pool master refused snapshot delete reservation` while the master kept its reservation (`pending_recovery`), blocking later deletes.
+- Root cause: the master saves the reservation before member replicas acknowledge it and answers 409 if they do not; the owner abandoned its intent on that first answer.
+- Fix: the owner repeats the identical reservation (the master replays it) up to four times before giving up. Not sufficient alone: `abortSnapshotLocalIntent` still aborts on `ErrSnapshotReservationUnconfirmed` (outside this fix's write set).
+- Regression: `TestRetryUnconfirmedReservationRetriesOnlyUnconfirmed`, `go test -count=1 ./internal/agent -run TestRetryUnconfirmed` (new function, no old-code run possible).
+- Avoid: Aborting a local intent after the master may already have persisted its reservation.
+
+## BUG-0940 — Backup run stalled on a member held the pool backup slot indefinitely
+
+- Symptom: a run the member kept reporting as running (hung S3, frozen member Core) stayed pending/dispatched for the whole stall with no operator-visible reason, blocking the pool's backup slot.
+- Root cause: `waitPeerBackupTerminal` and `nextPendingPeerBackup` had no bound for a run the member still reported pending, or for a member that stopped answering during a Controller-driven run.
+- Fix: a run still pending `peerBackupRunLimit` (12 h) after `created_at` settles `needs_attention` (stage `run_deadline`) with a reason saying what to check; it is not failed and stays observable, so a later member result settles it.
+- Regression: `TestStalledMemberRunSettlesNeedsAttention`, `TestWaitPeerBackupTerminalStopsAtDeadline`; both fail with the limit raised to 12000 h (checked); `go test -count=1 ./internal/agent`.
+- Avoid: Failing the run at the deadline; the member may still be writing to the repository.
+
+## BUG-0941 — Master promotion refused because the candidate could not reach a backup repository
+
+- Symptom: promotion or planned master change failed with "the promoted host cannot access a replicated backup repository" (or a missing credential) for one unreachable repository.
+- Root cause: `stagePoolBackupAuthorityActivationPages` and the post-adoption catalog reconcile treated an unreadable repository as a transfer error.
+- Fix: the record is adopted with health `offline` and access `failed` plus a reason; catalog import skips it. Every other transfer check is unchanged.
+- Regression: `TestPromotionAdoptsUnreachableRepository`, `TestStageActivationContinuesPastUnreachableRepository`, `TestReconcileSkipsUnreachableVerifyAndImportsOthers`, `TestPeerBackupCredentialScopeAndPromotion`, `TestBackupRepositoryRegistrationWithOfflineMember`; the last two previously asserted the refusal.
+- Avoid: Gating authority on the reachability of a single repository.
+
+## BUG-0980 — Metadata request for an unknown policy or repository stayed pending and blocked every master change
+
+- Symptom: run-now for a missing backup job, and catalog rebuild or import for an unknown repository ID (G11), left the receipt `pending`/`needs_attention` forever; a pending receipt blocked planned master change and eject.
+- Root cause: `settleBackupMetadataResponse` treated `ErrBackupPolicyNotFound` and `ErrBackupRepoNotFound` as retryable.
+- Fix: both settle the receipt `failed`. Contract change: the same operation ID stays failed after the repository is registered, so the retry needs a new operation ID (documented in API.md and the catalog rebuild guide).
+- Regression: `TestFailedMetadataRequestReceiptDoesNotBlockAuthorityChange` (fails without the fix: receipt stays `pending`), `go test -count=1 ./internal/agent -run TestFailedMetadataRequestReceipt`.
+- Avoid: Leaving a permanent refusal pending "in case it becomes valid"; a fixed request cannot change its own receipt.
+
+## BUG-0981 — Pending backup run for an unreachable or non-ready member never settled
+
+- Symptom: a pending run owned by a dead or not-ready member stayed pending forever and blocked eject, promote and later backups.
+- Root cause: `nextPendingPeerBackup` re-tried it every cycle with no bound, and `unsettledBackupTransferRefusal` counted it as unsettled work.
+- Fix: a member silent for `peerBackupSilentLimit` (1 h) settles the run `failed` at stage `peer_dispatch` with a reason that the outcome is unknown; eject and promote ignore pending runs owned by the eject target or a member that is not ready or not in the pool.
+- Regression: `TestUnservableMemberRunsSettleFailed`, `TestPendingRunOfUnreadyOrEjectedMemberDoesNotBlockTransfer` (new function and signature; no old-code run possible), `go test -count=1 ./internal/agent -run 'TestUnservableMemberRuns|TestPendingRunOfUnready'`.
+- Avoid: Treating an unreachable host as proof the backup did not happen; the reason tells the operator to check the catalog.
+
+## BUG-0982 — needs_attention run whose host is the master or gone never settled
+
+- Symptom: a `needs_attention` run whose member had become the master, or had left the pool, was re-observed forever.
+- Root cause: only runs owned by a present peer were dispatched or bounded.
+- Fix: `abandonedPeerBackupReason` fails such a run at once (stage `peer_dispatch`).
+- Regression: `TestUnservableMemberRunsSettleFailed`; same command as BUG-0981.
+- Avoid: Waiting on a host the pool no longer has.
+
+## BUG-0983 — A stale needs_attention backup blocked every new backup of the same VM
+
+- Symptom: run-now or a scheduled backup for a VM never started and never failed while an older `needs_attention` backup for it sat in the master's journal.
+- Root cause: the direct-peer loop re-observed the journal entry instead of settling it from the pool run's terminal status; a `backup-now` entry with no run row was never settled.
+- Fix: `journalBackupSettlement` settles the entry to the run's terminal status, or `failed` when the master has no run row (reason says to check the catalog).
+- Regression: `TestStaleNeedsAttentionBackupDoesNotBlockNewRun`; `TestReportRestoreMissingPointFailsBeforeReservation` was updated (BUG-0901). Not covered: an entry whose run row exists but whose member is gone (open, final review R10).
+- Avoid: Bounding only the run row and not the journal entry.
+
+## BUG-0984 — SFTP host-key change reported a vague health error
+
+- Symptom: after an SFTP server's host key changed, the repository showed a generic probe error.
+- Root cause: `backupHealthError` did not classify the host-key mismatch.
+- Fix: the message names the pinned-key mismatch and says to forget and re-register the repository (message only; other probe failures keep the generic text).
+- Regression: `TestBackupHealthErrorNamesSFTPHostKeyChange`; lab retest reported the new message.
+- Avoid: Hiding the reason a repository is unhealthy behind a generic error.
+
+## BUG-0985 — Back up now opened off-screen; orphan cleanup poll error never cleared
+
+- Symptom: the **Back up now** panel (and its deep link) rendered below the jobs list and recovery points, near y 2138, and the page did not scroll (G9); the orphan cleanup "may still be running" alert stayed above a finished result (R8).
+- Root cause: a mount-time `scrollIntoView` ran before the lists loaded, so the panel moved after it; the poll never cleared its error on a later success.
+- Fix: the panel renders above the backup jobs list, and the scroll effect is removed; a successful poll calls `setPollError("")`.
+- Regression: source assertions in `web/src/backups-selection.test.mjs` and `web/src/backup-orphans.test.mjs` (added with the fix; not run against the old source), `cd web && npx tsc --noEmit && npm test`. No browser re-walk.
+- Avoid: Scrolling to an element before the content above it has loaded.
+
+## BUG-0960 — A forgotten destination or a changed SFTP host key could not be recovered from the UI
+
+- Symptom: the **Create** form had no repository ID, so a forgotten destination could not be registered again (a new ID is refused because the owner marker names the original), and pinning a new SFTP host key needed a Forget. The guide called both an API step (G1, X-S3). The refusal said the credential was working even when only the pin had changed.
+- Root cause: identity reuse existed only as an undocumented side effect of BUG-0773 (same ID, unreadable credential); there was no explicit replace request, and the form always generated the ID.
+- Fix (owner decision): `replace_confirmation` (Controller and host-local register routes, `Command.ReplaceRepository`) equal to the repository ID lets a same-ID registration replace the credential and, for SFTP, the pinned host key. Core verifies the owner marker rather than claiming the destination, keeps recovery points, history and creation time, and still refuses a different kind, host, port, root, an unknown repository or a wrong confirmation (`prepareBackupRepositoryForRegistration`, `backupReplacementError`); members adopt the new pin and identity on their next probe (`probePeerBackupRepository`, `adoptPeerBackupRepository`). The form gains an optional **Repository ID** and a typed confirmation. The refusal and health messages now name this path. The BUG-0984 message wording was updated to match.
+- Regression: `TestSFTPRegistrationReplacesPinOnlyWithConfirmation` (fails if the confirmation gate or the verify-only preparation is removed), `TestControllerBackupRepositoryReplaceConfirmation`, `web/src/backup-repositories.test.mjs`. Command: `go test -count=1 ./internal/agent ./internal/controller -run 'ReplacesPin|ReplaceConfirmation'`, `cd web && npm test`. Not exercised: a real SFTP server or a member adopting the new pin end to end.
+- Avoid: Documenting an accidental same-ID behaviour as a recovery path instead of giving it an explicit, confirmed request.
+
+## BUG-0961 — Restore replace kept the original disks forever with no way to release them
+
+- Symptom: every replace left the previous disk set (and vTPM state) in the VM's storage directory; only deleting the VM freed it (X-R5).
+- Root cause: the retained files were journaled but no operation could remove them.
+- Fix (owner decision): the `vm-release-retained` command (`VMReleaseRetainedRequest`), Controller route `POST /api/v1/vms/{id}/release-retained`, host-local `POST /api/local/v1/pool/vms/{id}/release-retained` and a **Release retained original** action. Core (`releaseRetainedOriginals`) requires the VM name, a shut-off VM without retained snapshots, skips files in the live chain, verifies the files like a VM delete, then unlinks them and the retained vTPM state, and records the paths in its journal entry. Replay is idempotent by request ID; an interrupted release is re-run.
+- Regression: `TestReleaseRetainedOriginalsDeletesOnlyDetachedFiles` (fails if live chain files are not excluded), `TestReleaseRetainedOriginalsRefusesRunningVM`, `TestReleaseRetainedRequestIsJournaledForThisHostAndIdempotent`, `TestReleaseRetainedOriginalsRouteQueuesHostCommand`, `web/src/release-retained.test.mjs`. Command: `go test -count=1 ./internal/vmhost ./internal/agent ./internal/controller -run 'ReleaseRetained'`, `cd web && npm test`. Not exercised: a real replaced VM, vTPM state, a member-hosted VM, or a browser.
+- Avoid: Retaining destructive-recovery artifacts without an owner-visible way to release them.
+
+## BUG-0986 — Filtering an inspected recovery point reverted its refreshed details
+
+- Date: 2026-10-01.
+- Symptom: a newly reported protection change disappeared from the detail panel when a filter excluded that point.
+- Root cause: the retained inspection snapshot was never updated from newer catalog observations.
+- Fix: retain the latest reported selected point and label details outside the current loaded page as last reported, not deleted.
+- Regression: `retained-metadata` in `tests/integration/backup_workspace_browser.py` failed on the initial redesigned candidate and passed after integration; [browser evidence](qa/2026-10-01-backup-ui/README.md). The forge browser lane runs it on pushes and pull requests; remote CI was not run here.
+- Avoid: treating a filtered page as the whole catalog or keeping only the snapshot from the first click.
+
+## BUG-0987 — A VM-scoped Backups link erased an ordinary restore draft
+
+- Date: 2026-10-01.
+- Symptom: returning to a recovery point after another VM-scoped Backups link reset its destination name and storage.
+- Root cause: the route-change effect cleared the active form without retaining its ordinary draft.
+- Fix: save point/mode-specific presentation drafts before navigation and restore them when reopening.
+- Regression: `draft-route` in `tests/integration/backup_workspace_browser.py` failed before correction and passed afterward; [browser evidence](qa/2026-10-01-backup-ui/README.md). Included in the forge browser lane.
+- Avoid: making a harmless scope change discard an operator's reviewed destination.
+
+## BUG-0988 — A scope change hid an unresolved backup-job creation request
+
+- Date: 2026-10-01.
+- Symptom: a VM-scoped route change hid the exact-retry panel after a simulated uncertain save.
+- Root cause: parent route handling closed the creation panel despite its child retaining an unresolved intent.
+- Fix: retain the open creation flow through same-page scope changes; Back, Cancel and Close stay disabled until the exact request is resolved.
+- Regression: `uncertain-job` in `tests/integration/backup_workspace_browser.py` failed before correction and passed afterward, including unchanged request body after retry; [browser evidence](qa/2026-10-01-backup-ui/README.md). Included in the forge browser lane.
+- Avoid: treating an uncertain response as permission to drop the form or submit a changed intent.
+
+## BUG-0989 — Repository-panel closure lost keyboard focus to its opener
+
+- Date: 2026-10-01.
+- Symptom: an expanded job could collapse while its repository panel was open, removing the opener; even an intact disabled opener was not reliably focused after Escape.
+- Root cause: expansion controls could detach the trigger, and Panel captured focus after the opening commit had disabled it.
+- Fix: hold the owning job open during repository editing and capture the opener before commit, restoring focus after it is enabled again.
+- Regression: `repository-focus` in `tests/integration/backup_workspace_browser.py` failed before correction and passed afterward; [browser evidence](qa/2026-10-01-backup-ui/README.md). Included in the forge browser lane.
+- Avoid: capturing focus in the mount effect after opening has already changed the active control.
+
+## BUG-0990 — Expanded jobs left phantom columns on phones
+
+- Date: 2026-10-01.
+- Symptom: a job's visible name column collapsed to about 38 px at phone width while hidden desktop columns still occupied table layout.
+- Root cause: the expanded context cell retained desktop `colSpan=6` after only two columns remained visible.
+- Fix: use two columns for the phone context and six for wider screens, following the existing breakpoint.
+- Regression: `phone-layout` in `tests/integration/backup_workspace_browser.py` failed before correction and passed afterward, checking readable name width, page overflow and the wider-screen transition; [browser evidence](qa/2026-10-01-backup-ui/README.md). Included in the forge browser lane.
+- Avoid: hiding table columns without adapting spanning cells.
+
+## BUG-0991 — Backup refusals were hidden behind the phone panel
+
+- Date: 2026-10-01.
+- Symptom: a definite backup refusal left its full-width panel open without showing the reason inside it.
+- Root cause: Back up now rendered the request error only in the underlying workspace.
+- Fix: display request and repository errors inside the panel, retaining correction controls after a definite refusal.
+- Regression: `backup-refusal` in `tests/integration/backup_workspace_browser.py` failed before correction and passed afterward with simulated HTTP 403. The complete eight-case browser command passed in the isolated Playwright environment; [browser evidence](qa/2026-10-01-backup-ui/README.md). The existing forge invocation runs the added case; remote CI was not run.
+- Avoid: placing an action's only refusal message behind the surface that initiated it.
+
+## BUG-0992 — Unknown repository inventory directed operators to register another destination
+
+- Date: 2026-10-01.
+- Symptom: pending or unavailable repository reads showed missing-destination guidance in job creation; the recovery list also treated null as empty.
+- Root cause: the parent normalized nullable repository inventory to an empty array for the job panel, omitted its read error, and used a truthiness check in the recovery empty state.
+- Fix: preserve null through the child props, show pending or failed reads, and offer registration guidance only for a confirmed empty list.
+- Regression: `repository-inventory` failed before correction and passed afterward, covering pending, HTTP 503 and confirmed-empty transitions with no registration link while inventory is unknown. Included in the same eight-case browser command and forge lane; [browser evidence](qa/2026-10-01-backup-ui/README.md).
+- Avoid: interpreting a failed read as proof that a pool resource does not exist.
+
+## BUG-0993 — A successful polled run detached the repository panel's focus target
+
+- Date: 2026-10-01.
+- Symptom: an auto-expanded failed job collapsed after a newer successful run while its repository panel was open; closing could not return focus to Change repository.
+- Root cause: expansion still depended on failure state because opening the contextual action did not record an explicit expansion choice.
+- Fix: set the owning job expanded before opening its repository panel, preserving its trigger through the run-state update and closure.
+- Regression: `repository-poll-focus` failed before correction and passed afterward, waiting for the updated successful result before asserting that the trigger survives and regains focus. Included in the eight-case browser command and forge lane; [browser evidence](qa/2026-10-01-backup-ui/README.md).
+- Avoid: relying on automatically derived expansion while an open panel depends on a row's controls.
+
+## BUG-1020 — A planned master change stayed needs_attention after it succeeded
+- Symptom: with a backup repository unreachable from the new master, the master change finished on both hosts but the Controller task stayed needs_attention for good, with advice to cancel or power off the new master.
+- Root cause: the old master's command returns before the new master answers, and only a promotion's journal receipt was later reconciled to the finished transfer; the activate error also advised an action that risks two masters. The new master's catalog check of an unreachable repository had no deadline, so activation outlasted the request.
+- Fix: `reconcilePoolPromotionJournal` (pool_transfer.go) also settles the old master's pool-transfer receipt once the durable transfer is done; the activate message now says to wait and not power off; each repository check in `reconcilePoolBackupCatalogAfterAuthorityAdopt` is bounded at 30 s.
+- Regression: `TestPlannedMasterChangeReceiptSettlesWhenTransferIsDone` in internal/agent failed with the receipt left needs_attention before the fix and passes after. The lab run is not repeated.
+- Avoid: advising a fence or cancel from a timeout, and leaving a command receipt that no later observation can settle.
+
+## BUG-1021 — NFS and SMB3 repositories adopted offline never came back
+- Symptom: after a promotion with an unreachable network-share repository the new master kept it offline until it was registered again.
+- Root cause: adoption left no mount path and the health probe never mounted it, unlike S3 and SFTP which need none.
+- Fix: `probePoolBackupRepositories` calls `remountAdoptedBackupRepository` (pool_backup.go) for an NFS or SMB3 record with no mount path, so it mounts and records the path once the share answers.
+- Regression: `TestProbeRemountsRepositoryAdoptedOffline` fails without the call and passes with it.
+- Avoid: treating a missing mount as a permanent record state.
+
+## BUG-1022 — Orphan-cleanup records did not travel with a master change
+- Symptom: the new master answered 404 for an orphan cleanup the old master ran.
+- Root cause: the signed authority carried runs, catalog, pins and receipts but not the cleanup records.
+- Fix: a seventh record kind, `orphan_cleanups`, in the authority pages, manifest counts, walker and activation staging (backup_authority_pages.go, backup_policy.go, backup_authority_transfer.go, backup_orphans.go, protocol/backup_policy.go); OpenAPI updated.
+- Regression: `TestOrphanCleanupRecordTravelsWithAuthority` (manifest count and the record on the adopted root).
+- Avoid: adding a master-owned record directory without adding it to the authority pages.
+
+## BUG-1023 — Stale backup receipts and journal entries blocked every master change
+- Symptom: a test cleanup that could not proceed, or a leftover receipt or needs_attention entry, made every master change refuse with no way to clear it and no operation named.
+- Root cause: the freeze gate treated every pending receipt and every needs_attention journal entry as running work forever.
+- Fix: `unsettledBackupTransferRefusal` names the operation, settles a receipt pending for over the run limit to needs_attention with a reason, and ignores a needs_attention journal entry whose durable run or receipt already ended. Running work still blocks.
+- Regression: `TestStaleBackupOperationsDoNotBlockMasterChange` (fresh receipt blocks and is named, stale receipt settles, ended entry ignored).
+- Avoid: a gate with no age bound and no way to tell finished from stuck.
+
+## BUG-1024 — The 12 hour run limit could not be exercised
+- Symptom: the lab could not test the stalled-run deadline.
+- Fix: `peerBackupRunLimit` is a variable that reads `NEX_BACKUP_RUN_LIMIT` (a Go duration) and defaults to 12 h.
+- Regression: none new; the existing deadline tests still pass. A run executing on the master itself is still unbounded by design: its local worker owns it and settling the record under it could admit a second run of the same VM.
+- Avoid: constants that no test or lab can shorten.
+
+## BUG-1040 — Test-restore cleanup test could not pass without libvirt (CI red)
+- Symptom: `TestCleanupOfFailedTestRestoreWithoutJournalSettles` failed with "test restore creator journal is unavailable" after the BUG-0922 change.
+- Root cause: `testRestoreGone` now proves the domain absent through `virsh list`, which is nil without libvirt, so the unit environment could never settle. The product was right; the fixture gave it no libvirt answer.
+- Fix: the test puts a `virsh` on PATH that lists no domains. The product keeps refusing when libvirt cannot answer.
+- Regression: that test (`go test -count=1 -run TestCleanupOfFailedTestRestoreWithoutJournalSettles ./internal/agent`); the vmhost test `TestCleanupTestRestoredVMSettlesWhenNothingWasRegistered` covers the domain-still-exists refusal.
+- Avoid: weakening a safety check to satisfy a fixture that never provided the evidence.
+
+## BUG-1041 — Release retained original skipped the pool owner admission
+- Symptom: on a pool VM with an unfinished update, restore or snapshot reservation, a release ran on the host without asking the pool master, and its irreversible file and vTPM deletion could remove originals a settling restore relies on.
+- Root cause: `AdmitPoolVMExecution` admitted only vm-update, power, media and delete through the master's record; `vm-release-retained` fell through to the no-op default.
+- Fix: `poolSharedVM` finds the VM for a release and the existing `delete-check` runs for it, so the master refuses while the record shows a pending update, recovery or start, or retained snapshots. No separate pin exists or is needed: restore replace holds the same record through its update reservation.
+- Regression: `TestPoolVMReleaseRetainedTakesOwnerAdmission` (fails with the admission removed). Not exercised: a lab restore racing a release.
+- Avoid: adding a destructive command kind without routing it through the owner admission its siblings take.
+
+## BUG-1042 — A needs_attention backup of a member that left the pool never settled
+- Symptom: a backup-now journal entry in needs_attention whose run row names a member no longer in the pool was re-observed forever and blocked later backups of the VM (R10).
+- Root cause: `journalBackupSettlement` settled only terminal run rows or a missing run row.
+- Fix: it also settles the run failed (`peer_dispatch`) and returns the failed result when `abandonedPeerBackupReason` says the member is gone.
+- Regression: `TestNeedsAttentionBackupOfDepartedMemberSettles` (fails with the case removed).
+- Avoid: bounding one half of a run's state (run row) and leaving its journal twin unbounded.
+
+## BUG-1043 — Orphan cleanup re-protected a point that was already gone
+- Symptom: when the delete reported an error after the point left the catalog, the result gained "protection could not be restored" for a point that no longer existed (R9).
+- Root cause: the re-protect condition also fired on a delete error alone.
+- Fix: re-protect only while the point is still cataloged.
+- Regression: `TestOrphanDeleteDoesNotReprotectAPointGone` (fails with the old condition).
+- Avoid: undoing a temporary change without checking the thing it applied to still exists.
+
+## BUG-1044 — Same-ID repository replace named the wrong reason; pin adoption untested
+- Symptom: a confirmed same-ID replace over a different root failed with "backup state is unavailable on this host", a wrong replace_confirmation on the Controller route returned the generic 400, and a member adopting a new SFTP host-key pin had no test (F10, M1).
+- Fix: `backupReplacementError` returns an error (still `errors.Is` `ErrBackupUnavailable`) saying the ID exists for a different destination; the Controller names `replace_confirmation`.
+- Regression: `TestSFTPRegistrationReplacesPinOnlyWithConfirmation` (message), `TestControllerBackupRepositoryReplaceConfirmation`, `TestMemberAdoptsReplacedSFTPHostKeyPinOnly` (fails with the pin branch of `probePeerBackupRepository` removed).
+- Avoid: reusing a generic unavailable error for a refusal the operator can act on.
+
+## BUG-1045 — G9 regression test was deleted
+- Symptom: `web/src/backups-selection.test.mjs` and `web/src/backups-retry.test.mjs` were removed with the backup workspace redesign; nothing failed if Back up now rendered below the lists or scrolled on mount (F5). BUG-0985 still names the deleted file.
+- Fix: `web/src/backups-panels.test.mjs` asserts the slide-over precedes the jobs and recovery views, no `scrollIntoView`, the `panelLocked` guard before a point switch, and the held restore request.
+- Regression: that file (`cd web && npm test`). The old assertions did not match the redesigned source, so they were rewritten, not restored.
+- Avoid: deleting a regression test with its feature without moving the assertion.
+
+## BUG-1000 — A member-owned snapshot delete stranded when the master had already settled it (N1)
+- Symptom: after the master settled a snapshot delete but the owner missed the acknowledgement, the owner's journal stayed `pending`, the task ended `failed` ("snapshot target not found") or `needs_attention`, no retry or restart cleared it, and the VM could not be deleted ("retained snapshots") or moved.
+- Root cause: `executeStoppedSnapshot` re-resolved the delete/revert target from the master catalog on every attempt. The master removes the entry when it settles, so the re-drive failed before reaching the journal and nothing re-entered a `failed` command.
+- Fix: a re-drive of a journaled target command reuses the journaled target (`internal/agent/snapshot.go`), so the owner re-verifies, settles with the master (idempotent) and settles its own journal. A snapshot left `needs_attention` is re-driven at most every `snapshotRedriveDelay` (5 s) so an unreachable master is not hammered.
+- Regression: `TestSnapshotDeleteRedriveAfterMasterSettledUsesJournaledTarget` (fails with the journaled-target lookup removed). Not exercised: a lab member with a real libvirt snapshot.
+- Avoid: resolving a durable operation's target from live catalog state on a retry.
+
+## BUG-1001 — A refused snapshot reservation left the master pending and the VM undeletable (N2)
+- Symptom: on a fresh member-owned VM, a reservation the master saved but the owner could not confirm ended `failed`, the owner dropped its local intent, and the master kept `pending_recovery`; VM delete then failed with "does not match the durable pool owner record".
+- Root cause: `abortSnapshotLocalIntent` removed the owner's intent for any reservation error, and `ErrSnapshotReservationUnconfirmed` had no consumer. Lost replies, server errors and undecodable acknowledgements were also plain errors.
+- Fix: `abortSnapshotLocalIntent` keeps the intent and returns `needs_attention` with an actionable reason for an unconfirmed reservation, so the exact request is re-driven until the master confirms. Transport errors, 5xx replies and bad acknowledgements are now classed unconfirmed (`internal/agent/pool_vm.go`). The round-2 four-attempt retry helper is deleted; the re-drive supersedes it.
+- Regression: `TestAbortSnapshotLocalIntentKeepsIntentWhenMasterReservationUnconfirmed` (vmhost), `TestSnapshotReservationWithLostReplyIsUnconfirmedAndRedrivesExactly` (master plus member lab) and `TestUnacknowledgedMasterReservationStaysRetryable`, all failing before the change. Not exercised: a persistently unreachable master over time in a lab.
+- Avoid: abandoning a local intent when the remote side may already hold its half.
+
+## BUG-1002 — A restore-as-new refused by the master settled needs_attention and kept its staging (X-R3)
+- Symptom: a member's restore-as-new that the pool master definitively refused settled `needs_attention` and left `backup-restore/<operation>` on disk.
+- Root cause: the pre-effect inference `restorePlacementHasNoEffects` treats an existing staging directory as possible placement, but the member creates staging before asking; the definite refusal (`poolVMPlacementRefusal`) had no consumer.
+- Fix: `executeRestoreAsNew` settles failed (removing staging and the pin) when the placement error is `poolVMPlacementRefusal`.
+- Regression: `TestRestoreAsNewDefiniteMasterRefusalFailsAndRemovesStaging` (fails with the check removed; run on a master store with a stubbed placement, so the member inference itself is not exercised).
+- Avoid: adding an error classification that no caller consumes.
+
+## BUG-1120 — A member restart mid snapshot delete ended the operation failed (N6)
+- Symptom: restarting the member's Core or libvirt during a snapshot delete settled it `failed` with "cannot establish other domain storage ownership"; the same operation ID replayed the failure and the VM stayed undeletable until a new request ID.
+- Root cause: `exclusiveDisks` returned a plain error when `virsh list`/`dumpxml` failed, and the snapshot preflight treated every error as a definite refusal.
+- Fix: `ErrOwnershipUnconfirmed` (`internal/vmhost/engine.go`) marks probe failures; `failSnapshotPreflight` keeps the preflight journal and returns `needs_attention` for it, and the delete and revert preflights now use that helper. Only a proven ownership conflict stays a definite failure.
+- Regression: `TestManagedSnapshotPreflightKeepsOperationWhenOwnershipUnconfirmed` (fails with the branch disabled: status `failed`) and `TestExclusiveDiskProbeFailureIsUnconfirmedNotConflict`. Not exercised: a real member restart in the lab.
+- Avoid: classing an ambiguous native-probe error as a definite failure.
+
+## BUG-1121 — Release retained originals accepted while a restore-replace was queued (R-F4b)
+- Symptom: a release sent after a queued restore-replace ran right after it and deleted the originals the replace had just retained.
+- Root cause: the Controller's pending-request check omitted `backup-restore-replace` and `backup-test-restore`.
+- Fix: both kinds added to the pending list in `internal/controller/release_retained.go`; the request is refused with 409.
+- Regression: `TestReleaseRetainedRefusedWhileRestoreReplaceQueued` (fails with the kinds removed: got 202). Covers queued rows only; a dispatched row uses the same query.
+- Avoid: a per-route list of conflicting kinds that drifts from the other restore admissions.
+
+## BUG-1140 — The API contract suite was red after the orphan-cleanup and forget/retain work (R3-4)
+- Symptom: `tests.test_api_contract` failed three tests: nullable array schemas for `OrphanCleanupRequest.vm_ids` and `BackupOrphanQuery.groups`/`warnings`, peer schemas that no longer matched the Controller copies, and `/api/v1/pool/backup/forget` and `/retain` documented but never found as called.
+- Root cause: the specs declared those Go slices as plain `array` (the contract requires `["array","null"]`); four shared schemas in `peer-openapi.json` kept older descriptions than `openapi.json`; the coverage adapter only recognised `postPeerCapability`, not the `postPeerBackupRoute` helper that sends forget/retain. `docs/API.md` also never mentioned the `orphan_cleanups` authority records.
+- Fix: the three array types in the three specs, the shared peer schemas synced from `openapi.json`, the adapter reads `postPeerBackupRoute` literals, generated HTML regenerated, and `docs/API.md` names `orphan_cleanups` in the authority manifest.
+- Regression: `python3 -m unittest tests.test_api_contract` (82 tests, previously 3 failures); `generate_api.py --check` is current. It already runs in forge CI.
+- Avoid: editing a Go DTO or a peer helper without rerunning the contract suite.
+
+## BUG-1141 — A stalled backup showed "dispatched" with no reason (N4 part 2, R3-6)
+- Symptom: a member-run backup waiting on an unreachable member showed only `dispatched` on its Controller task for minutes.
+- Root cause: the waiting reason lived only in the agent's in-memory retry state, and member-dispatched pending journal entries were never reported as outcomes; the Controller ignored queued outcomes.
+- Fix: `noteBlocker` (`internal/agent/backup_blocker.go`) stores the reason in the pending journal entry's existing `Error`; `commandOutcomes` reports such an entry as a `queued` outcome; the Controller copies it to a still-dispatched operation's `error` (`internal/controller/managed.go`) and the Tasks page shows *Waiting: reason*. No new field, route or state.
+- Regression: `TestPendingPeerBackupReportsBlockerReason` (fails with the outcome filter reverted), `TestQueuedOutcomeReasonShowsOnDispatchedTask` (fails with the relay disabled) and the Tasks check in `web/src/managed.test.mjs`. Not exercised: a real unreachable member in the lab. The master-hosted backup slot held by another run and a blocked test cleanup do not yet record a reason, and F7 (no deadline on a master-hosted run) is untouched.
+- Avoid: keeping the operator-facing reason only in volatile loop state.
+
+## BUG-1100 — A planned master change stayed needs_attention on the old master after it succeeded (P1b)
+- Symptom: after a planned master change whose activation outlasted the activate stage, the old master's Controller task stayed `needs_attention` ("activation is not confirmed yet") forever although the new master was in place.
+- Root cause: two gaps. Core settled the receipt only from the old master's own transfer record, which may be gone or replaced by then; and the Controller accepted a later `succeeded` result for a `needs_attention` operation only for `pool-promote`, so it ignored Core's settle for `pool-transfer`.
+- Fix: `reconcilePoolPromotionJournal` (`internal/agent/pool_transfer.go`) settles a `master-change` receipt from the durable pool membership (the target is now the master), with no transfer record needed, so it holds across restarts of either host and settles once. The Controller (`internal/controller/identity.go`) now takes that `succeeded` result for `pool-transfer`.
+- Regression: `TestPlannedMasterChangeReceiptSettlesFromMembership` (agent; no transfer record exists; the old code required one, so it could not settle) and `TestMasterChangeReceiptRecoversFromAttention` (controller; fails with `pool-transfer` removed from the recoverable kinds: status stays `needs_attention`). Not run in the lab.
+- Avoid: settling an outcome from a record the operation itself can outlive, and assuming Core's settle reaches the task without checking the Controller accepts that transition.
+
+## BUG-1101 — A master that handed its authority over logged four failures every 5 s (N8)
+- Symptom: until it learned the outcome, the old master logged "pool authority replica push did not complete", "pending test cleanup could not be recovered", "terminal backup restore pins could not be reconciled" and "backup schedule tick did not complete" on every tick.
+- Root cause: those ticks ran authority writes that a handed-off master always refuses.
+- Fix: `run.go` skips them while `poolAuthorityHandedOff` (new, `pool_transfer.go`) is true. The N7 refusal text now says nothing moved and to start the change again; the retry stays the operator's choice because the freeze refuses before anything moves.
+- Regression: none automated for the log spin (a log-only effect); the gate is covered by the existing transfer tests passing.
+- Avoid: background ticks that retry a write the host has just given up the right to make.
+
+## BUG-1102 — Master-hosted backup runs had no deadline, and the run limit env var worked in production (F7/N4, R3-5)
+- Symptom: a master-hosted backup or restore that stalled (for example an unresponsive S3 repository) kept the one managed-command slot and showed `dispatched` indefinitely. `NEX_BACKUP_RUN_LIMIT` was read in every build and also shortened the master-change receipt age check, so it could let work that was still running stop blocking a master change.
+- Root cause: only member-hosted runs had the stalled-run deadline; the limit was one environment-driven variable used for both.
+- Fix: `runLocalBackupWithDeadline` (`backup_peer_dispatch.go`, called from `run.go`) settles the run `needs_attention` (stage `run_deadline`, with a reason) at the same deadline and frees the slot without cancelling the work, so the reservation stays and a late outcome is still recorded. `peerBackupRunLimit` is a fixed 12 h constant (receipt check); `stalledRunLimit` is the deadline, shortened only in a `-tags lab` build (`backup_run_limit_lab.go`) through `NEX_BACKUP_RUN_LIMIT`.
+- Regression: `TestLocalRunSettlesAtDeadline` (agent; a never-returning run settles at the deadline, a finishing run keeps its result; there was no deadline path before). Not run in the lab.
+- Avoid: a production environment override for a safety limit.
+
+## BUG-1142 — Public demo publication rejected valid images on Docker containerd stores
+- Date: 2026-10-01.
+- Symptom: the first installed demo publication stopped before container replacement with a loaded-image identity mismatch.
+- Root cause: the importer compared the Docker inspect manifest/index ID with the validated configuration digest; Docker 29 containerd stores report different identities.
+- Fix: hash exported configuration bytes for both immutable-tag preflight and post-import verification. Image existence checks do not export unnecessarily.
+- Regression: `python3 tests/integration/demo_deploy_image.py --image "nex-demo:$RELEASE"` passed against the actual built image on Docker 29/containerd; subsequent installed publication became healthy. Both Demo workflow copies run the regression before publication. The first failed live publication is failing-before evidence; see [demo verification](qa/2026-10-01-public-controller-demo.md).
+- Avoid: assuming Docker inspect image IDs always identify configuration bytes, or removing integrity verification to make publication pass.
+
+## BUG-1143 — Repeated demo image layers could amplify root-owned repacking
+- Date: 2026-10-01.
+- Symptom: independent review found that a restricted publishing key could reference one layer repeatedly, exceeding the bounded input size while root copied the normalized archive.
+- Root cause: only decompressed input bytes were bounded; each manifest reference generated another output copy before Docker validation.
+- Fix: bound complete repacked output before opening its file, including every layer reference, configuration, manifest, headers, block padding, end markers and record padding. Failed startup/health candidates are removed after a healthy rollback unless selected or retained.
+- Regression: `python3 -m unittest discover -s tests -p 'test_demo_archive.py'` passed (one test): an input that fits the limit but expands through repeated references is refused before any normalized output exists. Both Demo workflows run it. Installed failed-start and failed-health rollback checks are recorded in [demo verification](qa/2026-10-01-public-controller-demo.md).
+- Avoid: treating unique tar member names or later Docker rejection as a bound on aggregate referenced output.
+
+## BUG-1200 — Member libvirt restart during a snapshot create/delete/revert gave a definite failure from a non-listing probe (N6b)
+- Symptom: a member restart about a second into a snapshot delete returned a definite `failed` ("VM native autostart must be confirmed disabled before snapshot creation") because `virsh dominfo` failed while libvirt restarted. The same-ID retry returned the cached failure and the VM then showed an unknown state.
+- Root cause: round 4 classified only the other-domain `list`/`dumpxml` probes as `ErrOwnershipUnconfirmed`. The `domstate`, `dominfo`, `dumpxml`, `snapshot-list`, `snapshot-dumpxml` and `snapshot-current` probes in the snapshot preflight and revert observation turned a failed query into a refusal, and a probe failure in the delete execution path could settle as failed-before-effects.
+- Fix: one shared `managedSnapshotProbe` wraps every failed read-only libvirt query in `ErrOwnershipUnconfirmed`; the preflight keeps its journal and reports `needs_attention` for the same ID, and delete execution no longer settles failed-before-effects on an unconfirmed probe. Only a query that succeeds and shows a conflict is a definite refusal.
+- Regression: `go test -count=1 -run TestSnapshotProbeFailureIsUnconfirmedNotRefusal ./internal/vmhost/` injects each failing probe (10 cases); all 10 subtests failed with the helper reverted to a plain error and pass with the fix. Full `./internal/vmhost/` passes.
+- Avoid: classifying only the probe a lab run happened to hit; a failed query is never evidence of a state conflict.
+
+## BUG-1220 — Blocked master-dispatched backup runs and test cleanups showed Dispatched with no reason (N4b)
+- Symptom: a member backup run dispatched by the master, with the member unreachable, showed `Dispatched` in Tasks with no reason; a queued backup held by another run of the same VM, and a test cleanup that could not reach its member, also showed nothing.
+- Root cause: only the queued-peer completion path called `noteBlocker`. The direct dispatch completion (`directPeerDone`), the skip in `nextManagedCommand` and the member cleanup path never recorded why work was not moving.
+- Fix: `notePeerBackupAnswer` (observe plus `noteBlocker`) is shared by both peer completion paths; `noteQueuedBackupBlockers` records "waiting for ..." for pending backups the picker skipped and clears it when picked; `noteCleanupBlocker` records `member unreachable` on a cleanup that needs attention. Reasons are fixed strings or the existing member answers.
+- Regression: `go test -count=1 -run 'QueuedBackupReports|DirectPeerBackupRecords|CleanupBlockerReason' ./internal/agent` (internal/agent/backup_blocker_test.go). These tests call helpers added by the fix, so before it they fail to compile; no separate behavioral revert was run. The Run loop wiring itself has no loop-level test; lab re-verification is outstanding.
+- Avoid: adding a reason at one completion path; every place that skips or defers work needs its own note.
+
+## BUG-1221 — A raw observation error replaced the friendly deadline reason after the stalled-run deadline (N10)
+- Symptom: after the deadline settled a master-hosted run `needs_attention`, the operation error became `published recovery point is absent` or raw S3 SDK text while the run row kept the deadline reason.
+- Root cause: reconciliation re-observed the needs_attention entry and `completeManagedCommand` overwrote the error with each unresolved observation.
+- Fix: in `completeManagedCommand`, a needs_attention entry holding the deadline reason keeps it when the new result is still needs_attention; a real succeeded or failed outcome replaces it.
+- Regression: `go test -count=1 -run TestDeadlineReasonSurvivesUnresolvedObservation ./internal/agent`; failed with the keep-branch disabled ("deadline reason replaced"), passes with it.
+- Avoid: letting each reconcile result overwrite an explanation the operator was shown.
+
+## BUG-1300 — Release retained originals was admitted only by the Controller (R5-1/F4)
+- Symptom: a Core-local release call, or a Controller with a stale view, was journaled while the VM had unfinished restore, snapshot or VM work or master pending recovery; only the execution step later refused some cases.
+- Root cause: acceptance of `vm-release-retained` in `acceptBackupRequest` did no admission; the busy check lived only in `internal/controller/release_retained.go`.
+- Fix: acceptance now refuses with `ErrBackupConflict` when `restoreTargetBusy`, `pendingVMCommand` or the pool owner admission (`AdmitPoolVMExecution`, the master's delete-check) says the VM has unfinished work. The Controller query remains a fast refusal.
+- Regression: `go test -count=1 -run TestAcceptReleaseRetainedRefusesUnfinishedWork ./internal/agent`; failed with the acceptance gate removed ("pending recovery" accepted), passes with it. Not covered: a release on a member whose master is unreachable (refused by the admission error, untested).
+- Avoid: keeping the only admission check in the Controller.
+
+## BUG-1320 — A master-change receipt settled when its target became master by another operation (R5-2)
+
+- Symptom: an earlier unresolved change-to-B receipt on the old master settled as succeeded once B later became master through a different change.
+- Root cause: round 4 settled the receipt from pool membership alone (target is master) and dropped the generation compare; the hand-off also marked any non-terminal source record done, whatever operation produced the new master.
+- Fix: `reconcilePoolPromotionJournal` settles only when this host's durable source record for the same operation is `done`; otherwise it keeps `needs_attention` with a clear reason. `applyPoolRepoint` ends a source record of another operation as aborted and never rewrites a terminal one.
+- Regression: `go test -count=1 ./internal/agent -run MasterChangeReceipt` (`TestMasterChangeReceiptIgnoresAnotherOperationsPromotion` fails without the check; the existing settle test covers the normal case).
+- Avoid: inferring a command's outcome from pool state another operation can also produce.
+
+## BUG-1500 — Member-hosted stalled-run deadline fired late (N9)
+
+- Symptom: with a member that stopped answering and a 60 s lab limit, the run settled needs_attention about 130 s after it started.
+- Root cause: after an unreachable answer the next observation was scheduled by the doubling backoff, which could land well past the run's deadline; the deadline is only evaluated when the run is observed.
+- Fix: `notePeerBackupAnswer` caps the next observation at the run's stalled-run deadline.
+- Regression: `go test -count=1 -run TestPeerBackoffNeverPassesStalledDeadline ./internal/agent`; fails with the cap removed, passes with it. Not rerun on the lab.
+- Avoid: scheduling a deadline check only on the retry cadence.
+
+## BUG-1520 — A backup policy could not be deleted (closeout gap)
+
+- Symptom: a backup job whose VMs were all deleted could not be moved or removed from the UI; only a raw API update remained, and no route removed a job at all.
+- Root cause: Core had no policy delete; the guide told operators no delete-job action existed.
+- Fix: guarded `backup-policy-delete` on the pool master (`internal/agent/backup_policy_delete.go`) with a Core-local route, a Controller route and a UI dialog. It removes only the definition, refuses while a run is pending or the typed name differs, and is idempotent by request_id through the metadata receipt, including a retry after a crash between the delete and the receipt.
+- Regression: `go test -count=1 -run TestDeleteBackupPolicy ./internal/agent` (fails with the pending-run refusal or the crash-retry branch removed), `go test -count=1 -run TestControllerDeleteBackupPolicyRoute ./internal/controller`, `cd web && npm test`. Not run in a browser or on the lab.
+- Avoid: deleting policy-owned data (recovery points, run history) with the definition; the points stay and are removed through their own flows.
+
+## BUG-1600 — Member agent re-read every managed journal per outcome (B1)
+
+- Date: 2026-10-02
+- Symptom: a member with hundreds of managed journals sat at 100-190 % CPU even idle; VM delete took up to 300 s and create 85 s.
+- Root cause: `ManagedEngine.JournaledCommand`, called once per outcome (`localPoolVMInventory`, `run.go`, placement), loaded and validated every journal in the directory to find one, so each publish cost O(outcomes x journals).
+- Fix: `JournaledCommand` validates the operation ID and reads only `<operation id>.json` (`internal/vmhost/managed.go`). Journals are not deleted; history retention stays an owner decision. Remaining per-report cost is one pass over the journals in `readable()`.
+- Regression: `go test -count=1 -run TestJournaledCommandReadsOnlyItsOwnJournal ./internal/vmhost` (500 unreadable sibling journals; fails before the fix because the directory scan aborts). Full `./internal/vmhost` and `./internal/agent` pass. Not run on the lab.
+- Avoid: pruning journals to hide the cost, or caching a directory scan per outcome instead of reading the one file.
+
+## BUG-1620 — Core-local release-retained was mirrored as a Controller-queued row and wedged the host (B2)
+
+- Date: 2026-10-02
+- Symptom: a release-retained accepted by a host's local API appeared in the Controller as an `adopt-outcome:` row with status `queued`; the agent's result for it was answered 409 "operation has not been delivered" every second, the host showed stale, and a queued restore-replace behind it never dispatched.
+- Root cause: `adoptManaged` inserted every adopted mirror with Core's own status. For a still-queued Core outcome that is a Controller-queued row, which the result handler refuses (the Controller never delivered it) and which counts as pending work on the host.
+- Fix: one rule in the adoption insert (`internal/controller/managed.go`): a mirror of a Core-queued outcome is stored as `dispatched`, since Core already holds the work. Core's later terminal outcome or result settles it through the existing paths. Applies to every adopted kind.
+- Regression: `go test -count=1 -run TestCoreLocalReleaseRetainedMirrorAcceptsAgentResult ./internal/controller` (fails before: mirror is `queued`). Snapshot, backup and host-queue adoption tests now expect `dispatched`.
+- Avoid: special-casing release-retained, or letting the result handler accept results for queued rows.
+
+## BUG-1640 — Test cleanup to an unreachable member showed no waiting reason (B3/N4b)
+
+- Symptom: a test cleanup dispatched to a blocked member stayed "Dispatched, Awaiting agent result" for 100+ s, while a backup run showed "Waiting: member unreachable".
+- Root cause: `waitPeerCleanupMode` retries transport failures forever and never reported them; `noteCleanupBlocker` also ignored a still-pending entry.
+- Fix: the wait loop calls an `unreachable` callback on each transport failure; the Run loop records `member unreachable` through `noteCleanupBlocker`, which now accepts pending entries (`internal/agent/backup_peer_cleanup.go`, `run.go`, `backup_blocker.go`). Restore, release and forget sweeps already use the run path that records it.
+- Regression: `go test -count=1 -run TestPendingCleanupReportsUnreachableMember ./internal/agent` (fails with the pending case removed).
+- Avoid: mutating the journal from the wait goroutine; the Run loop owns the Store.
+
+## BUG-1641 — Policy delete could race a run reservation (R6-1)
+
+- Symptom: a run-now or scheduler tick could reserve a run for a policy after delete had checked for pending runs and removed it; the run then backed up the VM.
+- Root cause: `ReservePoolBackupRun` took the authority lock but never re-checked the policy; its callers read the policy before the lock.
+- Fix: under the same lock, a new policy-bound reservation on the master is refused with policy-not-found when the policy is gone; the scheduler skips that occurrence (`internal/agent/pool_backup.go`, `backup_schedule.go`).
+- Regression: `go test -count=1 -run TestPolicyDeleteRacesRunReservation ./internal/agent` (fails with the check removed).
+- Avoid: checking the policy before taking the lock.
+
+## BUG-1642 — Crash-retry of a policy delete succeeded for an unknown policy (R6-2)
+
+- Symptom: a delete of a policy that never existed, whose pending receipt a crash left behind, settled as succeeded instead of not found.
+- Root cause: the receipt was written before the policy was looked up, so a pending receipt did not imply the policy existed.
+- Fix: the policy is checked under the same lock before the pending receipt is written (`internal/agent/backup.go`), so a retry that finds it gone means this delete removed it.
+- Regression: `go test -count=1 -run TestDeleteMissingPolicyLeavesNoReceipt ./internal/agent` (fails with the check removed).
+- Avoid: translating not-found into success without proof the delete ran. Not changed: needs_attention runs still do not block delete.
+
+## BUG-1700 — Member agent re-validated every managed journal on each report pass (B1b)
+
+- Symptom: idle member agent CPU grew with journal count (lab: 72% of a core at 494 journals, 7% at 87), because `Applied`, `readable` and the storage report passes each re-parsed and re-validated every journal, including snapshot-definition XML digests.
+- Root cause: `readJournal` (`internal/vmhost/managed.go`) ran its full validation on every read; settled journals never change.
+- Fix: `readJournal` records the SHA-256 of each journal's bytes after validation and skips re-validation when the same path has the same content. A rewritten, replaced or corrupted file has different bytes and is validated again; the engine's own writes need no invalidation. No journal is pruned.
+- Regression: `go test -count=1 -run 'TestSettledJournalsAreValidatedOnce|TestChangedJournalIsRevalidated' ./internal/vmhost` (the first fails with the cache disabled: 2500 validations vs 500; the second covers a same-size, same-mtime rewrite).
+- Avoid: pruning journal history to cut cost; keying on mtime/size alone.
+
+## BUG-1720 — go vet failed: the authority staging store copied a lock value (VET-1)
+
+- Date: 2026-10-02
+- Symptom: `go vet ./...` exited 1 with copylocks at `internal/agent/backup_authority_transfer.go` (`stage := *s`).
+- Root cause: the staging store was a struct copy of `Store`, which contains `poolCPUCache` and its `sync.Mutex`. The stage writers read only `dir` and `State.HostID`.
+- Fix: `stage := &Store{dir: temporary, State: s.State}`; no lock is copied and the stage writers see the same fields as before.
+- Regression: `go vet ./internal/agent` (red before) and the existing authority-transfer tests (`go test -count=1 -run 'Authority|Promot|Transfer' ./internal/agent`). No new test: behavior is unchanged.
+- Avoid: copying a `Store` by value; build a new one with the fields the callee needs.
+
+## BUG-1721 — A Core-queued mirror stayed dispatched forever once Core stopped reporting it (B2b)
+
+- Date: 2026-10-02
+- Symptom: an adopted outcome mirrored as `dispatched` (BUG-1620) had no way to settle if Core never reported a terminal outcome for it.
+- Root cause: BUG-1620 left the mirror to Core's later report; the missing-observation settle only handles `needs_attention` mirrors and excludes snapshot and backup kinds.
+- Fix: in the same adoption pass (`internal/controller/managed.go`), an adopted `dispatched` mirror absent from Core's report for more than ten minutes becomes `needs_attention` with "Core no longer reports this queued operation; check the host history for its outcome". It is never marked succeeded: the Core journal stays authoritative.
+- Regression: `go test -count=1 -run TestSilentQueuedAdoptedOutcomeNeedsAttention ./internal/controller` (fails with the new update disabled).
+- Avoid: settling an unreported mirror as succeeded, which claims an outcome Core never reported.

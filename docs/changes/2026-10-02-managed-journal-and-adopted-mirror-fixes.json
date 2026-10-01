@@ -1,0 +1,48 @@
+{
+  "summary": "A member reads only the named journal for an outcome instead of every journal; a Core-local queued outcome is mirrored by a replacing Controller as dispatched, so the agent's result is accepted and the host queue no longer wedges; a mirror Core stops reporting needs attention instead of staying dispatched; the pool authority staging store no longer copies a lock value.",
+  "paths": [
+    "internal/vmhost/managed.go",
+    "internal/vmhost/managed_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/managed_test.go",
+    "internal/controller/backup_adoption_test.go",
+    "internal/controller/release_retained_test.go",
+    "internal/controller/snapshot_adoption_test.go",
+    "internal/agent/backup_authority_transfer.go",
+    "docs/BUG_LEDGER.md",
+    "docs/API.md",
+    "docs/changes/2026-10-02-managed-journal-and-adopted-mirror-fixes.json"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Internal performance and adoption bookkeeping. The only operator-visible change is a task that Core stops reporting showing needs attention with a message to check the host history."
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The host report's managed outcomes keep their fields. The Controller stores an adopted queued outcome as dispatched and flags an unreported one after ten minutes; the agent result and operations routes keep their contracts.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes inside the backup recovery plan."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The host's managed journals (<operation id>.json) and outcome history, reported in the managed inventory.",
+    "reason": "The Controller operation rows are mirrors of Core's outcomes and are rebuilt from the report by a fresh Controller; the Core journal stays authoritative and nothing new is stored on the Controller."
+  },
+  "verification": {
+    "method": "Focused Go tests: TestJournaledCommandReadsOnlyItsOwnJournal (vmhost), TestCoreLocalReleaseRetainedMirrorAcceptsAgentResult and TestSilentQueuedAdoptedOutcomeNeedsAttention (controller), each failing with its fix removed, existing authority-transfer tests for the staging store, and go vet. Scenario-lab run on a three-host pool confirmed the release-retained row settles within 3 s and a queued restore-replace behind it ran. The journal CPU cost was measured in the lab and not fully resolved by BUG-1600 alone (see BUG-1700).",
+    "evidence": [
+      "internal/vmhost/managed_test.go",
+      "internal/controller/release_retained_test.go",
+      "internal/controller/backup_adoption_test.go",
+      ".cache/backup-scenario-lab/evidence/sixth-b2.log",
+      ".cache/backup-scenario-lab/evidence/sixth-b1-old.log",
+      ".cache/backup-scenario-lab/evidence/sixth-b1-new.log",
+      ".cache/backup-scenario-lab/evidence/sixth-gotest.log"
+    ]
+  }
+}

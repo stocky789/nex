@@ -23,6 +23,8 @@ type Props = {
 
 const blankRemote = { kind: "nfs" as BackupKind, server: "", exportPath: "", directory: "", share: "", endpoint: "", bucket: "", prefix: "", region: "", root: "", port: "", hostKey: "", username: "", secret: "", sshKey: "", domain: "" };
 
+// validRepositoryID mirrors Core's identifier rule for a repository ID the operator chooses.
+export const validRepositoryID = (id: string) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id);
 const validHost = (value: string) => value !== "" && !/[\s/\\@]/.test(value);
 const validComponent = (value: string) => value !== "" && value !== "." && value !== ".." && !/[/\\]/.test(value);
 const validRelative = (path: string) => path.split("/").every(validComponent);
@@ -85,6 +87,9 @@ export function hostAccess(repo: BackupRepository, hosts: Host[], masterHostID: 
     const member = repo.member_access?.find(a => a.host_id === host.id);
     if (!member) {
       return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: "No access report" };
+    }
+    if (repositoryHealth(repo) === "unknown") {
+      return { host: { id: host.id, hostname: host.hostname }, tone: "unknown" as const, label: "Unknown", detail: `Last report: ${date(member.observed_at)}` };
     }
     const state = memberState(repo, member);
     if (state === "accessible") {
@@ -176,8 +181,11 @@ function ForgetRepository({ api, poolID, repo, onClose, onDone }: {
 export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, unavailable, onNotice }: Props) {
   const [rows, setRows] = useState<BackupRepository[] | null>(null);
   const [error, setError] = useState("");
+  const [formError, setFormError] = useState("");
   const [form, setForm] = useState(false);
   const [name, setName] = useState("");
+  const [repoID, setRepoID] = useState("");
+  const [replaceConfirm, setReplaceConfirm] = useState("");
   const [remote, setRemote] = useState(blankRemote);
   const [working, setWorking] = useState("");
   const [createUncertain, setCreateUncertain] = useState(false);
@@ -193,7 +201,10 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
   const source = backupSource(remote);
   const credentialReady = remote.kind === "nfs" || Boolean(remote.username.trim() && !(remote.kind === "smb3" && (remote.username.includes("=") || !validSMBDomain(remote.domain.trim()))) &&
     (credentialReceipt.current || (remote.kind === "sftp" ? remote.sshKey.trim() : remote.secret)));
-  const canCreate = Boolean(name.trim() && source && credentialReady && !unavailable && !busy);
+  // Entering an existing repository's ID replaces its credential or SFTP host key; any other ID re-registers a forgotten destination.
+  const existing = rows?.find(r => r.id === repoID.trim());
+  const idReady = !repoID.trim() || (validRepositoryID(repoID.trim()) && (!existing || replaceConfirm === existing.id));
+  const canCreate = Boolean(name.trim() && source && credentialReady && idReady && !unavailable && !busy);
 
   const load = async () => {
     loadAbort.current?.abort();
@@ -216,6 +227,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     setRows(null);
     setError("");
     setForm(false);
+    setFormError("");
     setForgetting(null);
     setOrphans(null);
     setCreateUncertain(false);
@@ -239,7 +251,10 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     credentialReceipt.current = "";
     setCreateUncertain(false);
     setForm(false);
+    setFormError("");
     setName("");
+    setRepoID("");
+    setReplaceConfirm("");
     setRemote(blankRemote);
   };
   const change = (update: () => void) => {
@@ -258,9 +273,9 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     e.preventDefault();
     if (!canCreate || !source) return;
     setWorking(createKey);
-    setError("");
+    setFormError("");
     try {
-      createID.current ||= rid("brepo");
+      createID.current ||= repoID.trim() || rid("brepo");
       const registrationID = requestID(createKey, "brepo");
       const credentialID = remote.kind === "nfs" ? "" : requestID(credentialKey, "bcred");
       if (credentialID && !credentialReceipt.current) {
@@ -278,6 +293,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
         kind: remote.kind,
         ...source,
         ...(credentialID ? { credential_ref: credentialReceipt.current, credential_request_id: credentialID } : {}),
+        ...(existing ? { replace_confirmation: existing.id } : {}),
       });
       clearRequest(createKey);
       onNotice(`Backup repository ${name.trim()}: registration requested`, backupOpID(reply));
@@ -292,7 +308,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
         credentialReceipt.current = "";
         setCreateUncertain(false);
       } else setCreateUncertain(true);
-      setError(err instanceof Error ? err.message : String(err));
+      setFormError(err instanceof Error ? err.message : String(err));
     } finally {
       setWorking("");
     }
@@ -347,7 +363,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     <button type="button" className="sm primary" disabled={blocked || form || Boolean(working)} title={createWhy || undefined} onClick={() => setForm(true)}>
       <Icon kind="backup" />Create
     </button>
-    <button type="button" className="sm" onClick={() => { location.hash = "/backups?flow=create-policy"; }}>Backup jobs</button>
+    <button type="button" className="sm" onClick={() => { location.hash = "/backups"; }}>Backup jobs</button>
   </>}>
     {error && <p className="why" role="alert">{error}</p>}
     {form && <section className="panel form-panel" aria-label="Create backup repository">
@@ -356,8 +372,15 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
         <button type="button" disabled={Boolean(working)} onClick={closeForm}>Close</button>
       </div>
       <form className="vm-fields" onSubmit={onCreate}>
+        {formError && <p className="why" role="alert">{formError}</p>}
         {createUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact registration.</p>}
         <label>Name<input required maxLength={100} value={name} autoFocus disabled={fieldsDisabled} onChange={e => change(() => setName(e.target.value))} /></label>
+        <label>Repository ID<input value={repoID} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" placeholder="Optional; generated when empty" autoComplete="off" disabled={fieldsDisabled} onChange={e => change(() => setRepoID(e.target.value))} /></label>
+        <p className="note">Leave empty for a new repository. To bring back a forgotten destination, or to replace a lost credential or an SFTP host key, enter the repository's original ID (shown under its name in the list); its recovery points are kept.</p>
+        {existing && <>
+          <p className="warning">{existing.name} already exists. Saving replaces its credential and, for SFTP, its pinned host key. The destination must be the same one; Core refuses a different destination.</p>
+          <label>Type the repository ID to confirm<input required autoComplete="off" value={replaceConfirm} disabled={fieldsDisabled} onChange={e => setReplaceConfirm(e.target.value)} /><span className="mono">{existing.id}</span></label>
+        </>}
         <label>Destination type<select value={remote.kind} disabled={fieldsDisabled} onChange={e => patchRemote({ ...blankRemote, kind: e.target.value as BackupKind, server: remote.server, exportPath: remote.exportPath, directory: remote.directory })}>
           {backupKinds.map(kind => <option key={kind} value={kind}>{kind === "smb3" ? "SMB3" : kind === "s3" ? "S3 compatible" : kind === "sftp" ? "SFTP" : "NFS"}</option>)}
         </select></label>
@@ -404,14 +427,14 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
           <td><AccessLights items={hostAccess(repo, hosts, masterHostID)} /></td>
           <td><span className="muted">{repo.health?.observed_at ? date(repo.health.observed_at) : "Not checked"}</span></td>
           <td className="row-actions">
-            <button type="button" className="sm" disabled={blocked || Boolean(working)} title={createWhy || undefined} onClick={() => void onTest(repo)}>
+            <button type="button" className="sm" disabled={blocked || Boolean(working)} title={createWhy || undefined} aria-label={`Test access to ${repo.name}`} onClick={() => void onTest(repo)}>
               {working === `test-${repo.id}` ? "Testing…" : "Test access"}
             </button>
-            <button type="button" className="sm" disabled={blocked || Boolean(working)} onClick={() => void onImport(repo)}>
+            <button type="button" className="sm" disabled={blocked || Boolean(working)} aria-label={`Import points into ${repo.name}`} onClick={() => void onImport(repo)}>
               {working === `import-${repo.id}` ? "Importing…" : "Import points"}
             </button>
-            <button type="button" className="sm" disabled={blocked || Boolean(working)} onClick={() => setOrphans(repo)}>Orphaned backups</button>
-            <button type="button" className="sm danger" disabled={blocked || Boolean(working)} onClick={() => setForgetting(repo)}>Forget</button>
+            <button type="button" className="sm" disabled={blocked || Boolean(working)} aria-label={`Orphaned backups in ${repo.name}`} onClick={() => setOrphans(repo)}>Orphaned backups</button>
+            <button type="button" className="sm danger" disabled={blocked || Boolean(working)} aria-label={`Forget ${repo.name}`} onClick={() => setForgetting(repo)}>Forget</button>
           </td>
         </tr>)}
       </tbody>

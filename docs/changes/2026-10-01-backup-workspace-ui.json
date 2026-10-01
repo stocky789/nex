@@ -1,0 +1,63 @@
+{
+  "summary": "Refine the existing backup workspace with separate jobs/recovery views, inspection-first contextual actions, named wide slide-over workflows, fixed footers, preserved drafts and exact retries, responsive filters and compact phone rows.",
+  "paths": [
+    "web/src/backups.tsx",
+    "web/src/backup-policies.tsx",
+    "web/src/ui.tsx",
+    "web/src/settings.css",
+    "web/src/backups-panels.test.mjs",
+    "web/src/backup-policies.test.mjs",
+    "tests/integration/backup_workspace_browser.py",
+    ".github/workflows/phase1.yml",
+    ".gitea/workflows/phase1.yml",
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/guide/README.md",
+    "docs/guide/backup-now.md",
+    "docs/guide/backup-policies.md",
+    "docs/guide/restore-as-new.md",
+    "docs/guide/restore-replace.md",
+    "docs/guide/test-restore.md",
+    "docs/plans/2026-09-25-recovery-snapshots-backups-restores.md",
+    "docs/qa/2026-10-01-backup-ui/README.md",
+    "docs/qa/2026-10-01-backup-ui/results.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The changed UI steps now name separate views, inspection before restore, meaningful wizard steps, fixed footer controls, expanded job actions and exact retries after uncertain responses. Their changed UI portions were walked with fictional API inventory, not real native recovery.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/backup-now.md",
+      "docs/guide/backup-policies.md",
+      "docs/guide/restore-as-new.md",
+      "docs/guide/restore-replace.md",
+      "docs/guide/test-restore.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "Catalog/run reads and existing backup, restore-as-new, replace, test-restore, protect, verify/cleanup, policy create/pause/run-now and revision-checked repository updates are presented differently without changing URLs, bodies, authentication, authorization, CSRF, Core validation or retry identities. The reference documents the UI presentation; machine-readable contracts and generated API HTML need no change.",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "This is a Controller-only refinement of implemented backup capabilities; no milestone changes status and no native recovery or phase gate is closed. Full job editing, new filters, telemetry and backup capabilities remain outside this scope."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state. Tabs, selection, filters and ordinary drafts remain transient React presentation state. Existing pool backup policies, repositories, run history, recovery points and verification records remain Core-owned and adopted through the existing authenticated host APIs."
+  },
+  "verification": {
+    "method": "Exercised the built React UI through browser interaction and inspected captures at 1440x900, 1024x768 and 390x844 in both themes, with fictional API replies, keyboard/focus, exact retries, replacement/cleanup blockers, failed reads/recovery, prerequisites, pagination and reduced motion. Five regressions failed on the initial redesign; three additional final-review regressions failed on the subsequently corrected candidate. The final eight-case browser suite passed in the isolated Playwright runner, as did npm --prefix web run typecheck, npm --prefix web test and npm --prefix web run build. The API generator check, privacy test and worktree documentation gate passed; mirrored forge invocation was inspected but remote CI was not run. Independent UI and documentation correction reviews returned no findings. Native recovery and real API enforcement were not exercised.",
+    "evidence": [
+      "docs/qa/2026-10-01-backup-ui/README.md",
+      "docs/qa/2026-10-01-backup-ui/results.json",
+      "tests/integration/backup_workspace_browser.py",
+      "web/src/backup-policies.test.mjs",
+      "web/src/backups-panels.test.mjs",
+      ".github/workflows/phase1.yml",
+      ".gitea/workflows/phase1.yml"
+    ]
+  }
+}

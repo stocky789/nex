@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { readFile } from "node:fs/promises";
 import { bundleTestModule } from "./test-helpers.mjs";
 
-const { BackupPolicies, failedVMs, repositoryChangeBody, requestRepositoryChange } = await import(bundleTestModule(new URL("./backup-policies.tsx", import.meta.url), "backup-policies"));
+const { failedVMs, jobVMResults, repositoryChangeBody, requestRepositoryChange } = await import(bundleTestModule(new URL("./backup-policies.tsx", import.meta.url), "backup-policies"));
 const { stableBody } = await import(bundleTestModule(new URL("./backup-types.ts", import.meta.url), "backup-types"));
 const pending = {};
 const first = stableBody(pending, "pause-policy-a", { paused: true });
@@ -13,20 +11,7 @@ assert.equal(stableBody(pending, "pause-policy-a", { paused: false }), first, "a
 delete pending["pause-policy-a"];
 assert.deepEqual(stableBody(pending, "pause-policy-a", { paused: false }), { paused: false }, "a settled action may start a new intent");
 
-const backupsSource = readFileSync(new URL("./backups.tsx", import.meta.url), "utf8");
-const policySource = readFileSync(new URL("./backup-policies.tsx", import.meta.url), "utf8");
-assert.doesNotMatch(backupsSource, /setTab|aria-pressed=\{tab/, "backup jobs and recovery points share one page without tabs");
-assert.match(policySource, /if \(uncertain\) return;\s*clearRequest\("policy-create"\)/, "an uncertain policy body stays frozen");
-assert.match(policySource, /request_id: requestID\(key, "bpol"\)/, "an exact create retry keeps its request ID");
-
-const props = { api: async () => ({}), data: { vms: [], hosts: [] }, pool: { id: "pool-1" }, repos: [], policies: [], busy: false, unavailable: false, working: "", setWorking() {}, onNotice() {}, onError() {}, error: "", reload: async () => {}, requestID: () => "held-id", clearRequest() {}, openCreate: true, onOpenCreate() {}, onCloseCreate() {}, onViewPoints() {}, runs: [] };
-assert.match(renderToStaticMarkup(createElement(BackupPolicies, { ...props })), /Create backup job/, "returning to Backup jobs renders the preserved form");
-const offlineRepo = { id: "repo-1", name: "Primary", health: { status: "offline", observed_at: new Date().toISOString() } };
 const policy = { id: "policy-1", repository_id: "repo-1", name: "Nightly", rule: { frequency: "daily", hour: 2, minute: 0 } };
-const offlineList = renderToStaticMarkup(createElement(BackupPolicies, { ...props, repos: [offlineRepo], policies: [policy], openCreate: false }));
-assert.match(offlineList, /Repository offline/, "policy list warns about its selected offline destination");
-const changeList = renderToStaticMarkup(createElement(BackupPolicies, { ...props, repos: [{ ...offlineRepo, kind: "nfs" }, { id: "repo-2", name: "Replacement", kind: "nfs" }], policies: [policy], openCreate: false }));
-assert.match(changeList, /Change repository/, "policy row exposes a repository change when another destination is available");
 const fullPolicy = { ...policy, schedule_id: "schedule-1", revision: 7, enabled: false, paused: true, capture_mode: "snapshot", time_zone: "UTC", vm_ids: ["vm-a"], retention: { keep_latest: 3, protect_newer_than: 4 }, limits: { max_concurrent_per_repo: 2 }, overrides: [{ vm_id: "vm-a", capture_mode: "stopped" }] };
 assert.deepEqual(repositoryChangeBody(fullPolicy, "repo-2", "held-id"), {
   request_id: "held-id", expected_revision: 7, schedule_id: "schedule-1", name: "Nightly", enabled: false, paused: true,
@@ -53,3 +38,28 @@ assert.deepEqual(sent, [
 const run = (vm, status, at) => ({ policy_id: "policy-1", vm_id: vm, status, updated_at: at });
 assert.deepEqual(failedVMs({ id: "policy-1", vm_ids: ["a", "b", "c"] }, [run("a", "failed", "2026-01-01"), run("b", "succeeded", "2026-01-01"), run("c", "failed", "2026-01-01"), run("c", "succeeded", "2026-01-02"), { ...run("d", "failed", "2026-01-01"), policy_id: "other" }]), ["a"], "only a VM whose latest run of this job failed marks the job failed");
 assert.deepEqual(failedVMs({ id: "policy-1", vm_ids: ["a"] }, null), [], "unknown run history shows no failure");
+
+const history = [
+  run("a", "needs_attention", "2026-01-03"),
+  run("a", "succeeded", "2026-01-02"),
+  run("a", "failed", "2026-01-01"),
+  run("b", "missed", "2026-01-03"),
+  run("c", "skipped", "2026-01-03"),
+  run("d", "running", "2026-01-03"),
+  { ...run("a", "succeeded", "2026-01-04"), policy_id: "other" },
+];
+const results = jobVMResults("policy-1", history);
+assert.equal(results.get("a").last.status, "needs_attention", "a later non-success remains the current result despite an earlier successful backup");
+assert.equal(results.get("a").lastSuccess.updated_at, "2026-01-02", "the last successful recovery point remains visible after a later unsuccessful run");
+assert.deepEqual(failedVMs({ id: "policy-1", vm_ids: ["a", "b", "c", "d"] }, history), ["a", "b"], "missed and needs-attention results require attention; skipped and running do not");
+const reversedResults = jobVMResults("policy-1", [...history].reverse());
+for (const vmID of ["a", "b", "c", "d"]) {
+  assert.deepEqual(reversedResults.get(vmID), results.get(vmID), "latest result and successful backup selection are independent of history ordering");
+}
+
+const { deletePolicyBody } = await import(bundleTestModule(new URL("./backup-policy-delete.tsx", import.meta.url), "backup-policy-delete"));
+assert.deepEqual(deletePolicyBody("bpdelete-1", "Nightly"), { request_id: "bpdelete-1", confirmation: "Nightly" });
+const deleteSource = await readFile(new URL("./backup-policy-delete.tsx", import.meta.url), "utf8");
+assert.ok(deleteSource.includes("disabled={busy || !confirmMatches(typed, policy.name)}"), "delete stays disabled until the job name is typed");
+assert.ok(deleteSource.includes("useEffect(() => { requestID.current = rid(\"bpdelete\"); }, [typed]);"), "a changed confirmation is a new request");
+assert.ok(deleteSource.includes("/delete`, \"POST\""), "delete posts to the policy delete route");

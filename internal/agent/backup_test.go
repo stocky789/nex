@@ -49,7 +49,7 @@ func upsertTestBackupRepository(s *Store, repo protocol.BackupRepository) (proto
 		Server: repo.Source.Server, Export: repo.Source.Export, FilesystemID: "test-nfs",
 	}
 	repo.MountPath = ""
-	return upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+	return upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
 }
 
 func seedBackupMaster(t *testing.T) *Store {

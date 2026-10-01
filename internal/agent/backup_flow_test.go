@@ -193,12 +193,15 @@ func TestRetentionKeepsSettlingPointAndSkipsUndeletablePoint(t *testing.T) {
 	}
 	previous := verifyBackupRepository
 	t.Cleanup(func() { verifyBackupRepository = previous })
-	entered, release := make(chan struct{}), make(chan struct{})
+	entered, release := make(chan struct{}, 1), make(chan struct{})
 	verifyBackupRepository = func(ctx context.Context, repo protocol.BackupRepository) error {
-		select {
-		case entered <- struct{}{}:
-			<-release
-		default:
+		// Only this test's repository: a leftover goroutine from another test must not take the slot.
+		if repo.MountPath == mount {
+			select {
+			case entered <- struct{}{}:
+				<-release
+			default:
+			}
 		}
 		return previous(ctx, repo)
 	}

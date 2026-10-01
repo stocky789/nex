@@ -136,6 +136,12 @@ func prepareS3BackupRepository(ctx context.Context, s *Store, repo protocol.Back
 	}
 	claimed, err := b.verifyOwner(ctx)
 	if err != nil {
+		if claimed {
+			// Claim write left an owner object; release before the corrected retry.
+			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = errors.Join(err, b.deleteExactMarker(cleanup, b.key(s3BackupOwnerKey), b.ownerBytes()))
+		}
 		return protocol.BackupRepository{}, err
 	}
 	identity := b.remoteIdentity()
@@ -202,6 +208,7 @@ func (b *s3BackupStorage) Verify(ctx context.Context) error {
 func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err error) {
 	key := b.key(s3BackupOwnerKey)
 	raw, err := b.read(ctx, key, 4096)
+	var wroteClaim bool
 	if isS3Missing(err) && b.repo.RemoteIdentity == nil {
 		if err := requirePoolAuthorityWritable(b.s); err != nil {
 			return false, err
@@ -232,14 +239,23 @@ func (b *s3BackupStorage) verifyOwner(ctx context.Context) (claimed bool, err er
 		if putErr != nil && !isS3Precondition(putErr) {
 			return false, putErr
 		}
+		wroteClaim = putErr == nil
 		raw, err = b.read(ctx, key, 4096)
 		claimed = true
 	}
+	releaseClaim := func(cause error) (bool, error) {
+		if !wroteClaim {
+			return claimed, cause
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return true, errors.Join(cause, b.deleteExactMarker(cleanup, key, b.ownerBytes()))
+	}
 	if err != nil {
-		return false, err
+		return releaseClaim(err)
 	}
 	if !bytes.Equal(raw, b.ownerBytes()) {
-		return false, ErrBackupConflict
+		return releaseClaim(ErrBackupConflict)
 	}
 	return claimed, nil
 }
@@ -434,7 +450,7 @@ func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protoc
 			if len(keys) == 0 || incomplete {
 				return protocol.BackupManifest{}, "", os.ErrNotExist
 			}
-			return protocol.BackupManifest{}, "", ErrBackupConflict
+			return protocol.BackupManifest{}, "", backupPointDamaged("recovery point " + pointID + " has no manifest on the destination")
 		}
 		return protocol.BackupManifest{}, "", err
 	}
@@ -447,10 +463,14 @@ func (b *s3BackupStorage) StatPoint(ctx context.Context, pointID string) (protoc
 	var manifest protocol.BackupManifest
 	if json.Unmarshal(raw, &manifest) != nil || manifest.Valid() != nil || manifest.RecoveryPointID != pointID ||
 		manifest.RepositoryID != b.repo.ID || manifest.PoolID != b.repo.PoolID {
-		return protocol.BackupManifest{}, "", ErrBackupConflict
+		return protocol.BackupManifest{}, "", backupPointDamaged("the manifest of recovery point " + pointID + " is invalid or belongs to another repository")
 	}
 	for _, artifact := range manifestArtifacts(manifest) {
-		if err := b.statArtifact(ctx, pointID, artifact.Filename, artifact.Size); err != nil {
+		if err := b.statArtifact(ctx, pointID, artifact.Filename, artifact.Size); isS3Missing(err) {
+			return protocol.BackupManifest{}, "", backupPointDamaged(fmt.Sprintf("recovery point %s is missing its artifact %s on the destination", pointID, artifact.Filename))
+		} else if errors.Is(err, ErrBackupConflict) {
+			return protocol.BackupManifest{}, "", backupPointDamaged(fmt.Sprintf("recovery point %s has an artifact %s of the wrong size on the destination", pointID, artifact.Filename))
+		} else if err != nil {
 			return protocol.BackupManifest{}, "", err
 		}
 	}
@@ -539,6 +559,13 @@ func (b *s3BackupStorage) verifyArtifact(ctx context.Context, pointID, name stri
 	}
 	return nil
 }
+
+// backupPointDamaged says which recovery point the destination cannot fully serve and why.
+// Callers still see ErrBackupConflict.
+type backupPointDamaged string
+
+func (e backupPointDamaged) Error() string      { return string(e) }
+func (backupPointDamaged) Is(target error) bool { return target == ErrBackupConflict }
 
 func (b *s3BackupStorage) statArtifact(ctx context.Context, pointID, name string, size int64) error {
 	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.repo.S3Source.Bucket), Key: aws.String(b.pointKey(pointID, name))})

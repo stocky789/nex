@@ -26,7 +26,8 @@ func TestReportRestoreMissingPointFailsBeforeReservation(t *testing.T) {
 	cmd := protocol.Command{OperationID: "restore-missing-point", Kind: "backup-restore-as-new",
 		Restore: &protocol.RestoreAsNewRequest{RepositoryID: "repo-1", RecoveryPointID: "point-missing",
 			NewVMID: "22222222-2222-4222-8222-222222222222", NewVMName: "restored", StorageID: "storage-1"}}
-	// A reservation that fails without a definite answer stays uncertain.
+	// A reservation whose run record never became durable settles failed on the master,
+	// which is the authority for that record; a retry needs a new operation.
 	vm := *poolVMTestSpec("vm-1", s.State.HostID)
 	uncertain := protocol.Command{OperationID: "backup-reserve-uncertain", Kind: protocol.BackupKindBackupNow, VM: &vm,
 		Backup: &protocol.BackupNowRequest{RepositoryID: "repo-1", Consistency: protocol.BackupCaptureStopped}}
@@ -55,7 +56,7 @@ func TestReportRestoreMissingPointFailsBeforeReservation(t *testing.T) {
 		raw, err := os.ReadFile(filepath.Join(s.dir, "state.json"))
 		var observed State
 		if err == nil && json.Unmarshal(raw, &observed) == nil &&
-			observed.Journal[cmd.OperationID].Status != "pending" && observed.Journal[uncertain.OperationID].Status != "pending" {
+			observed.Journal[cmd.OperationID].Status == "failed" && observed.Journal[uncertain.OperationID].Status == "failed" {
 			break
 		}
 		select {
@@ -74,7 +75,7 @@ func TestReportRestoreMissingPointFailsBeforeReservation(t *testing.T) {
 	if entry.Status != "failed" || !strings.Contains(entry.Error, ErrBackupNotFound.Error()) {
 		t.Fatalf("missing point journal: %+v", entry)
 	}
-	if entry := s.State.Journal[uncertain.OperationID]; entry.Status != "needs_attention" {
+	if entry := s.State.Journal[uncertain.OperationID]; entry.Status != "failed" || !strings.Contains(entry.Error, "no record of this backup") {
 		t.Fatalf("uncertain reservation journal: %+v", entry)
 	}
 	if _, err := loadPoolBackupRun(s, cmd.OperationID); !errors.Is(err, os.ErrNotExist) {

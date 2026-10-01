@@ -32,6 +32,19 @@ type pauseBackupPolicyRequest struct {
 	Paused    bool   `json:"paused"`
 }
 
+type deleteBackupPolicyRequest struct {
+	RequestID    string `json:"request_id"`
+	Confirmation string `json:"confirmation"`
+}
+
+// deleteBackupPolicyIntent includes the path policy so request_id replay cannot retarget
+// an accepted delete to another policy with the same body.
+type deleteBackupPolicyIntent struct {
+	RequestID    string `json:"request_id"`
+	PolicyID     string `json:"policy_id"`
+	Confirmation string `json:"confirmation"`
+}
+
 type runNowBackupPolicyRequest struct {
 	RequestID string `json:"request_id"`
 	VMID      string `json:"vm_id"`
@@ -132,6 +145,23 @@ func (c *Controller) pauseBackupPolicy(w http.ResponseWriter, r *http.Request, u
 	}
 	policy := protocol.BackupPolicy{ID: policyID, PoolID: pool, Paused: body.Paused}
 	c.enqueueBackupPolicy(w, pool, user, body.RequestID, "backup-policy-pause", &policy, nil, body, policyID)
+}
+
+func (c *Controller) deleteBackupPolicy(w http.ResponseWriter, r *http.Request, user, csrf string) {
+	pool, policyID := r.PathValue("id"), r.PathValue("policy_id")
+	var body deleteBackupPolicyRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.DeleteBackupPolicyRequest{PolicyID: policyID, Confirmation: body.Confirmation}
+	if !protocol.ValidSnapshotOperationID(body.RequestID) || body.RequestID == policyID || req.Valid() != nil || body.Confirmation == "" {
+		fail(w, 400, "stable request_id distinct from policy id and the backup job name required")
+		return
+	}
+	intent := deleteBackupPolicyIntent{RequestID: body.RequestID, PolicyID: policyID, Confirmation: body.Confirmation}
+	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-policy-delete", protocol.Command{
+		OperationID: body.RequestID, Kind: "backup-policy-delete", PolicyDelete: &req,
+	}, intent, policyID)
 }
 
 func (c *Controller) runNowBackupPolicy(w http.ResponseWriter, r *http.Request, user, csrf string) {

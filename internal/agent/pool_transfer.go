@@ -220,6 +220,13 @@ func savePoolTransfer(s *Store, record *poolTransferRecord) error {
 	return savePoolPeer(s, state)
 }
 
+// poolAuthorityHandedOff reports whether this host signed its pool authority away and so
+// refuses every authority write until it learns the outcome.
+func poolAuthorityHandedOff(s *Store) bool {
+	record, err := loadPoolTransfer(s)
+	return err == nil && record != nil && record.HandedOff
+}
+
 func poolTransferTerminal(stage string) bool { return stage == "done" || stage == "aborted" }
 
 // poolTransferCancellable is the one cancellation predicate: cancelPoolTransfer enforces it
@@ -1060,9 +1067,14 @@ func applyPoolRepoint(s *Store, caller protocol.PoolMember, request protocol.Poo
 			state.Restricted = supersededPoolRestriction(state.Restricted)
 		}
 	}
-	if record := state.Transfer; record != nil && record.Role == "source" {
+	if record := state.Transfer; record != nil && record.Role == "source" && !poolTransferTerminal(record.Stage) {
 		record.Stage, record.Status, record.Frozen, record.HandedOff = "done", "succeeded", false, false
 		record.MembershipGeneration, record.LastError = notice.Membership.Generation, ""
+		if record.OperationID != notice.OperationID {
+			// The pool moved on by another operation; this transfer did not produce it.
+			record.Stage, record.Status = "aborted", "failed"
+			record.LastError = "the pool changed master by another operation"
+		}
 		record.UpdatedAt = time.Now().UTC()
 	}
 	if err = savePoolPeer(s, state); err != nil {
@@ -1180,7 +1192,7 @@ func ExecutePoolTransfer(ctx context.Context, s *Store, cmd protocol.Command) pr
 		// a backup can be admitted between the unresolved-work check and the
 		// transfer record, or be blocked from settling by a refused transfer.
 		poolBackupAuthorityMu.Lock()
-		backupErr := unsettledBackupTransferRefusal(s)
+		backupErr := unsettledBackupTransferRefusal(s, action, v.MemberHostID)
 		if backupErr == nil {
 			backupErr = savePoolTransfer(s, record)
 		}
@@ -1459,7 +1471,7 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
-	if err := unsettledBackupTransferRefusal(s); err != nil {
+	if err := unsettledBackupTransferRefusal(s, record.Action, record.TargetHostID); err != nil {
 		return err
 	}
 	// The master's own peer origin is what every member already uses to reach it, and what
@@ -1540,19 +1552,35 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 		poolVMMu.Unlock()
 		return err
 	}
-	return errors.New("pool authority changed while it was being frozen; retry the master change")
+	return errors.New("pool authority kept changing while it was being frozen; nothing was changed, so start the master change again")
 }
 
-func unsettledBackupTransferRefusal(s *Store) error {
-	if hasUnsettledBackup(s.State.Journal, "") {
+// unsettledBackupTransferRefusal ignores pending runs reserved on the host being ejected or
+// on a member that is not ready: no member can settle them, and they must not pin the pool.
+func unsettledBackupTransferRefusal(s *Store, action, targetHostID string) error {
+	// An operation whose durable run or receipt already ended succeeded or failed is
+	// settled; only its journal entry is stale, so it must not pin the pool.
+	live := map[string]JournalEntry{}
+	for id, entry := range s.State.Journal {
+		if entry.Status == "needs_attention" && backupOperationEnded(s, id) {
+			continue
+		}
+		live[id] = entry
+	}
+	if hasUnsettledBackup(live, "") {
 		return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
 	}
 	runs, err := listPoolBackupRuns(s)
 	if err != nil {
 		return errors.New("backup run history is unavailable while freezing pool authority")
 	}
+	membership, err := Membership(s)
+	if err != nil {
+		return errors.New("pool membership is unavailable while freezing pool authority")
+	}
 	for _, run := range runs {
-		if run.Status == "pending" {
+		owner, found := poolMemberByID(membership, run.HostID)
+		if run.Status == "pending" && !(action == "eject" && run.HostID == targetHostID) && (run.HostID == "" || run.HostID == s.State.HostID || found && owner.Status == "ready") {
 			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
 		}
 	}
@@ -1561,11 +1589,31 @@ func unsettledBackupTransferRefusal(s *Store) error {
 		return errors.New("backup operation receipts are unavailable while freezing pool authority")
 	}
 	for _, receipt := range receipts {
-		if receipt.Status == "pending" {
-			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		if receipt.Status != "pending" {
+			continue
+		}
+		if time.Since(receipt.ObservedAt) <= peerBackupRunLimit {
+			return errors.New("backup operation is unresolved (" + receipt.OperationID + ", " + receipt.Kind + "); finish or reconcile it before changing pool authority")
+		}
+		// Nothing has progressed it for the run limit, so it is not running work. Record the
+		// reason; promotion settles an unresolved receipt this way too.
+		receipt.Status, receipt.ObservedAt = "needs_attention", time.Now().UTC()
+		receipt.Error = "the operation did not finish within " + peerBackupRunLimit.String() + " and no longer holds up a pool master change; its outcome is unknown, so inspect the target before retrying"
+		if err := savePoolBackupMetadataReceipt(s, receipt); err != nil {
+			return errors.New("backup operation receipts could not be settled while freezing pool authority")
 		}
 	}
 	return nil
+}
+
+// backupOperationEnded reports whether the operation's durable run or receipt is terminal.
+func backupOperationEnded(s *Store, id string) bool {
+	ended := func(status string) bool { return status == "succeeded" || status == "failed" }
+	if run, err := loadPoolBackupRun(s, id); err == nil {
+		return ended(run.Status)
+	}
+	receipt, err := loadPoolBackupMetadataReceipt(s, id)
+	return err == nil && ended(receipt.Status)
 }
 
 // recordPoolMasterPeerOrigin records the master's own peer origin in its membership row if
@@ -1802,7 +1850,7 @@ func handOffPoolAuthority(ctx context.Context, s *Store, record *poolTransferRec
 	}
 	reply, err := poolTransferRPC(ctx, s, member.PeerOrigin, member.HostID, protocol.PoolTransferRequest{OperationID: record.OperationID, Action: "activate", Notice: *record.Notice}, timeout)
 	if err != nil {
-		return errors.New("pool authority was handed to " + member.HostID + " but activation did not complete; cancel the transfer or confirm powering off that host to resume authority on this host")
+		return errors.New("pool authority was handed to " + member.HostID + " but its activation is not confirmed yet; this host keeps refusing authority writes and converges by itself once that host answers, so wait and do not power off either host")
 	}
 	if !reply.Activated || reply.Notice == nil {
 		return errors.New("pool member " + member.HostID + " did not activate the pool authority")
@@ -2021,19 +2069,45 @@ func AdvancePoolAuthorityTransfer(ctx context.Context, s *Store, timeout time.Du
 }
 
 // The transfer runs on a probe goroutine; reconcile its command receipt on Run's
-// journal-owning loop after the same durable operation reaches done.
+// journal-owning loop once the durable pool state shows the outcome. A candidate's
+// promotion reads its own transfer record. The old master's planned change returns before
+// the new master's answer arrives and its transfer record may be gone or replaced by then,
+// so it settles only when the pool shows the target as master and this host's source record
+// for the same operation finished: another change that made the target master is not this
+// receipt's success.
 func reconcilePoolPromotionJournal(s *Store) {
 	for id, entry := range s.State.Journal {
-		if entry.Command == nil || entry.Command.Kind != "pool-promote" || entry.Status != "needs_attention" {
+		if entry.Command == nil || (entry.Command.Kind != "pool-promote" && entry.Command.Kind != "pool-transfer") || entry.Status != "needs_attention" {
 			continue
 		}
-		// Only a waiting promotion receipt reads the transfer record under poolPeerMu.
-		record, err := loadPoolTransfer(s)
-		if err != nil || record == nil || record.OperationID != id || record.Action != "promote" ||
-			record.Role != "candidate" || record.Stage != "done" {
-			continue
+		observed := time.Now().UTC()
+		if v := entry.Command.Pool; entry.Command.Kind == "pool-transfer" {
+			if v == nil || v.Action != "master-change" {
+				continue
+			}
+			membership, err := Membership(s)
+			if err != nil || membership.MasterHostID != v.MemberHostID {
+				continue
+			}
+			record, err := loadPoolTransfer(s)
+			if err != nil || record == nil || record.OperationID != id || record.Role != "source" || record.Stage != "done" {
+				const moved = "the target became master through another operation, not this master change"
+				if entry.Error != moved {
+					entry.Error = moved
+					s.State.Journal[id] = entry
+				}
+				continue
+			}
+		} else {
+			// Only a waiting receipt reads the transfer record under poolPeerMu.
+			record, err := loadPoolTransfer(s)
+			if err != nil || record == nil || record.OperationID != id || record.Action != "promote" ||
+				record.Stage != "done" {
+				continue
+			}
+			observed = record.UpdatedAt
 		}
-		entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", record.UpdatedAt, false
+		entry.Status, entry.Error, entry.ObservedAt, entry.Acknowledged = "succeeded", "", observed, false
 		s.State.Journal[id] = entry
 	}
 }

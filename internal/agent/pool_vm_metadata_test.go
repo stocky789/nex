@@ -88,3 +88,22 @@ func TestUpdatePoolVMSnapshotMetadataRequiresReplicaConfirm(t *testing.T) {
 		t.Fatal("metadata succeeded while replica push was already in flight")
 	}
 }
+
+// A background replica push in flight must delay a snapshot reservation, not fail it.
+func TestPushReplicasWaitingForBusyOutlastsBackgroundPush(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	if err := EnsurePoolMembership(s); err != nil {
+		t.Fatal(err)
+	}
+	poolReplicaMu.Lock()
+	poolReplicaPushing[s.dir] = true
+	poolReplicaMu.Unlock()
+	time.AfterFunc(600*time.Millisecond, func() {
+		poolReplicaMu.Lock()
+		delete(poolReplicaPushing, s.dir)
+		poolReplicaMu.Unlock()
+	})
+	if err := pushReplicasWaitingForBusy(context.Background(), s); err != nil {
+		t.Fatalf("push did not wait for the background push: %v", err)
+	}
+}

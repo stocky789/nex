@@ -234,3 +234,105 @@ func TestForgetBackupRepositoryRetiresSealedCredential(t *testing.T) {
 		t.Fatal("retired credential still resolves")
 	}
 }
+
+// A crash after the repository record is gone must still retry detach from the pending record.
+func TestForgetRetriesPendingDetachWhenRecordGone(t *testing.T) {
+	var detached []string
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(_ context.Context, repo protocol.BackupRepository) error {
+		detached = append(detached, repo.ID)
+		return nil
+	}
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+
+	s := seedBackupMaster(t)
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: t.TempDir()}
+	if err := rememberPendingBackupDetach(s, repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := forgetPoolBackupRepository(context.Background(), s, protocol.ForgetRepositoryRequest{RepositoryID: "repo-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(detached) != 1 || detached[0] != "repo-1" {
+		t.Fatalf("pending detach was not retried: %v", detached)
+	}
+	if _, err := os.Lstat(pendingBackupDetachPath(s, "repo-1")); !os.IsNotExist(err) {
+		t.Fatalf("pending detach left behind: %v", err)
+	}
+}
+
+// A retain sweep refreshes the held ID list per member so a repo registered mid-sweep is kept.
+func TestRetainSweepRefreshesHeldRepositories(t *testing.T) {
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(context.Context, protocol.BackupRepository) error { return nil }
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+
+	lab := newTransferLab(t, 2)
+	master := lab.host("master-1")
+	membership, err := Membership(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := poolConfirmationPeers(membership, master.State.HostID)
+	if len(peers) < 2 {
+		t.Fatalf("need two ready members, got %d", len(peers))
+	}
+	stale := protocol.BackupRepository{ID: "repo-stale", PoolID: "pool-1", Name: "stale", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/stale"}, MountPath: t.TempDir()}
+	for _, peer := range peers {
+		if err := savePoolBackupRepositories(lab.host(peer.HostID), poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{stale.ID: stale}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// First member sees an empty hold list (as if the sweep started before any registration).
+	if err := postPeerBackupRoute(context.Background(), master, peers[0], "/retain", peerRetainRepositories{RepositoryIDs: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetPoolBackupRepository(lab.host(peers[0].HostID), "repo-stale"); err == nil {
+		t.Fatal("first member kept a stale repository")
+	}
+	fresh, err := upsertTestBackupRepository(master, protocol.BackupRepository{
+		ID: "repo-new", PoolID: "pool-1", Name: "new", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/new"}, MountPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := savePoolBackupRepositories(lab.host(peers[1].HostID), poolBackupRepositoriesState{
+		Repositories: map[string]protocol.BackupRepository{stale.ID: stale, fresh.ID: fresh},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Second member is retained against a refreshed list that includes the mid-sweep registration.
+	if err := postPeerBackupRoute(context.Background(), master, peers[1], "/retain", peerRetainRepositories{RepositoryIDs: []string{fresh.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetPoolBackupRepository(lab.host(peers[1].HostID), "repo-stale"); err == nil {
+		t.Fatal("second member kept a stale repository")
+	}
+	if _, err := GetPoolBackupRepository(lab.host(peers[1].HostID), "repo-new"); err != nil {
+		t.Fatalf("second member dropped a repository registered mid-sweep: %v", err)
+	}
+}
+
+func TestMemberForgetRefusesJournaledRegister(t *testing.T) {
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(context.Context, protocol.BackupRepository) error { return nil }
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+	member := newTransferLab(t, 1).host("member-1")
+	repo := protocol.BackupRepository{ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: t.TempDir()}
+	if err := savePoolBackupRepositories(member, poolBackupRepositoriesState{Repositories: map[string]protocol.BackupRepository{repo.ID: repo}}); err != nil {
+		t.Fatal(err)
+	}
+	member.State.Journal = map[string]JournalEntry{"register-1": {Status: "pending", Command: &protocol.Command{
+		OperationID: "register-1", Kind: "backup-repository-register", BackupRepository: &repo}}}
+	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1"); err == nil {
+		t.Fatal("member forgot a repository its journal still registers")
+	}
+	member.State.Journal["register-1"] = JournalEntry{Status: "failed", Command: member.State.Journal["register-1"].Command}
+	if err := forgetMemberBackupRepository(context.Background(), member, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+}

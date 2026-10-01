@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.public-demo body { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
+.public-demo #root { min-height: 0; }
+.demo-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12px; }
+.demo-banner strong { color: var(--text); }
+.demo-banner a { margin-left: auto; }
+.public-demo .app { height: 100%; }
+.public-demo .login { min-height: 100%; }
+.demo-login-credentials { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--sunken); }
+.demo-login-credentials dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 10px 0 0; }
+.demo-login-credentials dd { margin: 0; font-weight: 600; }
+.public-demo .slideover { top: calc(48px + var(--demo-banner-height, 30px)); }
+.public-demo .vm-filters { max-height: calc(100dvh - 48px - var(--demo-banner-height, 30px)); }
+@media (max-width: 900px) {
+  .public-demo .activity .menu-items { top: calc(52px + var(--demo-banner-height, 30px)); }
+}
+@media (max-width: 600px) {
+  .public-demo .scope .menu-items { top: calc(52px + var(--demo-banner-height, 30px)); }
+}

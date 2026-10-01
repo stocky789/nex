@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -17,6 +18,10 @@ import (
 )
 
 const poolBackupOrphanCleanupsDir = "pool-backup-orphan-cleanups"
+
+// orphanSizingBudget must stay under the Core HTTP write timeout (30 s) and the Controller's
+// relay wait (10 s); points not sized in time are counted, not guessed.
+var orphanSizingBudget = 6 * time.Second
 
 // orphanView is a repository's recovery points whose VM is not in the master's VM inventory.
 type orphanView struct {
@@ -121,7 +126,7 @@ func queryBackupOrphans(ctx context.Context, s *Store, repositoryID string) (pro
 	if err != nil {
 		return protocol.BackupOrphanQuery{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, orphanSizingBudget)
 	defer cancel()
 	backend, backendErr := openBackupRepositoryStorage(s, view.repo)
 	out := protocol.BackupOrphanQuery{RepositoryID: repositoryID, Groups: []protocol.BackupOrphanGroup{}, Warnings: view.warnings}
@@ -162,8 +167,45 @@ func queryBackupOrphans(ctx context.Context, s *Store, repositoryID string) (pro
 	return out, nil
 }
 
+// orphanAuthority is checked before every delete, so a cleanup that outlives the pool's
+// authority (or is resumed on a deposed host) stops instead of deleting.
+func orphanAuthority(s *Store) error {
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	if err := masterBackupPool(s, s.State.PoolID); err != nil {
+		return err
+	}
+	return requirePoolAuthorityWritable(s)
+}
+
+func orphanCleanupsPath(s *Store) string {
+	return filepath.Join(poolBackupStoreDir(s), poolBackupOrphanCleanupsDir)
+}
+
 func orphanCleanupPath(s *Store, operationID string) string {
-	return filepath.Join(poolBackupStoreDir(s), poolBackupOrphanCleanupsDir, operationID+".json")
+	return filepath.Join(orphanCleanupsPath(s), operationID+".json")
+}
+
+func listOrphanCleanups(s *Store) ([]protocol.BackupOrphanCleanup, error) {
+	entries, err := os.ReadDir(orphanCleanupsPath(s))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cleanups []protocol.BackupOrphanCleanup
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		cleanup, err := loadOrphanCleanup(s, strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return nil, err
+		}
+		cleanups = append(cleanups, cleanup)
+	}
+	return cleanups, nil
 }
 
 func loadOrphanCleanup(s *Store, operationID string) (protocol.BackupOrphanCleanup, error) {
@@ -262,6 +304,9 @@ func cleanupBackupOrphans(ctx context.Context, s *Store, operationID string, req
 		if err := ctx.Err(); err != nil {
 			return rec, err
 		}
+		if err := orphanAuthority(s); err != nil {
+			return rec, err
+		}
 		result := &rec.Points[i]
 		if err := deleteOrphanedPoint(ctx, s, backend, req, result); err != nil {
 			result.Status, result.Reason = "failed", err.Error()
@@ -269,6 +314,9 @@ func cleanupBackupOrphans(ctx context.Context, s *Store, operationID string, req
 		if err := saveOrphanCleanup(s, rec); err != nil {
 			return rec, err
 		}
+	}
+	if sweeper, ok := backend.(interface{ SweepDeleteMarkers(context.Context) }); ok {
+		sweeper.SweepDeleteMarkers(ctx)
 	}
 	rec.Status = "succeeded"
 	failed := 0
@@ -295,26 +343,54 @@ func deleteOrphanedPoint(ctx context.Context, s *Store, backend backupRepository
 	}
 	point, err := getCatalogPoint(s, req.RepositoryID, result.RecoveryPointID)
 	if errors.Is(err, ErrBackupNotFound) {
-		result.Status = "deleted"
+		// Deleted only when the destination confirms it; a forgotten or re-cataloged
+		// repository still holds the bytes.
+		if _, _, err := backend.StatPoint(ctx, result.RecoveryPointID); errors.Is(err, os.ErrNotExist) {
+			result.Status = "deleted"
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("the destination could not confirm the point is gone: %w", err)
+		}
+		result.Status, result.Reason = "skipped", "not in the catalog but still on the destination; rebuild the catalog and review again"
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	reprotect := false
 	if point.Protected {
 		if !req.IncludeProtected {
 			result.Status, result.Reason = "skipped", "protected"
 			return nil
 		}
+		pins, err := ActiveBackupRestorePins(s)
+		if err != nil {
+			return err
+		}
+		if pins[point.ID] {
+			result.Status, result.Reason = "skipped", "in use by an unfinished restore or test restore"
+			return nil
+		}
+		// The delete refuses protected points, so protection is lifted for it and put back
+		// unless the point is really gone from the catalog after prune.
 		if _, err := SetPoolBackupPointProtected(s, protocol.ProtectRecoveryPointRequest{RepositoryID: req.RepositoryID, RecoveryPointID: point.ID}); err != nil {
 			return err
 		}
+		reprotect = true
 	}
-	if err := pruneRecoveryPoint(ctx, s, backend, req.RepositoryID, point.ID); err != nil {
+	err = pruneRecoveryPoint(ctx, s, backend, req.RepositoryID, point.ID)
+	// pruneRecoveryPoint leaves a point pinned by a restore that started meanwhile in place.
+	_, catalogErr := getCatalogPoint(s, req.RepositoryID, point.ID)
+	stillCataloged := catalogErr == nil
+	if reprotect && stillCataloged {
+		if _, protectErr := SetPoolBackupPointProtected(s, protocol.ProtectRecoveryPointRequest{RepositoryID: req.RepositoryID, RecoveryPointID: point.ID, Protected: true}); protectErr != nil {
+			err = errors.Join(err, fmt.Errorf("protection could not be restored: %w", protectErr))
+		}
+	}
+	if err != nil {
 		return err
 	}
-	// pruneRecoveryPoint leaves a point pinned by a restore that started meanwhile in place.
-	if _, err := getCatalogPoint(s, req.RepositoryID, point.ID); err == nil {
+	if stillCataloged {
 		result.Status, result.Reason = "skipped", "in use by an unfinished restore or test restore"
 		return nil
 	}

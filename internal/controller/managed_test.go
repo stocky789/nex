@@ -887,6 +887,45 @@ func TestCoreRecoverySettlesControllerOperation(t *testing.T) {
 	}
 }
 
+// A queued outcome that carries a reason shows it on the still-dispatched task, and the task
+// stays dispatched; the reason clears when Core stops reporting one.
+func TestQueuedOutcomeReasonShowsOnDispatchedTask(t *testing.T) {
+	a := newClient(t)
+	host := a.enroll(a.token(a.site(), ""), csr(t))
+	cert := certificate(t, host.CertificatePEM)
+	seq := uint64(0)
+	report := func(outcomes []protocol.ManagedOutcome) protocol.ReportResponse {
+		seq++
+		return a.report(cert, protocol.ReportRequest{Version: protocol.LegacyVersion, Sequence: seq, Capabilities: []string{protocol.ManagedVMCapability}, Inventory: &protocol.Inventory{Managed: &protocol.ManagedState{Outcomes: outcomes}}})
+	}
+	report(nil)
+	req := storageRegisterRequest{RequestID: "waiting-storage", PoolID: a.poolOf(host.HostID), HostID: host.HostID, Name: "Local", Path: "/var/lib/nex/vms"}
+	var queued protocol.StorageRegistration
+	read(t, a.call("POST", "/api/v1/storage", req, nil, 201), &queued)
+	report(nil)
+	task := func() protocol.Operation {
+		var ops []protocol.Operation
+		read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+		for _, op := range ops {
+			if op.ID == queued.OperationID {
+				return op
+			}
+		}
+		t.Fatal("operation missing")
+		return protocol.Operation{}
+	}
+	outcome := protocol.ManagedOutcome{OperationID: queued.OperationID, Kind: "storage-register", ID: queued.ID, Status: "queued", Error: "member unreachable"}
+	report([]protocol.ManagedOutcome{outcome})
+	if op := task(); op.Status != "dispatched" || op.Error != "member unreachable" {
+		t.Fatalf("reason not shown on dispatched task: %+v", op)
+	}
+	outcome.Error = ""
+	report([]protocol.ManagedOutcome{outcome})
+	if op := task(); op.Status != "dispatched" || op.Error != "" {
+		t.Fatalf("reason not cleared: %+v", op)
+	}
+}
+
 // VM power, media, update and delete requests audit the VM they act on, so a VM's activity can
 // be read from GET /api/v1/audit (GM-08). vm-create already audits its VM id.
 func TestVMOperationAuditsNameTheVM(t *testing.T) {

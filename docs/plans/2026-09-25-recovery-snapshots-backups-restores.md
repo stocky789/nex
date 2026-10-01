@@ -214,7 +214,37 @@ Protection labels use actual Core policy and schedule/run evidence, with Unknown
 that evidence is unavailable. Show policy coverage and successful-copy history separately; having
 a policy does not prove a backup exists. Do not invent an aggregate protection score.
 
-Illustrative structure, without fabricated product data:
+### Controller-only refinement (2026-10-01)
+
+The implemented scope is presentation of existing Core capabilities:
+
+- Separate compact **Backup jobs** and **Recovery points** views. Job filters and
+  expansion survive view switches; View points keeps its VM scope.
+- Point selection opens inspection only. Restore, protection, verification and
+  exact-VM cleanup are contextual actions rather than repeated point-row buttons.
+- Wide slide-overs use named steps and fixed footer navigation. Backup and restore
+  have Destination and Review and submit; job creation retains three meaningful steps.
+- Restore as new is the safe default. Replace original VM and Test restore state
+  their consequences; existing exact-name, fresh shut-off and cleanup-ID gates remain.
+- Existing catalog filters occupy a desktop sidebar or smaller-screen Filters
+  disclosure. Name/result hierarchy, compact phone rows, loading placeholders and
+  reduced-motion-aware transitions use the console tokens and accessible controls.
+- Ordinary drafts and refreshed point details remain available while navigating;
+  uncertain requests cannot change target or disappear through a view switch.
+
+**API impact: existing contract** — unchanged catalog/run reads, backup/restore/test,
+protection, policy create/pause/run-now and revision-checked repository update.
+**Guide impact: updated** — backup, job setup and all three restore instructions.
+**State owner: none** — no new durable data; the existing pool master's backup
+records and fresh-Controller adoption path remain authoritative. Full job editing,
+new telemetry, filters and backup capabilities are outside this refinement.
+
+The [browser review](../qa/2026-10-01-backup-ui/README.md) covers actual rendered
+workflows with fictional API responses and regression checks. It establishes UI
+behavior only, not new Core recovery evidence or phase closure.
+
+
+Illustrative future structure (not the implemented refinement above):
 
 ```text
 Backups                                 Back up now   Create policy

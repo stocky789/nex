@@ -273,6 +273,9 @@ func TestStorageCredentialReplayRepairsMountCredentialArtifacts(t *testing.T) {
 			if err != nil || !info.Mode().IsRegular() || info.Mode() != 0600 {
 				t.Fatalf("repaired credential = %v, %v", info, err)
 			}
+			if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Nlink != 1 || st.Uid != uint32(os.Geteuid()) {
+				t.Fatalf("repaired credential is not an exclusive inode: %#v", info.Sys())
+			}
 			got, err := os.ReadFile(path)
 			if err != nil || string(got) != string(want) {
 				t.Fatalf("repaired bytes = %q, %v", got, err)
@@ -305,6 +308,63 @@ func TestStorageCredentialReplayRepairsWrongOwner(t *testing.T) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || st.Uid != uint32(os.Geteuid()) || info.Mode() != 0600 {
 		t.Fatalf("repaired owner/mode = %#v", info)
+	}
+}
+
+func TestStorageCredentialMissingFileRefusesDifferentSecret(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	changed := handoff
+	changed.Credentials.Secret = "different-secret"
+	if _, err := SaveStorageCredential(state, changed); err == nil {
+		t.Fatal("missing credential file accepted a different secret under the same receipt")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("conflicting replay wrote a credentials file: %v", err)
+	}
+	if _, err := SaveStorageCredential(state, handoff); err != nil {
+		t.Fatalf("same-secret repair after loss: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(got), handoff.Credentials.Secret) {
+		t.Fatalf("same-secret repair: %q, %v", got, err)
+	}
+}
+
+func TestStorageCredentialReplayRepairsDivergentExclusiveFile(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, credentialDirectory, receipt.Receipt)
+	if err := os.WriteFile(path, []byte("username=operator\npassword=tampered\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveStorageCredential(state, handoff); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	want, errBody := smbAuthFileBody(handoff.Credentials.Username, handoff.Credentials.Secret, handoff.Credentials.Domain)
+	if err != nil || errBody != nil || string(got) != want {
+		t.Fatalf("divergent file was not repaired: %q want %q (%v, %v)", got, want, err, errBody)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Nlink != 1 || st.Uid != uint32(os.Geteuid()) {
+		t.Fatalf("repaired file is not exclusive: %#v", st)
 	}
 }
 

@@ -164,11 +164,10 @@
         "Bounded nested Campaign B re-run after promote backup-authority fix (continuity, restore-as-new, adoption)",
         "Browser Backups rail walkthrough; settlement bugs fixed in code; hermetic Phase 6 backup CI regression",
         "Phase 6 gate closed on 2026-09-27 for disposable virtual-lab scope",
-        "NFS, SMB3, S3-compatible and SFTP passed bounded native stopped and online cross-host backup/restore, fault and retention checks",
-        "Retained history beyond 64 MiB and signed backup-authority takeover passed bounded native multi-host checks"
+        "Retained history beyond 64 MiB and signed backup-authority takeover passed bounded native multi-host checks on an earlier candidate"
       ],
       open: [
-        "Backup repositories beyond NFS: SMB3, S3-compatible, SFTP, FTPS and opt-in plaintext FTP, with Core-owned periodic health alerts and native backup/restore lab acceptance",
+        "Backup repositories beyond NFS: SMB3, S3-compatible and SFTP are implemented in the current candidate, but native/browser/forge acceptance of that tree remains open (earlier destination lab evidence predates later review fixes); FTPS and opt-in plaintext FTP are still out of scope",
         "Nested disposable lab is not physical failure-domain certification",
         "Quiesced online and UEFI online backup remain refused until proven",
         "Enabled destination build needs a live browser walkthrough of setup, credentials, policy, restore and error flows",

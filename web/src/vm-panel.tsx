@@ -4,7 +4,7 @@ import type { API, Data, Host } from "./types";
 import { GuestTools, InstallMedia, VMDetails, VMPower, VMUsage, staleNote, stateText, type VM } from "./managed";
 import type { ConsoleMedia } from "./console";
 import { Stats, formatValue } from "./stats";
-import { TagEditor } from "./vm-edit";
+import { TagEditor, tagStyle } from "./vm-edit";
 import { VMSnapshots } from "./vm-snapshots";
 import { VMLastBackup } from "./vm-last-backup";
 import { GuestOS } from "./guest-os";
@@ -27,7 +27,7 @@ export function consoleBlocker(vm: VM, host?: Host, unavailable = false): string
 }
 // A VM on a host that is not fresh, or while the inventory cannot load, has an unknown state, never a stopped one.
 export const stateBadge = (vm: VM, unavailable = false) => unavailable || vm.freshness !== "fresh" ? <Badge value="stale" label="Unknown" /> : <Badge value={vm.state} />;
-export const TagList = ({ tags }: { tags?: string[] | null }) => tags?.length ? <span className="tags">{tags.map(t => <span key={t} className="tag">{t}</span>)}</span> : <span className="muted">—</span>;
+export const TagList = ({ tags }: { tags?: string[] | null }) => tags?.length ? <span className="tags">{tags.map(t => <span key={t} className="tag" style={tagStyle(t)}>{t}</span>)}</span> : <span className="muted">—</span>;
 
 const tabs = ["Overview", "Performance", "Snapshots", "Configuration", "Activity"] as const;
 const openConsole = (vm: VM) => { location.hash = `/console/${encodeURIComponent(vm.id)}`; };
@@ -88,7 +88,7 @@ export function VMPanel({ vm, data, api, reload, busy, unavailable, onNotice, me
       {!editing && <>
         <section className="tile" aria-label="Tags">
           <h2>Tags</h2>
-          <TagEditor vm={vm} host={host} master={master} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} />
+          <TagEditor vm={vm} host={host} master={master} api={api} reload={reload} unavailable={unavailable} onNotice={onNotice} known={[...new Set(data.vms.filter(v => v.pool_id === vm.pool_id).flatMap(v => v.spec?.tags ?? []))].sort()} />
         </section>
         <section className="tile" aria-label="High availability">
           <h2>High availability</h2>

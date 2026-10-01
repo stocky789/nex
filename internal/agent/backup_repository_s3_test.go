@@ -50,6 +50,7 @@ type fakeS3 struct {
 	failArtifactDeleteOnce     bool
 	failFirmwareDeleteOnce     bool
 	ignoreConditionalDelete    bool
+	failOwnerGetAfterPut       bool
 	blockManifestPutOnce       atomic.Bool
 	finalWinsTombstoneOnce     atomic.Bool
 	manifestPutEntered         chan struct{}
@@ -167,6 +168,15 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if key == f.denyGet {
 			s3TestError(w, http.StatusForbidden, "AccessDenied")
 			return
+		}
+		if strings.HasSuffix(key, "/"+s3BackupOwnerKey) || key == s3BackupOwnerKey {
+			if f.failOwnerGetAfterPut {
+				if _, ok := f.objects[key]; ok {
+					f.failOwnerGetAfterPut = false
+					s3TestError(w, http.StatusForbidden, "AccessDenied")
+					return
+				}
+			}
 		}
 		if strings.HasSuffix(key, "/manifest.json") && f.failManifestGetOnce {
 			f.failManifestGetOnce = false
@@ -317,7 +327,7 @@ func TestS3AbortFencesDelayedArtifactWrites(t *testing.T) {
 			lateResult := make(chan error, 1)
 			if multipart {
 				fake.mu.Lock()
-				fake.uploads[key] = map[int][]byte{1: payload}
+				fake.uploads = map[string]map[int][]byte{key: {1: payload}}
 				fake.mu.Unlock()
 				fake.blockArtifactCompleteOnce.Store(true)
 				go func() {
@@ -487,17 +497,17 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	}
 	repo := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Test", Kind: protocol.BackupRepoKindS3,
 		S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: "pool-1"}, CredentialRef: receipt.Receipt}
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "wrong-operation"); err == nil {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "wrong-operation", ""); err == nil {
 		t.Fatal("wrong registration operation resolved private credential")
 	}
-	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1")
+	prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "")
 	if err != nil || prepared.RemoteIdentity == nil {
 		t.Fatalf("prepare: %#v %v", prepared.RemoteIdentity, err)
 	}
 	if !preparedBackupRepositoryMatches(repo, prepared) {
 		t.Fatal("prepared S3 identity rejected")
 	}
-	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+	saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
 	if err != nil || saved.RemoteIdentity == nil || saved.MountPath != "" {
 		t.Fatalf("save: %#v %v", saved, err)
 	}
@@ -514,7 +524,7 @@ func TestS3CoreRegistrationAndTestUsePrivateReceipt(t *testing.T) {
 	if checked, err := TestPoolBackupRepositoryAccess(s, saved.ID); err != nil || checked.Access.Status != "ok" {
 		t.Fatalf("test access: %#v %v", checked.Access, err)
 	}
-	replayed, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1")
+	replayed, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, "register-1", "")
 	if err != nil || *replayed.RemoteIdentity != *saved.RemoteIdentity {
 		t.Fatalf("exact replay: %#v %v", replayed.RemoteIdentity, err)
 	}
@@ -1259,6 +1269,28 @@ func TestS3RefusedRegistrationReleasesOwner(t *testing.T) {
 	}
 }
 
+// Claim write followed by a read failure must still release .nex-owner.json so
+// the prefix is not stuck before Probe cleanup can run.
+func TestS3ClaimWriteReadFailReleasesOwner(t *testing.T) {
+	s, fake, repo := testS3Registration(t, "pool-1")
+	ctx := context.Background()
+	fake.objects["pool-1/"] = nil
+	fake.failOwnerGetAfterPut = true
+	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err == nil {
+		t.Fatal("claim write with unread owner registered")
+	}
+	fake.mu.Lock()
+	_, owned := fake.objects["pool-1/"+s3BackupOwnerKey]
+	fake.mu.Unlock()
+	if owned {
+		t.Fatal("claim-write read failure kept its owner claim")
+	}
+	repo.ID = "repo-2"
+	if _, err := prepareS3BackupRepository(ctx, s, repo, testS3Credential); err != nil {
+		t.Fatalf("corrected registration refused: %v", err)
+	}
+}
+
 // Regression for BUG-0720: a new repository may not sit inside another one's
 // prefix, and "." may not alias the bucket root.
 func TestS3RegistrationRefusesNestedPrefix(t *testing.T) {
@@ -1507,11 +1539,11 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 		}
 		repo := protocol.BackupRepository{ID: id, PoolID: s.State.PoolID, Name: id, Kind: protocol.BackupRepoKindS3,
 			S3Source: &protocol.BackupS3Source{Endpoint: server.URL, Bucket: "backups", Prefix: prefix}, CredentialRef: receipt.Receipt}
-		prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, request)
+		prepared, err := prepareBackupRepositoryForRegistration(context.Background(), s, repo, request, "")
 		if err != nil {
 			t.Fatalf("prepare %s: %v", id, err)
 		}
-		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared)
+		saved, err := upsertPoolBackupRepositoryPrepared(s, repo, prepared, false)
 		if err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
@@ -1543,7 +1575,7 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 	// Replacing a credential this host can still read stays refused.
 	swapped := good
 	swapped.CredentialRef = "someone-elses-receipt"
-	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3"); !errors.Is(err, ErrBackupCredentialInUse) {
+	if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, swapped, "register-3", ""); !errors.Is(err, ErrBackupCredentialInUse) {
 		t.Fatalf("readable credential was replaced: %v", err)
 	}
 	recovered := register("a-broken", "one", "register-4")

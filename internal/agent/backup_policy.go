@@ -318,12 +318,15 @@ func PoolBackupAuthorityRefs(s *Store) (*protocol.PoolBackupAuthority, error) {
 	sort.Slice(auth.MetadataReceipts, func(i, j int) bool {
 		return auth.MetadataReceipts[i].OperationID < auth.MetadataReceipts[j].OperationID
 	})
+	if auth.OrphanCleanups, err = listOrphanCleanups(s); err != nil {
+		return nil, err
+	}
 
 	if err := auth.Valid(); err != nil {
 		return nil, err
 	}
 	if len(auth.Repositories) == 0 && len(auth.Definitions) == 0 && len(auth.History) == 0 &&
-		len(auth.Catalog) == 0 && len(auth.Pins) == 0 && len(auth.Policies) == 0 && len(auth.Runs) == 0 && len(auth.MetadataReceipts) == 0 {
+		len(auth.Catalog) == 0 && len(auth.Pins) == 0 && len(auth.Policies) == 0 && len(auth.Runs) == 0 && len(auth.MetadataReceipts) == 0 && len(auth.OrphanCleanups) == 0 {
 		return nil, nil
 	}
 	return auth, nil
@@ -365,6 +368,7 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 		{3, poolBackupRunsPath(s), "backup run record is corrupt"},
 		{4, poolBackupCatalogPath(s), "backup catalog entry is corrupt"},
 		{6, poolBackupReceiptsPath(s), "backup metadata receipt is corrupt"},
+		{7, orphanCleanupsPath(s), "orphaned backup cleanup record is corrupt"},
 	} {
 		entries, err := os.ReadDir(group.path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -401,6 +405,10 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 				var receipt protocol.BackupMetadataReceipt
 				err = json.Unmarshal(raw, &receipt)
 				record, valid, id = receipt, receipt.Valid(), receipt.OperationID
+			case 7:
+				var cleanup protocol.BackupOrphanCleanup
+				err = json.Unmarshal(raw, &cleanup)
+				record, id = cleanup, cleanup.OperationID
 			}
 			if err != nil || valid != nil || id+".json" != entry.Name() {
 				return false, errors.New(group.corrupt)

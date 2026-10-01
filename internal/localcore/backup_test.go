@@ -23,6 +23,7 @@ func TestBackupMetadataReceiptReplay(t *testing.T) {
 		{"backup-repository-test", "/api/local/v1/pool/backup-repositories/repo-1/test", nil},
 		{"backup-policy-upsert", "/api/local/v1/pool/backup-policies", map[string]any{"policy": map[string]any{"id": "pol-1", "schedule_id": "sch-1", "name": "Daily", "enabled": true, "paused": true, "repository_id": "repo-1", "capture_mode": "stopped", "time_zone": "UTC", "rule": map[string]any{"frequency": "daily", "hour": 3, "minute": 15}, "vm_ids": []string{"6199dc4e-dd2a-45c2-a5d6-9c9f76304b43"}, "retention": map[string]any{"keep_latest": 3}, "revision": 1}}},
 		{"backup-policy-pause", "/api/local/v1/pool/backup-policies/pol-1/pause", map[string]any{"paused": true}},
+		{"backup-policy-delete", "/api/local/v1/pool/backup-policies/pol-1/delete", map[string]any{"confirmation": "Daily"}},
 		{"backup-protect", "/api/local/v1/pool/backup-protect", map[string]any{"repository_id": "repo-1", "recovery_point_id": "point-1", "protected": true}},
 		{"backup-test-verify", "/api/local/v1/pool/backup-test-verify", map[string]any{"repository_id": "repo-1", "recovery_point_id": "point-1", "test_vm_id": "11111111-1111-4111-8111-111111111111", "result": "passed"}},
 		{"backup-catalog-import", "/api/local/v1/pool/backup-catalog/import", map[string]any{"repository_id": "repo-1"}},

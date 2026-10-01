@@ -29,12 +29,15 @@ follows the console layout described in
 3. Type a tag in the field (*Add a tag, such as web*) and select **Add**, or press Enter. A tag is
    1 to 32 lowercase letters, digits or hyphens; capitals are lowered and a repeated tag is
    ignored. Add up to 16 tags. The list is kept sorted.
+   Tags already used on other VMs in the pool appear below the field as coloured **+ tag** buttons;
+   select one to add it. Each tag has its own colour, the same everywhere it is shown.
 4. To remove a tag, select the **×** beside it (*Remove tag <tag>*).
 5. Select **Save tags**. It is enabled only when the list differs from the saved one. The notice
    reads *Tags for <VM> requested. They show here once the pool master reports them.* Follow the
    `vm-update` task in **Tasks**.
 6. To find tagged VMs, use the **VMs** filter sidebar: type a tag in *Search name, IP, tag*, or
-   tick one or more values under the **Tags** facet. The **Tags** column shows each VM's tags
+   tick one or more values under the **Tags** facet. Set **Group by** to **Tag** to list VMs under a heading per tag (a VM
+   with several tags appears under each; untagged VMs come last). The **Tags** column shows each VM's tags
    (hide or show it with **Customize columns**), and the VM panel's **Overview** tab lists them
    under **Tags**.
 

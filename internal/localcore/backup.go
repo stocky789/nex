@@ -13,6 +13,8 @@ import (
 type registerBackupRepositoryRequest struct {
 	OperationID string                    `json:"operation_id"`
 	Repository  protocol.BackupRepository `json:"repository"`
+	// ReplaceConfirmation is the existing repository's ID, typed to replace its credential or SFTP host key.
+	ReplaceConfirmation string `json:"replace_confirmation,omitempty"`
 }
 
 type testBackupRepositoryRequest struct {
@@ -24,6 +26,11 @@ type forgetBackupRepositoryRequest struct {
 	Confirmation    string `json:"confirmation"`
 	RecoveryPoints  int    `json:"recovery_points"`
 	ProtectedPoints int    `json:"protected_points"`
+}
+
+type releaseRetainedRequest struct {
+	OperationID  string `json:"operation_id"`
+	Confirmation string `json:"confirmation"`
 }
 
 type orphanCleanupRequest struct {
@@ -70,12 +77,14 @@ func (s *Service) registerBackupRepository(w http.ResponseWriter, r *http.Reques
 	if !decode(w, r, &body) {
 		return
 	}
-	if !protocol.ValidSnapshotOperationID(body.OperationID) || body.Repository.Valid() != nil {
+	if !protocol.ValidSnapshotOperationID(body.OperationID) || body.Repository.Valid() != nil ||
+		body.ReplaceConfirmation != "" && body.ReplaceConfirmation != body.Repository.ID {
 		fail(w, http.StatusBadRequest, "invalid backup repository request")
 		return
 	}
 	request := protocol.Command{
 		OperationID: body.OperationID, Kind: "backup-repository-register", BackupRepository: &body.Repository,
+		ReplaceRepository: body.ReplaceConfirmation,
 	}
 	response, err := s.requestBackup(r.Context(), agent.BackupRequest{Command: &request})
 	if err != nil {
@@ -95,6 +104,35 @@ func (s *Service) registerBackupRepository(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	reply(w, http.StatusOK, response.Repository)
+}
+
+// releaseRetainedOriginals deletes the disks and vTPM state restore replace kept beside a VM on this host.
+func (s *Service) releaseRetainedOriginals(w http.ResponseWriter, r *http.Request) {
+	var body releaseRetainedRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	// The agent fills in this host and pool.
+	req := protocol.VMReleaseRetainedRequest{VMID: r.PathValue("id"), PoolID: "-", HostID: "-", Confirmation: body.Confirmation}
+	if !protocol.ValidSnapshotOperationID(body.OperationID) || req.Valid() != nil {
+		fail(w, http.StatusBadRequest, "invalid release retained originals request")
+		return
+	}
+	request := protocol.Command{OperationID: body.OperationID, Kind: "vm-release-retained", ReleaseRetained: &req}
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{Command: &request})
+	if err != nil {
+		writeBackupError(w, err)
+		return
+	}
+	if response.Err != nil {
+		writeBackupError(w, response.Err)
+		return
+	}
+	if response.Result == nil {
+		fail(w, http.StatusServiceUnavailable, "release result unavailable")
+		return
+	}
+	reply(w, http.StatusAccepted, response.Result)
 }
 
 func (s *Service) testBackupRepository(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +362,32 @@ func (s *Service) pauseBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, http.StatusOK, response.Policy)
+}
+
+func (s *Service) deleteBackupPolicy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OperationID  string `json:"operation_id"`
+		Confirmation string `json:"confirmation"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	req := protocol.DeleteBackupPolicyRequest{PolicyID: r.PathValue("id"), Confirmation: body.Confirmation}
+	if !protocol.ValidSnapshotOperationID(body.OperationID) || req.Valid() != nil || body.Confirmation == "" {
+		fail(w, http.StatusBadRequest, "invalid delete backup policy request")
+		return
+	}
+	request := protocol.Command{OperationID: body.OperationID, Kind: "backup-policy-delete", PolicyDelete: &req}
+	response, err := s.requestBackup(r.Context(), agent.BackupRequest{Command: &request})
+	if err != nil {
+		writeBackupError(w, err)
+		return
+	}
+	if response.Err != nil {
+		writeBackupError(w, response.Err)
+		return
+	}
+	reply(w, http.StatusOK, response.Result)
 }
 
 func (s *Service) runNowBackupPolicy(w http.ResponseWriter, r *http.Request) {

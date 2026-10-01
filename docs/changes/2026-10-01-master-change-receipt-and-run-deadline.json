@@ -1,0 +1,47 @@
+{
+  "summary": "The old master's planned master change task settles from the durable pool membership and the Controller accepts that result; master-hosted backup runs get the stalled-run deadline; the run-limit override exists only in lab builds.",
+  "paths": [
+    "internal/agent/pool_transfer.go",
+    "internal/agent/run.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/backup_run_limit_lab.go",
+    "internal/agent/backup_run_deadline_test.go",
+    "internal/agent/backup_master_change_test.go",
+    "internal/controller/identity.go",
+    "internal/controller/pooltransfer_test.go",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-master-change-receipt-and-run-deadline.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "The freeze refusal text changed and the hand-off entry now says the task settles to succeeded by itself.",
+    "pages": [
+      "docs/guide/pool-authority-and-recovery.md"
+    ]
+  },
+  "api": {
+    "impact": "existing contract",
+    "reason": "The Controller's result handling for pool-transfer now accepts a later succeeded result after needs_attention, as it already did for pool-promote. No endpoint, field or schema changes.",
+    "pages": [
+      "docs/API.md"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes inside the backup recovery plan."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No new durable state: the receipt outcome is derived from the pool membership the hosts already keep, and the run deadline reuses the run record's created time and status."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent and internal/controller, and the full internal/agent and internal/controller suites; no lab run.",
+    "evidence": [
+      "internal/agent/backup_master_change_test.go",
+      "internal/agent/backup_run_deadline_test.go",
+      "internal/controller/pooltransfer_test.go",
+      "docs/BUG_LEDGER.md"
+    ]
+  }
+}

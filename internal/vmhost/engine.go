@@ -1411,6 +1411,11 @@ func (e *Engine) RemoveSeed(ctx context.Context, id string) error {
 
 // Check both running and persistent assignments; a pathname is not proof that
 // another libvirt domain has not been attached to the same writable image.
+// ErrOwnershipUnconfirmed means a libvirt query failed, as during a restart, so VM state or another
+// domain's storage could not be confirmed. It is transient: callers keep the operation and retry
+// rather than fail it. Only a query that succeeds and shows a conflict is a definite refusal.
+var ErrOwnershipUnconfirmed = errors.New("cannot confirm VM or domain storage state")
+
 func (e *Engine) exclusiveDisk(ctx context.Context, j journal) error {
 	return e.exclusiveDisks(ctx, j, []string{j.Disk})
 }
@@ -1429,7 +1434,7 @@ func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) 
 	}
 	ids, err := e.virsh(ctx, "list", "--all", "--uuid")
 	if err != nil {
-		return err
+		return errors.Join(ErrOwnershipUnconfirmed, err)
 	}
 	if len(strings.Fields(string(ids))) > 256 {
 		return errors.New("VM ownership observation limit exceeded")
@@ -1444,11 +1449,11 @@ func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) 
 		for _, args := range [][]string{{"dumpxml", id}, {"dumpxml", id, "--inactive"}} {
 			b, err := e.virsh(ctx, args...)
 			if err != nil {
-				return errors.New("cannot establish other domain storage ownership")
+				return ErrOwnershipUnconfirmed
 			}
 			files, err := domainDiskSourceFiles(b)
 			if err != nil {
-				return errors.New("cannot establish other domain storage ownership")
+				return ErrOwnershipUnconfirmed
 			}
 			for _, head := range files {
 				otherHead, statErr := os.Stat(head)

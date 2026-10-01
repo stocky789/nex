@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 )
 
 // backupRefusal is a refusal the operator can act on; its text is the command's failure.
@@ -36,20 +37,20 @@ type peerRetainRepositories struct {
 // touches the destination, so registering the same destination again and rebuilding the
 // catalog brings the recovery points back. An unknown repository is already forgotten.
 func forgetPoolBackupRepository(ctx context.Context, s *Store, req protocol.ForgetRepositoryRequest) error {
-	repo, found, err := dropPoolBackupRepositoryRecords(s, req)
-	if err != nil {
+	if _, _, err := dropPoolBackupRepositoryRecords(ctx, s, req); err != nil {
 		return err
-	}
-	if found {
-		if err := detachBackupRepositoryHost(ctx, repo); err != nil {
-			log.Printf("forgotten backup repository %s left its mount on this host: %v", repo.ID, err)
-		}
 	}
 	forgetBackupRepositoryOnMembers(ctx, s, req.RepositoryID)
 	return nil
 }
 
-func dropPoolBackupRepositoryRecords(s *Store, req protocol.ForgetRepositoryRequest) (protocol.BackupRepository, bool, error) {
+func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol.ForgetRepositoryRequest) (protocol.BackupRepository, bool, error) {
+	// An orphan cleanup holds this for its whole run; forgetting under it would let it
+	// report points deleted that the destination still holds.
+	if !poolBackupRetentionMu.TryLock() {
+		return protocol.BackupRepository{}, false, backupRefusal("an orphaned backup cleanup or retention pass is running on this pool; wait for it to finish")
+	}
+	defer poolBackupRetentionMu.Unlock()
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	if err := masterBackupPool(s, s.State.PoolID); err != nil {
@@ -64,7 +65,8 @@ func dropPoolBackupRepositoryRecords(s *Store, req protocol.ForgetRepositoryRequ
 	}
 	repo, ok := repos.Repositories[req.RepositoryID]
 	if !ok {
-		return protocol.BackupRepository{}, false, nil
+		// Record already gone: still finish a pending detach left by a crash mid-forget.
+		return protocol.BackupRepository{}, false, finishPendingBackupDetach(ctx, s, req.RepositoryID)
 	}
 	if req.Confirmation != repo.Name {
 		return repo, true, backupRefusal(fmt.Sprintf("type the repository name %q to confirm", repo.Name))
@@ -127,7 +129,15 @@ func dropPoolBackupRepositoryRecords(s *Store, req protocol.ForgetRepositoryRequ
 		return repo, true, backupRefusal(fmt.Sprintf("this repository now holds %d recovery points (%d protected), not the %d (%d protected) confirmed; review and confirm again",
 			len(points), protected, req.RecoveryPoints, req.ProtectedPoints))
 	}
-	// Secret first: if it cannot be retired nothing is forgotten and the request can be retried.
+	// Detach first and remember the mount: a failed unmount leaves the record, and a crash
+	// after the record is gone still retries from the pending detach.
+	// ponytail: holds the authority lock for the 20 s detach bound when the file server is dead.
+	if err := rememberPendingBackupDetach(s, repo); err != nil {
+		return repo, true, err
+	}
+	if err := detachBackupRepositoryHost(ctx, repo); err != nil {
+		return repo, true, fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, err)
+	}
 	if err := retireBackupRepositoryCredential(s, repo); err != nil {
 		return repo, true, err
 	}
@@ -142,7 +152,10 @@ func dropPoolBackupRepositoryRecords(s *Store, req protocol.ForgetRepositoryRequ
 		}
 	}
 	delete(repos.Repositories, repo.ID)
-	return repo, true, savePoolBackupRepositories(s, repos)
+	if err := savePoolBackupRepositories(s, repos); err != nil {
+		return repo, true, err
+	}
+	return repo, true, clearPendingBackupDetach(s, repo.ID)
 }
 
 // pinRefusal names the operation, and the test VM when there is one, that holds a recovery
@@ -174,10 +187,36 @@ func retireBackupRepositoryCredential(s *Store, repo protocol.BackupRepository) 
 	clusterSecretMu.Lock()
 	defer clusterSecretMu.Unlock()
 	file, err := findBackupCredential(s, repo.CredentialRef)
+	if errors.Is(err, errBackupCredentialKeyMissing) {
+		return dropUnreadableBackupCredential(s, repo.CredentialRef)
+	}
 	if file == nil || err != nil || !file.stored.Receipt.RetiredAt.IsZero() {
 		return err
 	}
 	return retireBackupCredentialFile(s, file.path, file.stored)
+}
+
+// dropUnreadableBackupCredential is the operator's way out of a lost credential key: the
+// receipt can be neither opened nor retired, so forgetting the repository removes it. The
+// reference is readable without the key.
+func dropUnreadableBackupCredential(s *Store, reference string) error {
+	dir, err := backupCredentialDir(s)
+	if err != nil {
+		return err
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	for _, path := range paths {
+		raw, err := readClusterSecret(path)
+		var sealed sealedBackupCredential
+		if err != nil || json.Unmarshal(raw, &sealed) != nil || sealed.Reference != reference {
+			continue
+		}
+		if err := removeBackupSMBCredentialNative(reference); err != nil {
+			return err
+		}
+		return os.Remove(path)
+	}
+	return nil
 }
 
 // detachBackupRepositoryHost is bounded because a dead file server can hold an unmount.
@@ -185,6 +224,78 @@ func detachBackupRepositoryHost(ctx context.Context, repo protocol.BackupReposit
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	return detachBackupRepositoryNative(ctx, repo)
+}
+
+func backupRepositoryNeedsDetach(repo protocol.BackupRepository) bool {
+	return repo.Kind == protocol.BackupRepoKindNFS || repo.Kind == protocol.BackupRepoKindSMB3
+}
+
+func pendingBackupDetachPath(s *Store, id string) string {
+	return filepath.Join(poolBackupStoreDir(s), "pool-backup-pending-detaches", id+".json")
+}
+
+// rememberPendingBackupDetach stores the mount identity before the repository record is
+// deleted, so a crash mid-forget can still unmount on retry.
+func rememberPendingBackupDetach(s *Store, repo protocol.BackupRepository) error {
+	if !backupRepositoryNeedsDetach(repo) {
+		return nil
+	}
+	raw, err := json.Marshal(repo)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(pendingBackupDetachPath(s, repo.ID)), 0700); err != nil {
+		return err
+	}
+	return vmhost.AtomicWrite(pendingBackupDetachPath(s, repo.ID), raw, 0600)
+}
+
+func clearPendingBackupDetach(s *Store, id string) error {
+	return removeIfPresent(pendingBackupDetachPath(s, id))
+}
+
+func finishPendingBackupDetach(ctx context.Context, s *Store, id string) error {
+	raw, err := os.ReadFile(pendingBackupDetachPath(s, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var repo protocol.BackupRepository
+	if json.Unmarshal(raw, &repo) != nil || repo.ID != id {
+		return errors.New("pending backup detach record is corrupt")
+	}
+	if err := detachBackupRepositoryHost(ctx, repo); err != nil {
+		return fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, err)
+	}
+	return clearPendingBackupDetach(s, id)
+}
+
+// memberJournalUsesBackupRepository reports an unsettled journal operation that still names
+// the repository, including register/forget/orphan/catalog commands that
+// backupCommandRepositoryID does not cover.
+func memberJournalUsesBackupRepository(s *Store, id string) string {
+	for opID, entry := range s.State.Journal {
+		if entry.Command == nil || entry.Status == "succeeded" || entry.Status == "failed" {
+			continue
+		}
+		cmd := *entry.Command
+		if backupCommandRepositoryID(cmd) == id {
+			return opID
+		}
+		switch {
+		case cmd.BackupRepository != nil && cmd.BackupRepository.ID == id:
+			return opID
+		case cmd.ForgetRepository != nil && cmd.ForgetRepository.RepositoryID == id:
+			return opID
+		case cmd.OrphanCleanup != nil && cmd.OrphanCleanup.RepositoryID == id:
+			return opID
+		case cmd.CatalogImport != nil && cmd.CatalogImport.RepositoryID == id:
+			return opID
+		}
+	}
+	return ""
 }
 
 // Members that miss this keep an inert record and mount; the master repeats the sweep when
@@ -238,19 +349,21 @@ func postPeerBackupRoute(ctx context.Context, s *Store, member protocol.PoolMemb
 
 // retainBackupRepositoryOnMembers drops the records a member still holds for repositories this
 // master no longer has, such as a forget the member missed. Members keep no unique state, and
-// the master never dispatches work for a repository it does not hold, so nothing here is in use.
+// a member refuses to forget a repository its own journal still uses.
 func retainBackupRepositoryOnMembers(ctx context.Context, s *Store, membership protocol.PoolMembership) {
-	repos, err := ListPoolBackupRepositories(s)
-	if err != nil {
-		return
-	}
-	held := peerRetainRepositories{RepositoryIDs: []string{}}
-	for _, repo := range repos {
-		held.RepositoryIDs = append(held.RepositoryIDs, repo.ID)
-	}
 	for _, member := range poolConfirmationPeers(membership, s.State.HostID) {
 		if member.PeerOrigin == "" {
 			continue
+		}
+		// Read again for each member: a repository registered during a slow sweep must not
+		// be missing from the list a later member receives.
+		repos, err := ListPoolBackupRepositories(s)
+		if err != nil {
+			return
+		}
+		held := peerRetainRepositories{RepositoryIDs: []string{}}
+		for _, repo := range repos {
+			held.RepositoryIDs = append(held.RepositoryIDs, repo.ID)
 		}
 		if err := postPeerBackupRoute(ctx, s, member, "/retain", held); err != nil {
 			log.Printf("member %s did not drop stale backup repositories: %v", member.HostID, err)
@@ -320,17 +433,31 @@ func handlePeerRetainRepositories(s *Store, w http.ResponseWriter, r *http.Reque
 
 func forgetMemberBackupRepository(ctx context.Context, s *Store, id string) error {
 	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
 	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return err
+	}
 	repo, ok := repos.Repositories[id]
-	if err == nil && ok {
-		if err = retireBackupRepositoryCredential(s, repo); err == nil {
-			delete(repos.Repositories, repo.ID)
-			err = savePoolBackupRepositories(s, repos)
-		}
+	if !ok {
+		return finishPendingBackupDetach(ctx, s, id)
 	}
-	poolBackupAuthorityMu.Unlock()
-	if err == nil && ok {
-		err = detachBackupRepositoryHost(ctx, repo)
+	if opID := memberJournalUsesBackupRepository(s, id); opID != "" {
+		return fmt.Errorf("operation %s on this host still uses backup repository %s", opID, id)
 	}
-	return err
+	// Detach before the record goes, so a failed unmount is retried by the next sweep.
+	if err := rememberPendingBackupDetach(s, repo); err != nil {
+		return err
+	}
+	if err := detachBackupRepositoryHost(ctx, repo); err != nil {
+		return err
+	}
+	if err := retireBackupRepositoryCredential(s, repo); err != nil {
+		return err
+	}
+	delete(repos.Repositories, repo.ID)
+	if err := savePoolBackupRepositories(s, repos); err != nil {
+		return err
+	}
+	return clearPendingBackupDetach(s, id)
 }

@@ -94,20 +94,31 @@ func prepareSFTPBackupRepository(ctx context.Context, repo protocol.BackupReposi
 	if err := storage.checkRoot(client); err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	if err := storage.claimOwner(client); err != nil {
+	claimed, err := storage.claimOwner(client)
+	if err != nil {
+		if claimed {
+			err = errors.Join(err, storage.releaseOwner(client))
+		}
 		return protocol.BackupRepository{}, err
+	}
+	releaseClaim := func(cause error) error {
+		if !claimed {
+			return cause
+		}
+		// The retry carries a new repository ID, so a kept claim would refuse it.
+		return errors.Join(cause, storage.releaseOwner(client))
 	}
 	observedIdentity := sftpIdentity(repo.SFTPSource, credentials.Username)
 	if repo.RemoteIdentity != nil && repo.RemoteIdentity.Fingerprint != observedIdentity {
-		return protocol.BackupRepository{}, ErrBackupConflict
+		return protocol.BackupRepository{}, releaseClaim(ErrBackupConflict)
 	}
 	repo.RemoteIdentity = &protocol.BackupRemoteIdentity{Fingerprint: observedIdentity}
 	storage.repo = repo
 	if err := storage.verify(client); err != nil {
-		return protocol.BackupRepository{}, err
+		return protocol.BackupRepository{}, releaseClaim(err)
 	}
 	if err := storage.probeOnClient(ctx, client); err != nil {
-		return protocol.BackupRepository{}, err
+		return protocol.BackupRepository{}, releaseClaim(err)
 	}
 	return repo, nil
 }
@@ -118,7 +129,9 @@ type sftpOwner struct {
 	Pool       string `json:"pool"`
 }
 
-func (b sftpBackupStorage) claimOwner(client *sftp.Client) error {
+// claimOwner binds the root to this repository. claimed reports that this call
+// wrote owner.json, so a later registration failure can release it.
+func (b sftpBackupStorage) claimOwner(client *sftp.Client) (claimed bool, err error) {
 	root := b.root()
 	ownerName := path.Join(root, "owner.json")
 	want, _ := json.Marshal(sftpOwner{b.repo.ID, b.repo.PoolID})
@@ -126,20 +139,41 @@ func (b sftpBackupStorage) claimOwner(client *sftp.Client) error {
 	// Only a new registration claims the root, finishing an interrupted claim.
 	if b.repo.RemoteIdentity == nil && (errors.Is(err, os.ErrNotExist) || err == nil && len(owner) < len(want) && bytes.HasPrefix(want, owner)) {
 		if err := b.writeMarker(client, ownerName, want); err != nil {
-			return err
+			return false, err
 		}
-		owner, err = want, nil
+		owner, err, claimed = want, nil, true
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return ErrBackupConflict
+		return false, ErrBackupConflict
 	} else if err != nil {
-		return err
+		return false, err
 	}
 	var marker sftpOwner
 	if json.Unmarshal(owner, &marker) != nil || marker.Repository != b.repo.ID || marker.Pool != b.repo.PoolID {
+		return false, ErrBackupConflict
+	}
+	return claimed, syncSFTPDir(client, root)
+}
+
+// releaseOwner removes this repository's owner.json so a corrected registration
+// under a new ID is not blocked by a claim left from a refused attempt.
+func (b sftpBackupStorage) releaseOwner(client *sftp.Client) error {
+	ownerName := path.Join(b.root(), "owner.json")
+	want, _ := json.Marshal(sftpOwner{b.repo.ID, b.repo.PoolID})
+	owner, err := b.readFile(client, ownerName, 4096)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(owner, want) {
 		return ErrBackupConflict
 	}
-	return syncSFTPDir(client, root)
+	if err := client.Remove(ownerName); err != nil {
+		return err
+	}
+	return syncSFTPDir(client, b.root())
 }
 
 func (b sftpBackupStorage) requireWritableAuthority() error {
@@ -1443,6 +1477,18 @@ func (b sftpBackupStorage) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	return b.deleteOnClient(ctx, client, id)
+}
+
+// SweepDeleteMarkers retires the delete records of points the last delete removed from the catalog.
+func (b sftpBackupStorage) SweepDeleteMarkers(ctx context.Context) {
+	client, closeAll, err := b.connect(ctx)
+	if err != nil {
+		return
+	}
+	defer closeAll()
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	_ = b.retireSettledDeletes(client)
 }
 
 func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Client, id string) error {

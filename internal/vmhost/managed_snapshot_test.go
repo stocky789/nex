@@ -1177,6 +1177,41 @@ esac`)
 	}
 }
 
+// The master may have saved a reservation it could not confirm. Dropping the local
+// intent then strands the master's copy (and, for a fresh VM, makes it undeletable).
+func TestAbortSnapshotLocalIntentKeepsIntentWhenMasterReservationUnconfirmed(t *testing.T) {
+	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	vm := managedTestVM()
+	command := protocol.Command{OperationID: "snapKeep01deadbeef", Kind: "snapshot-create", VM: &vm,
+		Snapshot: &protocol.VMSnapshotRequest{Name: "unconfirmed"}}
+	record := managedSnapshotRecord{
+		SnapshotID: command.OperationID, Name: "unconfirmed", CreatedAt: time.Now().UTC(),
+		BeforeDomain: snapshotBeforeDomainFixture(), Before: snapshotObservationFixture(),
+		ExpectedAfter: snapshotExpectedObservationFixture(),
+		StorageDependencies: []managedSnapshotStorageDependency{{
+			StorageID: "s", Generation: 2, IdentitySHA256: strings.Repeat("b", 64),
+			SnapshotArtifactPath: "/srv/vm/recovery/" + command.OperationID,
+		}},
+	}
+	j := managedJournal{Command: command, Snapshot: &record, RecoveryStage: "local-intent", Stage: "snapshot-local-intent",
+		Result: protocol.Result{OperationID: command.OperationID, Status: "pending", ObservedAt: time.Now().UTC()}}
+	if err := e.saveSnapshotJournal(j); err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.Join(ErrSnapshotReservationUnconfirmed, errors.New("pool master refused snapshot reservation"))
+	result, err := e.abortSnapshotLocalIntent(context.Background(), j, cause)
+	if err != nil || result.Status != "needs_attention" || !strings.Contains(result.Error, "retries it") {
+		t.Fatalf("unconfirmed reservation result=%+v err=%v", result, err)
+	}
+	kept, err := e.readJournal(command.OperationID + ".json")
+	if err != nil || kept.RecoveryStage != "local-intent" || kept.RecoveryReservation != nil || kept.Result.Status != "needs_attention" {
+		t.Fatalf("local intent was not kept for a re-drive: %+v err=%v", kept, err)
+	}
+}
+
 func TestSnapshotReserveValidationFailureKeepsJournal(t *testing.T) {
 	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
 	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
@@ -1337,7 +1372,9 @@ func TestSnapshotReadonlyDiskTargetsForceSnapshotNo(t *testing.T) {
 	}
 }
 
-func TestObserveManagedSnapshotDomstateErrorMatchesMode(t *testing.T) {
+// Every libvirt query on the snapshot preflight and execution paths proves nothing when it fails
+// (libvirt may be restarting), so each must classify as ErrOwnershipUnconfirmed, not a refusal.
+func TestSnapshotProbeFailureIsUnconfirmedNotRefusal(t *testing.T) {
 	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
 	vm := managedTestVM()
 	current := managedJournal{
@@ -1345,17 +1382,36 @@ func TestObserveManagedSnapshotDomstateErrorMatchesMode(t *testing.T) {
 		Result:  protocol.Result{OperationID: "seed", Status: "succeeded"},
 		Disks:   []string{"/srv/vm/disk.qcow2"}, Targets: []string{"vda"},
 	}
-	fakeCommand(t, "virsh", `case "$3" in
-domstate) exit 1;;
-*) exit 2;;
-esac`)
-	_, _, _, err := e.observeManagedSnapshot(context.Background(), nil, current, "crash")
-	if err == nil || !strings.Contains(err.Error(), "confirmed running") || strings.Contains(err.Error(), "confirmed stopped") {
-		t.Fatalf("running-mode domstate failure used stopped refusal: %v", err)
+	revert := managedJournal{Command: protocol.Command{VM: &vm}, SnapshotRevert: &managedSnapshotRevertRecord{}}
+	ctx := context.Background()
+	checks := map[string]func() error{
+		"domstate": func() error { _, _, _, err := e.observeManagedSnapshot(ctx, nil, current, "stopped"); return err },
+		"dominfo":  func() error { _, _, _, err := e.observeManagedSnapshot(ctx, nil, current, "stopped"); return err },
+		"dumpxml":  func() error { _, _, _, err := e.observeManagedSnapshot(ctx, nil, current, "stopped"); return err },
+		"snapshot-list": func() error {
+			_, err := managedSnapshotAbsent(ctx, vm.ID, "n")
+			return err
+		},
+		"snapshot-dumpxml": func() error {
+			_, _, err := readManagedNativeSnapshotXML(ctx, vm.ID, "n")
+			return err
+		},
+		"snapshot-current":     func() error { _, err := snapshotRevertCurrentName(ctx, vm.ID); return err },
+		"revert-domstate":      func() error { _, _, err := e.observeSnapshotRevert(ctx, nil, revert); return err },
+		"revert-dominfo":       func() error { _, _, err := e.observeSnapshotRevert(ctx, nil, revert); return err },
+		"revert-dumpxml":       func() error { _, _, err := e.observeSnapshotRevert(ctx, nil, revert); return err },
+		"revert-snapshot-list": func() error { return refuseSnapshotDeleteWithChildren(ctx, vm.ID, "n") },
 	}
-	_, _, _, err = e.observeManagedSnapshot(context.Background(), nil, current, "stopped")
-	if err == nil || !strings.Contains(err.Error(), "confirmed stopped") {
-		t.Fatalf("stopped-mode domstate failure: %v", err)
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) {
+			fail := strings.TrimPrefix(name, "revert-")
+			t.Setenv("FAIL_VIRSH", fail)
+			fakeCommand(t, "virsh", `[ "$3" = "$FAIL_VIRSH" ] && exit 1
+case "$3" in domstate) echo "shut off";; dominfo) echo "Autostart: disable";; esac`)
+			if err := check(); !errors.Is(err, ErrOwnershipUnconfirmed) {
+				t.Fatalf("%s failure is not unconfirmed: %v", name, err)
+			}
+		})
 	}
 }
 
@@ -1393,5 +1449,28 @@ func TestManagedNativeSnapshotXMLParsesLibvirtRevertDisksTip(t *testing.T) {
 	}
 	if len(ignored.RevertDisks) != 0 {
 		t.Fatalf("lowercase revertdisks must not populate RevertDisks on Go's XML decoder: %#v", ignored.RevertDisks)
+	}
+}
+
+// A libvirt restart makes the other-domain ownership probe fail; that is transient, so the
+// preflight journal is kept and the result is not a terminal failure.
+func TestManagedSnapshotPreflightKeepsOperationWhenOwnershipUnconfirmed(t *testing.T) {
+	e, vm := NewManaged(filepath.Join(t.TempDir(), "managed")), managedTestVM()
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{OperationID: "snapshot-ownership-restart", Kind: "snapshot-create", VM: &vm, Snapshot: &protocol.VMSnapshotRequest{Name: "point"}}
+	record := managedSnapshotRecord{SnapshotID: command.OperationID, Name: "point", CreatedAt: time.Now().UTC()}
+	j := managedJournal{Command: command, Result: protocol.Result{OperationID: command.OperationID, Status: "pending"},
+		Stage: "snapshot-preflight", RecoveryStage: "preflight", Snapshot: &record}
+	if err := e.saveSnapshotJournal(j); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.failSnapshotPreflight(context.Background(), protocol.Result{OperationID: command.OperationID, Status: "failed"}, command.OperationID, ErrOwnershipUnconfirmed)
+	if err != nil || result.Status != "needs_attention" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := e.readJournal(command.OperationID + ".json"); err != nil {
+		t.Fatalf("preflight journal dropped: %v", err)
 	}
 }

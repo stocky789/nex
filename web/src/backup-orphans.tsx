@@ -36,6 +36,8 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
   const [submitted, setSubmitted] = useState("");
   const [record, setRecord] = useState<CleanupRecord | null>(null);
   const [refusal, setRefusal] = useState("");
+  const [pollError, setPollError] = useState("");
+  const misses = useRef(0);
   const chosen = query?.groups.filter(g => picked.includes(g.vm_id)) ?? [];
   const totals = cleanupBody("", chosen, includeProtected, typed);
   const want = orphanConfirmation(totals.recovery_points, totals.protected_points, includeProtected);
@@ -49,12 +51,18 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
     if (!submitted || record?.status === "succeeded" || record?.status === "failed" || refusal) return;
     const timer = window.setInterval(async () => {
       try {
-        // Core writes the record only once it has planned the cleanup; a refused one never gets it, so its error is the answer.
         const op = (await api<Operation[]>("operations")).find(o => o.id === submitted);
-        if (!op || op.status === "queued" || op.status === "dispatched") return;
-        if (op.status === "failed") { setRefusal(op.error || "Core refused the cleanup."); return; }
-        setRecord(await api<CleanupRecord>(`${base}/orphan-cleanups/${submitted}`));
-      } catch { /* the next tick retries */ }
+        if (!op) throw new Error("Core has not reported this cleanup yet.");
+        misses.current = 0; setPollError("");
+        if (op.status === "queued" || op.status === "dispatched") return;
+        // Core writes the record once it has planned the cleanup. A failed cleanup that got that far
+        // still has per-point results; a pure refusal has none (404), so its error is the answer.
+        const found = await api<CleanupRecord>(`${base}/orphan-cleanups/${submitted}`).catch(e => { if (op.status === "failed") return null; throw e; });
+        if (found) setRecord(found);
+        else if (op.status === "failed") setRefusal(op.error || "Core refused the cleanup.");
+      } catch (e) {
+        if (++misses.current >= 15) setPollError(message(e));
+      }
     }, 2000);
     return () => window.clearInterval(timer);
   }, [submitted, record?.status, refusal]);
@@ -68,6 +76,8 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   };
+  const vmName = (id: string) => query?.groups.find(g => g.vm_id === id)?.vm_name || id;
+  const deleting = totals.recovery_points - (includeProtected ? 0 : totals.protected_points);
   const counts = record?.points.reduce<Record<string, number>>((n, p) => ({ ...n, [p.status]: (n[p.status] ?? 0) + 1 }), {}) ?? {};
   return <Panel icon="backup" title={`Orphaned backups: ${repo.name}`} wide onClose={onClose}>
     <p className="muted">Recovery points here whose VM is no longer in the pool. Deleting them removes their data from the destination and cannot be undone.</p>
@@ -87,7 +97,7 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
         </tr>)}</tbody>
       </table></div>
       <label className="check" style={{ justifyContent: "flex-start", alignItems: "center" }}><input type="checkbox" checked={includeProtected} disabled={busy} onChange={e => setIncludeProtected(e.target.checked)} />Include protected recovery points</label>
-      <p role="status">{chosen.length === 0 ? "Select the VMs to clean up." : `${totals.recovery_points} recovery points from ${chosen.length} VM${chosen.length === 1 ? "" : "s"} selected, ${totals.protected_points} protected${includeProtected ? " (will be deleted)" : " (will be kept)"}.`}</p>
+      <p role="status">{chosen.length === 0 ? "Select the VMs to clean up." : `${chosen.length} VM${chosen.length === 1 ? "" : "s"} selected with ${totals.recovery_points} recovery point${totals.recovery_points === 1 ? "" : "s"}, ${totals.protected_points} protected. ${deleting} will be deleted${includeProtected ? "" : `; ${totals.protected_points} protected will be kept`}. The confirmation text counts every selected point.`}</p>
       {chosen.length > 0 && <label>Type the text below to confirm<input autoComplete="off" value={typed} disabled={busy} onChange={e => setTyped(e.target.value)} /><span className="mono">{want}</span></label>}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
@@ -95,13 +105,16 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
       </div>
     </>}
     {submitted && <div role="status">
-      {refusal ? <p className="alert" role="alert">{refusal}</p> : !record ? <p>Waiting for Core to start the cleanup…</p> : <>
+      {refusal && record?.error !== refusal && <p className="alert" role="alert">{refusal}</p>}
+      {pollError && <p className="alert" role="alert">{pollError} The cleanup may still be running; check <a href="#/tasks">Tasks</a>.</p>}
+      {!record && !refusal && !pollError && <p>Waiting for Core to start the cleanup…</p>}
+      {record && <>
         <p><Badge value={record.status} /> {counts.deleted ?? 0} deleted, {counts.skipped ?? 0} skipped, {counts.failed ?? 0} failed, {counts.pending ?? 0} waiting.</p>
         {record.error && <p className="alert" role="alert">{record.error}</p>}
         <div className="table-scroll"><table className="records">
           <thead><tr><th>Recovery point</th><th>VM</th><th>Result</th></tr></thead>
           <tbody>{record.points.map(p => <tr key={p.recovery_point_id}>
-            <td className="mono">{p.recovery_point_id}</td><td className="mono">{p.vm_id}</td><td>{p.status}{p.reason ? <small>{p.reason}</small> : null}</td>
+            <td className="mono">{p.recovery_point_id}</td><td>{vmName(p.vm_id)}</td><td>{p.status}{p.reason ? <small>{p.reason}</small> : null}</td>
           </tr>)}</tbody>
         </table></div>
       </>}

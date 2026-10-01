@@ -272,6 +272,7 @@ type Command struct {
 	ForgetRepository  *ForgetRepositoryRequest        `json:"forget_repository,omitempty"`
 	OrphanCleanup     *OrphanCleanupRequest           `json:"orphan_cleanup,omitempty"`
 	BackupPolicy      *BackupPolicy                   `json:"backup_policy,omitempty"`
+	PolicyDelete      *DeleteBackupPolicyRequest      `json:"delete_backup_policy,omitempty"`
 	Power             *VMPowerRequest                 `json:"power,omitempty"`
 	Delete            *VMDeleteRequest                `json:"delete,omitempty"`
 	VMMedia           *VMMediaRequest                 `json:"vm_media,omitempty"`
@@ -285,6 +286,12 @@ type Command struct {
 	SystemDiskReplace *SystemDiskReplaceRequest       `json:"system_disk_replace,omitempty"`
 	OperationID       string                          `json:"operation_id"`
 	Kind              string                          `json:"kind"`
+
+	// ReplaceRepository is the repository ID typed to confirm that a backup-repository-register
+	// replaces the credential or SFTP host key of an existing registration.
+	ReplaceRepository string `json:"replace_repository,omitempty"`
+	// ReleaseRetained is the vm-release-retained payload.
+	ReleaseRetained *VMReleaseRetainedRequest `json:"release_retained,omitempty"`
 }
 type Result struct {
 	OperationID string    `json:"operation_id"`

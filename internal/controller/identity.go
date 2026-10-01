@@ -647,7 +647,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 		// uncertain result. Their later result comes from the same authenticated
 		// Core and operation ID, after Core has reconciled its durable outcome.
 		recovered := status == "needs_attention" && (res.Status == "succeeded" || res.Status == "failed") &&
-			(kind == "storage-zfs-provision" && res.Status == "succeeded" || kind == "pool-promote" && res.Status == "succeeded" || backupOutcomeKind(kind))
+			(kind == "storage-zfs-provision" && res.Status == "succeeded" || (kind == "pool-promote" || kind == "pool-transfer") && res.Status == "succeeded" || backupOutcomeKind(kind))
 		if status == "dispatched" || recovered {
 			if _, err = tx.Exec("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", res.Status, res.Error, stamp(), res.OperationID); err != nil || c.audit(tx, "host:"+host, "operation."+res.Status, res.OperationID) != nil {
 				fail(w, 500, "result storage failed")

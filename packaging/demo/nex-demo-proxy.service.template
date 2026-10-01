@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Nex simulated demo private reverse proxy
+After=network-online.target docker.service run-nex\x2ddemo.mount
+Wants=network-online.target
+Requires=run-nex\x2ddemo.mount
+
+[Service]
+Type=simple
+User=nex-demo
+Group=nex-demo
+UMask=0077
+RuntimeDirectory=nex-demo-proxy
+RuntimeDirectoryMode=0700
+LogNamespace=nex-demo
+SyslogIdentifier=nex-demo-proxy
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=50
+ExecStart=/usr/sbin/nginx -c /etc/nex-demo/nginx.conf -g 'daemon off;'
+ExecReload=/usr/sbin/nginx -c /etc/nex-demo/nginx.conf -s reload
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/run/nex-demo-proxy
+ReadOnlyPaths=/run/nex-demo
+IPAddressDeny=any
+IPAddressAllow=localhost @NEX_DEMO_PROXY_PEER@
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:8081
+TasksMax=32
+MemoryMax=128M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

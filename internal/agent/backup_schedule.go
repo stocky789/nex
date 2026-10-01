@@ -20,6 +20,10 @@ type BackupScheduleTickResult struct {
 	Policy   protocol.BackupPolicy
 }
 
+// scheduleTickBeforePolicySave runs just before ApplyBackupScheduleTick reloads
+// and persists policy cursors. Tests inject a concurrent ExpectedRevision upsert.
+var scheduleTickBeforePolicySave = func(*Store) {}
+
 // EvaluateBackupScheduleTick advances one policy through due occurrences without
 // Controller. Past-due slots are recorded missed (bounded); only the current due
 // slot may dispatch. Duplicate occurrence IDs are refused.
@@ -152,10 +156,7 @@ func ApplyBackupScheduleTick(s *Store, now time.Time) ([]BackupScheduleTickResul
 		}
 	}
 	var results []BackupScheduleTickResult
-	state, err := loadPoolBackupPolicies(s)
-	if err != nil {
-		return nil, err
-	}
+	updatedByID := map[string]protocol.BackupPolicy{}
 	for _, policy := range policies {
 		tick, updated, err := EvaluateBackupScheduleTick(policy, now, existing, pendingVM)
 		if err != nil {
@@ -191,7 +192,7 @@ func ApplyBackupScheduleTick(s *Store, now time.Time) ([]BackupScheduleTickResul
 				return results, err
 			}
 			if _, err := ReservePoolBackupRun(s, run); err != nil {
-				if errors.Is(err, ErrBackupConflict) {
+				if errors.Is(err, ErrBackupConflict) || errors.Is(err, ErrBackupPolicyNotFound) {
 					continue
 				}
 				return results, err
@@ -207,13 +208,30 @@ func ApplyBackupScheduleTick(s *Store, now time.Time) ([]BackupScheduleTickResul
 				_ = saveScheduledBackupRun(s, run)
 			}
 		}
-		state.Policies[updated.ID] = updated
+		updatedByID[updated.ID] = updated
 		results = append(results, tick)
 	}
+	scheduleTickBeforePolicySave(s)
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	if err := requirePoolAuthorityWritable(s); err != nil {
 		return results, err
+	}
+	// Reload under the authority lock so a concurrent ExpectedRevision upsert
+	// cannot be silently reverted by writing a stale whole-file snapshot.
+	state, err := loadPoolBackupPolicies(s)
+	if err != nil {
+		return results, err
+	}
+	for id, updated := range updatedByID {
+		current, ok := state.Policies[id]
+		if !ok || current.Revision != updated.Revision {
+			continue
+		}
+		current.LastDispatchAt = updated.LastDispatchAt
+		current.NextDispatchAt = updated.NextDispatchAt
+		current.UpdatedAt = updated.UpdatedAt
+		state.Policies[id] = current
 	}
 	if err := savePoolBackupPolicies(s, state); err != nil {
 		return results, err

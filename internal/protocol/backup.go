@@ -130,7 +130,9 @@ func (r BackupRepository) Valid() error {
 			return errors.New("backup repository NFS source is invalid")
 		}
 	case BackupRepoKindSMB3:
-		if r.Source != (NFSStorageSource{}) || r.SMBSource == nil || r.S3Source != nil || r.SFTPSource != nil || r.Identity != nil || r.RemoteIdentity != nil || !validBackupHost(r.SMBSource.Server) || !validBackupComponent(r.SMBSource.Share) || !validBackupRelative(r.SMBSource.Directory) {
+		// Server/Share become mount.cifs What=//Server/Share; reuse the storage mount
+		// validators so shell metacharacters never reach the unit file.
+		if r.Source != (NFSStorageSource{}) || r.SMBSource == nil || r.S3Source != nil || r.SFTPSource != nil || r.Identity != nil || r.RemoteIdentity != nil || !storageServer(r.SMBSource.Server) || !storageSMBShare(r.SMBSource.Share) || !validBackupRelative(r.SMBSource.Directory) {
 			return errors.New("backup repository SMB3 source is invalid")
 		}
 	case BackupRepoKindS3:

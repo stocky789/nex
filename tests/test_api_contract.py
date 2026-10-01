@@ -332,6 +332,8 @@ class PeerAPIContractTests(APIContractTests):
         called.discard(('post', consts['poolBackupPeerPath'] + '{}'))
         called.update(('post', consts['poolBackupPeerPath'] + route) for route in
                       re.findall(r'postPeerCapability\([^\n]*"(/capability/\w+)"', source))
+        called.update(('post', consts['poolBackupPeerPath'] + route) for route in
+                      re.findall(r'postPeerBackupRoute\([^\n]*, "(/\w+)",', source))
         # CPU observations share a bounded request helper and dispatch on literal
         # operation suffixes. Recover those real routes rather than treating the
         # whole suffix as an arbitrary resource identifier.

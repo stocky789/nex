@@ -36,7 +36,7 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 		requested := existing
 		requested.MountPath, requested.SMBIdentity = "", nil
 		change(&requested)
-		if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new"); !errors.Is(err, ErrBackupUnavailable) || prepareCalls != 0 {
+		if _, err := prepareBackupRepositoryForRegistration(context.Background(), s, requested, "register-new", ""); !errors.Is(err, ErrBackupUnavailable) || prepareCalls != 0 {
 			t.Fatalf("unsafe replacement reached native prepare: %v, calls=%d", err, prepareCalls)
 		}
 		prepared := requested
@@ -44,7 +44,7 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 		if prepared.SMBSource.Server != existing.SMBSource.Server {
 			prepared.SMBIdentity = &protocol.SMBStorageIdentity{Server: prepared.SMBSource.Server, Share: prepared.SMBSource.Share, MarkerID: strings.Repeat("a", 32)}
 		}
-		if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared); !errors.Is(err, ErrBackupUnavailable) {
+		if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false); !errors.Is(err, ErrBackupUnavailable) {
 			t.Fatalf("unsafe replacement committed from prepared result: %v", err)
 		}
 	}
@@ -53,7 +53,7 @@ func TestSMBRepositoryReplacementFailsBeforePreparationAndDurableCommit(t *testi
 	prepared := requested
 	prepared.MountPath = t.TempDir()
 	prepared.SMBIdentity = &protocol.SMBStorageIdentity{Server: existing.SMBSource.Server, Share: existing.SMBSource.Share, MarkerID: strings.Repeat("b", 32)}
-	if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared); !errors.Is(err, ErrBackupConflict) {
+	if _, err := upsertPoolBackupRepositoryPrepared(s, requested, prepared, false); !errors.Is(err, ErrBackupConflict) {
 		t.Fatalf("changed SMB marker committed under the existing repository: %v", err)
 	}
 	current, err := GetPoolBackupRepository(s, existing.ID)

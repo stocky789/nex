@@ -27,6 +27,8 @@ type createBackupRepositoryRequest struct {
 	SFTPSource          *protocol.BackupSFTPSource `json:"sftp_source,omitempty"`
 	CredentialRef       string                     `json:"credential_ref,omitempty"`
 	CredentialRequestID string                     `json:"credential_request_id,omitempty"`
+	// ReplaceConfirmation is the existing repository's ID, typed to replace its credential or SFTP host key.
+	ReplaceConfirmation string `json:"replace_confirmation,omitempty"`
 }
 
 type testBackupRepositoryRequest struct {
@@ -40,8 +42,30 @@ type forgetBackupRepositoryRequest struct {
 	ProtectedPoints int    `json:"protected_points"`
 }
 
+// forgetBackupRepositoryIntent includes the path repository so request_id replay cannot
+// retarget an accepted forget to another repository with the same body.
+type forgetBackupRepositoryIntent struct {
+	RequestID       string `json:"request_id"`
+	RepositoryID    string `json:"repository_id"`
+	Confirmation    string `json:"confirmation"`
+	RecoveryPoints  int    `json:"recovery_points"`
+	ProtectedPoints int    `json:"protected_points"`
+}
+
 type orphanCleanupAPIRequest struct {
 	RequestID        string   `json:"request_id"`
+	VMIDs            []string `json:"vm_ids"`
+	IncludeProtected bool     `json:"include_protected"`
+	Confirmation     string   `json:"confirmation"`
+	RecoveryPoints   int      `json:"recovery_points"`
+	ProtectedPoints  int      `json:"protected_points"`
+}
+
+// orphanCleanupIntent includes the path repository so request_id replay cannot retarget
+// an accepted cleanup to another repository with the same body.
+type orphanCleanupIntent struct {
+	RequestID        string   `json:"request_id"`
+	RepositoryID     string   `json:"repository_id"`
 	VMIDs            []string `json:"vm_ids"`
 	IncludeProtected bool     `json:"include_protected"`
 	Confirmation     string   `json:"confirmation"`
@@ -271,6 +295,10 @@ func (c *Controller) createBackupRepository(w http.ResponseWriter, r *http.Reque
 		SMBSource: body.SMBSource, S3Source: body.S3Source, SFTPSource: body.SFTPSource,
 		CredentialRef: body.CredentialRef,
 	}
+	if body.ReplaceConfirmation != "" && body.ReplaceConfirmation != repoID {
+		fail(w, 400, "replace_confirmation must be the repository ID")
+		return
+	}
 	if !protocol.ValidSnapshotOperationID(body.RequestID) || repo.Valid() != nil ||
 		(repo.Kind == protocol.BackupRepoKindNFS && (body.CredentialRef != "" || body.CredentialRequestID != "")) ||
 		(repo.Kind != protocol.BackupRepoKindNFS && (body.CredentialRef == "" || !protocol.ValidSnapshotOperationID(body.CredentialRequestID))) {
@@ -309,9 +337,13 @@ func (c *Controller) forgetBackupRepository(w http.ResponseWriter, r *http.Reque
 		fail(w, 400, "stable request_id distinct from repository id, the repository name and the recovery point counts required")
 		return
 	}
+	intent := forgetBackupRepositoryIntent{
+		RequestID: body.RequestID, RepositoryID: repoID, Confirmation: body.Confirmation,
+		RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
 	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-repository-forget", protocol.Command{
 		OperationID: body.RequestID, Kind: "backup-repository-forget", ForgetRepository: &req,
-	}, body, repoID)
+	}, intent, repoID)
 }
 
 func (c *Controller) orphanedBackups(w http.ResponseWriter, r *http.Request, user, csrf string) {
@@ -350,9 +382,26 @@ func (c *Controller) relayBackupOrphans(w http.ResponseWriter, r *http.Request, 
 	case len(body) > backupRelayPageBytes:
 		fail(w, 502, "pool master returned an invalid orphaned backups response")
 	default:
+		repoID := r.PathValue("repo_id")
+		if query.Has("request_id") {
+			var record protocol.BackupOrphanCleanup
+			if json.Unmarshal(body, &record) != nil || record.Request.RepositoryID != repoID {
+				fail(w, 404, "not found")
+				return
+			}
+		} else if !validBackupOrphanList(body, repoID) {
+			fail(w, 502, "pool master returned an invalid orphaned backups response")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	}
+}
+
+// validBackupOrphanList checks the trust boundary only: Core owns group contents.
+func validBackupOrphanList(body []byte, repoID string) bool {
+	var list protocol.BackupOrphanQuery
+	return json.Unmarshal(body, &list) == nil && list.RepositoryID == repoID
 }
 
 func (c *Controller) cleanupOrphanedBackups(w http.ResponseWriter, r *http.Request, user, csrf string) {
@@ -369,9 +418,13 @@ func (c *Controller) cleanupOrphanedBackups(w http.ResponseWriter, r *http.Reque
 		fail(w, 400, "stable request_id distinct from repository id, the VM ids, the confirmation text and the recovery point counts required")
 		return
 	}
+	intent := orphanCleanupIntent{
+		RequestID: body.RequestID, RepositoryID: repoID, VMIDs: body.VMIDs, IncludeProtected: body.IncludeProtected,
+		Confirmation: body.Confirmation, RecoveryPoints: body.RecoveryPoints, ProtectedPoints: body.ProtectedPoints,
+	}
 	c.enqueueBackupMasterSync(w, pool, user, body.RequestID, "backup-orphan-cleanup", protocol.Command{
 		OperationID: body.RequestID, Kind: "backup-orphan-cleanup", OrphanCleanup: &req,
-	}, body, repoID)
+	}, intent, repoID)
 }
 
 func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, requestID, kind string, repo *protocol.BackupRepository, payload any) {
@@ -425,6 +478,9 @@ func (c *Controller) enqueueBackupRepository(w http.ResponseWriter, pool, user, 
 		name = repo.ID
 	}
 	cmd := protocol.Command{OperationID: requestID, Kind: kind, BackupRepository: repo}
+	if body, ok := payload.(createBackupRepositoryRequest); ok {
+		cmd.ReplaceRepository = body.ReplaceConfirmation
+	}
 	op, err := c.saveResource(tx, user, requestID, pool, master, name, rowID, cmd, payload)
 	if err != nil || tx.Commit() != nil {
 		fail(w, 500, "backup repository request storage failed")

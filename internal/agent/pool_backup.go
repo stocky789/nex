@@ -54,7 +54,7 @@ var (
 	ErrBackupUnavailable  = errors.New("backup state is unavailable on this host")
 	ErrBackupRepoNotFound = errors.New("backup repository not found")
 	// ErrBackupCredentialInUse refuses replacing a credential this host can still read.
-	ErrBackupCredentialInUse = errors.New("this repository already has a working credential; forget the repository before registering it with a different one")
+	ErrBackupCredentialInUse = errors.New("this repository already has a working credential; confirm replacing it with the repository ID, or forget the repository first")
 )
 
 type poolBackupRepositoriesState struct {
@@ -197,7 +197,9 @@ func prepareBackupRepository(ctx context.Context, repo protocol.BackupRepository
 	return prepareBackupRepositoryNative(ctx, repo)
 }
 
-func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo protocol.BackupRepository, operationID string) (protocol.BackupRepository, error) {
+// A non-empty replaceID (the typed repository ID) registers over an existing repository, replacing its
+// credential or, for SFTP, its pinned host key; the destination's owner marker must still match.
+func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo protocol.BackupRepository, operationID, replaceID string) (protocol.BackupRepository, error) {
 	// ponytail: one registration holds this lock through its bounded probe; split it if transfer latency becomes a problem.
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
@@ -211,8 +213,12 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 	if repo.Kind == protocol.BackupRepoKindNFS && (repo.Valid() != nil || repo.MountPath != "" || repo.Identity != nil) {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
+	replace := replaceID != ""
+	if replace && replaceID != repo.ID {
+		return protocol.BackupRepository{}, ErrBackupInvalid
+	}
 	if existing, err := GetPoolBackupRepository(s, repo.ID); err == nil {
-		if err := backupReplacementError(s, existing, repo); err != nil {
+		if err := backupReplacementError(s, existing, repo, replace); err != nil {
 			return protocol.BackupRepository{}, err
 		}
 		if repo.Kind == protocol.BackupRepoKindNFS {
@@ -222,7 +228,7 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 			repo.Identity, repo.MountPath = existing.Identity, existing.MountPath
 			return prepareBackupRepositoryNative(ctx, repo)
 		}
-	} else if !errors.Is(err, ErrBackupRepoNotFound) {
+	} else if !errors.Is(err, ErrBackupRepoNotFound) || replace {
 		return protocol.BackupRepository{}, err
 	}
 	if repo.Kind == protocol.BackupRepoKindNFS {
@@ -235,6 +241,10 @@ func prepareBackupRepositoryForRegistration(ctx context.Context, s *Store, repo 
 		credentials, err := ResolveBackupCredentialForRegistration(s, repo, operationID)
 		if err != nil {
 			return protocol.BackupRepository{}, err
+		}
+		if replace {
+			// Verify-only: an existing destination is never claimed again, only checked.
+			repo.RemoteIdentity = &protocol.BackupRemoteIdentity{Fingerprint: sftpIdentity(repo.SFTPSource, credentials.Username)}
 		}
 		return prepareBackupRepositorySFTPNative(ctx, repo, s.dir, credentials)
 	}
@@ -300,7 +310,7 @@ func prepareBackupRepositoryForAdoption(ctx context.Context, s *Store, repo prot
 	return prepareBackupRepositorySMBNative(ctx, repo, credentials)
 }
 
-func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository) (protocol.BackupRepository, error) {
+func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.BackupRepository, replace bool) (protocol.BackupRepository, error) {
 	if !preparedBackupRepositoryMatches(repo, prepared) {
 		return protocol.BackupRepository{}, ErrBackupInvalid
 	}
@@ -326,7 +336,7 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 		return protocol.BackupRepository{}, err
 	}
 	if existing, ok := state.Repositories[repo.ID]; ok {
-		if err := backupReplacementError(s, existing, repo); err != nil {
+		if err := backupReplacementError(s, existing, repo, replace); err != nil {
 			return protocol.BackupRepository{}, err
 		}
 		if repo.Kind == protocol.BackupRepoKindNFS && !reflect.DeepEqual(existing.Identity, repo.Identity) {
@@ -337,7 +347,9 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 		!samePeerSMBIdentity(existing.SMBIdentity, repo.SMBIdentity) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
-	if existing, ok := state.Repositories[repo.ID]; ok && existing.RemoteIdentity != nil && !reflect.DeepEqual(existing.RemoteIdentity, repo.RemoteIdentity) {
+	// An SFTP identity includes the host key and user, so a confirmed replacement changes it; the owner marker was verified instead.
+	if existing, ok := state.Repositories[repo.ID]; ok && existing.RemoteIdentity != nil && !reflect.DeepEqual(existing.RemoteIdentity, repo.RemoteIdentity) &&
+		!(replace && repo.Kind == protocol.BackupRepoKindSFTP) {
 		return protocol.BackupRepository{}, ErrBackupConflict
 	}
 	now := time.Now().UTC()
@@ -383,18 +395,38 @@ func upsertPoolBackupRepositoryPrepared(s *Store, repo, prepared protocol.Backup
 }
 
 // A repository keeps its credential unless this host can no longer read it (for example the
-// sealing key was lost); then registering the same destination again supplies a new one.
-func backupReplacementError(s *Store, existing, requested protocol.BackupRepository) error {
-	if existing.CredentialRef != requested.CredentialRef && (!backupCredentialKind(existing.Kind) || credentialReadable(s, existing)) {
+// sealing key was lost) or the operator confirmed a replacement; then registering the same
+// destination again supplies a new one. A confirmed replacement may also re-pin an SFTP host key.
+func backupReplacementError(s *Store, existing, requested protocol.BackupRepository, replace bool) error {
+	if existing.CredentialRef != requested.CredentialRef && !replace && (!backupCredentialKind(existing.Kind) || credentialReadable(s, existing)) {
 		return ErrBackupCredentialInUse
 	}
 	if existing.Kind != requested.Kind ||
 		!reflect.DeepEqual(existing.Source, requested.Source) ||
 		!reflect.DeepEqual(existing.SMBSource, requested.SMBSource) || !reflect.DeepEqual(existing.S3Source, requested.S3Source) ||
-		!reflect.DeepEqual(existing.SFTPSource, requested.SFTPSource) {
-		return ErrBackupUnavailable
+		!reflect.DeepEqual(existing.SFTPSource, requested.SFTPSource) && !(replace && sameSFTPDestination(existing.SFTPSource, requested.SFTPSource)) {
+		return repositoryMismatchError{}
 	}
 	return nil
+}
+
+// repositoryMismatchError is ErrBackupUnavailable for callers, worded for the operator.
+type repositoryMismatchError struct{}
+
+func (repositoryMismatchError) Error() string {
+	return "a repository with this ID already exists for a different destination; replacing changes only its credential or SFTP host key, so register another destination with a new ID"
+}
+
+func (repositoryMismatchError) Is(target error) bool { return target == ErrBackupUnavailable }
+
+// sameSFTPDestination reports whether two SFTP sources differ at most in the pinned host key.
+func sameSFTPDestination(a, b *protocol.BackupSFTPSource) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	pinned := *a
+	pinned.HostKeySHA256 = b.HostKeySHA256
+	return pinned == *b
 }
 
 func credentialReadable(s *Store, repo protocol.BackupRepository) bool {
@@ -526,11 +558,15 @@ func probePeerBackupRepository(ctx context.Context, s *Store, expected protocol.
 	local, err := GetPoolBackupRepository(s, expected.ID)
 	missing := errors.Is(err, ErrBackupRepoNotFound)
 	// The master owns the record's name and credential reference; a re-registration
-	// of the same destination replaces both here instead of being a conflict.
+	// of the same destination replaces both here instead of being a conflict; so does a
+	// confirmed SFTP host-key or credential replacement.
 	renamed := local
 	renamed.Name, renamed.CredentialRef = expected.Name, expected.CredentialRef
-	replaced := err == nil && (local.Name != expected.Name || local.CredentialRef != expected.CredentialRef) &&
-		sameBackupProbeRepository(expected, renamed)
+	if local.Kind == protocol.BackupRepoKindSFTP && sameSFTPDestination(local.SFTPSource, expected.SFTPSource) {
+		renamed.SFTPSource, renamed.RemoteIdentity = expected.SFTPSource, expected.RemoteIdentity
+	}
+	replaced := err == nil && (local.Name != expected.Name || local.CredentialRef != expected.CredentialRef ||
+		!reflect.DeepEqual(local.RemoteIdentity, expected.RemoteIdentity)) && sameBackupProbeRepository(expected, renamed)
 	if missing || replaced {
 		adopt := portablePeerRepository(expected)
 		adopt.SMBIdentity = expected.SMBIdentity
@@ -686,10 +722,18 @@ func checkBackupRepositoryAccessForStore(ctx context.Context, s *Store, repo pro
 	repo.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
 	repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
 	if err := probeBackupRepositoryForStore(ctx, s, repo); err != nil {
-		repo.Health.Status, repo.Health.Error = "offline", "backup repository health probe failed"
+		repo.Health.Status, repo.Health.Error = "offline", backupHealthError(err)
 		repo.Access = protocol.StorageAccess{Status: "failed", Error: err.Error(), ObservedAt: now}
 	}
 	return repo
+}
+
+// backupHealthError keeps probe details out of health, except the one an operator can act on.
+func backupHealthError(err error) string {
+	if strings.Contains(err.Error(), "host key differs from pinned key") {
+		return "backup repository health probe failed: the SFTP server's host key differs from the pinned key; verify the server, then register the repository again with its ID, the new fingerprint and the typed ID confirmation"
+	}
+	return "backup repository health probe failed"
 }
 
 func probeBackupRepositoryForStore(ctx context.Context, s *Store, repo protocol.BackupRepository) error {
@@ -721,17 +765,24 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 		var undelivered map[string]error
 		if backupCredentialKind(repo.Kind) && requirePoolAuthorityWritable(s) == nil {
 			if err := retireSupersededBackupCredentials(s, repo); err != nil {
-				// Only this repository is unusable; keep probing the others.
-				now := time.Now().UTC()
-				repo.Health = protocol.BackupRepositoryHealth{Status: "offline", ObservedAt: now,
-					Error: "backup credential is unreadable on this host; register the repository again with its credentials"}
-				repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
-				if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
-					return err
+				// A current credential that still opens is not offline: keep probing and retry retirement later.
+				if _, currentErr := localBackupCredential(s, repo); currentErr != nil {
+					now := time.Now().UTC()
+					repo.Health = protocol.BackupRepositoryHealth{Status: "offline", ObservedAt: now,
+						Error: "backup credential is unreadable on this host; register the repository again with its credentials"}
+					repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
+					if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
+						return err
+					}
+					continue
 				}
-				continue
+			} else {
+				undelivered = projectBackupCredentialToMembers(ctx, s, membership, repo)
 			}
-			undelivered = projectBackupCredentialToMembers(ctx, s, membership, repo)
+		}
+		if repo.MountPath == "" && (repo.Kind == protocol.BackupRepoKindNFS || repo.Kind == protocol.BackupRepoKindSMB3) && requirePoolAuthorityWritable(s) == nil {
+			// Adopted unreachable at promotion: mount it now that it may answer.
+			repo = remountAdoptedBackupRepository(ctx, s, repo, timeout)
 		}
 		// Each pass replaces the repository's rows, so ejected members drop out.
 		rows := map[string]protocol.PoolStorageAccess{}
@@ -774,7 +825,7 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
 		if probeErr != nil {
 			repo.Health.Status = "offline"
-			repo.Health.Error = "backup repository health probe failed"
+			repo.Health.Error = backupHealthError(probeErr)
 			repo.Access = protocol.StorageAccess{Status: "failed", Error: repo.Health.Error, ObservedAt: now}
 		}
 		if err := savePoolBackupRepositoryAccess(s, repo); err != nil && !errors.Is(err, ErrBackupConflict) && !errors.Is(err, ErrBackupUnavailable) {
@@ -792,6 +843,30 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 		retainBackupRepositoryOnMembers(ctx, s, membership)
 	}
 	return nil
+}
+
+// remountAdoptedBackupRepository returns repo unchanged when it still cannot be mounted.
+func remountAdoptedBackupRepository(ctx context.Context, s *Store, repo protocol.BackupRepository, timeout time.Duration) protocol.BackupRepository {
+	work, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	prepared, err := prepareBackupRepositoryForAdoption(work, s, repo)
+	if err != nil || prepared.MountPath == "" || prepared.ID != repo.ID {
+		return repo
+	}
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	state, err := loadPoolBackupRepositories(s)
+	current, ok := state.Repositories[repo.ID]
+	if err != nil || !ok || current.MountPath != "" {
+		return repo
+	}
+	current.MountPath, current.Identity, current.SMBIdentity = prepared.MountPath, prepared.Identity, prepared.SMBIdentity
+	state.Repositories[repo.ID] = current
+	if savePoolBackupRepositories(s, state) != nil {
+		return repo
+	}
+	repo.MountPath, repo.Identity, repo.SMBIdentity = current.MountPath, current.Identity, current.SMBIdentity
+	return repo
 }
 
 func savePoolBackupRepositoryAccess(s *Store, repo protocol.BackupRepository) error {
@@ -1008,6 +1083,17 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 		return existing, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return protocol.BackupRun{}, err
+	}
+	// A delete accepted before this point has already checked for pending runs, so a new run of
+	// that policy must not start; a delete after it sees this run and refuses.
+	if run.PolicyID != "" && membership.MasterHostID == s.State.HostID {
+		policies, err := loadPoolBackupPolicies(s)
+		if err != nil {
+			return protocol.BackupRun{}, err
+		}
+		if _, ok := policies.Policies[run.PolicyID]; !ok {
+			return protocol.BackupRun{}, ErrBackupPolicyNotFound
+		}
 	}
 	run.Stage = "reserved"
 	run.Status = "pending"

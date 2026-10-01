@@ -25,7 +25,7 @@ import (
 
 func managedCommand(kind string) bool {
 	switch kind {
-	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
+	case "storage-register", "storage-update", "storage-recheck", "storage-detach", "storage-credential-retire", "storage-zfs-provision", "storage-zfs-replace", "network-register", "network-remove", "network-update", "media-remove", "iso-import", "vm-create", "vm-update", "snapshot-create", "snapshot-revert", "snapshot-delete", "snapshot-metadata", "backup-now", "backup-restore-as-new", "backup-restore-replace", "backup-test-restore", "backup-repository-register", "backup-repository-test", "backup-repository-forget", "backup-orphan-cleanup", "backup-policy-upsert", "backup-policy-pause", "backup-policy-delete", "backup-policy-run-now", "backup-protect", "backup-catalog-import", "backup-catalog-rebuild", "backup-test-verify", "backup-test-cleanup", "vm-power", "vm-delete", "vm-media", "vm-release-retained", "pool-member-join", "pool-storage-reconcile", "pool-join", "pool-maintenance", "pool-transfer", "pool-promote", "pool-fence-profile", "pool-bmc-provisioning", "pool-host-fencing", "management-network", "host-system-disk-replace":
 		return true
 	}
 	return false
@@ -917,6 +917,10 @@ func commandHost(cmd protocol.Command) string {
 	case "vm-media":
 		if cmd.VMMedia != nil {
 			return cmd.VMMedia.HostID
+		}
+	case "vm-release-retained":
+		if cmd.ReleaseRetained != nil {
+			return cmd.ReleaseRetained.HostID
 		}
 	}
 	return ""

@@ -106,6 +106,7 @@
 <li><a href="#createBackupPolicy">POST /api/v1/pools/{id}/backup-policies</a></li>
 <li><a href="#updateBackupPolicy">PUT /api/v1/pools/{id}/backup-policies/{policy_id}</a></li>
 <li><a href="#pauseBackupPolicy">POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause</a></li>
+<li><a href="#deleteBackupPolicy">POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete</a></li>
 <li><a href="#runNowBackupPolicy">POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now</a></li>
 <li><a href="#restoreBackupReplace">POST /api/v1/pools/{id}/backup-restore-replace</a></li>
 <li><a href="#protectBackupPoint">POST /api/v1/pools/{id}/backup-protect</a></li>
@@ -117,6 +118,7 @@
 <li><a href="#listOrphanedBackups">GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphans</a></li>
 <li><a href="#cleanupOrphanedBackups">POST /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups</a></li>
 <li><a href="#getOrphanCleanup">GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}</a></li>
+<li><a href="#releaseRetainedOriginals">POST /api/v1/vms/{id}/release-retained</a></li>
 </ul></nav>
 <section><h2>refresh-inventory</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -479,7 +481,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Controller queues registration of an external NFS backup destination on the pool master. Core owns the durable pool-backup-repositories.json record. Exact request_id replay is required; Controller stores no authoritative repository catalog.&quot;
+  &quot;semantics&quot;: &quot;Controller queues registration of an NFS, SMB3, S3 or SFTP backup destination on the pool master. Core owns the durable pool-backup-repositories.json record. Exact request_id replay is required; Controller stores no authoritative repository catalog.&quot;
 }</pre></section>
 <section><h2>backup-repository-test</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -611,6 +613,16 @@
   },
   &quot;semantics&quot;: &quot;Controller queues pause or resume of a backup policy on the pool master. Core owns enabled/paused state; Controller adopts inventory.&quot;
 }</pre></section>
+<section><h2>backup-policy-delete</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/DeleteBackupPolicyRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Controller queues deletion of a backup policy definition on the pool master. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. Replays by request_id return the recorded Result; a policy that is already gone succeeds only for the request_id that deleted it.&quot;
+}</pre></section>
 <section><h2>backup-policy-run-now</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
   &quot;result&quot;: {
@@ -630,6 +642,16 @@
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
   &quot;semantics&quot;: &quot;Controller queues deletion of chosen missing VMs&#x27; recovery points from a repository on the pool master. Core re-checks at execution that each VM is still absent from its durable VM inventory and that the point counts match the confirmed ones, else fails the Result deleting nothing. It records the plan and per-point outcomes on the master, then deletes each point&#x27;s destination data and catalog entry through the retention delete. Protected points are skipped unless include_protected; points pinned by an unfinished restore or test restore, named by a pending run, or whose VM exists again are skipped. A repeated or interrupted command continues from the recorded plan; replays by request_id return the recorded Result.&quot;
+}</pre></section>
+<section><h2>vm-release-retained</h2><pre>{
+  &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
+  &quot;payload&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/VMReleaseRetainedRequest&quot;
+  },
+  &quot;result&quot;: {
+    &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
+  },
+  &quot;semantics&quot;: &quot;Delete the disk files and vTPM state that restore replace and VM edits retained for a managed VM. Requires observed shut off, confirmation equal to the VM name, no retained snapshots and no unfinished VM or restore operation; files in the current disk chain are never removed and each file is checked like a vm-delete wipe (registered storage directory, regular file, no other domain uses it). The journal on the VM&#x27;s host records the released paths, so an exact replay returns the recorded result and an interrupted release re-runs, skipping files already gone. Released paths stop counting as storage-detach dependencies.&quot;
 }</pre></section>
 <section><h2>GET /appliance-ready.json</h2><pre>{
   &quot;description&quot;: &quot;Appliance-only public JSON file served by the existing Controller UI file handler, not a separately registered API route. First boot atomically publishes it after initialization, verified local HTTPS UI HTTP 200, and guest bootstrap-secret cleanup. It must be absent from a pristine appliance image and may return 404 before preparation or on non-appliance deployments. A persisted marker records first-boot completion; it is not continuous health or successful host enrollment/adoption.&quot;,
@@ -1573,12 +1595,12 @@
   &quot;x-audience&quot;: &quot;client&quot;
 }</pre></details></section>
 <section id="listOperation"><h2>GET <code>/api/v1/operations</code></h2>
-<p>List operations</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. A still-dispatched vm-create additionally carries advisory warnings, recomputed from the current mirror on every read and stored nowhere, naming each pool-shared repository, network or ISO whose access on the target host the pool master&#x27;s last report does not show as current. They are a signal, never a verdict: the master decides, and the warnings clear by themselves when it reports working access.</p>
+<p>List operations</p><p>Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. A still-dispatched vm-create additionally carries advisory warnings, recomputed from the current mirror on every read and stored nowhere, naming each pool-shared repository, network or ISO whose access on the target host the pool master&#x27;s last report does not show as current. They are a signal, never a verdict: the master decides, and the warnings clear by themselves when it reports working access. For backup-* operations host_id is the executing host (the restore target or the VM&#x27;s owner) when the stored command names one, otherwise the pool master that queued it; the 202 and replay bodies of a queued request report the queueing host.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listOperation&quot;,
   &quot;summary&quot;: &quot;List operations&quot;,
-  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. A still-dispatched vm-create additionally carries advisory warnings, recomputed from the current mirror on every read and stored nowhere, naming each pool-shared repository, network or ISO whose access on the target host the pool master&#x27;s last report does not show as current. They are a signal, never a verdict: the master decides, and the warnings clear by themselves when it reports working access.&quot;,
+  &quot;description&quot;: &quot;Implemented in development product 0.1.0, protocol v1. Read-only; safe to retry. Results represent persisted controller state. Host connection freshness is separate from per-check health; stale inventory never proves VMs have stopped. Returns at most 1000 records, newest first; no pagination in this development version. A still-dispatched vm-create additionally carries advisory warnings, recomputed from the current mirror on every read and stored nowhere, naming each pool-shared repository, network or ISO whose access on the target host the pool master&#x27;s last report does not show as current. They are a signal, never a verdict: the master decides, and the warnings clear by themselves when it reports working access. For backup-* operations host_id is the executing host (the restore target or the VM&#x27;s owner) when the stored command names one, otherwise the pool master that queued it; the 202 and replay bodies of a queued request report the queueing host.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -4464,12 +4486,12 @@
   }
 }</pre></details></section>
 <section id="offerStorageCredentials"><h2>POST <code>/api/v1/storage/credentials</code></h2>
-<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \ = , ; &#x27; &quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.</p>
+<p>Deliver repository credentials to Core</p><p>Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \ = , ; &#x27; &quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;offerStorageCredentials&quot;,
   &quot;summary&quot;: &quot;Deliver repository credentials to Core&quot;,
-  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master with backup-destination-&lt;kind&gt;-v1. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \\ = , ; &#x27; \&quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.&quot;,
+  &quot;description&quot;: &quot;Administrator session, same HTTPS Origin and X-CSRF-Token required. Existing storage handoff also accepts a backup registration purpose marker backup-credential:&lt;kind&gt;:&lt;registration request_id&gt; for smb3, s3 or sftp, addressed to the fresh pool master. Supply repository_id and a stable independent credential request_id. SMB3 and S3 require username and secret; SFTP requires username and ssh_private_key. SMB3 also accepts an optional domain (plain domain or workgroup name; whitespace, control characters and / \\ = , ; &#x27; \&quot; ` $ &amp; | &lt; &gt; ( ) are refused); domain is refused for S3 and SFTP. ssh_known_hosts is refused for backup purpose, as is an SMB3 username containing &#x27;=&#x27;. A backup-purpose offer also requires repository, the destination to register; an invalid destination is refused before any secret is offered. Controller retains bytes in bounded memory only while Core redeems the one-time offer and durably acknowledges an opaque receipt; no secret enters repository commands or Controller persistence. Retry the same request_id after 503; changed replay is 409.&quot;,
   &quot;security&quot;: [
     {
       &quot;AdminSession&quot;: []
@@ -9506,12 +9528,12 @@
   }
 }</pre></details></section>
 <section id="listBackupRepositories"><h2>GET <code>/api/v1/pools/{id}/backup-repositories</code></h2>
-<p>List pool backup repositories</p><p>Returns the pool master&#x27;s NFS backup destination list from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.</p>
+<p>List pool backup repositories</p><p>Returns the pool master&#x27;s backup destination list (NFS, SMB3, S3 and SFTP) from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listBackupRepositories&quot;,
   &quot;summary&quot;: &quot;List pool backup repositories&quot;,
-  &quot;description&quot;: &quot;Returns the pool master&#x27;s NFS backup destination list from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.&quot;,
+  &quot;description&quot;: &quot;Returns the pool master&#x27;s backup destination list (NFS, SMB3, S3 and SFTP) from retained inventory. Requires an administrator session. Controller does not invent an empty list when backup_repositories_reported is false.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9580,12 +9602,12 @@
   }
 }</pre></details></section>
 <section id="createBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories</code></h2>
-<p>Register a pool backup repository</p><p>Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.</p>
+<p>Register a pool backup repository</p><p>Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. Core accepts NFS, SMB3, S3 and SFTP. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure. To reuse a repository ID, register a forgotten repository again with its original id, or send replace_confirmation equal to id to replace an existing repository&#x27;s credential or SFTP host key; members adopt the new pin and identity on their next access probe.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;createBackupRepository&quot;,
   &quot;summary&quot;: &quot;Register a pool backup repository&quot;,
-  &quot;description&quot;: &quot;Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. NFS remains available. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure.&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-register on the pool master. Administrator session, Origin, CSRF and a stable request_id are required. Core accepts NFS, SMB3, S3 and SFTP. Core refuses same-ID NFS source or observed filesystem identity replacement; register a new ID for a move and retain the old destination for old-point restores. The Controller accepts typed nonsecret SMB3, S3 and SFTP sources only with a matching one-time Core credential receipt that has been acknowledged. Exact request replay returns the original operation; changed payload is 409. A failed first NFS/SMB3 mount start cleans Core&#x27;s new unit so a fresh request can use the same ID after the service recovers; an uncertain cleanup is reported as a failure. To reuse a repository ID, register a forgotten repository again with its original id, or send replace_confirmation equal to id to replace an existing repository&#x27;s credential or SFTP host key; members adopt the new pin and identity on their next access probe.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9626,7 +9648,7 @@
             &quot;id&quot;: {
               &quot;type&quot;: &quot;string&quot;,
               &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;,
-              &quot;description&quot;: &quot;Repository ID. Required for smb3, s3 and sftp because the credential receipt is bound to it; Controller mints one for NFS when omitted.&quot;
+              &quot;description&quot;: &quot;Repository ID. Required for smb3, s3 and sftp because the credential receipt is bound to it; Controller mints one for NFS when omitted. Give a forgotten repository&#x27;s original ID to re-register the same destination with the same identity, or an existing repository&#x27;s ID together with replace_confirmation to replace its credential or SFTP host key.&quot;
             },
             &quot;name&quot;: {
               &quot;type&quot;: &quot;string&quot;
@@ -9675,6 +9697,11 @@
             &quot;credential_request_id&quot;: {
               &quot;type&quot;: &quot;string&quot;,
               &quot;description&quot;: &quot;Stable request ID of the preceding one-time credential offer.&quot;
+            },
+            &quot;replace_confirmation&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;maxLength&quot;: 64,
+              &quot;description&quot;: &quot;The existing repository&#x27;s ID, typed to confirm replacing its credential or, for SFTP, its pinned host key. Must equal id (400 otherwise). Core then verifies the destination&#x27;s owner marker instead of claiming it, keeps the repository&#x27;s recovery points, run history and creation time, and refuses a different destination, kind, host, port or root, an unknown repository, or an owner mismatch. Without it a same-ID registration with a different readable credential or host key is refused.&quot;
             }
           },
           &quot;additionalProperties&quot;: false,
@@ -9927,12 +9954,12 @@
   }
 }</pre></details></section>
 <section id="forgetBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/forget</code></h2>
-<p>Forget a backup repository</p><p>Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id returns the recorded outcome.</p>
+<p>Forget a backup repository</p><p>Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;forgetBackupRepository&quot;,
   &quot;summary&quot;: &quot;Forget a backup repository&quot;,
-  &quot;description&quot;: &quot;Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id returns the recorded outcome.&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9999,6 +10026,17 @@
     }
   },
   &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of the same request_id: the recorded operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
     &quot;202&quot;: {
       &quot;description&quot;: &quot;Queued.&quot;,
       &quot;content&quot;: {
@@ -10032,6 +10070,16 @@
     },
     &quot;403&quot;: {
       &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -10572,12 +10620,12 @@
   }
 }</pre></details></section>
 <section id="backupVMNow"><h2>POST <code>/api/v1/vms/{id}/backup</code></h2>
-<p>Back up a VM now</p><p>Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In a capability-enabled SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.</p>
+<p>Back up a VM now</p><p>Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In an SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;backupVMNow&quot;,
   &quot;summary&quot;: &quot;Back up a VM now&quot;,
-  &quot;description&quot;: &quot;Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In a capability-enabled SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.&quot;,
+  &quot;description&quot;: &quot;Omitted or stopped requires a shut-off guest. crash is online crash-consistent push-mode backup. quiesced is refused until proven. UEFI online capture is refused in this development slice. Exact retry reuses the retained operation; changed input returns 409. For NFS and SMB3, uncertain final rename or sync remains needs_attention until exact point readback proves the result; pre-rename errors fail. In an SFTP or S3 repository, uncertain publication remains needs_attention until Core verifies the final point or safely aborts the exact incomplete upload. Controller queues on the pool master with the VM owner host; the master dispatches member work over the authenticated Core peer route. Core owns publication.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -11106,6 +11154,154 @@
   },
   &quot;description&quot;: &quot;Pause or resume a backup policy&quot;
 }</pre></details></section>
+<section id="deleteBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/delete</code></h2>
+<p>Delete a backup policy</p><p>Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;deleteBackupPolicy&quot;,
+  &quot;summary&quot;: &quot;Delete a backup policy&quot;,
+  &quot;description&quot;: &quot;Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Pool ID.&quot;
+    },
+    {
+      &quot;name&quot;: &quot;policy_id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Backup policy ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;confirmation&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;confirmation&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;minLength&quot;: 1,
+              &quot;maxLength&quot;: 256
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of the same request_id: the recorded operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
 <section id="runNowBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/run-now</code></h2>
 <p>Run a backup policy for one VM now</p><p>Run a backup policy for one VM now</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
@@ -11420,8 +11616,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11439,8 +11635,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11470,6 +11666,16 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11710,8 +11916,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11729,8 +11935,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11760,6 +11966,16 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11853,8 +12069,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11872,8 +12088,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11903,6 +12119,16 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -11987,8 +12213,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12006,8 +12232,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12037,6 +12263,16 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12121,8 +12357,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Accepted or queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12140,8 +12376,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Succeeded or replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Accepted or queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12171,6 +12407,16 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12302,12 +12548,12 @@
   }
 }</pre></details></section>
 <section id="cleanupOrphanedBackups"><h2>POST <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups</code></h2>
-<p>Delete orphaned recovery points</p><p>Queues backup-orphan-cleanup on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, explicit vm_ids, the counts shown for them and the confirmation text (which states the protected count with include_protected). Core deletes the destination data and catalog entries of those VMs&#x27; points still absent from the VM inventory; protected, in-use and re-created-VM points are skipped and reported in the cleanup record. Replaying the request_id returns the recorded outcome; a changed payload is 409.</p>
+<p>Delete orphaned recovery points</p><p>Queues backup-orphan-cleanup on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, explicit vm_ids, the counts shown for them and the confirmation text (which states the protected count with include_protected). Core deletes the destination data and catalog entries of those VMs&#x27; points still absent from the VM inventory; protected, in-use and re-created-VM points are skipped and reported in the cleanup record. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409; a changed payload is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;cleanupOrphanedBackups&quot;,
   &quot;summary&quot;: &quot;Delete orphaned recovery points&quot;,
-  &quot;description&quot;: &quot;Queues backup-orphan-cleanup on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, explicit vm_ids, the counts shown for them and the confirmation text (which states the protected count with include_protected). Core deletes the destination data and catalog entries of those VMs&#x27; points still absent from the VM inventory; protected, in-use and re-created-VM points are skipped and reported in the cleanup record. Replaying the request_id returns the recorded outcome; a changed payload is 409.&quot;,
+  &quot;description&quot;: &quot;Queues backup-orphan-cleanup on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, explicit vm_ids, the counts shown for them and the confirmation text (which states the protected count with include_protected). Core deletes the destination data and catalog entries of those VMs&#x27; points still absent from the VM inventory; protected, in-use and re-created-VM points are skipped and reported in the cleanup record. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409; a changed payload is 409.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -12394,8 +12640,8 @@
     }
   },
   &quot;responses&quot;: {
-    &quot;202&quot;: {
-      &quot;description&quot;: &quot;Queued.&quot;,
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12405,8 +12651,8 @@
         }
       }
     },
-    &quot;200&quot;: {
-      &quot;description&quot;: &quot;Exact replay.&quot;,
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12446,8 +12692,28 @@
         }
       }
     },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown pool.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;Conflict.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Pool master unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12459,12 +12725,12 @@
   }
 }</pre></details></section>
 <section id="getOrphanCleanup"><h2>GET <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}</code></h2>
-<p>Read an orphaned-backup cleanup</p><p>Read-only relay of the pool master&#x27;s durable cleanup record. 404 until the master has planned the cleanup (a refused cleanup has no record; read its operation).</p>
+<p>Read an orphaned-backup cleanup</p><p>Read-only relay of the pool master&#x27;s durable cleanup record. 404 until the master has planned the cleanup (a refused cleanup has no record; read its operation). A record that belongs to another repository is 404.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;getOrphanCleanup&quot;,
   &quot;summary&quot;: &quot;Read an orphaned-backup cleanup&quot;,
-  &quot;description&quot;: &quot;Read-only relay of the pool master&#x27;s durable cleanup record. 404 until the master has planned the cleanup (a refused cleanup has no record; read its operation).&quot;,
+  &quot;description&quot;: &quot;Read-only relay of the pool master&#x27;s durable cleanup record. 404 until the master has planned the cleanup (a refused cleanup has no record; read its operation). A record that belongs to another repository is 404.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -12546,8 +12812,157 @@
         }
       }
     },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Core refused the read; the body carries its reason.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;503&quot;: {
       &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="releaseRetainedOriginals"><h2>POST <code>/api/v1/vms/{id}/release-retained</code></h2>
+<p>Release the retained originals of a VM</p><p>Queues vm-release-retained on the VM&#x27;s host. Requires an administrator session, CSRF, a stable request_id and the VM&#x27;s current name as confirmation. Core deletes the original disk files and vTPM state that restore replace or a VM edit kept beside the VM, and never touches a file in a live disk chain. The command settles failed, changing nothing, when the confirmation is not the VM name, the VM is not shut off, the VM has retained snapshots, a restore or other VM operation on it is unfinished, an original is still used by another domain, or nothing is retained. Replaying the request_id returns the recorded operation (200); the same request_id with another confirmation is 409; a second request for the VM while one is pending is 409. Interrupted releases are re-run by the host and skip files already removed.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;releaseRetainedOriginals&quot;,
+  &quot;summary&quot;: &quot;Release the retained originals of a VM&quot;,
+  &quot;description&quot;: &quot;Queues vm-release-retained on the VM&#x27;s host. Requires an administrator session, CSRF, a stable request_id and the VM&#x27;s current name as confirmation. Core deletes the original disk files and vTPM state that restore replace or a VM edit kept beside the VM, and never touches a file in a live disk chain. The command settles failed, changing nothing, when the confirmation is not the VM name, the VM is not shut off, the VM has retained snapshots, a restore or other VM operation on it is unfinished, an original is still used by another domain, or nothing is retained. Replaying the request_id returns the recorded operation (200); the same request_id with another confirmation is 409; a second request for the VM while one is pending is 409. Interrupted releases are re-run by the host and skip files already removed.&quot;,
+  &quot;tags&quot;: [
+    &quot;Client \u2192 Controller&quot;
+  ],
+  &quot;security&quot;: [
+    {
+      &quot;AdminSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
+  &quot;x-audience&quot;: &quot;client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;VM ID.&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false,
+          &quot;required&quot;: [
+            &quot;request_id&quot;,
+            &quot;confirmation&quot;
+          ],
+          &quot;properties&quot;: {
+            &quot;request_id&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+            },
+            &quot;confirmation&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;maxLength&quot;: 256,
+              &quot;description&quot;: &quot;The VM&#x27;s current name.&quot;
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Replay of the same request_id: the recorded operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Queued.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;additionalProperties&quot;: true
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid credentials.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Authorization, origin, or CSRF validation failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown VM.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Conflict: the request_id was reused with another confirmation, another request for the VM is pending, or Core refused at acceptance because the pool master holds pending recovery, a retained snapshot or an unfinished update for the VM or the host journals an unfinished restore, snapshot or VM operation for it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Host unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -13260,6 +13675,7 @@
         &quot;vm-power&quot;,
         &quot;vm-delete&quot;,
         &quot;vm-media&quot;,
+        &quot;vm-release-retained&quot;,
         &quot;pool-member-join&quot;,
         &quot;pool-storage-reconcile&quot;,
         &quot;pool-join&quot;,
@@ -13290,6 +13706,7 @@
         &quot;backup-test-cleanup&quot;,
         &quot;backup-policy-upsert&quot;,
         &quot;backup-policy-pause&quot;,
+        &quot;backup-policy-delete&quot;,
         &quot;backup-policy-run-now&quot;
       ]
     },
@@ -13557,6 +13974,17 @@
         }
       ]
     },
+    &quot;delete_backup_policy&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/DeleteBackupPolicyRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;backup-policy-delete payload.&quot;
+    },
     &quot;forget_repository&quot;: {
       &quot;anyOf&quot;: [
         {
@@ -13576,6 +14004,21 @@
           &quot;type&quot;: &quot;null&quot;
         }
       ]
+    },
+    &quot;replace_repository&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;backup-repository-register: the repository ID typed to confirm replacing the credential or SFTP host key of an existing registration.&quot;
+    },
+    &quot;release_retained&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/VMReleaseRetainedRequest&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ],
+      &quot;description&quot;: &quot;vm-release-retained payload.&quot;
     }
   },
   &quot;required&quot;: [
@@ -14690,6 +15133,7 @@
         &quot;vm-power&quot;,
         &quot;vm-delete&quot;,
         &quot;vm-media&quot;,
+        &quot;vm-release-retained&quot;,
         &quot;pool-member-join&quot;,
         &quot;pool-storage-reconcile&quot;,
         &quot;pool-join&quot;,
@@ -14720,6 +15164,7 @@
         &quot;backup-test-cleanup&quot;,
         &quot;backup-policy-upsert&quot;,
         &quot;backup-policy-pause&quot;,
+        &quot;backup-policy-delete&quot;,
         &quot;backup-policy-run-now&quot;
       ]
     },
@@ -19954,7 +20399,7 @@
         &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
       },
       &quot;maxItems&quot;: 10000,
-      &quot;description&quot;: &quot;Master-owned NFS backup destinations reported only by the current pool master.&quot;
+      &quot;description&quot;: &quot;Master-owned backup destinations (NFS, SMB3, S3 and SFTP) reported only by the current pool master.&quot;
     },
     &quot;backup_repositories_reported&quot;: {
       &quot;type&quot;: &quot;boolean&quot;,
@@ -23333,7 +23778,7 @@
       &quot;description&quot;: &quot;The same advisory sentences POST /api/v1/vms may answer with, present only on an operation whose kind is vm-create and whose status is dispatched. They are recomputed from the current mirror on every read and stored nowhere, so they disappear by themselves once the host&#x27;s access is reported as current again. Every other field is unchanged.&quot;
     }
   },
-  &quot;description&quot;: &quot;A durable operation as the listing reports it: the operation itself, plus advisory placement warnings recomputed on read for a VM create that is still dispatched.&quot;
+  &quot;description&quot;: &quot;A durable operation as the listing reports it: the operation itself, plus advisory placement warnings recomputed on read for a VM create that is still dispatched. For backup-* operations host_id is the executing host (the restore target or the VM&#x27;s owner) when the stored command names one, otherwise the pool master that queued it; the 202 and replay bodies of a queued request report the queueing host.&quot;
 }</pre></details>
 <details id="HostHardware"><summary>HostHardware</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
@@ -25798,6 +26243,27 @@
     }
   }
 }</pre></details>
+<details id="DeleteBackupPolicyRequest"><summary>DeleteBackupPolicyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;Deletes one backup policy definition from the pool master; recovery points, run history and repository data are never touched.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.DeleteBackupPolicyRequest&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [
+    &quot;policy_id&quot;,
+    &quot;confirmation&quot;
+  ],
+  &quot;properties&quot;: {
+    &quot;policy_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
+    },
+    &quot;confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 256,
+      &quot;description&quot;: &quot;The backup policy name.&quot;
+    }
+  }
+}</pre></details>
 <details id="BackupRestorePin"><summary>BackupRestorePin</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;description&quot;: &quot;Prevents prune while this restore operation uses the recovery point. Multiple operation IDs may pin one point; each operation ID must be unique in transferred authority.&quot;,
@@ -26015,7 +26481,7 @@
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/BackupRepository&quot;
       },
-      &quot;description&quot;: &quot;Durable NFS backup destination registrations for master takeover.&quot;
+      &quot;description&quot;: &quot;Durable backup destination registrations (NFS, SMB3, S3 and SFTP) for master takeover.&quot;
     },
     &quot;definitions&quot;: {
       &quot;type&quot;: [
@@ -26086,6 +26552,16 @@
         &quot;$ref&quot;: &quot;#/components/schemas/BackupMetadataReceipt&quot;
       },
       &quot;description&quot;: &quot;Durable operation result receipts retained for exact metadata retry after master takeover.&quot;
+    },
+    &quot;orphan_cleanups&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/BackupOrphanCleanup&quot;
+      },
+      &quot;description&quot;: &quot;Orphaned-backup cleanup records retained so the new master still answers for a cleanup the old master ran.&quot;
     }
   },
   &quot;required&quot;: [],
@@ -26157,6 +26633,9 @@
     &quot;page_count&quot;: {
       &quot;type&quot;: &quot;integer&quot;,
       &quot;description&quot;: &quot;Ordered page count.&quot;
+    },
+    &quot;orphan_cleanups&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
     }
   },
   &quot;required&quot;: [
@@ -26168,6 +26647,7 @@
     &quot;catalog&quot;,
     &quot;pins&quot;,
     &quot;metadata_receipts&quot;,
+    &quot;orphan_cleanups&quot;,
     &quot;page_count&quot;
   ],
   &quot;additionalProperties&quot;: false
@@ -26247,7 +26727,7 @@
 }</pre></details>
 <details id="BackupS3Source"><summary>BackupS3Source</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Backup BackupS3Source contract. Planned until the corresponding Core capability is advertised.&quot;,
+  &quot;description&quot;: &quot;S3-compatible HTTPS endpoint, bucket, optional prefix and signing region for a backup destination.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupS3Source&quot;,
   &quot;properties&quot;: {
     &quot;endpoint&quot;: {
@@ -26274,7 +26754,7 @@
 }</pre></details>
 <details id="BackupSFTPSource"><summary>BackupSFTPSource</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Backup BackupSFTPSource contract. Planned until the corresponding Core capability is advertised.&quot;,
+  &quot;description&quot;: &quot;SFTP host, root path and pinned SSH host-key fingerprint for a backup destination.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupSFTPSource&quot;,
   &quot;properties&quot;: {
     &quot;host&quot;: {
@@ -26301,7 +26781,7 @@
 }</pre></details>
 <details id="BackupRemoteIdentity"><summary>BackupRemoteIdentity</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Backup BackupRemoteIdentity contract. Planned until the corresponding Core capability is advertised.&quot;,
+  &quot;description&quot;: &quot;Observed remote destination fingerprint used for S3 and SFTP identity checks.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRemoteIdentity&quot;,
   &quot;properties&quot;: {
     &quot;fingerprint&quot;: {
@@ -26315,7 +26795,7 @@
 }</pre></details>
 <details id="BackupRepositoryHealth"><summary>BackupRepositoryHealth</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Backup BackupRepositoryHealth contract. Planned until the corresponding Core capability is advertised.&quot;,
+  &quot;description&quot;: &quot;Latest Core-observed repository access health.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepositoryHealth&quot;,
   &quot;properties&quot;: {
     &quot;status&quot;: {
@@ -26339,7 +26819,7 @@
 }</pre></details>
 <details id="BackupRepositoryHealthTransition"><summary>BackupRepositoryHealthTransition</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
-  &quot;description&quot;: &quot;Backup BackupRepositoryHealthTransition contract. Planned until the corresponding Core capability is advertised.&quot;,
+  &quot;description&quot;: &quot;Historical repository health transition; not a fresh access result.&quot;,
   &quot;x-go-type&quot;: &quot;protocol.BackupRepositoryHealthTransition&quot;,
   &quot;properties&quot;: {
     &quot;status&quot;: {
@@ -26539,7 +27019,10 @@
       &quot;pattern&quot;: &quot;^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$&quot;
     },
     &quot;vm_ids&quot;: {
-      &quot;type&quot;: &quot;array&quot;,
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
       &quot;minItems&quot;: 1,
       &quot;maxItems&quot;: 1000,
       &quot;uniqueItems&quot;: true,
@@ -26634,13 +27117,19 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;groups&quot;: {
-      &quot;type&quot;: &quot;array&quot;,
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/BackupOrphanGroup&quot;
       }
     },
     &quot;warnings&quot;: {
-      &quot;type&quot;: &quot;array&quot;,
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
       &quot;items&quot;: {
         &quot;type&quot;: &quot;string&quot;
       },
@@ -26710,7 +27199,10 @@
       &quot;type&quot;: &quot;string&quot;
     },
     &quot;points&quot;: {
-      &quot;type&quot;: &quot;array&quot;,
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
       &quot;items&quot;: {
         &quot;$ref&quot;: &quot;#/components/schemas/BackupOrphanPointResult&quot;
       }
@@ -26720,5 +27212,32 @@
       &quot;format&quot;: &quot;date-time&quot;
     }
   }
+}</pre></details>
+<details id="VMReleaseRetainedRequest"><summary>VMReleaseRetainedRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;vm_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;confirmation&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 256,
+      &quot;description&quot;: &quot;The VM&#x27;s current name.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;vm_id&quot;,
+    &quot;pool_id&quot;,
+    &quot;host_id&quot;,
+    &quot;confirmation&quot;
+  ],
+  &quot;additionalProperties&quot;: false,
+  &quot;x-go-type&quot;: &quot;protocol.VMReleaseRetainedRequest&quot;
 }</pre></details>
 </section></main></html>

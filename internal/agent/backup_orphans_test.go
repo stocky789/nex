@@ -189,3 +189,87 @@ func TestBackupOrphanQueryAndCleanup(t *testing.T) {
 		t.Fatalf("recreated %+v", rec)
 	}
 }
+
+func TestOrphanMissingCatalogProbesDestination(t *testing.T) {
+	master := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(master, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "gone-1", "vm-gone")
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(poolBackupCatalogPath(master), "gone-1.json")); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := GetPoolBackupRepository(master, "repo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := openBackupRepositoryStorage(master, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := orphanRequest([]string{"vm-gone"}, 1, 0, false)
+	result := protocol.BackupOrphanPointResult{RecoveryPointID: "gone-1", VMID: "vm-gone", Status: "pending"}
+	if err := deleteOrphanedPoint(context.Background(), master, backend, req, &result); err != nil || result.Status != "skipped" {
+		t.Fatalf("bytes still on destination must not report deleted: %+v %v", result, err)
+	}
+	if err := os.RemoveAll(filepath.Join(mount, "gone-1")); err != nil {
+		t.Fatal(err)
+	}
+	result.Status = "pending"
+	if err := deleteOrphanedPoint(context.Background(), master, backend, req, &result); err != nil || result.Status != "deleted" {
+		t.Fatalf("destination gone should report deleted: %+v %v", result, err)
+	}
+}
+
+type orphanFailingDelete struct{ backupRepositoryStorage }
+
+func (orphanFailingDelete) Delete(context.Context, string) error {
+	return errors.New("destination unavailable")
+}
+
+func TestOrphanIncludeProtectedRestoresOnFailure(t *testing.T) {
+	master := seedBackupMaster(t)
+	mount := t.TempDir()
+	if _, err := upsertTestBackupRepository(master, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "gone-1", "vm-gone")
+	if _, err := importPoolBackupCatalog(context.Background(), master, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetPoolBackupPointProtected(master, protocol.ProtectRecoveryPointRequest{RepositoryID: "repo-1", RecoveryPointID: "gone-1", Protected: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{}}); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := GetPoolBackupRepository(master, "repo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := openBackupRepositoryStorage(master, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := protocol.BackupOrphanPointResult{RecoveryPointID: "gone-1", VMID: "vm-gone", Status: "pending"}
+	if err := deleteOrphanedPoint(context.Background(), master, orphanFailingDelete{backend}, orphanRequest([]string{"vm-gone"}, 1, 1, true), &result); err == nil {
+		t.Fatalf("failed delete reported success: %+v", result)
+	}
+	point, err := getCatalogPoint(master, "repo-1", "gone-1")
+	if err != nil || !point.Protected {
+		t.Fatalf("protection was not restored: %+v %v", point, err)
+	}
+}

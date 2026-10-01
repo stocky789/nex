@@ -1,0 +1,43 @@
+{
+  "summary": "Backup runs and metadata receipts settle instead of pending forever: unknown policy or repository settles failed, runs of unreachable, non-ready, departed or master-hosted members settle failed with stage peer_dispatch, stale journal entries no longer block new backups, and eject and promote ignore runs owned by unserviceable members. The Back up now panel opens above the lists.",
+  "paths": [
+    "internal/agent/backup.go",
+    "internal/agent/backup_peer_dispatch.go",
+    "internal/agent/pool_transfer.go",
+    "internal/agent/pool_backup.go",
+    "internal/agent/run.go",
+    "internal/agent/pool_transfer_test.go",
+    "internal/agent/backup_settlement_bounds_test.go",
+    "web/src/backups.tsx",
+    "web/src/backup-orphans.tsx",
+    "docs/guide/backup-now.md",
+    "docs/guide/catalog-rebuild.md",
+    "docs/guide/backup-repositories.md",
+    "docs/API.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-10-01-run-settlement-bounds.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operators need a new operation ID after a failed unknown-repository request, and an explanation of runs that settle failed at peer_dispatch.",
+    "pages": ["docs/guide/backup-now.md", "docs/guide/catalog-rebuild.md", "docs/guide/backup-repositories.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "Behavior only: backup-now, catalog rebuild and import for an unknown policy or repository settle failed on the first attempt and the operation ID stays failed; runs settle failed at stage peer_dispatch. No fields or endpoints change. docs/API.md needs the note (requested from the API owner).",
+    "pages": ["docs/API.md"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Bug fixes inside the backup recovery plan; no milestone changes."
+  },
+  "state": {
+    "owner": "core",
+    "record": "The pool master's backup run record and operation receipt (status, stage, error).",
+    "reason": "No new durable state; existing records settle terminally and a fresh Controller reads them through the existing run and operation inventory."
+  },
+  "verification": {
+    "method": "Focused Go tests in internal/agent (unit, no lab) and the earlier web source tests. The selection source test was retired by the backup workspace redesign on 2026-10-01; that redesign has separate browser-only evidence and does not extend this record's native settlement coverage.",
+    "evidence": ["internal/agent/backup_settlement_bounds_test.go", "docs/BUG_LEDGER.md"]
+  }
+}

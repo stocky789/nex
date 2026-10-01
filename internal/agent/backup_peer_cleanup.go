@@ -70,15 +70,17 @@ func memberCleanupWork(s *Store, cmd protocol.Command) (peerCleanupWork, bool, e
 	return peerCleanupWork{command: cmd, ownerRun: target, member: member, repo: portablePeerRepository(repo), intent: intent, client: client}, true, nil
 }
 
-func waitPeerCleanup(ctx context.Context, work peerCleanupWork) (protocol.Result, error) {
-	return waitPeerCleanupMode(ctx, work, true)
+func waitPeerCleanup(ctx context.Context, work peerCleanupWork, unreachable func()) (protocol.Result, error) {
+	return waitPeerCleanupMode(ctx, work, true, unreachable)
 }
 
-func waitPeerCleanupReadOnly(ctx context.Context, work peerCleanupWork) (protocol.Result, error) {
-	return waitPeerCleanupMode(ctx, work, false)
+func waitPeerCleanupReadOnly(ctx context.Context, work peerCleanupWork, unreachable func()) (protocol.Result, error) {
+	return waitPeerCleanupMode(ctx, work, false, unreachable)
 }
 
-func waitPeerCleanupMode(ctx context.Context, work peerCleanupWork, allowPost bool) (protocol.Result, error) {
+// waitPeerCleanupMode polls the member until the cleanup settles. It retries a transport
+// failure forever, so it calls unreachable on each one for the caller to record why it waits.
+func waitPeerCleanupMode(ctx context.Context, work peerCleanupWork, allowPost bool, unreachable func()) (protocol.Result, error) {
 	defer work.client.CloseIdleConnections()
 	base := strings.TrimRight(work.member.PeerOrigin, "/") + poolBackupPeerPath
 	var nextPost time.Time
@@ -91,6 +93,9 @@ func waitPeerCleanupMode(ctx context.Context, work peerCleanupWork, allowPost bo
 		}
 		reply, status, err := doPeerBackup(work.client, request)
 		cancel()
+		if err != nil && status == 0 {
+			unreachable()
+		}
 		pending := false
 		if err == nil {
 			if reply.Result.OperationID != work.command.OperationID || reply.IntentSHA256 != work.intent {

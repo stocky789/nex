@@ -63,6 +63,44 @@ func TestBackupAuthorityPinsPermitSamePointButRequireUniqueOperations(t *testing
 	}
 }
 
+func TestBackupAuthorityRejectsMalformedOrphanCleanup(t *testing.T) {
+	stamp := time.Now().UTC()
+	valid := BackupOrphanCleanup{
+		OperationID: "orph-1",
+		Request: OrphanCleanupRequest{
+			RepositoryID: "repo-1", VMIDs: []string{"vm-gone"}, Confirmation: "delete 1 recovery points",
+			RecoveryPoints: 1,
+		},
+		Status: "succeeded", Points: []BackupOrphanPointResult{
+			{RecoveryPointID: "point-1", VMID: "vm-gone", Status: "deleted"},
+		},
+		UpdatedAt: stamp,
+	}
+	if err := (PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{valid}}).Valid(); err != nil {
+		t.Fatalf("valid orphan cleanup refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*BackupOrphanCleanup){
+		"empty request":          func(c *BackupOrphanCleanup) { c.Request = OrphanCleanupRequest{} },
+		"bad status":             func(c *BackupOrphanCleanup) { c.Status = "pending" },
+		"oversized error":        func(c *BackupOrphanCleanup) { c.Error = strings.Repeat("e", 4097) },
+		"zero updated_at":        func(c *BackupOrphanCleanup) { c.UpdatedAt = time.Time{} },
+		"bad point status":       func(c *BackupOrphanCleanup) { c.Points[0].Status = "running" },
+		"missing point vmid":     func(c *BackupOrphanCleanup) { c.Points[0].VMID = "" },
+		"oversized point reason": func(c *BackupOrphanCleanup) { c.Points[0].Reason = strings.Repeat("r", 4097) },
+	} {
+		cleanup := valid
+		cleanup.Points = append([]BackupOrphanPointResult(nil), valid.Points...)
+		mutate(&cleanup)
+		if err := (PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{cleanup}}).Valid(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	dup := PoolBackupAuthority{OrphanCleanups: []BackupOrphanCleanup{valid, valid}}
+	if err := dup.Valid(); err == nil {
+		t.Fatal("duplicate orphan cleanup operation was accepted")
+	}
+}
+
 func TestBackupScheduleDSTGapIsSkippedAndRepeatRunsOnce(t *testing.T) {
 	// America/New_York 2026-03-08 spring forward: 02:30 local does not exist.
 	rule := BackupScheduleRule{Frequency: BackupScheduleDaily, Hour: 2, Minute: 30}

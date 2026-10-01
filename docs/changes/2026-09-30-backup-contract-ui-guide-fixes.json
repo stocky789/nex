@@ -1,0 +1,52 @@
+{
+  "summary": "Forget and orphan-cleanup replay is scoped by repository, the adopted-outcome settle list is built from the backup kinds, unknown pools answer 404, and the Backup pages and guide match the walked behaviour.",
+  "paths": [
+    "internal/controller/managed.go",
+    "internal/controller/backups.go",
+    "internal/controller/backup_dr.go",
+    "internal/controller/backups_test.go",
+    "docs/API.md",
+    "docs/api/openapi.json",
+    "docs/api/index.html",
+    "web/src/backup-repositories.tsx",
+    "web/src/backup-policies.tsx",
+    "web/src/backups.tsx",
+    "web/src/backup-orphans.tsx",
+    "web/src/main.tsx",
+    "web/src/rail-screens.tsx",
+    "web/src/labels.ts",
+    "web/src/backup-orphans.test.mjs",
+    "web/src/backup-repositories.test.mjs",
+    "docs/guide/backup-repositories.md",
+    "docs/guide/backup-policies.md",
+    "docs/guide/backup-now.md",
+    "docs/guide/catalog-rebuild.md",
+    "docs/guide/pool-authority-and-recovery.md",
+    "docs/guide/recover-without-controller.md",
+    "docs/guide/remove-pool-network-or-iso.md",
+    "docs/BUG_LEDGER.md",
+    "docs/changes/2026-09-30-backup-contract-ui-guide-fixes.json"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Operator steps changed or were wrong: API-only re-registration, root-squash, NFS port, Save behaviour, member access delay, wizard step names, Backup jobs button, CLI path and service stop, master-change refusal, restore-as-new placement.",
+    "pages": ["docs/guide/backup-repositories.md", "docs/guide/backup-policies.md", "docs/guide/backup-now.md", "docs/guide/catalog-rebuild.md", "docs/guide/pool-authority-and-recovery.md", "docs/guide/recover-without-controller.md", "docs/guide/remove-pool-network-or-iso.md"]
+  },
+  "api": {
+    "impact": "changed contract",
+    "reason": "POST .../backup-repositories/{repo_id}/forget and .../orphan-cleanups answer 409 when a request_id is replayed for another repository, 404 for an unknown pool; GET .../orphan-cleanups/{request_id} answers 404 for another repository's record. OpenAPI declares the missing 200, 404, 409 and 503 responses and the backup host_id meaning in the operation listing.",
+    "pages": ["docs/API.md", "docs/api/openapi.json"]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Fixes found in backup scenario testing inside the current slice."
+  },
+  "state": {
+    "owner": "none",
+    "reason": "No durable state added; the Controller stores the same command rows and the pool master's records are unchanged."
+  },
+  "verification": {
+    "method": "go test ./internal/controller (focused tests for repository-scoped replay, unknown pool and the settle list), web typecheck and npm test, generate_api.py --check, check_docs.py --worktree and the privacy test. No browser or lab walkthrough was run; the guide edits describe behaviour observed in the earlier lab walk and were not re-walked.",
+    "evidence": ["internal/controller/backups_test.go", "web/src/backup-orphans.test.mjs", "web/src/backup-repositories.test.mjs"]
+  }
+}
