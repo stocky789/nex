@@ -11533,3 +11533,12 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: in the same adoption pass (`internal/controller/managed.go`), an adopted `dispatched` mirror absent from Core's report for more than ten minutes becomes `needs_attention` with "Core no longer reports this queued operation; check the host history for its outcome". It is never marked succeeded: the Core journal stays authoritative.
 - Regression: `go test -count=1 -run TestSilentQueuedAdoptedOutcomeNeedsAttention ./internal/controller` (fails with the new update disabled).
 - Avoid: settling an unreported mirror as succeeded, which claims an outcome Core never reported.
+
+## BUG-1800 — Snapshot create/delete briefly showed needs_attention when a background replica push was in flight (OBS-7-1)
+
+- Date: 2026-10-02
+- Symptom: back-to-back snapshot create/delete on a member showed `needs_attention` ("the pool master has not confirmed the snapshot reservation") for about 5 s, then ended `succeeded`; about 10 of 60 operations in the lab.
+- Root cause: the master's snapshot reservation confirm (`confirmPoolVMSnapshotReplica`) pushes the pool authority replica, and `PushPoolAuthorityReplicas` is single-flight and refuses with "already in progress" when the periodic or another push is running. The refusal was classed as an unconfirmed reservation, so Core surfaced `needs_attention` and re-drove after its 5 s delay. Not caused by the journal validation cache (A/B: 10/60 with it, 11/60 without) or JournaledCommand.
+- Fix: `pushReplicasWaitingForBusy` (`internal/agent/pool_vm_inventory.go`) retries the push for up to 10 s while it is busy; the confirm still needs a push of its own, so the exact-acknowledgement checks are unchanged.
+- Regression: `go test -count=1 -run TestPushReplicasWaitingForBusyOutlastsBackgroundPush ./internal/agent` (fails with the retry disabled; runs in the existing agent suite). Lab: 1/60 (cold start after a host reboot) then 0/58 on the fixed build.
+- Avoid: making `PushPoolAuthorityReplicas` itself block; other callers and tests rely on its immediate busy refusal.
