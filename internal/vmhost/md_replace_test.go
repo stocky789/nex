@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/rootfs"
 )
 
 const mdTestByID = "/dev/disk/by-id/scsi-newdisk"
@@ -76,6 +79,7 @@ func mdTestLab(t *testing.T, arrays protocol.HardwareMDArrays, candidate ZFSDevi
 			return zfsProvisionRun(ctx, name, args...)
 		}
 	})
+	mdTestRootOptions(t, "rw,relatime")
 	mdSysBlockRoot = mdTestSysfs(t, map[string][]string{"sda": {"sda1", "sda2"}, "sdb": {"sdb1", "sdb2"}, "scsi-newdisk": {"scsi-newdisk-part1", "scsi-newdisk-part2"}})
 	mdFirmwareEFI = filepath.Join(t.TempDir(), "no-efi") // BIOS firmware
 	bootEFI := filepath.Join(t.TempDir(), "boot-efi")
@@ -87,6 +91,9 @@ func mdTestLab(t *testing.T, arrays protocol.HardwareMDArrays, candidate ZFSDevi
 	mdDiscoverDevice = func(context.Context) ([]ZFSDeviceCandidate, error) { return []ZFSDeviceCandidate{candidate}, nil }
 	systemDiskRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		*commands = append(*commands, strings.Join(append([]string{name}, args...), " "))
+		if name == "findmnt" {
+			return []byte(mdTestRoot + "\n"), nil
+		}
 		if name == "lsblk" {
 			// util-linux only nests the partitions when NAME is among the columns; a flat
 			// list would hide the ESP, so the stub answers only a request that asks for it.
@@ -102,6 +109,16 @@ func mdTestLab(t *testing.T, arrays protocol.HardwareMDArrays, candidate ZFSDevi
 		return nil, nil
 	}
 	return commands
+}
+
+// mdTestRoot is what findmnt reports for / on the stubbed host; the system manager that runs
+// the commands is where the root's state is read, not the agent's own sandboxed view.
+var mdTestRoot = "rw,relatime"
+
+func mdTestRootOptions(t *testing.T, options string) {
+	t.Helper()
+	mdTestRoot = options
+	t.Cleanup(func() { mdTestRoot = "rw,relatime" })
 }
 
 func mdTestArray(degraded int, members ...protocol.MDMember) protocol.HardwareMDArrays {
@@ -304,6 +321,9 @@ func mdTestRun(t *testing.T, commands *[]string) {
 	t.Helper()
 	systemDiskRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		*commands = append(*commands, strings.Join(append([]string{name}, args...), " "))
+		if name == "findmnt" {
+			return []byte(mdTestRoot + "\n"), nil
+		}
 		if name == "lsblk" {
 			return []byte(`{"blockdevices":[{"path":"/dev/sda","children":[{"path":"/dev/sda1","parttype":"` + espPartitionType + `"}]}]}`), nil
 		}
@@ -575,4 +595,269 @@ func TestDiskOpsShareExclusiveLockAcrossReplacers(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlock2()
+}
+
+// The installer builds one array for / and one for /var from the same disks. Replacing a
+// disk repairs both in one operation: the replacement is no longer blank for a second one,
+// so a second request would have nothing left to wipe. A healthy array is not touched.
+func TestReplaceSystemDiskRepairsEveryDegradedArrayOnTheDisk(t *testing.T) {
+	root := protocol.MDArray{Name: "md0", Device: "/dev/md0", Level: "raid1", RaidDisks: 2, Degraded: 1,
+		Members: []protocol.MDMember{mdSurvivingMember}}
+	data := protocol.MDArray{Name: "md1", Device: "/dev/md1", Level: "raid1", RaidDisks: 2, Degraded: 1,
+		Members: []protocol.MDMember{{Name: "sda3", Device: "/dev/sda3", Slot: "0", State: "in_sync"}}}
+	other := protocol.MDArray{Name: "md2", Device: "/dev/md2", Level: "raid1", RaidDisks: 2, Degraded: 0,
+		Members: []protocol.MDMember{{Name: "sda4", Device: "/dev/sda4", State: "in_sync"}, {Name: "sdc4", Device: "/dev/sdc4", State: "in_sync"}}}
+	commands := mdTestLab(t, protocol.HardwareMDArrays{Arrays: []protocol.MDArray{root, data, other}}, mdTestCandidate())
+	mdSysBlockRoot = mdTestSysfs(t, map[string][]string{
+		"sda": {"sda1", "sda2", "sda3", "sda4"}, "sdc": {"sdc1", "sdc2", "sdc3", "sdc4"},
+		"scsi-newdisk": {"scsi-newdisk-part1", "scsi-newdisk-part2", "scsi-newdisk-part3", "scsi-newdisk-part4"}})
+	if err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest()); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	for _, want := range []string{"mdadm --add /dev/md0 " + mdTestByID + "-part2", "mdadm --add /dev/md1 " + mdTestByID + "-part3"} {
+		if !containsCommand(*commands, want) {
+			t.Fatalf("missing %q in %v", want, *commands)
+		}
+	}
+	for _, command := range *commands {
+		if strings.HasPrefix(command, "mdadm --add") && strings.Contains(command, "md2") {
+			t.Fatalf("a healthy array was changed: %v", *commands)
+		}
+	}
+	// GRUB must be on the disk after both arrays have their member, not before.
+	last, grub := -1, -1
+	for i, command := range *commands {
+		if strings.HasPrefix(command, "mdadm --add") {
+			last = i
+		}
+		if strings.HasPrefix(command, "grub-install") {
+			grub = i
+		}
+	}
+	if grub < last {
+		t.Fatalf("GRUB installed before the arrays were repaired: %v", *commands)
+	}
+}
+
+// On a read-only root, grub-install (which writes /boot/grub) runs only inside a window
+// that is closed again afterwards, even when GRUB fails.
+func TestReplaceSystemDiskInstallsGRUBInsideARootWindow(t *testing.T) {
+	for _, grubFails := range []bool{false, true} {
+		commands := mdTestLab(t, mdTestArray(1, mdSurvivingMember), mdTestCandidate())
+		mdTestRootOptions(t, "ro,relatime")
+		run := systemDiskRun
+		systemDiskRun = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			out, _ := run(ctx, name, args...)
+			if grubFails && name == "grub-install" {
+				return out, errors.New("exit status 1")
+			}
+			return out, nil
+		}
+		err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest())
+		if (err != nil) != grubFails {
+			t.Fatalf("grubFails=%v: %v", grubFails, err)
+		}
+		var order []string
+		for _, command := range *commands {
+			switch {
+			case command == "mount -o remount,rw /":
+				order = append(order, "rw")
+			case strings.HasPrefix(command, "grub-install"):
+				order = append(order, "grub")
+			case command == "mount -o remount,ro /":
+				order = append(order, "ro")
+			}
+		}
+		if got := strings.Join(order, ","); got != "rw,grub,ro" {
+			t.Fatalf("grubFails=%v: order %q in %v", grubFails, got, *commands)
+		}
+	}
+}
+
+// mdTestTwoArrays is a host whose / and /var mirrors lost different disks' members, each
+// array's own member list given by the caller. md0 is the one the operator names.
+func mdTestTwoArrays(t *testing.T, md0, md1 []protocol.MDMember) *[]string {
+	t.Helper()
+	arrays := protocol.HardwareMDArrays{Arrays: []protocol.MDArray{
+		{Name: "md0", Device: "/dev/md0", Level: "raid1", RaidDisks: 2, Degraded: 1, Members: md0},
+		{Name: "md1", Device: "/dev/md1", Level: "raid1", RaidDisks: 2, Degraded: 1, Members: md1},
+	}}
+	commands := mdTestLab(t, arrays, mdTestCandidate())
+	mdSysBlockRoot = mdTestSysfs(t, map[string][]string{
+		"sda": {"sda1", "sda2", "sda3"}, "sdb": {"sdb1", "sdb2", "sdb3"},
+		"scsi-newdisk": {"scsi-newdisk-part1", "scsi-newdisk-part2", "scsi-newdisk-part3"}})
+	return commands
+}
+
+func mdTestMember(name, state string) protocol.MDMember {
+	return protocol.MDMember{Name: name, Device: "/dev/" + name, State: state}
+}
+
+func mdTestWiped(commands []string) bool {
+	return containsCommand(commands, "wipefs --all "+mdTestByID)
+}
+
+// The /var array's only working member may sit on a different disk than the named array's:
+// its partition number still comes from that member, and /var is repaired, not skipped.
+func TestReplaceSystemDiskRepairsASiblingWhoseSurvivorIsOnAnotherDisk(t *testing.T) {
+	commands := mdTestTwoArrays(t,
+		[]protocol.MDMember{mdTestMember("sda2", "in_sync"), mdTestMember("sdb2", "faulty")},
+		[]protocol.MDMember{mdTestMember("sda3", "faulty"), mdTestMember("sdb3", "in_sync")})
+	if err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest()); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	for _, want := range []string{"mdadm --add /dev/md0 " + mdTestByID + "-part2", "mdadm --add /dev/md1 " + mdTestByID + "-part3"} {
+		if !containsCommand(*commands, want) {
+			t.Fatalf("missing %q in %v", want, *commands)
+		}
+	}
+}
+
+// A sibling that cannot be repaired stops the operation before the disk is erased; success is
+// never reported with /var left degraded.
+func TestReplaceSystemDiskRefusesBeforeWipingWhenASiblingHasNoWorkingMember(t *testing.T) {
+	commands := mdTestTwoArrays(t,
+		[]protocol.MDMember{mdTestMember("sda2", "in_sync")},
+		[]protocol.MDMember{mdTestMember("sda3", "faulty")})
+	state := t.TempDir()
+	err := NewSystemDiskReplacer(state).Replace(context.Background(), mdTestRequest())
+	if err == nil || !strings.Contains(err.Error(), "/dev/md1 has no working member to copy from") {
+		t.Fatalf("expected a refusal naming /dev/md1, got %v", err)
+	}
+	if mdTestWiped(*commands) || containsCommand(*commands, "mdadm --add /dev/md0 "+mdTestByID+"-part2") {
+		t.Fatalf("the disk was changed although /var could not be repaired: %v", *commands)
+	}
+}
+
+// A replacement that already carries a member of the /var array (data about to be wiped) is
+// refused up front, like one that carries a member of the named array.
+func TestReplaceSystemDiskRefusesBeforeWipingADiskHoldingASiblingMember(t *testing.T) {
+	commands := mdTestTwoArrays(t,
+		[]protocol.MDMember{mdTestMember("sda2", "in_sync")},
+		[]protocol.MDMember{mdTestMember("sda3", "in_sync"), mdTestMember("scsi-newdisk-part3", "spare")})
+	err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest())
+	if err == nil || !strings.Contains(err.Error(), "already holds a member of /dev/md1") {
+		t.Fatalf("expected a refusal naming /dev/md1, got %v", err)
+	}
+	if mdTestWiped(*commands) {
+		t.Fatalf("a disk holding /var data was wiped: %v", *commands)
+	}
+}
+
+// An array whose only listed member is on the replacement disk shares no other disk with the
+// named array, yet wiping the disk would still destroy that member: refuse, never skip.
+func TestReplaceSystemDiskRefusesBeforeWipingADiskHoldingTheOnlyMemberOfAnotherArray(t *testing.T) {
+	commands := mdTestTwoArrays(t,
+		[]protocol.MDMember{mdTestMember("sda2", "in_sync")},
+		[]protocol.MDMember{mdTestMember("scsi-newdisk-part3", "in_sync")})
+	err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest())
+	if err == nil || !strings.Contains(err.Error(), "already holds a member of /dev/md1") {
+		t.Fatalf("expected a refusal naming /dev/md1, got %v", err)
+	}
+	if mdTestWiped(*commands) {
+		t.Fatalf("a disk holding another array's only member was wiped: %v", *commands)
+	}
+}
+
+// After the disk was wiped and added, a member that has since failed (or vanished) is not a
+// repaired mirror: no bootloader step, no success, and the journal keeps asking for attention.
+func TestReplaceSystemDiskResumeNeverReportsSuccessForABrokenReplacementMember(t *testing.T) {
+	good := mdTestMember("scsi-newdisk-part2", "in_sync")
+	cases := map[string]struct {
+		md0, md1 []protocol.MDMember
+		want     string
+	}{
+		"faulty named member": {
+			md0:  []protocol.MDMember{mdTestMember("sda2", "in_sync"), mdTestMember("scsi-newdisk-part2", "faulty")},
+			md1:  []protocol.MDMember{mdTestMember("sda3", "in_sync")},
+			want: "the replacement disk's member of /dev/md0 has failed",
+		},
+		"missing named member": {
+			md0:  []protocol.MDMember{mdTestMember("sda2", "in_sync")},
+			md1:  []protocol.MDMember{mdTestMember("sda3", "in_sync")},
+			want: "the replacement disk is no longer a member of /dev/md0",
+		},
+		"faulty sibling member": {
+			md0:  []protocol.MDMember{mdTestMember("sda2", "in_sync"), good},
+			md1:  []protocol.MDMember{mdTestMember("sda3", "in_sync"), mdTestMember("scsi-newdisk-part3", "faulty")},
+			want: "the replacement disk's member of /dev/md1 has failed",
+		},
+	}
+	for name, c := range cases {
+		state := t.TempDir()
+		commands := mdTestTwoArrays(t, c.md0, c.md1)
+		journal := systemDiskJournal{Request: mdTestRequest(), Stage: "member-added", Status: "needs_attention"}
+		path := filepath.Join(state, "op-replace-1.json")
+		if err := saveSystemDiskJournal(path, journal); err != nil {
+			t.Fatal(err)
+		}
+		err := NewSystemDiskReplacer(state).Replace(context.Background(), mdTestRequest())
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: expected %q, got %v", name, c.want, err)
+		}
+		for _, command := range *commands {
+			if strings.HasPrefix(command, "grub-install") || strings.HasPrefix(command, "mkfs.vfat") {
+				t.Fatalf("%s: made a broken disk bootable: %v", name, *commands)
+			}
+		}
+		got, readErr := readSystemDiskJournal(path)
+		if readErr != nil || got.Status != "needs_attention" || got.Stage == "bootable" {
+			t.Fatalf("%s: journal %+v (%v)", name, got, readErr)
+		}
+	}
+}
+
+// A classic host with a writable root is never remounted, whatever the agent's own sandboxed
+// view of / looks like: the state is read through the system manager that runs the commands.
+func TestReplaceSystemDiskLeavesAWritableRootAlone(t *testing.T) {
+	commands := mdTestLab(t, mdTestArray(1, mdSurvivingMember), mdTestCandidate())
+	if err := NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest()); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	for _, command := range *commands {
+		if strings.HasPrefix(command, "mount ") {
+			t.Fatalf("remounted a writable root: %v", *commands)
+		}
+	}
+}
+
+// The BIOS bootloader write waits for any other root window (a software update's package
+// install) instead of reading that window's writable root as the normal state, and only
+// writes GRUB after the other window has closed.
+func TestReplaceSystemDiskWaitsForAnotherRootWindowBeforeGRUB(t *testing.T) {
+	commands := mdTestLab(t, mdTestArray(1, mdSurvivingMember), mdTestCandidate())
+	mdTestRootOptions(t, "ro,relatime")
+	closeOther, err := rootfs.OpenWritable(context.Background(), func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("ro,relatime"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closed atomic.Bool
+	var early atomic.Bool
+	run := systemDiskRun
+	systemDiskRun = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if (name == "grub-install" || name == "mount") && !closed.Load() {
+			early.Store(true)
+		}
+		return run(ctx, name, args...)
+	}
+	done := make(chan error, 1)
+	go func() { done <- NewSystemDiskReplacer(t.TempDir()).Replace(context.Background(), mdTestRequest()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("GRUB was written inside another writer's window (%v)", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	closed.Store(true)
+	closeOther()
+	if err := <-done; err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if early.Load() {
+		t.Fatal("the root was remounted or GRUB written while another window held the root")
+	}
+	if !containsCommand(*commands, "mount -o remount,rw /") || !containsCommand(*commands, "mount -o remount,ro /") {
+		t.Fatalf("no window of its own: %v", *commands)
+	}
 }

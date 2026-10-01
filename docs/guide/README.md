@@ -8,6 +8,10 @@ verification limits that apply to its workflow.
 
 1. [Install Nex Core in a disposable VM](install-nex-core.md).
 2. [Verify the installed Nex Core host](verify-nex-core.md).
+   Image edition: [reinstall the system image and keep the data](reinstall-keeping-state.md)
+   (**Repair image**; development, not yet verified on a booted host).
+   Image edition: [check and switch optional host features](optional-host-features.md)
+   (feature layers such as OpenZFS, from the host's root shell; development, lab-simulated only).
 3. [Set up Nex Controller and enroll a host](manage-controller.md).
 4. [Navigate the Controller console](navigate-the-controller-console.md)
    (rail, scope menu, search, activity pill, lists with slide-over panels, Tasks, Events and
@@ -67,7 +71,9 @@ verification limits that apply to its workflow.
    (rebuild a host's mirrored system disk from its panel's **Storage** tab while the host keeps
    running).
 24. [Check and apply software updates](software-updates.md)
-   (Controller and host-local package updates from a configured repo).
+   (Controller and host-local package updates from a configured repo; image-edition hosts update
+   themselves from **Settings → Updates → Host images**, unverified, and
+   [Roll back a host update](roll-back-a-host-update.md) returns one to its previous release).
 25. [Publish a Nex Core release](publish-a-release.md)
    (authorized maintainers; tag-driven ISO and package build, and website publication).
 26. [Set up backup repositories](backup-repositories.md)

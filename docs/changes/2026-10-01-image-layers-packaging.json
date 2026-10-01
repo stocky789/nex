@@ -1,0 +1,61 @@
+{
+  "summary": "Phase I-2 closure for the immutable Nex Core plan: optional feature layers (nex-zfs, nex-cluster) are documented as an on-host Core contract (nex-core-local layers list|ensure|disable|activate, layer-unavailable with its reasons) and nex-layers.service ships enabled by a vendor wants link and preset; the Controller appliance can be built into a separate content-addressed payload (--appliance-packaging split) instead of the nex-core-local deb, with the classic bundled path unchanged and core-local-setup resolving /var/lib/nex/payload/<sha256>/; the graphical installer wizard gains the same Repair image choice as the text wizard; installer integration scripts pin the image edition beside the classic partman path.",
+  "paths": [
+    "CHANGELOG.md",
+    "cmd/nex-core-local/layers.go",
+    "cmd/nex-core-local/main.go",
+    "docs/API.md",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/guide/README.md",
+    "docs/guide/optional-host-features.md",
+    "docs/qa/image/phase2-packaging.md",
+    "installer/check.sh",
+    "installer/gui/nex-wizard.c",
+    "packaging/core-local/30-nex-core-local.preset",
+    "packaging/core-local/build-inside.sh",
+    "packaging/core-local/build.py",
+    "packaging/core-local/core-local-setup",
+    "packaging/core-local/nex-layers.service",
+    "tests/integration/installer-disk.py",
+    "tests/integration/installer-handoff.py",
+    "tests/test_storage_packaging.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "New page for image-edition operators to list, enable and disable optional feature layers from the host's root shell; the guide index links it.",
+    "pages": [
+      "docs/guide/optional-host-features.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New on-host command contract only: `nex-core-local layers` (activate, list, ensure, disable), the LayerInfo schema and the layer-unavailable refusal with its reasons, in docs/API.md and the local OpenAPI x-commands. No HTTP route, report-protocol command, Inventory field or Controller behaviour is added, and the Controller stores nothing about layers. The appliance split changes where the package build writes the image, not any request or result shape.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-2 of a proposed, not yet authorized plan; development work with no published milestone changed and nothing run on a booted image."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The layer manager runs in Core on the host and keeps its own journal; the Controller is not involved.",
+    "record": "/var/lib/nex/layers/enabled.json (per layer: enabled, sha256, base_build_id, changed), the store /var/lib/nex/layers/store/sha256-<hex>.raw and the signed manifests under /var/lib/nex/layers/releases/<BUILD_ID>/, all on the host's nex-data volume; the split Controller appliance lives at /var/lib/nex/payload/<sha256>/. A fresh Controller recovers nothing from these and needs nothing, because the host reads them from its own disks."
+  },
+  "verification": {
+    "method": "Ran scripts/generate_api.py and --check, tests/test_api_contract.py, tests.test_storage_packaging, tests.test_core_local_package, installer/check.sh and tests/integration/installer-handoff.py. Compiled installer/gui/nex-wizard.c and nex-config.c with gtk+-2.0 and glib in a throwaway Debian trixie container (-Wall -Wextra, no warnings) and ran tests/integration/installer-disk.py there under Xvfb. Smoke-ran the bundled, split and invalid branches of the appliance packaging in build-inside.sh against a stub bundle. Simulation only: the wizard Repair choice was compiled but never drawn or clicked, no package was built, and no installed image or ISO was booted.",
+    "evidence": [
+      "docs/qa/image/phase2-packaging.md",
+      "docs/qa/image/phase2-layers.md",
+      "tests/test_storage_packaging.py",
+      "tests/integration/installer-handoff.py",
+      "tests/integration/installer-disk.py",
+      "installer/check.sh"
+    ]
+  }
+}

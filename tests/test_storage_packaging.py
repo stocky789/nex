@@ -18,13 +18,15 @@ CLIENTS = {"nfs-common", "libnfs-utils", "cifs-utils", "smbclient", "open-iscsi"
 CLUSTERED_GFS2 = {"corosync", "dlm-controld", "gfs2-utils", "pacemaker", "pacemaker-cli-utils", "pcs",
                   "fence-agents-redfish", "fence-agents-ipmilan", "fence-agents-virsh"}
 MATCHED_DLM_VERSION = "4.3.0-3+nex1"
-OPTIONAL_FENCING = {"sanlock", "python3-sanlock", "libvirt-daemon-plugin-sanlock", "corosync-qdevice", "corosync-qnetd"}
+OPTIONAL_FENCING = {"sanlock", "python3-sanlock", "libvirt-daemon-plugin-sanlock", "corosync-qdevice"}
 
 
 class StoragePackagingTests(unittest.TestCase):
     def test_optional_fencing_packages_are_iso_staged_and_not_deb_dependencies(self):
         installer = set((ROOT / "installer/packages.txt").read_text().split())
         self.assertTrue(OPTIONAL_FENCING <= installer)
+        # No host caller: guest creation goes through the Core API and qnetd is Controller-hosted.
+        self.assertFalse({"virtinst", "sudo", "corosync-qnetd"} & installer)
         core = (ROOT / "packaging/core-local/build-inside.sh").read_text()
         controller = (ROOT / "packaging/controller/build-inside.sh").read_text()
         for package in OPTIONAL_FENCING:
@@ -42,7 +44,8 @@ class StoragePackagingTests(unittest.TestCase):
         self.assertIn("appliance/package-service-policy.sh", installer_build)
         self.assertIn("libvirt-daemon-plugin-sanlock", (ROOT / "installer/packages.txt").read_text())
         late_install = (ROOT / "installer/late-install.sh").read_text()
-        self.assertLess(late_install.index("package-service-policy.sh disable"), late_install.index("package-service-policy.sh runtime-qnetd"))
+        # Hosts do not carry corosync-qnetd (the Controller hosts the witness).
+        self.assertNotIn("runtime-qnetd", late_install)
 
     def test_qnetd_package_path_is_persistently_redirected_to_runtime_nssdb(self):
         helper = ROOT / "appliance/package-service-policy.sh"
@@ -134,7 +137,7 @@ class StoragePackagingTests(unittest.TestCase):
                 rc.symlink_to(f"../init.d/{service}")
             disable_env = dict(env, ACTION_LOG=str(log), PATH=f"{commands}:{os.environ['PATH']}")
             subprocess.run(["sh", str(helper), "disable"], env=disable_env, check=True)
-            self.assertFalse(list((root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")))
+            self.assertEqual([p.name for p in (root / "etc").glob("rc[0-6S].d/S[0-9][0-9]*")], ["S20corosync-qnetd"])
             subprocess.run(["sh", str(helper), "disable", "qnetd"], env=disable_env, check=True)
             self.assertNotIn("start", log.read_text())
             self.assertNotIn("stop", log.read_text())
@@ -216,6 +219,39 @@ class StoragePackagingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 17, result.stderr)
             self.assertEqual(policy.read_text(), "#!/bin/sh\nexit 42\n")
             self.assertFalse((root / "usr/sbin/.policy-rc.d.nex-package-save").exists())
+
+    def test_appliance_split_keeps_the_classic_bundle_and_resolves_the_payload(self):
+        import importlib.machinery
+        loader = importlib.machinery.SourceFileLoader("core_local_setup_split", str(ROOT / "packaging/core-local/core-local-setup"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        setup = importlib.util.module_from_spec(spec)
+        loader.exec_module(setup)
+        digest = "ab" * 32
+        with tempfile.TemporaryDirectory(prefix="nex-appliance-split-") as directory:
+            root = Path(directory)
+            bundle, payload = root / "usr/share/nex/appliance", root / "var/lib/nex/payload"
+            bundle.mkdir(parents=True)
+            setup.BUNDLE, setup.PAYLOAD = bundle, payload
+            (bundle / "controller.sha256").write_text(digest + "\n")
+            # Split package: the payload directory named by the build-time pin holds the signed files.
+            expected = tuple(payload / digest / name for name in ("controller.qcow2", "manifest.json", "manifest.sig"))
+            self.assertEqual(setup.appliance_files(), expected)
+            # Classic package: the bundled image wins, so an upgraded classic host never looks in /var.
+            (bundle / "controller.qcow2").write_bytes(b"image")
+            self.assertEqual(setup.appliance_files(),
+                             tuple(bundle / name for name in ("controller.qcow2", "manifest.json", "manifest.sig")))
+            # A pin that is not a SHA-256 never builds a path outside the payload store.
+            (bundle / "controller.qcow2").unlink()
+            (bundle / "controller.sha256").write_text("../../etc\n")
+            self.assertEqual(setup.appliance_files()[0].parent, bundle)
+
+        build = (ROOT / "packaging/core-local/build-inside.sh").read_text()
+        self.assertIn("NEX_APPLIANCE_PACKAGING:-bundled", build)
+        self.assertIn('"/output/payload/$appliance_sha"', build)
+        self.assertIn("nex-layers.service", build)
+        self.assertIn("sysinit.target.wants/nex-layers.service", build)
+        self.assertEqual((ROOT / "packaging/core-local/30-nex-core-local.preset").read_text().splitlines()[-1],
+                         "enable nex-layers.service")
 
     def test_clustered_iscsi_ocf_probe_is_packaged_and_read_only(self):
         wrapper = ROOT / "packaging/cluster-storage/cluster-iscsi-session"

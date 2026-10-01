@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+package agent
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"nex.local/nex/internal/nexupdate"
+	"nex.local/nex/internal/protocol"
+)
+
+// stepEngine is a host engine whose status the test sets and whose calls it records.
+type stepEngine struct {
+	status    nexupdate.ImageStatus
+	calls     []string
+	requests  []string
+	refuse    map[string]*nexupdate.Error
+	afterAply func()
+}
+
+func (e *stepEngine) Status(context.Context) (nexupdate.ImageStatus, error) { return e.status, nil }
+func (e *stepEngine) call(name, id string) (nexupdate.Operation, bool, error) {
+	e.calls, e.requests = append(e.calls, name), append(e.requests, id)
+	// The engine refuses a request ID outside its rule; the fake must refuse it the same way.
+	if name != "check" && !nexupdate.ValidRequestID(id) {
+		return nexupdate.Operation{}, false, &nexupdate.Error{Status: 400, Code: "invalid_request", Message: "request_id must be 8 to 64 letters, digits, - or _"}
+	}
+	if err := e.refuse[name]; err != nil {
+		return nexupdate.Operation{}, false, err
+	}
+	return nexupdate.Operation{ID: id}, false, nil
+}
+func (e *stepEngine) Check(context.Context) (nexupdate.ImageStatus, error) {
+	_, _, err := e.call("check", "")
+	if e.afterAply != nil {
+		e.afterAply()
+	}
+	return e.status, err
+}
+func (e *stepEngine) Apply(_ context.Context, r nexupdate.ApplyRequest) (nexupdate.Operation, bool, error) {
+	if r.Activate != "stage_only" {
+		panic("a rollout stage must never arm the next boot")
+	}
+	return e.call("apply", r.RequestID)
+}
+func (e *stepEngine) Activate(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
+	if r.RunningVMs != "refuse" {
+		panic("activate must keep the engine's refuse policy; the rollout shuts guests down itself")
+	}
+	return e.call("activate", r.RequestID)
+}
+func (e *stepEngine) Rollback(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
+	return e.call("rollback", r.RequestID)
+}
+func (e *stepEngine) Cancel(_ context.Context, r nexupdate.ActionRequest) (nexupdate.Operation, bool, error) {
+	return e.call("cancel", r.RequestID)
+}
+
+type stepGuests struct {
+	running  map[string]bool
+	shutdown []string
+	started  []string
+	startErr error
+	opIDs    []string
+}
+
+func (g *stepGuests) Running(context.Context) ([]string, error) {
+	var out []string
+	for id, on := range g.running {
+		if on {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+func (g *stepGuests) Shutdown(_ context.Context, op, id string) error {
+	g.shutdown, g.opIDs = append(g.shutdown, id), append(g.opIDs, op)
+	return nil
+}
+func (g *stepGuests) Start(_ context.Context, op, id string) error {
+	g.opIDs = append(g.opIDs, op)
+	if g.startErr != nil {
+		return g.startErr
+	}
+	g.started = append(g.started, id)
+	return nil
+}
+
+func hostStepLab(t *testing.T) (*Store, *stepEngine, *stepGuests) {
+	t.Helper()
+	s := peerStore(t, "member-1", "pool-1")
+	engine := &stepEngine{refuse: map[string]*nexupdate.Error{}, status: nexupdate.ImageStatus{
+		Channel: "stable", Phase: nexupdate.PhaseCommitted, StateFormat: 2,
+		Slots: []nexupdate.SlotStatus{{Role: "booted", Sequence: 1}}}}
+	guests := &stepGuests{running: map[string]bool{}}
+	SetImageUpdater(engine)
+	previous := poolUpdateGuestOps
+	poolUpdateGuestOps = func(*Store) PoolUpdateGuests { return guests }
+	t.Cleanup(func() { SetImageUpdater(nil); poolUpdateGuestOps = previous })
+	return s, engine, guests
+}
+
+func step(action string, vms ...string) protocol.PoolUpdateStep {
+	return protocol.PoolUpdateStep{RolloutID: "r1", StepID: poolUpdateStepID("r1", "member-1", action, 0), Action: action, Sequence: 2, VMIDs: vms}
+}
+
+func TestHostStatusReportsTheEngineAndGuests(t *testing.T) {
+	s, engine, guests := hostStepLab(t)
+	guests.running["vm-1"] = true
+	engine.status.Running = true
+	engine.status.Slots = append(engine.status.Slots, nexupdate.SlotStatus{Role: "staged", Sequence: 2})
+	engine.status.Available = &nexupdate.Available{Sequence: 2, Compat: nexupdate.Compat{StateFormat: 2, MixedPool: true, MinControllerAPIEpoch: 1},
+		Components: []nexupdate.ComponentInfo{{Bytes: 100, Required: true}, {Bytes: 900, Required: true, OnDemand: true}, {Bytes: 5}}}
+	poolUpdateFreeBytes = func() uint64 { return 4096 }
+	t.Cleanup(func() { poolUpdateFreeBytes = func() uint64 { return 0 } })
+	got, err := PoolUpdateHostStatusFor(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunningSequence != 1 || got.StagedSequence != 2 || !got.Busy || got.FreeBytes != 4096 || got.Channel != "stable" ||
+		!reflect.DeepEqual(got.RunningVMs, []string{"vm-1"}) || got.Target == nil || got.Target.RequiredBytes != 100 ||
+		got.Target.MinControllerAPIEpoch != 1 || len(got.Capabilities) != 1 {
+		t.Fatalf("status = %+v target = %+v", got, got.Target)
+	}
+	SetImageUpdater(nil)
+	if _, err = PoolUpdateHostStatusFor(context.Background(), s); err == nil {
+		t.Fatal("a classic host answered with an image status")
+	}
+}
+
+func TestHostStepsMapOntoTheEngine(t *testing.T) {
+	s, engine, _ := hostStepLab(t)
+	ctx := context.Background()
+	// check: not offered yet, so the engine checks; still not offered is a stable refusal.
+	if res := PoolUpdateHostStep(ctx, s, step("check")); res.Code != "release_unavailable" || engine.calls[len(engine.calls)-1] != "check" {
+		t.Fatalf("check without the release = %+v calls %v", res, engine.calls)
+	}
+	engine.status.Available = &nexupdate.Available{Sequence: 2}
+	engine.calls = nil
+	if res := PoolUpdateHostStep(ctx, s, step("check")); !res.Done || len(engine.calls) != 0 {
+		t.Fatalf("an already offered release re-checked: %+v %v", res, engine.calls)
+	}
+	// stage: starts the engine apply under the step ID, reports done only once staged.
+	if res := PoolUpdateHostStep(ctx, s, step("stage")); res.Done || res.Code != "" || engine.requests[len(engine.requests)-1] != step("stage").StepID {
+		t.Fatalf("stage in progress = %+v %v", res, engine.requests)
+	}
+	engine.status.Operation = &nexupdate.Operation{ID: step("stage").StepID, Error: &nexupdate.Error{Code: "state_format_downgrade", Message: "no"}}
+	if res := PoolUpdateHostStep(ctx, s, step("stage")); res.Code != "state_format_downgrade" {
+		t.Fatalf("a failed stage = %+v", res)
+	}
+	engine.status.Operation = nil
+	engine.status.Slots = append(engine.status.Slots, nexupdate.SlotStatus{Role: "staged", Sequence: 2})
+	engine.calls = nil
+	if res := PoolUpdateHostStep(ctx, s, step("stage")); !res.Done || len(engine.calls) != 0 {
+		t.Fatalf("a staged host re-staged: %+v %v", res, engine.calls)
+	}
+	// activate: the engine's own refusal is returned untouched; an armed host is not armed again.
+	engine.refuse["activate"] = &nexupdate.Error{Code: "running_vms", Message: "guests"}
+	if res := PoolUpdateHostStep(ctx, s, step("activate")); res.Code != "running_vms" {
+		t.Fatalf("activate with guests = %+v", res)
+	}
+	delete(engine.refuse, "activate")
+	engine.calls = nil
+	if res := PoolUpdateHostStep(ctx, s, step("activate")); !res.Done || engine.calls[0] != "activate" {
+		t.Fatalf("activate = %+v %v", res, engine.calls)
+	}
+	engine.status.Phase, engine.calls = nexupdate.PhaseArmed, nil
+	if res := PoolUpdateHostStep(ctx, s, step("activate")); !res.Done || len(engine.calls) != 0 {
+		t.Fatalf("a repeated activate re-armed: %+v %v", res, engine.calls)
+	}
+	// confirm: only a committed host on the target release confirms; a fallback is rolled_back.
+	if res := PoolUpdateHostStep(ctx, s, step("confirm")); res.Done || res.Code != "" {
+		t.Fatalf("confirm while armed = %+v", res)
+	}
+	engine.status.Slots = []nexupdate.SlotStatus{{Role: "booted", Sequence: 2}}
+	engine.status.Phase = nexupdate.PhaseCommitted
+	if res := PoolUpdateHostStep(ctx, s, step("confirm")); !res.Done {
+		t.Fatalf("confirm committed = %+v", res)
+	}
+	engine.status.Slots, engine.status.Phase = []nexupdate.SlotStatus{{Role: "booted", Sequence: 1}}, nexupdate.PhaseRolledBack
+	if res := PoolUpdateHostStep(ctx, s, step("confirm")); res.Code != "rolled_back" {
+		t.Fatalf("confirm after fallback = %+v", res)
+	}
+	if res := PoolUpdateHostStep(ctx, s, protocol.PoolUpdateStep{Action: "stage"}); res.Code != "invalid_step" {
+		t.Fatalf("invalid step = %+v", res)
+	}
+	// A step ID the engine would refuse is refused before any engine call, for every action.
+	engine.calls = nil
+	for _, id := range []string{"r1/member-1/stage", "short", strings.Repeat("a", 65), "-leading-dash-id"} {
+		bad := step("stage")
+		bad.StepID = id
+		if res := PoolUpdateHostStep(ctx, s, bad); res.Code != "invalid_step" || len(engine.calls) != 0 {
+			t.Fatalf("step id %q = %+v calls %v", id, res, engine.calls)
+		}
+	}
+}
+
+// drain and undrain touch exactly the guests the master listed, never force anything, repeat the
+// same operation ID, and a start that cannot happen yet is retried rather than failed.
+func TestHostGuestStepsTouchOnlyTheListedGuests(t *testing.T) {
+	s, _, guests := hostStepLab(t)
+	ctx := context.Background()
+	guests.running["listed"], guests.running["other"] = true, true
+	res := PoolUpdateHostStep(ctx, s, step("drain", "listed"))
+	if res.Done || !reflect.DeepEqual(guests.shutdown, []string{"listed"}) {
+		t.Fatalf("drain = %+v shutdown %v", res, guests.shutdown)
+	}
+	guests.running["listed"] = false
+	if res = PoolUpdateHostStep(ctx, s, step("drain", "listed")); !res.Done || len(guests.shutdown) != 1 {
+		t.Fatalf("drained host = %+v shutdown %v", res, guests.shutdown)
+	}
+	guests.startErr = errors.New("the master refused admission")
+	if res = PoolUpdateHostStep(ctx, s, step("undrain", "listed")); res.Done || res.Code != "" || res.Message == "" {
+		t.Fatalf("an admission refusal must be retried, not failed: %+v", res)
+	}
+	guests.startErr = nil
+	if res = PoolUpdateHostStep(ctx, s, step("undrain", "listed")); res.Done || !reflect.DeepEqual(guests.started, []string{"listed"}) {
+		t.Fatalf("undrain = %+v started %v", res, guests.started)
+	}
+	guests.running["listed"] = true
+	if res = PoolUpdateHostStep(ctx, s, step("undrain", "listed")); !res.Done || len(guests.started) != 1 {
+		t.Fatalf("a running guest was started again: %+v %v", res, guests.started)
+	}
+	if !guests.running["other"] {
+		t.Fatal("an unlisted guest was touched")
+	}
+	if guests.opIDs[0] != guests.opIDs[len(guests.opIDs)-3] && poolUpdateOpID("a", "b") != poolUpdateOpID("a", "b") {
+		t.Fatal("operation IDs are not deterministic")
+	}
+	if poolUpdateOpID("a", "b") == poolUpdateOpID("a", "c") {
+		t.Fatal("two guests share an operation ID")
+	}
+}
+
+// Only a staged file whose content hashes to its name is served from the peer cache.
+func TestPeerBlobCacheServesOnlyVerifiedContent(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte("slot image bytes")
+	sum := sha256.Sum256(content)
+	name := hex.EncodeToString(sum[:])
+	staging := filepath.Join(dir, "staging", "2")
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, name), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if path, ok := poolUpdateBlobFile(dir, name); !ok || filepath.Base(path) != name {
+		t.Fatal("the verified blob was not found")
+	}
+	for _, bad := range []string{"", "../etc/passwd", name[:63], name + "0", "ZZ" + name[2:]} {
+		if _, ok := poolUpdateBlobFile(dir, bad); ok {
+			t.Fatalf("%q was served", bad)
+		}
+	}
+	other := sha256.Sum256([]byte("different"))
+	corrupt := hex.EncodeToString(other[:])
+	if err := os.WriteFile(filepath.Join(staging, corrupt), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := poolUpdateBlobFile(dir, corrupt); ok {
+		t.Fatal("a file whose content does not match its name was served")
+	}
+}

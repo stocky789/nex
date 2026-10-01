@@ -309,6 +309,9 @@ func buildPoolAuthorityReplicaForMembership(s *Store, membership protocol.PoolMe
 	if replica.BackupManifest, err = encodePoolBackupAuthorityFromStore(s, nil); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}
+	if replica.UpdateRollout, err = LoadPoolUpdate(s); err != nil {
+		return protocol.PoolAuthorityReplica{}, "", err
+	}
 	if replica.Sections, err = replica.SectionDigests(); err != nil {
 		return protocol.PoolAuthorityReplica{}, "", err
 	}

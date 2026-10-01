@@ -38,6 +38,17 @@ install -m755 packaging/core-local/nex-storage-guard.sh "$pkg/etc/libvirt/hooks/
 install -m755 packaging/core-local/qemu-vnc-lossy "$pkg/usr/lib/nex/"
 install -m755 appliance/host-recovery.py "$pkg/usr/lib/nex/host-recovery"
 install -m644 packaging/core-local/nex-core-local.service "$pkg/usr/lib/systemd/system/"
+# Optional feature layers: verified and merged early in boot, only once Core has recorded an enabled layer
+# (the unit's ConditionPathExists). Enablement ships in /usr (vendor wants link plus preset) rather than in
+# postinst, so a verified image slot carries it and every slot update keeps it.
+install -m644 packaging/core-local/nex-layers.service "$pkg/usr/lib/systemd/system/"
+install -d "$pkg/usr/lib/systemd/system/sysinit.target.wants"
+ln -s ../nex-layers.service "$pkg/usr/lib/systemd/system/sysinit.target.wants/nex-layers.service"
+install -D -m644 packaging/core-local/30-nex-core-local.preset "$pkg/usr/lib/systemd/system-preset/30-nex-core-local.preset"
+# A read-only root keeps /etc and /root on /var: the initramfs binds them, systemd then remounts / ro.
+install -D -m755 packaging/core-local/initramfs-local-bottom "$pkg/usr/share/initramfs-tools/scripts/local-bottom/nex-root-state"
+install -D -m755 packaging/core-local/initramfs-hook "$pkg/usr/share/initramfs-tools/hooks/nex-root-state"
+install -m644 packaging/core-local/nex-root-ro.service "$pkg/usr/lib/systemd/system/"
 install -m755 packaging/core-local/preinst packaging/core-local/postinst packaging/core-local/prerm "$pkg/DEBIAN/"
 cp -a web/dist/. "$pkg/usr/share/nex/core-local/web/"
 cp web/dist/local.html "$pkg/usr/share/nex/core-local/web/index.html"
@@ -71,9 +82,34 @@ for file in \
     install -D -m644 "$file" "$pkg/usr/share/doc/nex-core-local/go-dependencies/${file#vendor/}"
 done
 go version /build/nex-core-local > "$pkg/usr/share/doc/nex-core-local/go-version.txt"
-for artifact in controller.qcow2 manifest.json manifest.sig nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
+# NEX_APPLIANCE_PACKAGING=bundled (default, classic edition): the signed appliance image and manifest are
+# inside the package under /usr/share/nex/appliance, as before. =split (image edition): they are written
+# next to the package as payload/<sha256>/{controller.qcow2,manifest.json,manifest.sig}, the layout the image
+# installer places in /var/lib/nex/payload/<sha256>/. Either way the package carries the source offer, the
+# notices, the update helpers, the trust key and controller.sha256 (the payload directory this build expects).
+packaging=${NEX_APPLIANCE_PACKAGING:-bundled}
+appliance_sha=$(sha256sum /input/bundle/controller.qcow2 | awk '{print $1}')
+printf '%s\n' "$appliance_sha" > "$pkg/usr/share/nex/appliance/controller.sha256"
+for artifact in nex-source.tar.gz components.tsv LICENSE NOTICE ARTWORK-LICENSE.md build-inputs.json; do
     cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
 done
+case "$packaging" in
+bundled)
+    for artifact in controller.qcow2 manifest.json manifest.sig; do
+        cp "/input/bundle/$artifact" "$pkg/usr/share/nex/appliance/"
+    done
+    ;;
+split)
+    install -d "/output/payload/$appliance_sha"
+    for artifact in controller.qcow2 manifest.json manifest.sig; do
+        cp --reflink=auto "/input/bundle/$artifact" "/output/payload/$appliance_sha/"
+    done
+    ;;
+*)
+    echo "NEX_APPLIANCE_PACKAGING must be bundled or split, not $packaging" >&2
+    exit 1
+    ;;
+esac
 install -d "$pkg/usr/share/nex/appliance/update"
 install -m755 packaging/controller/apply-update "$pkg/usr/share/nex/appliance/update/"
 install -m755 appliance/firstboot.py "$pkg/usr/share/nex/appliance/update/appliance-firstboot"
@@ -106,6 +142,7 @@ Section: admin
 Priority: optional
 Description: Nex Core local management and Controller virtual appliance
  Authenticated host-local VM controls and signed Controller appliance deployment.
+ The appliance image is inside the package (classic edition) or a separate payload (image edition).
  First boot selects the default-route management IP without changing networking.
 CONTROL
 chmod -R a+rX "$pkg/usr"

@@ -235,6 +235,38 @@ storage-related packages; forge, website downloads and APT use the same Release 
 when deploy secrets are set. Component licence review and source retention in this
 section still apply to external redistribution claims.
 
+### Prebuilt `nex-zfs` layer — 2026-10-01 (internal lab use only)
+
+Decision: project owner, 2026-10-01 — the immutable image edition may build OpenZFS
+kernel modules ahead of time for internal lab use. This is **not** clearance for external
+redistribution, and it does not change the statement above for the existing
+DKMS-based media: those still carry only `zfs-dkms` source and build on the host.
+
+What the image build does: `scripts/build-zfs-modules.sh` builds `zfs.ko` and `spl.ko` from
+Debian's `zfs-dkms` (source package `zfs-linux`, currently `2.3.9-0+deb13u1`; CDDL-1.0 with
+separately licensed BSD-2-Clause portions) against the exact `linux-headers` of the base
+kernel inside a pinned builder container, signs them with a Nex module key and installs them
+in the `nex-zfs` sysext layer together with Debian's unmodified `zfsutils-linux` and
+`zfs-zed`. The compiler, headers and DKMS exist only in the container. A layer is a
+separate file on `nex-data` that is merged only when an operator or Core operation enables
+it; the base image, the kernel and every other layer contain no ZFS code. The layer is
+a mere aggregation with the kernel at the point of use: Nex adds no code to OpenZFS and
+links nothing of its own into it. Whether shipping the combination is permitted outside the
+lab is a legal question for the project owner; until it is answered no release publishes
+`nex-zfs` (a publisher refusal for a manifest that lists it is release-pipeline work and is not built yet).
+
+Obligations to keep before any external release: the exact `zfs-linux` source package, the
+build recipe (`scripts/build-zfs-modules.sh` and its builder Dockerfile, with the snapshot
+timestamp), the base kernel source, the CDDL-1.0 text and the Debian copyright notices of the
+layer's packages, listed in the compliance manifest and the source bundle. The module
+signing key is generated per developer under `.cache/` (ignored by Git) or supplied through
+CI secrets; the throwaway development key signs nothing that is published.
+
+`nex-cluster` and any later layer contain only Debian packages and Nex-built `dlm-controld`
+and libvirt packages already covered above; each layer carries its package list in
+`/usr/share/nex/layers/<name>.packages` and Debian's copyright files under
+`/usr/share/doc`.
+
 ## In-band management-controller tool (`ipmitool`) — 2026-09-22
 
 BMC fencing adds Debian `ipmitool` to `installer/packages.txt` and to the

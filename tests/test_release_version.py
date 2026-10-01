@@ -19,7 +19,7 @@ CHANGELOG = """# Changelog
 
 ## [Unreleased]
 
-> **Maintainers:** Leave this section empty.
+> **Maintainers / agents:** Put new entries here until a release is cut.
 
 ## [0.1.6-alpha1] — 2026-09-10
 
@@ -76,8 +76,9 @@ class ResolveTests(unittest.TestCase):
                     release.resolve(tag, CHANGELOG)
 
     def test_unreleased_entries_block_the_release(self):
-        dirty = CHANGELOG.replace("> **Maintainers:** Leave this section empty.",
-                                  "- An entry someone forgot to move.")
+        dirty = CHANGELOG.replace(
+            "> **Maintainers / agents:** Put new entries here until a release is cut.",
+            "- An entry someone forgot to move.")
         with self.assertRaisesRegex(release.ReleaseVersionError, r"\[Unreleased\] still has entries"):
             release.resolve("v0.1.6-alpha1", dirty)
 

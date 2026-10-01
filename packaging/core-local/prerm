@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 if [ "$1" = remove ]; then
+    # Without the initramfs script the next boot shows the stale /etc the installer left
+    # on /, not the host's configuration on /var, so removal is refused there.
+    if mountpoint -q /etc; then
+        echo "nex-core-local: this host keeps /etc on /var; removing Nex Core would boot the stale /etc left on /" >&2
+        exit 1
+    fi
     /usr/lib/nex/storage-downgrade-guard --core --check
     # Same live-load gate as postinst: installer/chroot trees must not fail remove
     # because the live kernel AppArmor flag is visible without a usable policy load path.
@@ -30,7 +36,7 @@ if [ "$1" = remove ]; then
     if [ -d /run/systemd/system ]; then
         deb-systemd-invoke stop nex-core-local.service
     fi
-    deb-systemd-helper disable nex-core-local.service
+    deb-systemd-helper disable nex-core-local.service nex-root-ro.service
     # Remove the generated apt source so removal never leaves a source whose key is gone.
     rm -f "${DPKG_ROOT:-}/etc/apt/sources.list.d/nex.sources" "${DPKG_ROOT:-}/etc/apt/apt.conf.d/91nex-core-storage-downgrade"
 fi

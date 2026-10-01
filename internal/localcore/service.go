@@ -26,6 +26,8 @@ type Config struct {
 	DataDir, AgentStateDir, UIPath, DocsPath, SourcePath string
 	Authenticate                                         func(context.Context, string) error
 	Engine                                               vmhost.Config
+	// ImageUpdate replaces the update engine an image-edition host builds for itself (tests).
+	ImageUpdate *nexupdate.Engine
 }
 
 // PoolPeerHandler serves the isolated Core-to-Core join endpoint; it never accepts an
@@ -70,6 +72,8 @@ type Service struct {
 	lock       *os.File
 	wg         sync.WaitGroup
 	enrollMu   sync.Mutex
+	// imageUpdate is the image edition's update engine; nil on a classic host.
+	imageUpdate *nexupdate.Engine
 }
 type DeployRequest struct {
 	RequestID     string   `json:"request_id"`
@@ -140,6 +144,12 @@ func Open(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.imageUpdate = s.newImageUpdateEngine()
+	if s.imageUpdate != nil {
+		// The embedded agent relays the Controller's update actions to this same engine, so the
+		// host has exactly one writer of its update record.
+		agent.SetImageUpdater(s.imageUpdate)
+	}
 	ok = true
 	return s, nil
 }
@@ -153,6 +163,10 @@ func (s *Service) Close() error {
 	// progress into DataDir; abandoning it would leave dpkg running and write
 	// into a directory the caller is about to remove.
 	nexupdate.WaitApply()
+	if s.imageUpdate != nil {
+		agent.SetImageUpdater(nil)
+		s.imageUpdate.Close()
+	}
 	return s.lock.Close()
 }
 
@@ -208,6 +222,10 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("POST /api/local/v1/pool/backup-catalog/import", s.auth(s.importBackupCatalog))
 	m.HandleFunc("POST /api/local/v1/pool/backup-catalog/rebuild", s.auth(s.rebuildBackupCatalog))
 	m.HandleFunc("GET /api/local/v1/pool/backup-status", s.auth(s.backupStatus))
+	m.HandleFunc("GET /api/local/v1/pool/updates", s.auth(s.poolUpdates))
+	m.HandleFunc("POST /api/local/v1/pool/updates/rollouts", s.auth(s.poolUpdateStart))
+	m.HandleFunc("GET /api/local/v1/pool/updates/rollouts/{id}", s.auth(s.poolUpdateRollout))
+	m.HandleFunc("POST /api/local/v1/pool/updates/rollouts/{id}/control", s.auth(s.poolUpdateControl))
 	m.HandleFunc("GET /api/local/v1/vms", s.auth(s.vms))
 	m.HandleFunc("POST /api/local/v1/vms/{id}/actions", s.auth(s.power))
 	m.HandleFunc("GET /api/local/v1/vms/{id}/console", s.auth(s.console))
@@ -217,6 +235,11 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("POST /api/local/v1/deployments/{id}/retry", s.auth(s.retry))
 	m.HandleFunc("GET /api/local/v1/updates", s.auth(s.updates))
 	m.HandleFunc("POST /api/local/v1/updates/apply", s.auth(s.applyUpdate))
+	m.HandleFunc("POST /api/local/v1/updates/check", s.auth(s.checkUpdates))
+	m.HandleFunc("POST /api/local/v1/updates/activate", s.auth(s.activateUpdate()))
+	m.HandleFunc("POST /api/local/v1/updates/rollback", s.auth(s.rollbackUpdate()))
+	m.HandleFunc("POST /api/local/v1/updates/cancel", s.auth(s.cancelUpdate()))
+	m.HandleFunc("GET /api/local/v1/updates/operations/{id}", s.auth(s.updateOperation))
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, map[string]string{"status": "ok"}) })
 	m.Handle("GET /api/docs/", http.StripPrefix("/api/docs/", http.FileServer(http.Dir(s.cfg.DocsPath))))
 	m.HandleFunc("GET /source", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, s.cfg.SourcePath) })

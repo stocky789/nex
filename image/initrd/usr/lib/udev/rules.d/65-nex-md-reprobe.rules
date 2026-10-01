@@ -1,0 +1,5 @@
+# An md array assembled in the initrd is not probed for its file system on the first uevent (observed with
+# kernel 6.12.107 and mdadm 4.4: /dev/disk/by-label/nex-data never appears, though blkid on the node works and a
+# later "change" uevent fixes it). Ask for one re-probe per array as soon as it is a ready, tagged device.
+# The unit is a oneshot that stays active, so a device without a file system cannot loop.
+SUBSYSTEM=="block", KERNEL=="md*", ENV{DEVTYPE}=="disk", ENV{MD_LEVEL}=="raid[1-9]*", ENV{ID_FS_TYPE}=="", ENV{SYSTEMD_WANTS}+="nex-md-reprobe@%k.service"

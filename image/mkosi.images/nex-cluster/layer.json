@@ -1,0 +1,12 @@
+{
+  "name": "nex-cluster",
+  "units_enable": [],
+  "units_never_enable": ["corosync.service", "corosync-qdevice.service", "pacemaker.service", "pcsd.service", "sbd.service", "dlm.service", "sanlock.service", "wdmd.service"],
+  "provides": ["cluster", "gfs2", "sanlock"],
+  "modules": [],
+  "busy_units": ["corosync.service", "corosync-qdevice.service", "pacemaker.service", "sbd.service", "dlm.service", "sanlock.service", "wdmd.service"],
+  "busy_commands": [],
+  "depmod": false,
+  "allow_var": [],
+  "allow_collisions": []
+}

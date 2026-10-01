@@ -1,0 +1,75 @@
+{
+  "summary": "Phase I-3c of the immutable Nex Core plan: updating a single image-edition host from the Controller. A host whose update engine runs (nex-core-local) offers image-update-v1; the Controller acknowledges it with ReportResponse.image_update and only then does the host report Inventory.image. The Controller relays check, apply, activate, rollback and cancel as one durable host-image-update command (GET/POST /api/v1/hosts/{id}/updates…); the host's embedded agent hands it to the host's own update engine, which does the work and keeps the record, and the Settings → Updates page lists Host images with the slots, phase, rollback floor and last operation the host reported. Host-local GET /api/local/v1/updates/operations/{id} reads one recorded operation. Pool rollout, settings, media, import and component fetch are not part of this slice, and the Controller's own APT routes stay for classic Controllers.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/API.md",
+    "docs/api/index.html",
+    "docs/api/local-openapi.json",
+    "docs/api/local.html",
+    "docs/api/openapi.json",
+    "docs/guide/README.md",
+    "docs/guide/roll-back-a-host-update.md",
+    "docs/guide/software-updates.md",
+    "docs/qa/image/phase3-controller.md",
+    "internal/agent/imageupdate.go",
+    "internal/agent/imageupdate_test.go",
+    "internal/agent/managed.go",
+    "internal/agent/run.go",
+    "internal/agent/state.go",
+    "internal/agent/client.go",
+    "internal/controller/controller.go",
+    "internal/controller/identity.go",
+    "internal/controller/imageupdate.go",
+    "internal/controller/imageupdate_test.go",
+    "internal/controller/managed.go",
+    "internal/controller/monitor.go",
+    "internal/localcore/service.go",
+    "internal/localcore/updates.go",
+    "internal/localcore/updates_image_flow_test.go",
+    "internal/nexupdate/image.go",
+    "internal/protocol/imageupdate.go",
+    "internal/protocol/protocol.go",
+    "web/src/image-updates.test.mjs",
+    "web/src/image-updates.tsx",
+    "web/src/settings.tsx"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "software-updates.md gains the image-edition update steps and roll-back-a-host-update.md is new, both marked unverified: no workflow was walked through on a running Controller or image host, only automated handler and component tests ran.",
+    "pages": [
+      "docs/guide/README.md",
+      "docs/guide/roll-back-a-host-update.md",
+      "docs/guide/software-updates.md"
+    ]
+  },
+  "api": {
+    "impact": "new contract",
+    "reason": "New Controller routes GET /api/v1/hosts/{id}/updates and POST /api/v1/hosts/{id}/updates/{action}, the managed command host-image-update (ImageUpdateRequest), ReportResponse.image_update (the image-update-v1 acknowledgement; Inventory.image is now withheld until it arrives) and host-local GET /api/local/v1/updates/operations/{id}. The Controller's GET /api/v1/updates and POST /api/v1/updates/apply are kept for classic Controllers; their removal belongs to the appliance-swap slice. Pool rollout routes, PUT …/updates/settings, media, import and component fetch are not implemented.",
+    "pages": [
+      "docs/API.md",
+      "docs/api/index.html",
+      "docs/api/local-openapi.json",
+      "docs/api/local.html",
+      "docs/api/openapi.json"
+    ]
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-3 of a proposed, not yet authorized plan; development work validated by automated tests only, no published milestone changed."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The host's update engine runs and records every update; the Controller only relays one request and shows the host's report, so deleting and reinstalling it loses nothing about updates.",
+    "record": "Per-host /var/lib/nex/image/state.json, update subtree, written only by the host's update engine (the disks are the truth); a fresh Controller reads it back through Inventory.image once it acknowledges image-update-v1 on the host's report. The Controller keeps only the operations row it keeps for every host command."
+  },
+  "verification": {
+    "method": "Go tests: go test of ./internal/protocol ./internal/nexupdate/... ./internal/localcore ./internal/agent ./internal/controller (all pass); go test -race of the update tests in nexupdate, localcore, agent and controller; web/src/image-updates.test.mjs and the settings, updates, ui and pool-members web tests plus tsc --noEmit; scripts/generate_api.py --check and tests/test_api_contract.py. Mutation check: disabling the Inventory.image withholding makes TestInventoryImageRequiresControllerAcknowledgement fail. Handler and component level only: no browser session against a running Controller, no VM, no real host and no pool; the end-to-end update of an image host through the Controller was not run.",
+    "evidence": [
+      "docs/qa/image/phase3-controller.md",
+      "internal/agent/imageupdate_test.go",
+      "internal/controller/imageupdate_test.go",
+      "internal/localcore/updates_image_flow_test.go",
+      "web/src/image-updates.test.mjs"
+    ]
+  }
+}

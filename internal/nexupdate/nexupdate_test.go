@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"nex.local/nex/internal/rootfs"
 )
 
 // fakeCommands redirects Command and LookPath at a recording stub so tests exercise
@@ -26,6 +29,10 @@ func fakeCommands(t *testing.T, handle func(line string) (string, int)) *[]strin
 		line := strings.Join(append([]string{name}, args...), " ")
 		calls = append(calls, line)
 		out, code := handle(line)
+		if name == "findmnt" {
+			// The root window reads the root's options through the same runner that writes.
+			out, code = testRootOptions+"\n", 0
+		}
 		return exec.CommandContext(ctx, "sh", "-c",
 			"printf %s "+shellQuote(out)+"; exit "+strconv.Itoa(code))
 	}
@@ -34,6 +41,15 @@ func fakeCommands(t *testing.T, handle func(line string) (string, int)) *[]strin
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// testRootOptions is what findmnt reports for / in these tests; setRootOptions changes it.
+var testRootOptions = "rw,relatime"
+
+func setRootOptions(t *testing.T, options string) {
+	t.Helper()
+	testRootOptions = options
+	t.Cleanup(func() { testRootOptions = "rw,relatime" })
+}
 
 // isolatePaths redirects the apt source and refresh stamp into a temp directory so
 // tests never write to /etc/apt or /var/lib/nex.
@@ -420,6 +436,138 @@ func TestApplyLocalInstallsMissingRecommendedPackages(t *testing.T) {
 }
 
 // A Controller apply must not drag a host's ZFS packages onto the appliance.
+// A read-only-root host: dpkg only ever runs between a remount rw and a remount ro,
+// and the root is made read-only again whether or not the install worked.
+func TestApplyLocalOpensRootWindowOnReadOnlyRoot(t *testing.T) {
+	for _, installFails := range []bool{false, true} {
+		isolatePaths(t)
+		setRootOptions(t, "ro,relatime")
+		installed := "0.1.0"
+		calls := fakeCommands(t, func(line string) (string, int) {
+			switch {
+			case strings.HasPrefix(line, "dpkg-query"):
+				return installed, 0
+			case strings.Contains(line, "install -y nex-core-local"):
+				if installFails {
+					return "E: unable to write", 100
+				}
+				installed = "0.2.0"
+			}
+			return "", 0
+		})
+		_, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", t.TempDir())
+		if (err != nil) != installFails {
+			t.Fatalf("installFails=%v: %v", installFails, err)
+		}
+		var order []string
+		for _, line := range *calls {
+			switch {
+			case line == "mount -o remount,rw /":
+				order = append(order, "rw")
+			case strings.Contains(line, "install -y nex-core-local"):
+				order = append(order, "install")
+			case line == "mount -o remount,ro /":
+				order = append(order, "ro")
+			}
+		}
+		if got := strings.Join(order, ","); got != "rw,install,ro" {
+			t.Fatalf("installFails=%v: root window order %q:\n%s", installFails, got, joined(calls))
+		}
+	}
+}
+
+// The package install shares one window lock with every other root writer (the BIOS
+// bootloader write of a disk replacement): it waits for an open window instead of treating
+// that window's writable root as the normal state and being made read-only underneath itself.
+func TestApplyLocalWaitsForAnotherRootWindow(t *testing.T) {
+	isolatePaths(t)
+	installed := "0.1.0"
+	var mu sync.Mutex
+	calls := fakeCommands(t, func(line string) (string, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return installed, 0
+		case strings.Contains(line, "install -y nex-core-local"):
+			installed = "0.2.0"
+		}
+		return "", 0
+	})
+	closeOther, err := rootfs.OpenWritable(context.Background(), func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", t.TempDir())
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("the install ran inside another writer's window")
+	case <-time.After(150 * time.Millisecond):
+	}
+	mu.Lock()
+	early := strings.Contains(joined(calls), "install -y nex-core-local")
+	mu.Unlock()
+	if early {
+		t.Fatal("apt install started before the other window closed")
+	}
+	closeOther()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// If / cannot be made writable nothing is installed: dpkg would fail half way through
+// unpacking instead.
+func TestApplyLocalRefusesToInstallWhenRootStaysReadOnly(t *testing.T) {
+	isolatePaths(t)
+	setRootOptions(t, "ro,relatime")
+	calls := fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return "0.1.0", 0
+		case line == "mount -o remount,rw /":
+			return "mount: permission denied", 32
+		}
+		return "", 0
+	})
+	dir := t.TempDir()
+	res, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", dir)
+	if err == nil || res.Status != "failed" || !strings.Contains(res.Message, "permission denied") {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got := joined(calls); strings.Contains(got, "install -y") || strings.Contains(got, "remount,ro") {
+		t.Fatalf("installed or remounted after a failed window:\n%s", got)
+	}
+	if p, ok := ReadProgress(dir); !ok || p.Phase != "failed" {
+		t.Fatalf("progress %+v", p)
+	}
+}
+
+// A writable root (older hosts, the Controller appliance) is never remounted.
+func TestApplyLocalLeavesWritableRootAlone(t *testing.T) {
+	isolatePaths(t)
+	installed := "0.1.0"
+	calls := fakeCommands(t, func(line string) (string, int) {
+		switch {
+		case strings.HasPrefix(line, "dpkg-query"):
+			return installed, 0
+		case strings.Contains(line, "install -y nex-core-local"):
+			installed = "0.2.0"
+		}
+		return "", 0
+	})
+	if _, err := ApplyLocal(context.Background(), "https://mirror.example/apt", "nex-core-local", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(joined(calls), "mount -o") {
+		t.Fatalf("remounted a writable root:\n%s", joined(calls))
+	}
+}
+
 func TestApplyLocalControllerSkipsCoreRecommendations(t *testing.T) {
 	isolatePaths(t)
 	installed := "0.1.0"

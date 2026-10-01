@@ -26,7 +26,7 @@ deb [trusted=yes] file:/var/cache/nex-install/repo ./
 LIST
 install -d -m755 /target/usr/share/nex/media
 virtio_iso=/target/usr/share/nex/media/virtio-win.iso
-if [ -f /cdrom/nex/netinst.tsv ]; then
+if [ -f /cdrom/nex/payloads.tsv ]; then
     in-target apt-get -o Dir::Etc::sourcelist=/var/cache/nex-install/offline.list \
         -o Dir::Etc::sourceparts=- update
     # Only fetch APT's actual plan, rather than downloading the installed base twice.
@@ -43,7 +43,7 @@ if [ -f /cdrom/nex/netinst.tsv ]; then
     rm -f "$virtio_iso"
     mv /target/var/cache/nex-install/media/virtio-win.iso "$virtio_iso"
     mkdir -p /target/usr/share/nex-core
-    cp /cdrom/nex/netinst.tsv /target/usr/share/nex-core/netinst-available.tsv
+    cp /cdrom/nex/payloads.tsv /target/usr/share/nex-core/netinst-available.tsv
     downloaded=/target/usr/share/nex-core/netinst-downloaded-packages.txt
     touch "$downloaded"
     sort -u "$downloaded" /run/nex-netinst-packages > "$downloaded.new"
@@ -86,9 +86,6 @@ apt_local install -y --no-install-recommends $(cat /var/cache/nex-install/packag
 # The package postinsts honor policy-rc.d for starts. Also remove any enablement
 # links they created so these optional fencing services remain off at first boot.
 /bin/sh /var/cache/nex-install/package-service-policy.sh disable
-# Keep Debian's fixed qnetd NSS path pointed at tmpfs. Its postinst can then recreate
-# the CA after /run is rebuilt without leaving a durable private CA behind.
-/bin/sh /var/cache/nex-install/package-service-policy.sh runtime-qnetd
 restore_package_policy
 trap - EXIT HUP INT TERM
 # Debian ships a sample Corosync conffile. Only its exact dpkg-recorded checksum
@@ -104,12 +101,13 @@ systemctl disable corosync.service dlm.service pacemaker.service pcsd.service pc
 # zfs-import-cache; an old pool stays untouched until an operator imports it deliberately.
 systemctl disable zfs-import-scan.service || true
 # A mirrored system disk: partman created the array, and the kernel assembles it from
-# the members' own superblocks. Record only the root array for this host's initramfs
-# (never a leftover array on unselected disks), and keep every member's ESP bootable,
-# because grub-efi-amd64 only ever writes the one mounted ESP.
+# the members' own superblocks. Record only the root and /var arrays for this host's
+# initramfs (never a leftover array on unselected disks; the initramfs mounts /var
+# before switching root), and keep every member's ESP bootable, because
+# grub-efi-amd64 only ever writes the one mounted ESP.
 root=$(findmnt -no SOURCE /)
 case $root in /dev/md*)
-    { /usr/share/mdadm/mkconf | grep -v '^ARRAY'; mdadm --detail --scan "$root"; } > /etc/mdadm/mdadm.conf
+    { /usr/share/mdadm/mkconf | grep -v '^ARRAY'; mdadm --detail --scan "$root" "$(findmnt -no SOURCE /var)"; } > /etc/mdadm/mdadm.conf
     update-initramfs -u
     cat > /usr/local/sbin/nex-sync-esp <<'ESP'
 #!/bin/sh

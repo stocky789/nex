@@ -1,0 +1,12 @@
+[Unit]
+Description=Fold the boot assessment into the update record
+# The update engine learns that an armed release was blessed, or that the boot fell back, by looking at the
+# boot entries on the disks. Doing it after every boot keeps Inventory.image current without an operator.
+After=systemd-bless-boot.service nex-boot-check.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nex-update status
+
+[Install]
+WantedBy=multi-user.target

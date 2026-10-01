@@ -1,0 +1,54 @@
+#!/bin/sh
+# Boot assessment: fails only for image-caused problems (state or config not writable, libvirt or Core
+# not running, the state format guard refusing, a layer check failing). Never looks at links, quorum,
+# peers, the clock or the Controller.
+# On failure of a counted boot (boot counter active) the entry is marked bad and the host reboots into
+# the previous image, unless /run/nex/maintenance-hold exists.
+#
+# NEX_BOOT_CHECK_TRIES (default 20) and NEX_BOOT_CHECK_WAIT seconds (default 10) bound how long a slow
+# start is given before the image is judged; a lab shortens them in a unit drop-in.
+set -u
+
+tries=${NEX_BOOT_CHECK_TRIES:-20}
+wait_seconds=${NEX_BOOT_CHECK_WAIT:-10}
+problems=""
+note() { problems="$problems $*;"; }
+
+check_once() {
+    problems=""
+    marker=/var/lib/nex/image/.boot-check.$$
+    mkdir -p /var/lib/nex/image && : > "$marker" && rm -f "$marker" || note "/var is not writable"
+    [ "$(findmnt -no FSTYPE /etc)" = overlay ] || note "/etc is not the persistent overlay"
+    marker=/etc/.nex-boot-check.$$
+    : > "$marker" && rm -f "$marker" || note "/etc is not writable"
+    systemctl is-failed --quiet nex-state-guard.service && note "retained state needs a newer state_format than this image reads"
+    if [ -x /usr/sbin/libvirtd ]; then
+        timeout 30 virsh -q -c qemu:///system version > /dev/null 2>&1 || note "libvirtd does not answer"
+    fi
+    if systemctl is-enabled --quiet nex-core-local.service 2> /dev/null; then
+        systemctl is-active --quiet nex-core-local.service || note "nex-core-local is not running"
+    fi
+    for check in /usr/lib/nex/boot-check.d/*; do
+        [ -x "$check" ] || continue
+        "$check" > /dev/null 2>&1 || note "$(basename "$check") failed"
+    done
+    [ -z "$problems" ]
+}
+
+attempts=0
+until check_once; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt "$tries" ] || break
+    sleep "$wait_seconds"
+done
+[ -z "$problems" ] && exit 0
+
+echo "nex-boot-check:$problems" >&2
+if [ -e /run/nex/maintenance-hold ]; then
+    exit 1
+fi
+if ls /sys/firmware/efi/efivars/LoaderBootCountPath-* > /dev/null 2>&1; then
+    /usr/lib/systemd/systemd-bless-boot bad
+    systemctl --no-block reboot
+fi
+exit 1

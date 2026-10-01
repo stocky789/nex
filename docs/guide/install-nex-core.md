@@ -27,6 +27,34 @@ verifies the downloaded bytes against checksums pinned in the ISO.
 A Nex-hosted Debian mirror is not needed. Installation uses prebuilt packages; the
 existing ZFS DKMS package still builds its kernel module locally.
 
+## Image edition (development, not yet verified on a booted host)
+
+Media built with an image set carries two editions. The default boot entries install the **image edition**:
+a read-only, integrity-checked system image written to two slots on each selected disk, with `/etc` and `/var`
+kept on a separate `nex-data` volume. The **Classic edition** entries (BIOS or UEFI) install the package-based
+host described on this page and stay selectable.
+
+- **UEFI only.** The image edition refuses legacy BIOS firmware before any disk is written. Use the Classic
+  entry on BIOS-only hardware.
+- **24 GiB minimum** per disk (16 GiB for Classic): two slots, a boot partition, and a data volume that holds a
+  staged update, the Controller appliance and VirtIO driver payloads, and the default VM store.
+- **Layout.** Every selected disk gets the same partition table: a 1 GiB boot partition, two system slots
+  with their integrity partitions, and `nex-data`. Two or more disks mirror only `nex-data` (md RAID1);
+  each disk can boot alone.
+- **Erase confirmation** is unchanged: the wizard lists every disk and an explicit yes erases it. Nothing is erased
+  until the system image and the media payloads have passed their checksum checks; a damaged image or payload stops
+  the install with no disk changed. Only arrays on the selected disks are stopped; no other array is assembled.
+- **Payloads.** The Controller appliance and the VirtIO driver ISO are installed under
+  `/var/lib/nex/payload/<sha256>/` on the data volume, not inside the system slot. The offline ISO carries
+  them; the network installer downloads them, and the system image, by SHA-256 from the address set when the
+  installer was built.
+- **Repair image** keeps the data volume: see [Reinstall the system image and keep the data](reinstall-keeping-state.md).
+
+Secure Boot is supported but not required: with it off the host works, and its image checks are not
+tamper-proof against someone with disk access. Known limits: no ISO has been built from this tree and no image
+install has been booted yet; `docs/qa/image/phase2-installer.md` lists what has and has not run. The graphical
+wizard does not yet offer Repair image; use the text frontend.
+
 ## Prerequisites
 
 - A locally built ISO and its matching SHA256 sidecar; see [build instructions](../../installer/README.md).
@@ -60,7 +88,9 @@ existing ZFS DKMS package still builds its kernel module locally.
    (keyboard only, for a machine whose graphics do not work). The menu waits for your choice.
    Both run the Nex wizard, collect the same settings and install the same headless hypervisor;
    neither installs a desktop. The serial option uses `ttyS0` at 115200 baud and is the one mode
-   that still runs Debian's own installation questions rather than the Nex wizard.
+   that still runs Debian's own installation questions rather than the Nex wizard. On media that carries the image
+   edition the serial entry is therefore labelled **Classic edition install (serial console ttyS0)**; the image edition
+   has no serial entry yet.
 3. For **GUI install**, wait for **Begin setup** on **Welcome to Nex Core**. The wizard
    introduces Nex Core and its local web UI; deploy Nex Controller from that UI or
    separately for central management. The wizard fills the available installer screen and follows display-resolution changes, including typical BMC/IPMI consoles at 1024×768 and 800×600. The left
@@ -122,9 +152,11 @@ existing ZFS DKMS package still builds its kernel module locally.
    two or more of them for a mirrored system disk.
    The GUI supports writable, nonremovable whole SATA/SCSI, virtio, Xen or NVMe disks of at
    least 16 GiB (`sd…`, `vd…`, `xvd…`, `nvme…`). Installation media and partitions are not eligible.
-   One disk erases that disk and installs a whole-disk ext4 layout. Two or more disks are
-   erased and installed as a Linux software RAID1 mirror (`md`): each selected disk holds an
-   identical copy of one ext4 root (sizes are not combined), with a small boot partition and a
+   One disk erases that disk and installs a root file system, a separate `/var` file system and
+   swap, all ext4. Two or more disks are
+   erased and installed as two Linux software RAID1 mirrors (`md`), one for `/` and one for
+   `/var`: each selected disk holds an
+   identical copy of both (sizes are not combined), with a small boot partition and a
    512 MiB EFI System Partition on each disk, so any of them can start the host on either UEFI
    or legacy BIOS firmware. Every mirror disk must be within 10% of the smallest selected disk's
    capacity, because usable size is that of the smallest member; a mismatched selection is
@@ -139,7 +171,7 @@ existing ZFS DKMS package still builds its kernel module locally.
    level. Disks under 16 GiB are not listed.
    If the machine has
    only one eligible disk it is ticked for you; a mirror is never assumed. The mirrored layout has
-   no swap partition; the single-disk layout is unchanged and still has one.
+   no swap partition; the single-disk layout still has one.
    A disk that held a previous installation is cleared first, including its partitions, LVM
    volumes and software RAID membership. If it was one member of a RAID array, the array is
    stopped and only the selected disk is cleared; the other member disks are not written, and
@@ -242,7 +274,7 @@ Offline mode creates no management bridge. Selecting a management adapter create
 either installation mode, with MAC-bound `nexN` interface names. The installer does not enable a firewall policy. Keep this alpha isolated until
 you have validated access controls.
 
-A mirrored system disk appears as one `md` array holding `/`. The installer installs GRUB on
+A mirrored system disk appears as two `md` arrays: one holds `/` and one holds `/var`. The installer installs GRUB on
 every selected disk and is meant to boot from whichever member survives; when a mirror disk
 fails, the host is meant to keep running on the remaining disk with its virtual machines
 uninterrupted until the array is repaired. The EFI partition each disk carries is not part of
@@ -256,6 +288,14 @@ can survive *n*−1 disk failures; it is not a backup, and it does not protect t
 virtual machines.
 Boot, disk-detach and leftover-array checks for the mirrored install remain outstanding — see
 Verification.
+
+The installed root file system (`/`) is mounted read-only. Everything the host changes while
+it runs lives under `/var`, `/etc` and `/run`: `/etc` and `/root` are kept on `/var`
+(`/var/lib/nex/etc` and `/var/roothome`) and mounted over the read-only root at boot, so
+configuration, SSH host keys and root's files survive reboots as before. Installing or
+updating software opens a short writable window, which **Update** does for you; see
+[Software updates](software-updates.md). Hosts installed before this layout keep a writable
+root and are not converted.
 
 Fresh installs allow root password SSH on the management network. Check the installed
 host key fingerprint at its trusted console with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`,
@@ -351,9 +391,11 @@ rebuilt ISO that includes this change remains outstanding.
 
 Mirrored system-disk installs (two or more disks): both wizards' Disk steps and two-disk
 installs have reached the base system in the lab, but no mirrored host has been booted,
-detached or checked for leftover arrays, and the current three-partition GPT layout has not
-had a completed install+boot walkthrough. Outstanding checks are listed in
-[installer mirror QA](../qa/iso/2026-09-22-installer-mirror.md).
+detached or checked for leftover arrays, and the current four-partition GPT layout (separate
+`/` and `/var` arrays) has not had a completed install+boot walkthrough. The separate `/var`
+and read-only root have been exercised only on a simulated disposable host, not by a real
+installer run: see [read-only classic root](../qa/2026-10-01-readonly-classic.md). Outstanding
+checks are listed in [installer mirror QA](../qa/iso/2026-09-22-installer-mirror.md).
 
 The [0.3.2 local artifact lab](../qa/2026-09-18-release-artifact-lab.md) verified
 its recorded ISO with BIOS/KVM and UEFI/TCG menu review, an automated offline

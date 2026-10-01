@@ -128,7 +128,7 @@ Description: Installation disks not accepted
 Template: nex-installer/no-disk
 Type: error
 Description: No installation disk was found
- Only writable, nonremovable disks of at least 16 GiB are offered, and none was
+ Only writable, nonremovable disks of at least 16 GiB (24 GiB for the image edition) are offered, and none was
  detected. Attach a supported disk and start setup again. Installation media and
  removable devices are never offered as targets.
 
@@ -153,3 +153,20 @@ Description: Erase ${disk} and install Nex Core?
  Layout: ${layout}
  .
  Answer no to go back and change any of these settings.
+
+Template: nex-installer/mode
+Type: select
+Choices: Erase and install, Repair image
+Default: Erase and install
+Description: A Nex Core data volume was found on ${found}
+ Erase and install wipes the selected disks and installs a new system. Repair
+ image rewrites only the system partitions and boot files of these disks and
+ keeps the data volume: the host name, settings, virtual machines and
+ payloads stay as they are.
+
+Template: nex-installer/repair-confirm
+Type: boolean
+Default: false
+Description: Repair the system image on ${disk}?
+ The system image and boot partitions of every disk listed are rewritten. The
+ Nex Core data volume is kept. Answer no to go back.

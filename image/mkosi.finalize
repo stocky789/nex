@@ -1,0 +1,8 @@
+#!/bin/sh
+# Host-side, after the tree is complete: keep the dpkg database and the resolved package list outside
+# the image for the layer builds (nex-zfs) and the licence/source manifest. The host image itself
+# has no package manager.
+set -eu
+tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
+    -C "$BUILDROOT" -cf "$OUTPUTDIR/base-dpkg.tar" var/lib/dpkg
+dpkg-query --admindir="$BUILDROOT/var/lib/dpkg" -W -f='${binary:Package}\t${Version}\n' | sort > "$OUTPUTDIR/base.dpkg-list"

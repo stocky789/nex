@@ -14,7 +14,8 @@ record or QA report.
   not presented as available instructions.
 - `docs/qa/`: actual walkthrough/test results, version/environment, inspected captures, and limits.
 - `docs/BUG_LEDGER.md`: bug symptoms, root causes, fixes and regression evidence.
-- [Changelog](../CHANGELOG.md): short user-facing entries.
+- [Changelog](../CHANGELOG.md): short user-facing entries under `## [Unreleased]` until a release
+  is cut; do not invent numbered version headings for day-to-day work.
 - [Development](development.md): build and developer instructions, kept out of the operator guide.
 - `docs/changes/`: review records for material changes, tying files to guide/API applicability and evidence.
 

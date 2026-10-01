@@ -1,0 +1,3 @@
+#!/bin/sh
+# Seed the nex-data layout that Core's installer would create (S3 overlay upper/work).
+mkdir -p /var/lib/nex/etc/upper /var/lib/nex/etc/work

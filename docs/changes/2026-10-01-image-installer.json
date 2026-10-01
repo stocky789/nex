@@ -1,0 +1,53 @@
+{
+  "summary": "Phase I-2 installer for the image edition of the immutable Nex Core plan: nex-image-install.sh runs the static nex-hostimage inside Debian Installer (S7: keep d-i), nex-config emits layout=single|raid1 and the disk list with a 24 GiB floor, UEFI-only refusal and Repair image mode (text wizard), and installer/netinst-manifest.py generalises to payloads.tsv rows for the signed image, the Controller appliance and the VirtIO ISO, placed under /var/lib/nex/payload/<sha256>/. The Classic edition stays selectable.",
+  "paths": [
+    "CHANGELOG.md",
+    "docs/guide/README.md",
+    "docs/guide/install-nex-core.md",
+    "docs/guide/reinstall-keeping-state.md",
+    "docs/qa/image/phase2-installer.md",
+    "installer/README.md",
+    "installer/build.sh",
+    "installer/check.sh",
+    "installer/gui/nex-config.c",
+    "installer/gui/nex-wizard.c",
+    "installer/gui/recheck.sh",
+    "installer/gui/wizard-text.sh",
+    "installer/gui/wizard-text.templates",
+    "installer/netinst-fetch.sh",
+    "installer/netinst-manifest.py",
+    "installer/nex-image-install.sh",
+    "tests/integration/installer-handoff.py",
+    "tests/test_image_installer.py",
+    "tests/test_netinst.py"
+  ],
+  "guide": {
+    "impact": "updated",
+    "reason": "Install page gains the image edition section; Repair image has its own page.",
+    "pages": [
+      "docs/guide/install-nex-core.md",
+      "docs/guide/reinstall-keeping-state.md",
+      "docs/guide/README.md"
+    ]
+  },
+  "api": {
+    "impact": "none",
+    "reason": "Installer and media only; no Controller, host or peer API changes.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-2 of a proposed, not yet authorized plan."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The installer keeps no state; the installed host's disks are the record.",
+    "record": "GPT partition names (nex-esp, nex-root-a/b, nex-verity-a/b, nex-data), nex-data contents under /var/lib/nex (etc upper, payload/<sha256>/). A fresh Controller recovers everything through host APIs."
+  },
+  "verification": {
+    "method": "tests/test_image_installer.py and tests/test_netinst.py unit tests (the installer script run against fake tools: verification precedes any array stop or write, only the selected disks' arrays are stopped, the data mirror is assembled from its own members, a damaged media payload stops the install, and the serial menu entries are labelled Classic on image media), tests/integration/installer-handoff.py (the hook clears no disk before the image installer runs), installer/check.sh, and a retained earlier d-i boot log for S7. No ISO was built and no image install was booted in QEMU: that is outstanding.",
+    "evidence": [
+      "docs/qa/image/phase2-installer.md"
+    ]
+  }
+}

@@ -84,7 +84,7 @@ for name in ('wizard-text.sh', 'wizard-text.templates', 'nex-network.c', 'nex-co
 assert 'g_ptr_array_sort(names, compare_names)' in Path('installer/gui/nex-wizard.c').read_text(), \
     'The graphical wizard must sort /sys/class/net, like the text wizard glob'
 # The text frontend must not weaken the disk, account or network contract.
-assert 'MIN_SECTORS=33554432' in wizard
+assert 'MIN_SECTORS=33554432' in wizard and 'MIN_SECTORS=50331648' in wizard, 'text wizard needs the 16 and 24 GiB floors'
 assert 'sd*|vd*|xvd*|nvme*' in wizard
 assert '[ -e "$path/partition" ] && continue' in wizard
 assert '"$(read_attr "$path/removable")" = 0' in wizard
@@ -120,16 +120,21 @@ assert entries.count(['d-i', 'preseed/early_command', 'string', '/bin/sh /cdrom/
 # array member, so it must never be answered for the operator.
 seed = Path('installer/gui/nex-config.c').read_text()
 assert 'partman-md/device_remove_md' not in seed, 'RAID removal would touch disks the operator did not select'
-# Two or more selected disks install one md RAID1 mirror of a single ext4 root, with an
-# ESP per disk on the GPT label a UEFI install uses. One disk keeps the plain layout.
+# Two or more selected disks install two md RAID1 mirrors (/ and /var), with an ESP per
+# disk on the GPT label a UEFI install uses. One disk installs separate ext4 / and /var.
 # Generated lines (including NVMe "p" suffixes and disk counts) are exercised by
 # tests/integration/installer-hostname.py driving render(); keep only structural guards here.
 assert 'd-i partman-auto/method string raid' in seed and 'd-i partman-auto/method string regular' in seed
 assert 'd-i partman-auto/expert_recipe string nex-mirror :: ' in seed
+assert 'd-i partman-auto/expert_recipe string nex-single :: ' in seed
 assert 'd-i partman-partitioning/default_label string gpt' in seed
 assert '1 1 1 free $iflabel{ gpt } method{ biosgrub } . ' in seed
 assert '538 538 538 free $iflabel{ gpt } method{ efi } format{ } . ' in seed
-assert '1000 20000 1000000000 raid $primary{ } method{ raid } .' in seed
+assert '6000 8000 10000 raid $primary{ } method{ raid } . ' in seed
+assert '4000 20000 1000000000 raid $primary{ } method{ raid } .' in seed
+assert 'mountpoint{ / } . ' in seed and 'mountpoint{ /var } . ' in seed, 'a single disk needs / and a separate /var'
+assert 'ext4 / %s . 1 %u 0 ext4 /var %s .' in seed, 'a mirror needs separate / and /var arrays'
+assert 'choose_recipe select atomic' not in seed, 'the stock atomic recipe puts /var on /'
 assert 'd-i grub-installer/force-efi-extra-removable boolean true' in seed, 'every ESP needs the removable boot path'
 assert 'd-i partman-basicfilesystems/no_swap boolean false' in seed, 'the mirror has no swap; partman must not ask'
 # Every selected disk is validated, not just the first, and a mirror of mismatched
@@ -168,9 +173,18 @@ shell = wizard.split('disk_serial() {', 1)[1].split('}', 1)[0]
 assert [a for a in ('device/serial', '"serial"', 'device/vpd_pg80') if a in helper] == ['device/serial', '"serial"', 'device/vpd_pg80']
 assert shell.index('device/serial') < shell.index('/serial"') < shell.index('device/vpd_pg80')
 assert 'Disabled, dhcp, static' in wizard, 'both frontends use Disabled for an unconfigured adapter'
+# Repair image is offered by both frontends the same way: image edition only, only when nex-image-install.sh probe
+# reports a complete data volume, only on exactly the disks it names, with its own confirmation.
+assert 'nex-image-install.sh", "probe"' in graphical and 'nex-image-install.sh" probe' in wizard
+assert '"Repair image"' in graphical and 'Choices: Erase and install, Repair image' in templates
+assert 'g_key_file_set_string(config, "Install", "mode", "repair")' in graphical and "mode=repair" in wizard
+assert 'repair_select_disks' in graphical and 'step_repairdisk' in wizard, 'Repair never lets the operator change the disk set'
+assert 'static gboolean page_used' in graphical and 'if (p == 1 || p == 3) return FALSE;' in graphical, \
+    'the graphical Repair skips the host and disk pages like the text Repair'
+assert 'repair-confirm' in wizard and 'Repair the system image on %s' in graphical
 assert 'ini_list()' in wizard, ';-separated disk list values must escape semicolons'
-assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in graphical, \
-    'GTK discover must skip disks below 16 GiB like the text frontend'
+assert 'bytes < disk_floor()) continue' in graphical and '(image_edition() ? 24ULL : 16ULL)' in graphical, \
+    'GTK discover must skip disks below the edition floor (16 GiB classic, 24 GiB image) like the text frontend'
 assert 'not pooled storage' in graphical, 'mirror summary must say capacity is not pooled'
 assert 'Template: nex-installer/disk-error\n' in templates
 assert '"/var/log/partman"' in Path('installer/gui/nex-shell.c').read_text(), 'View log must include the partman log'
@@ -199,7 +213,8 @@ for marker, label in (("<<'TARGET'", 'TARGET'), ("<<'ESP'", 'ESP')):
 # Gate on the installed root being an md device, not on any leftover array in mdstat.
 assert 'mdadm' in packages
 assert "case $root in /dev/md*)" in late
-assert "mdadm --detail --scan \"$root\"" in late and 'update-initramfs -u' in late
+assert "mdadm --detail --scan \"$root\" \"$(findmnt -no SOURCE /var)\"" in late and 'update-initramfs -u' in late, \
+    'the initramfs must know both the root and the /var array'
 assert '/usr/local/sbin/nex-sync-esp' in late and 'DPkg::Post-Invoke' in late
 assert 'mkdir -p "$copy/EFI"' in late, 'a freshly formatted ESP has no EFI directory to copy into'
 assert 'sed -i' in late and 'UUID=' in late.split('nex-sync-esp', 1)[1], \

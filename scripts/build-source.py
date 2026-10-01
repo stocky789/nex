@@ -27,6 +27,7 @@ FILES = ('go.mod', 'go.sum', 'LICENSE', 'NOTICE', 'ARTWORK-LICENSE.md', 'Makefil
          'packaging/core-local/core-local-setup', 'packaging/core-local/corosync-pristine', 'packaging/core-local/qemu-vnc-lossy',
          'packaging/core-local/preinst',
          'packaging/core-local/postinst', 'packaging/core-local/prerm',
+         'packaging/core-local/initramfs-hook', 'packaging/core-local/initramfs-local-bottom',
          'packaging/controller/Dockerfile', 'packaging/controller/run-controller',
          'packaging/controller/apply-update', 'packaging/controller/postinst',
          'packaging/controller/prerm',

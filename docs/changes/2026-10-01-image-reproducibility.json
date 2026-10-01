@@ -1,0 +1,38 @@
+{
+  "summary": "Phase I-2 reproducibility gate (S9) for the immutable Nex Core image: two clean base builds are now byte-identical (roothash, erofs, verity, kernel, initrd, base tree, release set). Three causes were removed: the random iSCSI InitiatorName drawn by the open-iscsi postinst (the image now carries Debian's GenerateName=yes form and iscsid writes the name on the host at its first start), ldconfig's aux-cache (inode numbers), and wall-clock directory and manifest mtimes in the release set (image/release.py clamps every entry to SOURCE_DATE_EPOCH). scripts/image-repro-check.sh compares metadata and bytes, lists differences and runs diffoscope; its containers and the layer build container run under CPU and memory caps; tests/test_image_composition.py gains a layer-finalize reproducibility test. docs/qa/image/phase2-installer.md no longer lists the graphical Repair image choice and the installer integration pins as outstanding.",
+  "paths": [
+    "docs/qa/image/phase2-installer.md",
+    "docs/qa/image/phase2-repro.md",
+    "image/mkosi.images/build-layer.sh",
+    "image/mkosi.postinst.chroot",
+    "image/release.py",
+    "scripts/image-repro-check.sh",
+    "tests/test_image_composition.py"
+  ],
+  "guide": {
+    "impact": "none",
+    "reason": "Build tooling and a QA record; no operator-visible workflow changes. The iSCSI initiator name of an image host is created by iscsid on first start instead of at package install, which no guide page describes."
+  },
+  "api": {
+    "impact": "none",
+    "reason": "No HTTP, report-protocol, local-command or Inventory change; the Controller is not involved.",
+    "pages": []
+  },
+  "roadmap": {
+    "impact": "none",
+    "reason": "Phase I-2 of a proposed, not yet authorized plan; development work with no published milestone changed and nothing run on a booted image."
+  },
+  "state": {
+    "owner": "core",
+    "reason": "The only host state touched is the iSCSI initiator name: it is no longer baked into the image and is created on the host.",
+    "record": "/etc/iscsi/initiatorname.iscsi in the /etc overlay upper on the host's nex-data volume (/var/lib/nex/etc/upper), written once by iscsid on its first start. The Controller stores nothing about it, so a fresh Controller recovers nothing and needs nothing."
+  },
+  "verification": {
+    "method": "Ran scripts/image-repro-check.sh three times under CPU and memory caps (image build in the pinned Debian trixie tools container, snapshot 20260929T000000Z, SOURCE_DATE_EPOCH 1790000000): the first two checks found the differences listed in docs/qa/image/phase2-repro.md and the third compared byte-identical for every artifact. The comparison step was smoke-run on a synthetic pair of trees, and python3 -m unittest tests.test_image_composition passes (the new test fails with the timestamp clamp disabled). Simulation only: nothing was booted, layers were not double-built, the Nex-built debs were not in the build, and both builds ran on one host.",
+    "evidence": [
+      "docs/qa/image/phase2-repro.md",
+      "docs/qa/image/phase2-installer.md",
+      "tests/test_image_composition.py"
+    ]
+  }
+}

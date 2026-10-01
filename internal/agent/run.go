@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http/httptrace"
 	"net/netip"
+	"nex.local/nex/internal/nexupdate"
 	"nex.local/nex/internal/protocol"
 	"nex.local/nex/internal/version"
 	"nex.local/nex/internal/vmhost"
@@ -224,13 +225,14 @@ var transientStorageClusters = newTransientResultQueue[protocol.StorageClusterRe
 var transientPoolResults = newTransientResultQueue[protocol.PoolResult](32)
 
 func resetReportExtensions(s *Store) error {
-	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady {
+	if !s.State.StorageClusterProtocolReady && !s.State.StorageClusterSessionMonitorProtocolReady && !s.State.ISODownloadProgressReady && !s.State.DetectedOSReady && !s.State.ImageUpdateReady {
 		return nil
 	}
 	s.State.StorageClusterProtocolReady = false
 	s.State.StorageClusterSessionMonitorProtocolReady = false
 	s.State.ISODownloadProgressReady = false
 	s.State.DetectedOSReady = false
+	s.State.ImageUpdateReady = false
 	return s.Save()
 }
 
@@ -487,6 +489,10 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// the same manner: an observation overlaid on the copy it reports, never
 		// written back into the record it owns.
 		managed.Membership = PoolFenceCheckMembership(s, managed.Membership)
+		// The rollout is the master's durable record; a fresh Controller reads it from here.
+		if membership.MasterHostID == s.State.HostID {
+			managed.UpdateRollout = PoolUpdateForPool(s)
+		}
 	}
 	detectedOS, detectedOSErr := poolDetectedOS(s)
 	managed.DetectedOS = detectedOS
@@ -620,6 +626,21 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		legacy.ManagementNetwork = nil
 		inv = &legacy
 	}
+	if inv.Image != nil && !s.State.ImageUpdateReady {
+		// A strict older Controller must never see inventory.image: the field is withheld until
+		// this Controller acknowledges image-update-v1.
+		copy := *inv
+		copy.Image = nil
+		inv = &copy
+	}
+	if inv.Managed != nil && inv.Managed.UpdateRollout != nil && !s.State.ImageUpdateReady {
+		// Withheld like inventory.image: a strict older Controller never sees update_rollout.
+		managed := *inv.Managed
+		managed.UpdateRollout = nil
+		copy := *inv
+		copy.Managed = &managed
+		inv = &copy
+	}
 	if inv.Managed != nil {
 		copy := *inv
 		copy.Managed = managedExtensionsForController(inv.Managed, s.State.ISODownloadProgressReady, s.State.DetectedOSReady)
@@ -655,6 +676,9 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 		// Offer the additive extension during every v2 preflight. An older
 		// Controller ignores it and acknowledges the base capability instead.
 		capabilities = append(capabilities, protocol.StorageClusterSessionMonitorCapability, protocol.ISODownloadProgressCapability, protocol.DetectedOSCapability)
+		if imageUpdateAvailable() {
+			capabilities = append(capabilities, protocol.ImageUpdateCapability, protocol.PoolUpdateRolloutCapability)
+		}
 	}
 	discoveries := transientStorageDiscoveries.drain(s)
 	var clusters []protocol.StorageClusterResult
@@ -708,9 +732,11 @@ func reportStorage(ctx context.Context, s *Store, m *Monitor, storage *vmhost.St
 	_ = vmhost.RecordManagementConnectivity(s.dir, "controller-report", time.Now(), reportLocal, reportPeer)
 	ready := response.ISODownloadProgress != nil && *response.ISODownloadProgress
 	osReady := response.DetectedOS != nil && *response.DetectedOS
-	if s.State.ISODownloadProgressReady != ready || s.State.DetectedOSReady != osReady {
+	imageReady := response.ImageUpdate != nil && *response.ImageUpdate && imageUpdateAvailable()
+	if s.State.ISODownloadProgressReady != ready || s.State.DetectedOSReady != osReady || s.State.ImageUpdateReady != imageReady {
 		s.State.ISODownloadProgressReady = ready
 		s.State.DetectedOSReady = osReady
+		s.State.ImageUpdateReady = imageReady
 		if err = s.Save(); err != nil {
 			return persistenceError{fmt.Errorf("persist managed report extensions preflight: %w", err)}
 		}
@@ -1115,6 +1141,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	probes := NativeProbes(version.Version, sampler)
 	probes["cpu-baseline"] = PoolCPUProbe(s)
 	probes["guest"] = recordingGuestProbe(func(ctx context.Context, detected map[string]protocol.DetectedOS) { recordGuestOS(ctx, s, detected) })
+	if nexupdate.Edition() == "image" {
+		probes["image"] = imageProbe
+	}
 	m := NewMonitor(cfg.ProbeTimeout, probes)
 	storage := vmhost.NewStorageMonitor(cfg.ProbeTimeout)
 	s.storageMonitor.Store(storage)
@@ -1262,6 +1291,10 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	scheduleWatchdogReconcile()
 	runWork.Add(1)
 	go func() { defer runWork.Done(); sampler.run(probeCtx) }()
+	// The pool master's rollout coordinator is a durable Core job that needs no Controller:
+	// it runs on the host's own tick and does nothing unless this host is master with one.
+	runWork.Add(1)
+	go func() { defer runWork.Done(); RunPoolUpdateCoordinator(probeCtx, s) }()
 	go m.WatchLibvirt(probeCtx)
 	backupTicks := make(chan time.Time, 1)
 	var backupHealthRunning atomic.Bool

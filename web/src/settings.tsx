@@ -7,6 +7,7 @@ import { relativeTime } from "./labels";
 import { Icon, type IconKind } from "./icons";
 import { Badge, Section, date } from "./ui";
 import { Gated, gatedButtons } from "./gated";
+import { ImageUpdates } from "./image-updates";
 import { BackupRepositories } from "./backup-repositories";
 import "./settings.css";
 
@@ -68,7 +69,7 @@ export function Settings({ section, pool, hosts = [], api, busy, unavailable, up
   if (!current) return <section className="panel empty"><h2>Object not found</h2><p>This link does not match a settings section.</p><a href="#/settings">Return to settings</a></section>;
   if (current.pool && !pool) return <><h1>{current.label}</h1><p className="empty">Choose a pool in the scope menu to see its {current.label.toLowerCase()}.</p></>;
   const members = <PoolMembers key={pool?.id} poolID={pool?.id || ""} api={api} unavailable={unavailable} hosts={hosts} coreAvailable={updates.update?.core_available_version} onEnrollHost={onEnrollHost} />;
-  const updatesPanel = <UpdatesPanel {...updates} busy={busy} />;
+  const updatesPanel = <><UpdatesPanel {...updates} busy={busy} /><ImageUpdates hosts={hosts} api={api} busy={busy} /></>;
   switch (section) {
     case "overview": return <>{members}<HighAvailability />{pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null}{updatesPanel}</>;
     case "backups": return pool ? <BackupRepositories api={api} poolID={pool.id} masterHostID={pool.master_host_id} hosts={hosts} busy={busy} unavailable={unavailable} onNotice={notice} /> : null;
@@ -128,7 +129,7 @@ function UpdatesPanel({
       )}
       {update?.error && <p className="warning" role="status">{update.error}</p>}
       {note && phase === "idle" && <p className="notice" role="status">{note}</p>}
-      <p className="note">Each host's Nex Core version is listed under Members; hosts update through their own package archive.</p>
+      <p className="note">Each host's Nex Core version is listed under Members. Classic hosts update through their own package archive; image-edition hosts update themselves and are listed under Host images.</p>
     </Section>
   );
 }

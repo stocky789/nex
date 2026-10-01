@@ -7,11 +7,70 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > **Version history note:** Early sections reconstruct development **stages** from commit
 > history; a section alone does not establish that a version was published. Nex remains
 > development software. Builds use the newest numbered changelog heading (`0.4.19` →
-> Debian `0.4.19`).
+> Debian `0.4.19`). Entries under `[Unreleased]` do not change the build version.
 
 ## [Unreleased]
 
-> **Maintainers:** Leave this section empty. Append new entries under the **latest numbered version** heading below (the first `## [x.y.z]` block after this one) until that version is tagged and published.
+> **Maintainers / agents:** Put every new user-facing entry here under the matching bucket
+> (**Major Feature**, **Minor Feature**, **Bug Fixes**, or **Miscellaneous**). Do **not**
+> create a new `## [x.y.z]` heading and do **not** append under a numbered version while
+> working. Numbered headings are created only when project owner cuts a release: move these
+> entries under that heading, leave `[Unreleased]` empty, then tag.
+
+### Minor Feature
+
+- A pool can now update itself one host at a time, run by the pool master's Nex Core (development work, no
+  screen or guide page yet, and tested only against simulated hosts): it stages the new release on every
+  host, then updates members first and the master last, never taking a host down if the rest of the pool
+  would lose its majority, shutting guests down and restarting them on the same host only when you allow it,
+  and pausing for you if a host does not come back or falls back to the old release. Pause, resume, abort
+  and roll back one host are available, a new master finds an unfinished rollout paused, and no Controller
+  needs to stay connected.
+- Nex Core's own update engine for the image edition (development work, host side only): it checks signed
+  release information (expiry, replay and rollback protection), downloads a system image that can resume
+  after an interruption, writes it to the unused system slot on every disk without touching the next
+  boot, and only on **activate** makes it the next boot with three tries before the previous version
+  returns by itself. **Roll back** re-arms the previous version, and an update is refused when the
+  target could not read the host's stored storage data or could not assemble the data mirror. New
+  host-local calls `check`, `activate`, `rollback` and `cancel` exist. Pool rolling updates do not exist yet,
+  and nothing has been booted on real hardware.
+- The image edition's update is now tied into the boot: after the restart a health check decides
+  whether the new system image stays; if it fails, the host returns to the previous version by itself and
+  reports why. A new system image whose stored data it could not read also falls back instead of
+  starting. Release information can be signed and bundled for offline use with new publishing scripts, and
+  each image host now reports its running, staged and previous version to the Controller. Development
+  work, tried once in a virtual machine only: no hardware, Secure Boot or pool.
+- You can now update a single image-edition host from the Controller's **Settings** → **Updates** page
+  (**Host images**): check for a release, download and stage it, reboot into it, roll back or cancel. The
+  host does the work itself and the page only shows what it reports, so replacing the Controller loses
+  nothing. Older Controllers never see the new information. Development work covered by automated tests
+  only; updating a whole pool, one host at a time, is not available yet.
+- Installation media can now carry an image edition: Nex Core installs as a read-only,
+  integrity-checked system image with two update slots per disk and its settings and data on a
+  separate volume, on UEFI hosts with disks of at least 24 GiB. A **Repair image** option reinstalls the
+  system image and keeps the data. The Classic edition stays selectable and is the way to install on legacy
+  BIOS hosts. This is development work: no installer ISO has been booted with it yet.
+- New Nex Core installs keep the system files read-only and put everything the host changes on
+  a separate `/var` volume (two mirrored volumes when you pick two or more disks). Settings,
+  SSH keys and root's files live on `/var` and survive reboots as before. Updates open a short
+  writable window while packages install and close it again. Hosts installed earlier are not
+  converted and keep their writable root.
+- Replacing a failed mirror disk now rebuilds every mirror on that disk in one operation.
+- Image-edition hosts can switch optional features, such as OpenZFS storage, on and off as separate signed layers
+  from the host's root shell (`nex-core-local layers`). Each layer is checked against the signed release before it
+  is merged, belongs to exactly one system image build, and cannot be switched off while in use. Development
+  only: tried in a disposable guest, not yet on an installed image or real hardware, and nothing places or
+  enables layers automatically yet.
+
+### Miscellaneous
+
+- The host install no longer includes the guest-creation command-line tool, `sudo` or the
+  cluster witness server, none of which the host uses; this trims about 46 MiB of installed
+  packages. Guests are still created through Core, and the witness is still hosted by the Controller.
+- The `nex-core-local` package build can now leave the Controller appliance image out of the package and write it as a
+  separate, content-addressed download for image-edition hosts (`--appliance-packaging split`). The default build, and
+  every Classic-edition install, still carries the appliance inside the package. Core reads the separate copy from
+  `/var/lib/nex/payload/<digest>/` only when the package does not contain one.
 
 ## [0.4.19] — 2026-10-02
 
