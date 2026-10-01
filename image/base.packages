@@ -1,0 +1,67 @@
+# Packages of the Nex Core base image (one per line; '#' comments).
+# Starting point: installer/packages.txt minus linux-headers-amd64, zfs-dkms and the groups that
+# ship as signed layers (nex-zfs: zfsutils-linux; nex-cluster: corosync, pacemaker, sanlock, fence
+# agents, sbd, dlm-controld, gfs2-utils; smb: cifs-utils, smbclient). Plus boot and image packages.
+# Debian is the package source only; the host never runs apt or dpkg (image-lock.py pins this set).
+
+# Virtualisation
+qemu-system-x86
+qemu-utils
+libvirt-daemon-system
+libvirt-clients
+ovmf
+python3-virt-firmware
+swtpm
+swtpm-tools
+
+# Networking and base services
+openssh-server
+nftables
+chrony
+ifupdown
+bridge-utils
+vlan
+dhcpcd-base
+iproute2
+ca-certificates
+
+# Storage clients and RAID
+mdadm
+nfs-common
+libnfs-utils
+open-iscsi
+
+# Platform tools used by Core
+python3
+genisoimage
+dmidecode
+pciutils
+ipmitool
+fdisk
+dosfstools
+e2fsprogs
+erofs-utils
+dmsetup
+efibootmgr
+
+# Curated diagnostics
+procps
+less
+strace
+tcpdump
+ethtool
+smartmontools
+iperf3
+
+# Boot chain (UKI, systemd-boot, shim) and kernel; no initramfs tooling is used on the host
+systemd
+systemd-sysv
+systemd-container
+systemd-boot
+systemd-boot-efi
+systemd-boot-efi-amd64-signed
+shim-signed
+udev
+dbus
+kmod
+linux-image-amd64

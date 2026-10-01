@@ -51,6 +51,30 @@ upstream notices. This rebuild still needs the tools listed above and does not p
 byte-identical output across toolchain versions. The dependency review is in
 [controller-dependencies.md](controller-dependencies.md).
 
+## Nex Core image (UEFI image edition)
+
+The image edition is built in a pinned Debian trixie container, so any workstation distribution works. Docker (or a
+compatible runtime) and Go are the host requirements; nothing is installed on the workstation. Outputs go to the
+gitignored `image/out/`.
+
+```
+image/build.sh all                       # base tree (mkosi), root.erofs + dm-verity hash tree, UKI, ESP tree, manifest
+NEX_LABEL=r1 NEX_SEQUENCE=1 image/build.sh all
+python3 scripts/image-lock.py write      # pin the resolved package closure as image/packages.lock
+python3 scripts/image-lock.py check      # drift gate against image/out/base.dpkg-list
+go test ./internal/hostimage/...         # layout, slot writer (S2 order), ESP converger, /etc seeding, install/repair
+tests/integration/image_boot.py --layout single   # installs image/out/release onto loop devices, boots under QEMU/OVMF
+tests/integration/image_boot.py --layout raid1    # same with two disks and the md RAID1 nex-data
+```
+
+`image/build.sh base` writes `image/out/base/` (the tree), `root.erofs`, `root.verity` and `roothash`; `release` adds
+`image/out/release/` (`manifest.json`, `nex-core_<label>_<sequence>.efi`, `esp/`), the directory
+`nex-hostimage install --image-dir` consumes. Packages come only from the snapshot named in `image/snapshot`;
+`image/base.packages` is the request, `image/denylist.txt` what must never appear, `image/packages.lock` the pinned result.
+The image carries no SSH host keys and an empty machine-id; `nex-firstboot.service` creates the keys on the host.
+`image/mkosi.images/` (layers) belongs to the layer build, see its own scripts. The private image-host address is
+supplied through configuration or CI secrets only, never committed.
+
 ## systemd examples
 
 The units in `packaging/systemd/` expect binaries in `/usr/local/lib/nex/`, built UI

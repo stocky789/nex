@@ -23,6 +23,9 @@ def main():
     parser.add_argument('--version', default='0.1.5~alpha1')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/core-local')
     parser.add_argument('--docker', default='docker', help='Docker executable or wrapper path')
+    parser.add_argument('--appliance-packaging', choices=['bundled', 'split'], default='bundled',
+                        help='bundled: appliance image inside the deb (classic edition); split: written to '
+                             '<output>/payload/<sha256>/ for /var/lib/nex/payload (image edition)')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9][A-Za-z0-9.+~]*', args.version):
         parser.error('invalid Debian package version')
@@ -69,8 +72,12 @@ def main():
                         '-v', str(stage) + ':/input:ro',
                         '-v', str(args.bundle.resolve()) + ':/input/bundle:ro',
                         '-v', str(args.output.resolve()) + ':/output',
-                        '-e', 'NEX_VERSION=' + args.version, 'nex-core-local-builder'], check=True)
+                        '-e', 'NEX_VERSION=' + args.version,
+                        '-e', 'NEX_APPLIANCE_PACKAGING=' + args.appliance_packaging,
+                        'nex-core-local-builder'], check=True)
     print(args.output / ('nex-core-local_' + args.version + '_amd64.deb'))
+    if args.appliance_packaging == 'split':
+        print(args.output / 'payload' / manifest['image_sha256'])
 
 
 if __name__ == '__main__':

@@ -80,8 +80,8 @@ POLICY
         elif [ "$#" -eq 2 ]; then
             exit 2
         else
-            units='sanlock.service wdmd.service corosync-qdevice.service corosync-qnetd.service'
-            services='sanlock wdmd corosync-qdevice corosync-qnetd'
+            units='sanlock.service wdmd.service corosync-qdevice.service'
+            services='sanlock wdmd corosync-qdevice'
         fi
         for unit in $units; do
             systemctl --root="$root/" disable "$unit"

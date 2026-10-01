@@ -281,6 +281,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if poolUpdatePeerPath(r.URL.Path) {
+			PoolUpdateHandler(s).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == poolFenceProvisionPath {
 			PoolFenceProvisionHandler(s).ServeHTTP(w, r)
 			return

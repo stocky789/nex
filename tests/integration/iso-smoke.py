@@ -85,7 +85,7 @@ CHECK = r'''#!/bin/sh
 exec >/dev/ttyS0 2>&1
 set -eu
 trap 'echo NEX_SMOKE_FAILED; systemctl poweroff' EXIT
-for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst ovmf python3-virt-firmware openssh-server nftables chrony; do
+for p in qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients ovmf python3-virt-firmware openssh-server nftables chrony; do
     test "$(dpkg-query -W -f='${Status}' "$p")" = 'install ok installed'
 done
 if dpkg-query -W -f='${Status}' zfs-dkms 2>/dev/null | grep -qx 'install ok installed'; then

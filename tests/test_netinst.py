@@ -87,7 +87,7 @@ class NetinstTests(unittest.TestCase):
             uris = root / 'uris'
             uris.write_text("'https://snapshot.debian.org/archive/debian/20260920T000000Z/pool/example.deb' example_1_all.deb 17 SHA256:unused\n")
             manifest.build_manifest(root / 'stage', uris, 'https://downloads.example.org/1', root / 'out')
-            rows = (repo.parent / 'netinst.tsv').read_text().splitlines()
+            rows = (repo.parent / 'payloads.tsv').read_text().splitlines()
             self.assertEqual(len(rows), 5)
             payloads = list((root / 'out').glob('*.deb'))
             self.assertEqual(len(payloads), 3)
@@ -99,6 +99,62 @@ class NetinstTests(unittest.TestCase):
             self.assertIn('https://fedorapeople.org/', rows[-1])
             with self.assertRaises(ValueError):
                 manifest.build_manifest(root / 'stage', uris, 'http://downloads.example.org', root / 'out')
+
+    def test_image_edition_rows_are_hashed_files_and_payloads_keep_outside_the_slot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'stage/nex/repo').mkdir(parents=True)
+            image = root / 'image'
+            (image / 'esp').mkdir(parents=True)
+            for name in ('root.erofs', 'root.verity', 'roothash', 'manifest.json', 'nex-core_dev_0.efi', 'esp/loader.conf'):
+                (image / name).write_bytes(name.encode())
+            appliance = root / 'appliance'
+            appliance.mkdir()
+            for name in ('controller.qcow2', 'manifest.json', 'manifest.sig'):
+                (appliance / name).write_bytes(b'appliance ' + name.encode())
+            uris = root / 'uris'
+            uris.write_text('')
+            manifest.build_manifest(root / 'stage', uris, 'https://downloads.example.org/1', root / 'out',
+                                    image=image, appliance=appliance)
+            rows = [row.split('\t') for row in (root / 'stage/nex/payloads.tsv').read_text().splitlines()]
+            by_destination = {destination: (checksum, url) for checksum, destination, url in rows}
+            self.assertEqual(sorted(d for d in by_destination if d.startswith('image/')),
+                             ['image/esp/loader.conf', 'image/manifest.json', 'image/nex-core_dev_0.efi',
+                              'image/root.erofs', 'image/root.verity', 'image/roothash'])
+            primary = hashlib.sha256(b'appliance controller.qcow2').hexdigest()
+            self.assertIn(f'payload/{primary}/controller.qcow2', by_destination)
+            self.assertIn(f'payload/{manifest.VIRTIO_SHA256}/virtio-win.iso', by_destination)
+            for destination, (checksum, url) in by_destination.items():
+                self.assertTrue(url.startswith('https://'), destination)
+                if url.startswith('https://downloads.example.org/1/'):
+                    self.assertEqual(checksum, hashlib.sha256((root / 'out' / url.rsplit('/', 1)[1]).read_bytes()).hexdigest())
+            (image / 'root.verity').unlink()
+            with self.assertRaises(ValueError):
+                manifest.build_manifest(root / 'stage', uris, 'https://downloads.example.org/1', root / 'out', image=image)
+
+    def test_fetch_selects_rows_by_edition_prefix(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'payload'
+            payload.write_bytes(b'image file')
+            checksum = hashlib.sha256(payload.read_bytes()).hexdigest()
+            pin = root / 'manifest'
+            pin.write_text(f'{checksum}\trepo/example.deb\thttps://downloads.example.org/example.deb\n'
+                           f'{checksum}\timage/root.erofs\thttps://downloads.example.org/root.erofs\n'
+                           f'{checksum}\tpayload/{checksum}/controller.qcow2\thttps://downloads.example.org/c.qcow2\n')
+            wget = root / 'wget'
+            wget.write_text('#!/bin/sh\nwhile [ "$1" != -O ]; do shift; done\ncp "$PAYLOAD" "$2"\n')
+            wget.chmod(0o755)
+            env = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}', NEX_NETINST_MANIFEST=str(pin), PAYLOAD=str(payload))
+            subprocess.run(['sh', str(ROOT / 'installer/netinst-fetch.sh'), str(root / 'one')],
+                           env=dict(env, NEX_NETINST_ROWS='image/'), check=True, capture_output=True)
+            self.assertTrue((root / 'one/image/root.erofs').is_file())
+            self.assertFalse((root / 'one/repo').exists(), 'the image edition must not download the classic package set')
+            self.assertFalse((root / 'one/payload').exists())
+            subprocess.run(['sh', str(ROOT / 'installer/netinst-fetch.sh'), str(root / 'two')],
+                           env=env, check=True, capture_output=True)
+            self.assertTrue((root / 'two/repo/example.deb').is_file())
+            self.assertFalse((root / 'two/image').exists(), 'the classic edition must not download the image set')
 
     def test_fetch_verifies_retries_and_reuses_only_valid_downloads(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,0 +1,17 @@
+# Packages the nex-cluster layer adds on top of the base (disjoint from ../../base.packages).
+# Default-off service stack: Core writes /etc/corosync and starts units on first cluster setup.
+corosync
+corosync-qdevice
+pacemaker
+pacemaker-cli-utils
+pcs
+resource-agents
+fence-agents-redfish
+fence-agents-ipmilan
+fence-agents-virsh
+sbd
+dlm-controld
+gfs2-utils
+sanlock
+python3-sanlock
+libvirt-daemon-plugin-sanlock

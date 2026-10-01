@@ -1,14 +1,23 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
 # The ISO pins every byte; URLs alone never authorize an installation payload.
+# Rows: SHA-256, destination below the target directory, HTTPS URL. NEX_NETINST_ROWS
+# selects the destination prefixes this call handles: repo/ and media/ for the classic
+# edition (the default), image/ and payload/ for the image edition.
 set -eu
-manifest=${NEX_NETINST_MANIFEST:-/cdrom/nex/netinst.tsv}
+manifest=${NEX_NETINST_MANIFEST:-/cdrom/nex/payloads.tsv}
 mode=${1:?expected --check or a destination directory}
+rows=${NEX_NETINST_ROWS:-repo/ media/}
 checked=
 while IFS="$(printf '\t')" read -r digest relative url; do
-    case "$relative" in repo/*.deb|media/virtio-win.iso) ;; *) echo 'Invalid netinst destination' >&2; exit 1;; esac
+    case "$relative" in repo/*.deb|media/virtio-win.iso|image/*|payload/*/*) ;; *) echo 'Invalid netinst destination' >&2; exit 1;; esac
     case "$relative" in *..*|*[!a-zA-Z0-9_./+%:~-]*) echo 'Invalid netinst path' >&2; exit 1;; esac
     case "$url" in https://*) ;; *) echo 'Netinst requires HTTPS sources' >&2; exit 1;; esac
+    selected=
+    for prefix in $rows; do
+        case "$relative" in "$prefix"*) selected=yes;; esac
+    done
+    [ -n "$selected" ] || continue
     if [ "$mode" = --check ]; then
         # Check both Nex blobs, plus one file per upstream archive. Checking every
         # package adds hundreds of round trips without guaranteeing later availability.

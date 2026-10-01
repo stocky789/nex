@@ -55,6 +55,15 @@
 <li><a href="#importBackupCatalogLocal">POST /api/local/v1/pool/backup-catalog/import</a></li>
 <li><a href="#rebuildBackupCatalogLocal">POST /api/local/v1/pool/backup-catalog/rebuild</a></li>
 <li><a href="#backupStatusLocal">GET /api/local/v1/pool/backup-status</a></li>
+<li><a href="#localCheckUpdates">POST /api/local/v1/updates/check</a></li>
+<li><a href="#localActivateUpdate">POST /api/local/v1/updates/activate</a></li>
+<li><a href="#localRollbackUpdate">POST /api/local/v1/updates/rollback</a></li>
+<li><a href="#localCancelUpdate">POST /api/local/v1/updates/cancel</a></li>
+<li><a href="#localGetUpdateOperation">GET /api/local/v1/updates/operations/{id}</a></li>
+<li><a href="#localGetPoolUpdates">GET /api/local/v1/pool/updates</a></li>
+<li><a href="#localStartPoolRollout">POST /api/local/v1/pool/updates/rollouts</a></li>
+<li><a href="#localGetPoolRollout">GET /api/local/v1/pool/updates/rollouts/{id}</a></li>
+<li><a href="#localControlPoolRollout">POST /api/local/v1/pool/updates/rollouts/{id}/control</a></li>
 </ul></nav>
 <section><h2>nex-core-local -prepare-recovery-file</h2><pre>{
   &quot;description&quot;: &quot;Root-only manual replacement preparation, not an HTTP operation or running listener. Requires stopped local service and a clean replacement host without outbound agent identity or normal deployments. Uses the selected signed appliance and existing local storage/bridge. Does not bootstrap a Site, enroll a host or adopt the VM. Repeated identical normalized file contents reconcile the persisted request and original VM UUID; changed contents fail. TLS-verified readiness and seed removal precede recovery_prepared.&quot;,
@@ -174,6 +183,21 @@
     &quot;$ref&quot;: &quot;#/components/schemas/BackupPolicy&quot;
   },
   &quot;semantics&quot;: &quot;Controller queues an immediate one-shot run of a backup policy for selected VMs. Core records occurrence IDs under pool-backup-runs/; Controller adopts outcomes.&quot;
+}</pre></section>
+<section><h2>nex-core-local layers</h2><pre>{
+  &quot;description&quot;: &quot;Root-only on-host management of optional feature layers (nex-zfs, nex-cluster): signed systemd-sysext images that Core verifies and merges over /usr. Not an HTTP operation and not reachable from the Controller or the report protocol. Subcommands: `activate` (what nex-layers.service runs at boot: re-hash every enabled layer against the signed release manifest and the running base build, link the good ones for systemd-sysext, remove links for the rest; always exits 0 so a bad layer never holds boot; writes the volatile report /run/nex/layers/status.json), `list` (JSON array of LayerInfo, one per layer the signed manifest offers or enabled.json records, sorted by name; the store file is size-checked, not re-hashed), `ensure NAME` (prove the store file, record it in enabled.json, link and merge it, run sysusers/tmpfiles/udev reload and enable the layer&#x27;s units; idempotent) and `disable NAME` (refused while a kernel module, busy unit or busy command of the layer is in use; otherwise disables the layer&#x27;s units and records it as not wanted; the merge ends at the next boot). Layer failures are reported as layer-unavailable with a reason: not_in_store, base_mismatch, digest_mismatch, signature_invalid, unknown_layer, merge_failed, reboot_required (enabled and verified, but a live merge was not possible), in_use (disable only). State owner: core; the record is /var/lib/nex/layers/enabled.json on the host and the store is /var/lib/nex/layers/store/sha256-&lt;hex&gt;.raw. A fresh Controller learns nothing from it and stores nothing. No HTTP route, command or Inventory field carries layers yet.&quot;,
+  &quot;usage&quot;: &quot;nex-core-local layers activate|list|ensure NAME|disable NAME&quot;,
+  &quot;output&quot;: {
+    &quot;schema&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/LayerInfo&quot;
+      }
+    },
+    &quot;format&quot;: &quot;list prints one JSON array on stdout; activate prints one `layer NAME: verified` or `layer NAME: refused (REASON); left unmerged` line per enabled layer; ensure and disable print nothing on success.&quot;
+  },
+  &quot;failure&quot;: &quot;ensure and disable exit nonzero with `layer-unavailable: NAME: REASON[: detail]` on stderr when the layer cannot be provided or is in use; activate exits 0 even when a layer is refused.&quot;,
+  &quot;compatibility&quot;: &quot;A layer is bound to exactly one base build by SYSEXT_LEVEL equal to the base BUILD_ID; a layer built for another base is refused (base_mismatch), so a rolled-back base never merges a newer base&#x27;s layer. The release key is the raw 32-byte Ed25519 key at /usr/share/nex/update/release.pub.&quot;
 }</pre></section>
 <section id="localLogin"><h2>POST <code>/api/local/v1/session</code></h2>
 <p>Sign in to this host</p><p>Authenticates only username root against the host operating-system password using PAM authentication and account checks, and validates browser origin. Use the root password set during Nex Core installation, or its current value after an OS password change. Locked or expired accounts/passwords and authentication-service failures fail closed, including the five-second helper timeout. Sets __Host-nex_local_session with Secure, HttpOnly, SameSite=Strict, Path=/ and no Domain. Each login creates a new session; at most 64 active sessions per service. Sessions expire after 30 minutes without an authenticated mutation and eight hours absolutely; GET/HEAD polling does not renew them. Legacy unprefixed cookies are not accepted; sign in again after upgrade. The former separate local admin account and saved credential files are not accepted; there is no fallback. Upgrades require matching local service, PAM helper/configuration and web assets. Root password changes affect subsequent logins; existing sessions remain valid until logout, expiry or service restart. Controller admin credentials and Core protocol v1 are unchanged. Local process restart invalidates its in-memory sessions. Login admission permits at most five valid-length attempts per one-minute actual peer-IP window, two concurrent password checks per service, and 4096 tracked peers. Forwarded client-IP headers are ignored. Login returns 429 when rate/concurrency/table or 64-session capacity is exhausted; bounded retries must not create an unbounded loop.</p>
@@ -1628,12 +1652,12 @@
   }
 }</pre></details></section>
 <section id="localGetUpdates"><h2>GET <code>/api/local/v1/updates</code></h2>
-<p>Check host-local package updates</p><p>Refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version. A package no configured source offers surfaces in error with HTTP 200. Root local session required.</p>
+<p>Report host-local update status</p><p>Image edition (static os-release IMAGE_ID=nex-core): returns ImageUpdateStatus from Core&#x27;s own record (/var/lib/nex/image/state.json, reconciled with the boot entries on the disks) with no side effects beyond folding the boot state into that record. Classic edition: refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version; a package no configured source offers surfaces in error with HTTP 200. Root local session required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localGetUpdates&quot;,
-  &quot;summary&quot;: &quot;Check host-local package updates&quot;,
-  &quot;description&quot;: &quot;Refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version. A package no configured source offers surfaces in error with HTTP 200. Root local session required.&quot;,
+  &quot;summary&quot;: &quot;Report host-local update status&quot;,
+  &quot;description&quot;: &quot;Image edition (static os-release IMAGE_ID=nex-core): returns ImageUpdateStatus from Core&#x27;s own record (/var/lib/nex/image/state.json, reconciled with the boot entries on the disks) with no side effects beyond folding the boot state into that record. Classic edition: refreshes the apt package index (at most every 5 minutes) and reports apt&#x27;s candidate version for nex-core-local against the installed version; a package no configured source offers surfaces in error with HTTP 200. Root local session required.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -1643,11 +1667,18 @@
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;responses&quot;: {
     &quot;200&quot;: {
-      &quot;description&quot;: &quot;Success&quot;,
+      &quot;description&quot;: &quot;Success. The schema depends on the edition.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/UpdateStatus&quot;
+            &quot;oneOf&quot;: [
+              {
+                &quot;$ref&quot;: &quot;#/components/schemas/UpdateStatus&quot;
+              },
+              {
+                &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateStatus&quot;
+              }
+            ]
           }
         }
       }
@@ -1661,16 +1692,26 @@
           }
         }
       }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;The boot state could not be read (image edition).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
 <section id="localApplyUpdates"><h2>POST <code>/api/local/v1/updates/apply</code></h2>
-<p>Apply host-local package update</p><p>Runs apt-get update then apt-get install --only-upgrade nex-core-local as root against the signed Nex archive, so dependencies resolve and the package signature is verified, then schedules systemctl restart via systemd-run --no-block. Fails if the installed version did not advance. Returns 202 scheduled on success. CSRF and same-origin required.</p>
+<p>Apply a host-local update</p><p>Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller is refused (scope_unavailable) until the appliance swap exists. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;localApplyUpdates&quot;,
-  &quot;summary&quot;: &quot;Apply host-local package update&quot;,
-  &quot;description&quot;: &quot;Runs apt-get update then apt-get install --only-upgrade nex-core-local as root against the signed Nex archive, so dependencies resolve and the package signature is verified, then schedules systemctl restart via systemd-run --no-block. Fails if the installed version did not advance. Returns 202 scheduled on success. CSRF and same-origin required.&quot;,
+  &quot;summary&quot;: &quot;Apply a host-local update&quot;,
+  &quot;description&quot;: &quot;Image edition: verifies signed release metadata (trust.json, channel.json, manifest), downloads the slot image with Range resume, writes it to the inactive slot on every disk and, only when activate is reboot, arms the boot entry and reboots. activate stage_only (default) never changes the next boot. request_id is the operation ID: an exact replay returns the original operation with 200 (an interrupted one resumes), a changed body is 409 request_conflict, a second active operation is 409 update_in_progress. scope controller is refused (scope_unavailable) until the appliance swap exists. Classic edition: runs apt-get update then apt-get install nex-core-local as root against the signed Nex archive and returns 202 scheduled; the request body is ignored. CSRF and same-origin required.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -1683,19 +1724,34 @@
     &quot;content&quot;: {
       &quot;application/json&quot;: {
         &quot;schema&quot;: {
-          &quot;type&quot;: &quot;object&quot;,
-          &quot;additionalProperties&quot;: false
+          &quot;oneOf&quot;: [
+            {
+              &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateApplyRequest&quot;
+            },
+            {
+              &quot;type&quot;: &quot;object&quot;,
+              &quot;additionalProperties&quot;: false,
+              &quot;description&quot;: &quot;Classic edition: empty object.&quot;
+            }
+          ]
         }
       }
     }
   },
   &quot;responses&quot;: {
     &quot;202&quot;: {
-      &quot;description&quot;: &quot;Update scheduled&quot;,
+      &quot;description&quot;: &quot;Update scheduled (classic: UpdateApplyResult) or operation started (image: ImageUpdateOperation).&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
-            &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+            &quot;oneOf&quot;: [
+              {
+                &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+              },
+              {
+                &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+              }
+            ]
           }
         }
       }
@@ -1726,6 +1782,36 @@
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
             &quot;$ref&quot;: &quot;#/components/schemas/UpdateApplyResult&quot;
+          }
+        }
+      }
+    },
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Exact replay of an earlier request_id (image edition).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (code invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: update_in_progress, request_conflict, already_armed, scope_unavailable, running_vms (image edition); classic: UpdateApplyResult with status failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
           }
         }
       }
@@ -4298,6 +4384,735 @@
     },
     &quot;401&quot;: {
       &quot;description&quot;: &quot;Unauthorized.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localCheckUpdates"><h2>POST <code>/api/local/v1/updates/check</code></h2>
+<p>Refresh and verify update metadata</p><p>Image edition only. Fetches trust.json, channel.json and the manifest from the configured update base URL and checks, in order: the trust chain from the pinned root keys, the channel signature and expires, channel_serial not older than stored, sequence not below the rollback floor, the manifest hash and signature, architecture and compatibility. Only a fully verified result updates channel_serial and the rollback floor and sets available. Within 60 seconds of the previous successful check the answer is 429 check_throttled with Retry-After. Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localCheckUpdates&quot;,
+  &quot;summary&quot;: &quot;Refresh and verify update metadata&quot;,
+  &quot;description&quot;: &quot;Image edition only. Fetches trust.json, channel.json and the manifest from the configured update base URL and checks, in order: the trust chain from the pinned root keys, the channel signature and expires, channel_serial not older than stored, sequence not below the rollback floor, the manifest hash and signature, architecture and compatibility. Only a fully verified result updates channel_serial and the rollback floor and sets available. Within 60 seconds of the previous successful check the answer is 429 check_throttled with Retry-After. Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: false,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;additionalProperties&quot;: false
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Verified; status as GET /updates.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateStatus&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Classic edition (unsupported_edition) or a release this host cannot take: wrong_architecture, engine_too_old, bridge_required, unsupported_component, below_rollback_floor.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;429&quot;: {
+      &quot;description&quot;: &quot;check_throttled.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;Metadata refused: bad_signature, channel_expired, channel_replayed, trust_replayed, trust_gap, manifest_mismatch, metadata_invalid, metadata_missing.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;source_unconfigured or source_unreachable; the host keeps running.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localActivateUpdate"><h2>POST <code>/api/local/v1/updates/activate</code></h2>
+<p>Arm the staged release and reboot</p><p>Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localActivateUpdate&quot;,
+  &quot;summary&quot;: &quot;Arm the staged release and reboot&quot;,
+  &quot;description&quot;: &quot;Image edition only. Arms the staged release: writes its UKI as nex-core_&lt;label&gt;_&lt;sequence&gt;+3.efi on every boot partition (temp file, flush, rename) beside the running version&#x27;s UKI, then reboots. This is the only call that changes the next boot. Re-checks the state_format and md-generation guards. running_vms refuse (default) refuses while virtual machines are running; shutdown accepts their downtime. Replay of request_id returns 200. Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateActionRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Armed; the host reboots shortly.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: nothing_staged, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_unsafe, md_generation_downgrade, running_vms, image_invalid, roothash_mismatch, unsupported_edition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localRollbackUpdate"><h2>POST <code>/api/local/v1/updates/rollback</code></h2>
+<p>Arm the retained previous version and reboot</p><p>Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localRollbackUpdate&quot;,
+  &quot;summary&quot;: &quot;Arm the retained previous version and reboot&quot;,
+  &quot;description&quot;: &quot;Image edition only. Arms the previous version kept since the last commit (its UKI gets +3, the running one is marked exhausted) and reboots. Refused when no previous version is retained (it is dropped when the next stage starts), when the previous image cannot read the retained state (state_format_downgrade, run at rollback) or when its kernel generation cannot assemble nex-data (md_generation_downgrade). Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateActionRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Armed; the host reboots shortly.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: nothing_to_roll_back, previous_unavailable, already_armed, update_in_progress, request_conflict, state_format_downgrade, state_format_too_old, md_generation_downgrade, running_vms, unsupported_edition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localCancelUpdate"><h2>POST <code>/api/local/v1/updates/cancel</code></h2>
+<p>Cancel a running apply or discard a staged release</p><p>Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localCancelUpdate&quot;,
+  &quot;summary&quot;: &quot;Cancel a running apply or discard a staged release&quot;,
+  &quot;description&quot;: &quot;Image edition only. Stops a running apply (its partial download is kept, so a later apply resumes it) or discards a staged release (its staging files are removed). Refused once a release is armed (already_armed) and while the slot is being written (write_in_progress). Root local session, CSRF and same-origin required.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateActionRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;Cancelled.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused: already_armed, write_in_progress, nothing_to_cancel, request_conflict, unsupported_edition.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localGetUpdateOperation"><h2>GET <code>/api/local/v1/updates/operations/{id}</code></h2>
+<p>Read one recorded update operation</p><p>Image edition only. Returns one operation of the host engine&#x27;s record (the last 20 are kept) by the request_id that created it; unknown or aged-out IDs are 404 unknown_operation. Root local session required; read-only.</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localGetUpdateOperation&quot;,
+  &quot;summary&quot;: &quot;Read one recorded update operation&quot;,
+  &quot;description&quot;: &quot;Image edition only. Returns one operation of the host engine&#x27;s record (the last 20 are kept) by the request_id that created it; unknown or aged-out IDs are 404 unknown_operation. Root local session required; read-only.&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The request_id of the operation.&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The operation.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;No such operation (unknown_operation).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Classic edition (unsupported_edition).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/UpdateRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localGetPoolUpdates"><h2>GET <code>/api/local/v1/pool/updates</code></h2>
+<p>Read the pool rollout</p><p>Returns the master&#x27;s durable rollout record (pool-update.json), or null when none was ever started. Root local session required. Pool master only (409 not_pool_master on a member).</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localGetPoolUpdates&quot;,
+  &quot;summary&quot;: &quot;Read the pool rollout&quot;,
+  &quot;description&quot;: &quot;Returns the master&#x27;s durable rollout record (pool-update.json), or null when none was ever started. Root local session required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The rollout record or null.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown rollout (rollout_not_found).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localStartPoolRollout"><h2>POST <code>/api/local/v1/pool/updates/rollouts</code></h2>
+<p>Start or dry-run a pool rollout</p><p>Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan, recording nothing. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localStartPoolRollout&quot;,
+  &quot;summary&quot;: &quot;Start or dry-run a pool rollout&quot;,
+  &quot;description&quot;: &quot;Runs the preflight, then records the rollout; the coordinator in this host&#x27;s Core stages everywhere, then updates one host at a time, members first and this master last. dry_run:true checks everything and returns the plan, recording nothing. request_id is the rollout ID. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRequest&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;202&quot;: {
+      &quot;description&quot;: &quot;Rollout recorded (or, for dry_run, 200 with the plan).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown rollout (rollout_not_found).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localGetPoolRollout"><h2>GET <code>/api/local/v1/pool/updates/rollouts/{id}</code></h2>
+<p>Read one rollout</p><p>Returns the rollout when its ID matches the master&#x27;s record. Root local session required. Pool master only (409 not_pool_master on a member).</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localGetPoolRollout&quot;,
+  &quot;summary&quot;: &quot;Read one rollout&quot;,
+  &quot;description&quot;: &quot;Returns the rollout when its ID matches the master&#x27;s record. Root local session required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The rollout ID (the start request_id).&quot;
+    }
+  ],
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The rollout record.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown rollout (rollout_not_found).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details></section>
+<section id="localControlPoolRollout"><h2>POST <code>/api/local/v1/pool/updates/rollouts/{id}/control</code></h2>
+<p>Pause, resume, abort or roll a host back</p><p>Applies one control to the rollout; pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).</p>
+<details><summary>Complete operation contract (parameters, authentication, responses)</summary>
+<pre>{
+  &quot;operationId&quot;: &quot;localControlPoolRollout&quot;,
+  &quot;summary&quot;: &quot;Pause, resume, abort or roll a host back&quot;,
+  &quot;description&quot;: &quot;Applies one control to the rollout; pause lands after the host being updated, resume re-checks membership, abort leaves committed hosts, rollback_host needs a paused rollout and an activated host. Root local session, CSRF and same-origin required. Pool master only (409 not_pool_master on a member).&quot;,
+  &quot;security&quot;: [
+    {
+      &quot;LocalSession&quot;: []
+    }
+  ],
+  &quot;x-introduced-version&quot;: &quot;0.1.0&quot;,
+  &quot;x-audience&quot;: &quot;host-local client&quot;,
+  &quot;parameters&quot;: [
+    {
+      &quot;name&quot;: &quot;id&quot;,
+      &quot;in&quot;: &quot;path&quot;,
+      &quot;required&quot;: true,
+      &quot;schema&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;The rollout ID (the start request_id).&quot;
+    }
+  ],
+  &quot;requestBody&quot;: {
+    &quot;required&quot;: true,
+    &quot;content&quot;: {
+      &quot;application/json&quot;: {
+        &quot;schema&quot;: {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutControl&quot;
+        }
+      }
+    }
+  },
+  &quot;responses&quot;: {
+    &quot;200&quot;: {
+      &quot;description&quot;: &quot;The rollout after the control.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutResult&quot;
+          }
+        }
+      }
+    },
+    &quot;400&quot;: {
+      &quot;description&quot;: &quot;Invalid request (invalid_request).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;401&quot;: {
+      &quot;description&quot;: &quot;Missing or invalid local session.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;Unknown rollout (rollout_not_found).&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Refused with a stable code: not_pool_master, rollout_in_progress, member_not_ready, host_busy, upgrade_required, channel_mismatch, bridge_required, state_format_downgrade, insufficient_space, release_unavailable, mixed_pool_requires_shutdown, controller_unknown, controller_too_old, ha_enabled, evacuation_unavailable, host_unreachable, request_conflict, rollout_finished, rollout_running, host_not_found, host_not_activated, rollback_failed, membership_changed, authority_unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/PoolRolloutRefusal&quot;
+          }
+        }
+      }
+    },
+    &quot;403&quot;: {
+      &quot;description&quot;: &quot;Origin or CSRF rejected.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -7331,6 +8146,76 @@
     &quot;observed_at&quot;
   ]
 }</pre></details>
+<details id="LayerInfo"><summary>LayerInfo</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;One optional feature layer as the host reports it (nex-core-local layers list). Core-owned; read from the signed release manifest, enabled.json and the last boot verification.&quot;,
+  &quot;properties&quot;: {
+    &quot;name&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^nex-[a-z0-9]+(-[a-z0-9]+)*$&quot;
+    },
+    &quot;enabled&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;Core&#x27;s journal says the layer is wanted.&quot;
+    },
+    &quot;merged&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The layer is currently merged over /usr.&quot;
+    },
+    &quot;available&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The signed manifest lists it and the store file is present at the signed size. The bytes are re-hashed by ensure and activate, not by list.&quot;
+    },
+    &quot;verified&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;,
+      &quot;description&quot;: &quot;The last boot verification of this base build re-hashed it successfully.&quot;
+    },
+    &quot;sha256&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Signed digest of the layer image; omitted when the manifest does not list it.&quot;
+    },
+    &quot;requires_base&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;BUILD_ID of the only base this layer may merge on.&quot;
+    },
+    &quot;reason&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;not_in_store&quot;,
+        &quot;base_mismatch&quot;,
+        &quot;digest_mismatch&quot;,
+        &quot;signature_invalid&quot;,
+        &quot;unknown_layer&quot;,
+        &quot;merge_failed&quot;,
+        &quot;reboot_required&quot;,
+        &quot;in_use&quot;
+      ],
+      &quot;description&quot;: &quot;Why the layer is not available or failed verification; omitted when there is nothing to report.&quot;
+    },
+    &quot;provides&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      },
+      &quot;description&quot;: &quot;Capabilities the merged layer provides (from its metadata); omitted when not merged.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;name&quot;,
+    &quot;enabled&quot;,
+    &quot;merged&quot;,
+    &quot;available&quot;,
+    &quot;verified&quot;
+  ],
+  &quot;x-go-type&quot;: &quot;vmhost.LayerInfo&quot;,
+  &quot;x-go-emitted-fields&quot;: [
+    &quot;name&quot;,
+    &quot;enabled&quot;,
+    &quot;merged&quot;,
+    &quot;available&quot;,
+    &quot;verified&quot;
+  ]
+}</pre></details>
 <details id="PoolFenceWitness"><summary>PoolFenceWitness</summary><pre>{
   &quot;type&quot;: &quot;object&quot;,
   &quot;properties&quot;: {
@@ -7351,5 +8236,542 @@
     &quot;state&quot;
   ],
   &quot;x-go-type&quot;: &quot;protocol.PoolFenceWitness&quot;
+}</pre></details>
+<details id="UpdateRefusal"><summary>UpdateRefusal</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;Stable refusal code.&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;One literal message.&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;code&quot;,
+    &quot;error&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ImageUpdateApplyRequest"><summary>ImageUpdateApplyRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;,
+      &quot;description&quot;: &quot;Operation ID; idempotency key.&quot;
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0,
+      &quot;description&quot;: &quot;Release sequence; omitted or 0 means the channel&#x27;s current release.&quot;
+    },
+    &quot;scope&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;host&quot;,
+        &quot;controller&quot;
+      ],
+      &quot;default&quot;: &quot;host&quot;
+    },
+    &quot;activate&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;stage_only&quot;,
+        &quot;reboot&quot;
+      ],
+      &quot;default&quot;: &quot;stage_only&quot;
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;
+      ],
+      &quot;default&quot;: &quot;refuse&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ImageUpdateActionRequest"><summary>ImageUpdateActionRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[a-zA-Z0-9][a-zA-Z0-9_-]{7,63}$&quot;
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;
+      ],
+      &quot;default&quot;: &quot;refuse&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;
+  ],
+  &quot;additionalProperties&quot;: false
+}</pre></details>
+<details id="ImageUpdateOperation"><summary>ImageUpdateOperation</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;kind&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;apply&quot;,
+        &quot;activate&quot;,
+        &quot;rollback&quot;,
+        &quot;cancel&quot;
+      ]
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;description&quot;: &quot;checking, downloading, writing, staged, armed, cancelled or failed.&quot;
+    },
+    &quot;progress&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;component&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;bytes_done&quot;: {
+          &quot;type&quot;: &quot;integer&quot;
+        },
+        &quot;bytes_total&quot;: {
+          &quot;type&quot;: &quot;integer&quot;
+        }
+      }
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;code&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;message&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        }
+      },
+      &quot;required&quot;: [
+        &quot;code&quot;,
+        &quot;message&quot;
+      ]
+    },
+    &quot;started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;finished_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;kind&quot;,
+    &quot;phase&quot;,
+    &quot;started_at&quot;
+  ]
+}</pre></details>
+<details id="ImageUpdateStatus"><summary>ImageUpdateStatus</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;running&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;slots&quot;: {
+      &quot;type&quot;: &quot;array&quot;,
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: {
+          &quot;slot&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          },
+          &quot;role&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;enum&quot;: [
+              &quot;booted&quot;,
+              &quot;previous&quot;,
+              &quot;staged&quot;,
+              &quot;armed&quot;
+            ]
+          },
+          &quot;label&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          },
+          &quot;sequence&quot;: {
+            &quot;type&quot;: &quot;integer&quot;
+          },
+          &quot;root_hash&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;role&quot;,
+          &quot;label&quot;,
+          &quot;sequence&quot;,
+          &quot;root_hash&quot;
+        ]
+      }
+    },
+    &quot;channel&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;available&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;label&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;sequence&quot;: {
+          &quot;type&quot;: &quot;integer&quot;
+        },
+        &quot;components&quot;: {
+          &quot;type&quot;: &quot;array&quot;,
+          &quot;items&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+              &quot;id&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;kind&quot;: {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              &quot;bytes&quot;: {
+                &quot;type&quot;: &quot;integer&quot;
+              },
+              &quot;required&quot;: {
+                &quot;type&quot;: &quot;boolean&quot;
+              },
+              &quot;on_demand&quot;: {
+                &quot;type&quot;: &quot;boolean&quot;
+              }
+            }
+          }
+        },
+        &quot;compat&quot;: {
+          &quot;type&quot;: &quot;object&quot;,
+          &quot;description&quot;: &quot;update_engine, state_format, min_state_format, api_epoch, min_controller_api_epoch, mixed_pool, controller_first, md_generation, md_fallback_safe from the signed manifest.&quot;
+        }
+      }
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;idle&quot;,
+        &quot;checking&quot;,
+        &quot;downloading&quot;,
+        &quot;writing&quot;,
+        &quot;staged&quot;,
+        &quot;armed&quot;,
+        &quot;booted&quot;,
+        &quot;committed&quot;,
+        &quot;rolled_back&quot;
+      ]
+    },
+    &quot;rollback_floor&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;channel_serial&quot;: {
+      &quot;type&quot;: &quot;integer&quot;
+    },
+    &quot;state_format&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;description&quot;: &quot;RequiredStateFormat: the lowest state_format an image must have to read this host&#x27;s retained state (0, 2 or 3).&quot;
+    },
+    &quot;checked_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;operation&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/ImageUpdateOperation&quot;
+    },
+    &quot;failure&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;code&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        },
+        &quot;message&quot;: {
+          &quot;type&quot;: &quot;string&quot;
+        }
+      },
+      &quot;required&quot;: [
+        &quot;code&quot;,
+        &quot;message&quot;
+      ]
+    }
+  },
+  &quot;required&quot;: [
+    &quot;running&quot;,
+    &quot;slots&quot;,
+    &quot;channel&quot;,
+    &quot;phase&quot;,
+    &quot;rollback_floor&quot;,
+    &quot;channel_serial&quot;,
+    &quot;state_format&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateHost"><summary>PoolUpdateHost</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The master&#x27;s record of one host&#x27;s progress in a rollout. stage is the next unfinished step: pending, staged, maintenance, teardown, drain, activate, boot, confirm, release, restart, soak, done or rolled_back. stopped_by_update lists the guests this rollout shut down on the host; it is written before the shutdown is requested, so a crash never loses which guests owe a restart.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateHost&quot;,
+  &quot;properties&quot;: {
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stage&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;stopped_by_update&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;type&quot;: &quot;string&quot;
+      }
+    },
+    &quot;step_started_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;deadline_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;soak_until&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;host_id&quot;,
+    &quot;stage&quot;,
+    &quot;step_started_at&quot;,
+    &quot;deadline_at&quot;,
+    &quot;soak_until&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdateRollout"><summary>PoolUpdateRollout</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;The pool master&#x27;s durable rollout record (pool-update.json beside pool-peer.json), replicated as the optional authority-replica section update_rollout (declared only while a record exists). A promoted master finds an active rollout paused with pause.code master_changed and an operator decides resume or abort. Hosts&#x27; own progress is in each host&#x27;s state.json. Reported in Inventory.managed.update_rollout by the master only, withheld until the Controller acknowledges image-update-v1. id is the request_id that started it; finalized_sequence is set only once every host committed the release.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdateRollout&quot;,
+  &quot;properties&quot;: {
+    &quot;id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;pool_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;state&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;running&quot;,
+        &quot;paused&quot;,
+        &quot;finalized&quot;,
+        &quot;aborted&quot;
+      ]
+    },
+    &quot;phase&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;staging&quot;,
+        &quot;hosts&quot;,
+        &quot;finalize&quot;
+      ]
+    },
+    &quot;pause&quot;: {
+      &quot;anyOf&quot;: [
+        {
+          &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdatePause&quot;
+        },
+        {
+          &quot;type&quot;: &quot;null&quot;
+        }
+      ]
+    },
+    &quot;pause_requested&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;membership_generation&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;hosts&quot;: {
+      &quot;type&quot;: [
+        &quot;array&quot;,
+        &quot;null&quot;
+      ],
+      &quot;items&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateHost&quot;
+      }
+    },
+    &quot;finalized_sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 0
+    },
+    &quot;created_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    &quot;updated_at&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;id&quot;,
+    &quot;pool_id&quot;,
+    &quot;sequence&quot;,
+    &quot;running_vms&quot;,
+    &quot;state&quot;,
+    &quot;phase&quot;,
+    &quot;membership_generation&quot;,
+    &quot;hosts&quot;,
+    &quot;created_at&quot;,
+    &quot;updated_at&quot;
+  ]
+}</pre></details>
+<details id="PoolRolloutRequest"><summary>PoolRolloutRequest</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Body of POST /api/local/v1/pool/updates/rollouts.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1,
+      &quot;maxLength&quot;: 128
+    },
+    &quot;sequence&quot;: {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1
+    },
+    &quot;running_vms&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;refuse&quot;,
+        &quot;shutdown&quot;,
+        &quot;evacuate&quot;
+      ]
+    },
+    &quot;dry_run&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;sequence&quot;
+  ]
+}</pre></details>
+<details id="PoolRolloutControl"><summary>PoolRolloutControl</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Body of POST /api/local/v1/pool/updates/rollouts/{id}/control.&quot;,
+  &quot;properties&quot;: {
+    &quot;request_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;action&quot;: {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;enum&quot;: [
+        &quot;pause&quot;,
+        &quot;resume&quot;,
+        &quot;abort&quot;,
+        &quot;rollback_host&quot;
+      ]
+    },
+    &quot;host_id&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;request_id&quot;,
+    &quot;action&quot;
+  ]
+}</pre></details>
+<details id="PoolRolloutResult"><summary>PoolRolloutResult</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;description&quot;: &quot;A rollout record, or for a dry run the plan: the host order a rollout would use.&quot;,
+  &quot;properties&quot;: {
+    &quot;rollout&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/PoolUpdateRollout&quot;
+    },
+    &quot;dry_run&quot;: {
+      &quot;type&quot;: &quot;boolean&quot;
+    },
+    &quot;plan&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: {
+        &quot;sequence&quot;: {
+          &quot;type&quot;: &quot;integer&quot;
+        },
+        &quot;order&quot;: {
+          &quot;type&quot;: &quot;array&quot;,
+          &quot;items&quot;: {
+            &quot;type&quot;: &quot;string&quot;
+          }
+        }
+      }
+    }
+  }
+}</pre></details>
+<details id="PoolRolloutRefusal"><summary>PoolRolloutRefusal</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;error&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;code&quot;,
+    &quot;error&quot;
+  ]
+}</pre></details>
+<details id="PoolUpdatePause"><summary>PoolUpdatePause</summary><pre>{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;description&quot;: &quot;Why a rollout is paused. code is one of operator_paused, master_changed, needs_attention, running_vms, step_timeout, rolled_back, unconfirmed, quorum_margin, host_busy, ha_enabled, membership_changed.&quot;,
+  &quot;x-go-type&quot;: &quot;protocol.PoolUpdatePause&quot;,
+  &quot;properties&quot;: {
+    &quot;code&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    &quot;message&quot;: {
+      &quot;type&quot;: &quot;string&quot;
+    }
+  },
+  &quot;required&quot;: [
+    &quot;code&quot;,
+    &quot;message&quot;
+  ]
 }</pre></details>
 </section></main></html>

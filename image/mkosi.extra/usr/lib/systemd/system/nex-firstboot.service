@@ -1,0 +1,12 @@
+[Unit]
+Description=Nex Core first boot: generate SSH host keys
+# Host keys are created on the host, never in the image, so every host has its own and builds stay reproducible.
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

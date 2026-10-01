@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-probe the md array %I for its file system
+DefaultDependencies=no
+After=systemd-udevd.service
+ConditionPathExists=/etc/initrd-release
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/udevadm trigger --action=change --settle /dev/%I

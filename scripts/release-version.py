@@ -40,7 +40,11 @@ def changelog_versions(text):
 
 
 def unreleased_is_empty(text):
-    """The Unreleased section is a placeholder; entries belong under a version."""
+    """True when [Unreleased] has no release entries (blockquote guidance allowed).
+
+    Day-to-day work accumulates under [Unreleased]. Before tagging a release those
+    entries must move under the numbered heading being shipped.
+    """
     lines = text.splitlines()
     try:
         start = next(i for i, line in enumerate(lines)

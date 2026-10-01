@@ -9,6 +9,13 @@ The working `0.4.18` version is not evidence of a published candidate. Updates a
 the Release workflow has published packages to the signed APT archive. Navigation on this page follows the development build 0.4.8 console layout; see
 [Navigate the Controller console](navigate-the-controller-console.md).
 
+**Image-edition hosts (development, unverified).** A host installed from the image edition does not use `apt`: its own
+update engine checks signed release information, downloads and writes the new system image to its unused slot, and only
+when you choose to reboot into it makes it the next boot. Those hosts are listed under **Host images** on the same
+**Updates** page; the rest of this page describes the classic package flow. The image-edition steps below have **not**
+been walked through on a running Controller, a host or a VM: only automated handler and component tests have run (see
+[Verification](#verification)). See also [Roll back a host update](roll-back-a-host-update.md).
+
 ## Prerequisites
 
 - Administrator session on Controller, or root on the host-local UI.
@@ -22,6 +29,19 @@ the Release workflow has published packages to the signed APT archive. Navigatio
   Core and Controller use plain `apt-get install` through their respective privileged paths, so
   an appliance with only its bundled binary can receive its first package. Running the matching
   command yourself does the same thing.
+- A host installed with the read-only root (new installs; see
+  [Install Nex Core](install-nex-core.md)) mounts `/` read-only. **Update** makes it writable
+  only while apt runs and mounts it read-only again afterwards, so nothing changes for you. If
+  you run `apt` yourself on such a host, open the same window around it as root, and close it
+  when it finishes (`findmnt -no OPTIONS /` shows `ro` again):
+
+  ```sh
+  mount -o remount,rw /
+  apt update && apt install --only-upgrade nex-core-local
+  mount -o remount,ro /
+  ```
+
+  Hosts installed before this layout have a writable root and need no window.
 
 ## Steps
 
@@ -40,6 +60,31 @@ Installed and available versions are shown. Apply schedules a package install an
 service restart; the page reports that the service is restarting. After a Core update the
 host identifies as `Nex Core <new version>` in `/etc/os-release`, the console banner and the
 **Nex Core** field on the host's **Overview** tab in Controller; that package version is the only Nex Core version.
+
+## Update an image-edition host (unverified)
+
+Requires an image-edition host that is freshly connected and whose Nex Core and Controller are the same development build
+(the host offers `image-update-v1` and the Controller acknowledges it; until then the host is not listed).
+
+1. Open **Settings** → **Updates** and find the host under **Host images**. The panel shows only what the host reports: the
+   running release and slot, any staged and previous release, the newest verified release, the channel, the rollback floor,
+   the phase and the latest operation or failure.
+2. Select **Check**. The host refreshes and verifies signed release information. It refuses a second check within 60 seconds.
+3. If a newer release is listed, select **Download and stage**. The host downloads (and resumes after an interruption),
+   verifies and writes the release to its unused system slot. **Nothing changes the next boot:** an unplanned reboot still
+   boots the current release.
+4. When the phase reads **Staged**, select **Reboot into update**. The host arms the new release with three tries and restarts
+   now. Running guests stop the reboot unless you tick *Shut down running guests gracefully first*, which accepts their downtime.
+5. After the restart the host checks its own health. If the new release passes, the phase becomes **Committed** and the
+   previous release is kept for **Roll back** until the next update is staged. If it does not pass, the host returns to the
+   previous release by itself and reports **Rolled back** with the failure `boot_failed`.
+
+**Cancel** stops a running download or discards a staged release; the host refuses it once the release is armed. A refused
+action appears as the task's error, for example `update_in_progress: another update operation is running`; the host keeps
+running. Nothing is stored by the Controller: replace the Controller and the same state appears from the host's next report.
+
+Pool-wide rolling updates (hosts one at a time, members before the master) do not exist yet; update each host on its own.
+
 
 ## Troubleshooting
 
@@ -125,3 +170,11 @@ Automated API tests cover check/apply and apt failures; package identity was che
 labeled simulation. The binary-only appliance helper regression is covered in a simulated helper
 test; no rebuilt package, published artifact, browser walkthrough or on-host upgrade is claimed.
 See the [single Nex Core version checks](../qa/single-nex-core-version.md).
+
+Image-edition hosts: the Controller routes, the acknowledgement that withholds `inventory.image` from an older Controller, the
+relay through the embedded agent into the host's engine and the Host images panel are covered by automated tests only
+(`go test ./internal/controller ./internal/agent ./internal/localcore`, `web/src/image-updates.test.mjs`, see
+[Phase I-3c results](../qa/image/phase3-controller.md)). No browser walkthrough on a running Controller and no update on a
+running image host through the Controller was done; the steps above are therefore unverified. The host engine itself was
+driven in a virtual machine through its command-line tool, not through these routes
+([Phase I-3b results](../qa/image/phase3-boot.md)).

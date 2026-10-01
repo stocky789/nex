@@ -566,6 +566,12 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 			supported := true
 			out.DetectedOS = &supported
 		}
+		// The Controller decodes Inventory.image and relays update actions; it answers only a Core that
+		// offered the capability, so a strict older Core never sees the field.
+		if slices.Contains(v.Capabilities, protocol.ImageUpdateCapability) {
+			supported := true
+			out.ImageUpdate = &supported
+		}
 		if slices.Contains(v.Capabilities, protocol.ISODownloadProgressCapability) {
 			supported := true
 			out.ISODownloadProgress = &supported
@@ -791,7 +797,7 @@ func (c *Controller) report(w http.ResponseWriter, r *http.Request, host string)
 				// able to show them from the last report until the next one arrives.
 				// PeerOrigin is the host's own observation of its peer address, kept so the
 				// join dialog can offer it; the join records it durably on the master.
-				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin,
+				stored.Managed = &protocol.ManagedState{Membership: merged.Managed.Membership, UpdateRollout: merged.Managed.UpdateRollout, Join: merged.Managed.Join, Replica: merged.Managed.Replica, Transfer: merged.Managed.Transfer, Authority: merged.Managed.Authority, Promotion: merged.Managed.Promotion, Restricted: merged.Managed.Restricted, ZFSProvisions: merged.Managed.ZFSProvisions, PeerOrigin: merged.Managed.PeerOrigin,
 					PoolVMSnapshots: merged.Managed.PoolVMSnapshots, PoolVMSnapshotsReported: merged.Managed.PoolVMSnapshotsReported,
 					RecoveryReservations: merged.Managed.RecoveryReservations, RecoveryReservationsReported: merged.Managed.RecoveryReservationsReported,
 					BackupRepositories: merged.Managed.BackupRepositories, BackupRepositoriesReported: merged.Managed.BackupRepositoriesReported,

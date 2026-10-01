@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Verify and link the enabled Nex Core feature layers
+Documentation=file:///usr/share/doc/nex-core-local/copyright
+DefaultDependencies=no
+# Nothing to verify or merge until Core has enabled a layer (Core writes this record on first ensure); a host
+# that never enabled one, including every classic-edition host, does not run this unit.
+ConditionPathExists=/var/lib/nex/layers/enabled.json
+# /var/lib/nex/layers lives on nex-data, which is mounted after the stock systemd-sysext.service has run
+# (that one is ordered before local-fs.target). This unit therefore links the verified layers and merges them
+# itself. Not ordered after systemd-tmpfiles-setup: that makes an ordering cycle with systemd-sysext.service.
+After=local-fs.target
+Before=sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Re-hashes each enabled store file against the signed release manifest. A layer that fails gets no link, so the
+# merge below leaves it out, and is reported in /run/nex/layers/status.json; the command exits 0 so boot never waits on it.
+ExecStart=/usr/lib/nex/nex-core-local layers activate
+# refresh merges when nothing is merged yet and replaces the stock merge when one exists.
+ExecStartPost=-/usr/bin/systemd-sysext refresh
+TimeoutStartSec=5min
+UMask=0077
+# No sandboxing options: they put the service in a private mount namespace, and a sysext merge made there
+# would be invisible to every other service (observed in the lab: refresh exited 0, nothing merged).
+
+[Install]
+WantedBy=sysinit.target

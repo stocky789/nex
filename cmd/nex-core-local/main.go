@@ -26,6 +26,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "layers" {
+		if err := runLayers(os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cluster-iscsi-session" {
 		if err := runClusterISCSISession(os.Args[2:], os.Geteuid()); err != nil {
 			log.Fatal(err)

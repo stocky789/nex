@@ -46,8 +46,8 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
   the space or to force every input to be fetched again. The pinned Debian cloud image is
   restored from the forge's cache server the same way.
 - `CHANGELOG.md` has a `## [X.Y.Z]` or `## [X.Y.Z-preN]` section for the version being released and it is the
-  newest version heading. Entries under `[Unreleased]` are not published: move them under the
-  version heading.
+  newest version heading. Day-to-day work lives under `[Unreleased]`; before tagging, move those
+  entries under the version heading and leave `[Unreleased]` empty (blockquote guidance may remain).
 - Repository secret `NEX_APPLIANCE_SIGNING_KEY`: the Ed25519 PEM private key that signs the
   Controller appliance manifest, the same key used for local builds. Without it each run signs
   with a throwaway key and warns; the release still installs, but its Controller appliance is
@@ -75,9 +75,11 @@ Website workflow still exists for website-only pushes that skip the ISO build; s
 
 ## Steps
 
-1. Record the release in `CHANGELOG.md`: keep appending to the newest `## [X.Y.Z]` or `## [X.Y.Z-preN]`
-   heading while that version is in development, or add a new heading above it to start the
-   next version. Its section becomes the release notes.
+1. Cut the release in `CHANGELOG.md`: add a new `## [X.Y.Z]` or `## [X.Y.Z-preN]` heading above the
+   previous numbered section (or reuse the newest numbered heading only when deliberately
+   republishing that same version), move every entry out of `[Unreleased]` under it, and leave
+   `[Unreleased]` empty. That numbered section becomes the release notes. Do not leave shipping
+   notes only under `[Unreleased]`.
 2. Confirm the version resolves before pushing:
 
    ```sh

@@ -736,6 +736,12 @@ func (m *Monitor) Snapshot() *protocol.Inventory {
 			out.Disks = append(out.Disks, protocol.Disk{Name: data.Path, SizeBytes: data.TotalBytes, AvailableBytes: &data.AvailableBytes})
 		case []protocol.Disk:
 			out.Disks = append(out.Disks, data...)
+		case protocol.ImageStatus:
+			// Retained data from a failed probe is not attached: the record must be current.
+			if r.Status == "healthy" {
+				image := data
+				out.Image = &image
+			}
 		case []protocol.VM:
 			out.VMs = append([]protocol.VM(nil), data...)
 		case []string:

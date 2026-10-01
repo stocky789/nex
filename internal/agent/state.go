@@ -75,6 +75,8 @@ type State struct {
 	// ISODownloadProgressReady is scoped to the current Controller connection.
 	ISODownloadProgressReady bool `json:"iso_download_progress_ready,omitempty"`
 	DetectedOSReady          bool `json:"detected_os_ready,omitempty"`
+	// ImageUpdateReady is scoped to the current Controller connection: it acknowledged image-update-v1.
+	ImageUpdateReady bool `json:"image_update_ready,omitempty"`
 	// StorageProtocolLegacy records an explicit v2 rejection by a Controller only
 	// while Core has no v2 storage state. It preserves existing local management.
 	StorageProtocolLegacy bool                    `json:"storage_protocol_legacy,omitempty"`

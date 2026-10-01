@@ -121,6 +121,9 @@ type ManagedState struct {
 	CredentialReceipts []StorageCredentialReceipt `json:"credential_receipts,omitempty"`
 	ZFSProvisions      []ZFSProvisionHostResult   `json:"zfs_provisions,omitempty"`
 	Membership         *PoolMembership            `json:"membership,omitempty"`
+	// UpdateRollout is the pool master's durable rollout record (pool-update.json). It is
+	// withheld until the Controller acknowledges image-update-v1.
+	UpdateRollout *PoolUpdateRollout `json:"update_rollout,omitempty"`
 	// PeerOrigin is this host's own pool-peer address as it works it out at report time: what
 	// a pool master would dial to reach it. It is an observation for the join dialog to
 	// prefill; the join itself records the member's peer origin durably on the master.
@@ -219,9 +222,59 @@ type Inventory struct {
 	// host-scoped rather than pool-scoped. It is the only path by which a Controller
 	// learns that a rollback deadline is running.
 	ManagementNetwork *ManagementNetworkStatus `json:"management_network,omitempty"`
-	Disks             []Disk                   `json:"disks"`
-	VMs               []VM                     `json:"vms"`
-	Checks            []Check                  `json:"checks"`
+	// Image is this host's immutable-image update state (booted, staged and previous release,
+	// phase, rollback floor, state format). Core withholds it until the Controller acknowledges
+	// ImageUpdateCapability, so a strict older decoder never sees it; absent on classic hosts.
+	Image  *ImageStatus `json:"image,omitempty"`
+	Disks  []Disk       `json:"disks"`
+	VMs    []VM         `json:"vms"`
+	Checks []Check      `json:"checks"`
+}
+
+// ImageUpdateCapability is the Controller's acknowledgement that it decodes Inventory.Image.
+const ImageUpdateCapability = "image-update-v1"
+
+// ImageRelease names one release on the host's slots.
+type ImageRelease struct {
+	Label    string `json:"label"`
+	Sequence int    `json:"sequence"`
+	RootHash string `json:"root_hash,omitempty"`
+	Slot     string `json:"slot,omitempty"`
+}
+
+// ImageError is a stable code with one literal message.
+type ImageError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ImageOperation is the host's latest update operation.
+type ImageOperation struct {
+	ID         string      `json:"id"`
+	Kind       string      `json:"kind"`
+	Phase      string      `json:"phase"`
+	Sequence   int         `json:"sequence,omitempty"`
+	Error      *ImageError `json:"error,omitempty"`
+	StartedAt  time.Time   `json:"started_at"`
+	FinishedAt *time.Time  `json:"finished_at,omitempty"`
+}
+
+// ImageStatus is Inventory.Image. Core owns every fact in it (the disks and the host's
+// /var/lib/nex/image/state.json hold them); the Controller only displays what the host reports.
+type ImageStatus struct {
+	Booted        ImageRelease  `json:"booted"`
+	Staged        *ImageRelease `json:"staged,omitempty"`
+	Previous      *ImageRelease `json:"previous,omitempty"`
+	Available     *ImageRelease `json:"available,omitempty"`
+	Channel       string        `json:"channel,omitempty"`
+	Phase         string        `json:"phase"`
+	RollbackFloor int           `json:"rollback_floor"`
+	StateFormat   int           `json:"state_format"`
+	// SecureBoot is whether the firmware booted this image with Secure Boot enforcing; absent when the
+	// host cannot tell. Without it the verity root is tamper-evident only to a runtime attacker.
+	SecureBoot *bool           `json:"secure_boot,omitempty"`
+	Operation  *ImageOperation `json:"operation,omitempty"`
+	Failure    *ImageError     `json:"failure,omitempty"`
 }
 type Host struct {
 	Capabilities []string   `json:"capabilities,omitempty"`
@@ -288,6 +341,7 @@ type Command struct {
 	Pool              *PoolCommand                    `json:"pool,omitempty"`
 	ManagementNetwork *ManagementNetworkRequest       `json:"management_network,omitempty"`
 	SystemDiskReplace *SystemDiskReplaceRequest       `json:"system_disk_replace,omitempty"`
+	ImageUpdate       *ImageUpdateRequest             `json:"image_update,omitempty"`
 	OperationID       string                          `json:"operation_id"`
 	Kind              string                          `json:"kind"`
 }
@@ -319,6 +373,7 @@ type ReportResponse struct {
 	StorageDiscoveries     []StorageDiscoveryRequest `json:"storage_discoveries,omitempty"`
 	StorageClusterRequests []StorageClusterRequest   `json:"storage_clusters,omitempty"`
 	ISODownloadProgress    *bool                     `json:"iso_download_progress,omitempty"`
+	ImageUpdate            *bool                     `json:"image_update,omitempty"`
 	StatsChannels          []StatsChannelRequest     `json:"stats_channels,omitempty"`
 	PoolRequests           []PoolRequest             `json:"pool_requests,omitempty"`
 }

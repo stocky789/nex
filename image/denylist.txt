@@ -1,0 +1,15 @@
+# Packages that must never reach the image (outside the reviewed server-hardware scope).
+# image-lock.py fails when the resolved set contains one. Moved from installer/build.sh prune-time removal.
+dahdi-firmware-nonfree
+atmel-firmware
+bluez-firmware
+firmware-sof-signed
+firmware-b43-installer
+firmware-b43legacy-installer
+# Build-time and on-host build tooling: the image never compiles or installs anything.
+zfs-dkms
+dkms
+linux-headers-amd64
+sudo
+virtinst
+corosync-qnetd

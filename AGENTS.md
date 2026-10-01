@@ -327,3 +327,11 @@ option as approval. These instructions cannot enable a question UI the client la
   and UI review pass. Record remaining work explicitly; do not mark partial work complete.
 - Update documentation in the same change as behavior. Keep changes coherent and commit messages
   imperative with an appropriate scope such as `controller:`, `agent:`, `ui:`, `installer:`, or `docs:`.
+- **Changelog (`CHANGELOG.md`):** After user-visible work, add a short operator-facing bullet under
+  `## [Unreleased]` in the matching bucket (**Major Feature**, **Minor Feature**, **Bug Fixes**,
+  or **Miscellaneous**). Create the bucket heading if it is missing. Never invent a new
+  `## [x.y.z]` / `## [x.y.z-preN]` heading, never bump or “open” a version, and never append under
+  an existing numbered section for day-to-day work. Numbered headings are release cutover only
+  (project owner moves Unreleased entries under a version, then tags). Builds keep using the newest
+  numbered heading until that cutover. Skip the changelog only for pure internal changes with no
+  operator-visible effect.

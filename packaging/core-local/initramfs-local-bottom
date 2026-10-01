@@ -1,0 +1,45 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+# initramfs-tools local-bottom: give a read-only-root Nex Core host its persistent /etc
+# and /root before systemd starts.
+#
+# The installer puts /var on its own filesystem. This script mounts it read-write, seeds
+# /var/lib/nex/etc and /var/roothome from the root filesystem's /etc and /root on first
+# boot, and binds them back over /etc and /root. After that the root filesystem's own
+# copies are shadowed and never change. A host whose fstab has no /var entry (installed
+# before this layout) is left exactly as it was.
+case ${1:-} in
+prereqs) exit 0 ;;
+esac
+
+. /scripts/functions
+. /scripts/local
+
+# rootmnt is exported by the initramfs init.
+# shellcheck disable=SC2154
+read_fstab_entry /var || exit 0
+local_device_setup "$MNT_FSNAME" "/var file system"
+checkfs "$DEV" /var "$MNT_TYPE"
+# Writable whatever the kernel command line's ro says, which only applies to /.
+mount -w -t "$MNT_TYPE" -o "$MNT_OPTS" "$DEV" "${rootmnt}/var" ||
+    panic "Failed to mount $DEV as /var file system."
+
+# seed SRC DEST: copy SRC to DEST once. An interrupted copy leaves only DEST.new,
+# which the next boot discards, so DEST is either absent or complete.
+seed() {
+    [ -d "$2" ] && return 0
+    rm -rf "$2.new"
+    cp -a "$1" "$2.new" && mv "$2.new" "$2"
+}
+
+state=${rootmnt}/var/lib/nex
+mkdir -p "$state"
+if seed "${rootmnt}/etc" "$state/etc" && seed "${rootmnt}/root" "${rootmnt}/var/roothome"; then
+    mount -o bind "$state/etc" "${rootmnt}/etc"
+    mount -o bind "${rootmnt}/var/roothome" "${rootmnt}/root"
+else
+    # No bind: / stays writable (nex-root-ro.service only runs when /etc is bound), so the
+    # host boots as a classic one with a separate /var rather than not at all.
+    log_failure_msg "Could not prepare /etc and /root on /var; leaving the root file system writable"
+fi
+exit 0

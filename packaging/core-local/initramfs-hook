@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
+# initramfs-tools hook: nex-root-state seeds /etc and /root with cp and rm. klibc has
+# neither, and busybox is only a recommended package.
+case ${1:-} in
+prereqs) exit 0 ;;
+esac
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /usr/bin/cp
+copy_exec /usr/bin/rm

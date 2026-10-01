@@ -29,6 +29,12 @@ type PoolQuorum struct {
 	RingID string `json:"ring_id,omitempty"`
 	// Hosts is the Nex Core host IDs in this host's partition, as Corosync names them.
 	Hosts []string `json:"hosts,omitempty"`
+	// ExpectedVotes, TotalVotes and Quorum are votequorum's own counts as this host reads them:
+	// the votes the nodelist expects, the votes present now (a voting quorum device included)
+	// and the votes a majority needs. Zero means the tool did not print the line.
+	ExpectedVotes int `json:"expected_votes,omitempty"`
+	TotalVotes    int `json:"total_votes,omitempty"`
+	Quorum        int `json:"quorum,omitempty"`
 }
 
 // Excludes is whether this host is in a quorate partition that the named host is not in.
@@ -68,6 +74,13 @@ func LocalQuorum(ctx context.Context) (PoolQuorum, error) {
 		}
 		if strings.HasPrefix(line, "Quorate:") {
 			q.Quorate = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "Quorate:")), "yes")
+		}
+		for prefix, field := range map[string]*int{"Expected votes:": &q.ExpectedVotes, "Total votes:": &q.TotalVotes, "Quorum:": &q.Quorum} {
+			if fields := strings.Fields(strings.TrimPrefix(line, prefix)); strings.HasPrefix(line, prefix) && len(fields) > 0 {
+				if n, convErr := strconv.Atoi(fields[0]); convErr == nil && n > 0 {
+					*field = n
+				}
+			}
 		}
 		if strings.HasPrefix(line, "Membership information") {
 			members = true

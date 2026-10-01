@@ -33,7 +33,8 @@ assert 'What you get: one system disk, no redundancy.' in wizard
 assert 'Tip: two or more similar-sized disks give RAID1 copies' in wizard
 assert "foreground='#B3261E'" in wizard, 'selection problems must be reported as the operator ticks'
 assert 'if (disks->len == 1)' in wizard, 'a single eligible disk is preselected; a mirror never is'
-assert 'bytes < 16ULL * 1024 * 1024 * 1024) continue' in wizard, 'GTK discover must skip disks below 16 GiB like the text frontend'
+assert 'bytes < disk_floor()) continue' in wizard and '(image_edition() ? 24ULL : 16ULL)' in wizard, \
+    'GTK discover must skip disks below the edition floor (16 GiB classic, 24 GiB image) like the text frontend'
 assert 'Attach a writable internal disk and restart the installer.' in wizard
 validator = source.split('static void fail(', 1)[1].split('static void protected_write(', 1)[0]
 summary = wizard[wizard.index('static gchar *disk_summary_text('):wizard.index('static void disks_changed(')]
@@ -51,6 +52,10 @@ static gboolean contents(const gchar *path, gchar **out, gsize *length, GError *
     (void)length; (void)error;
     const char *s=NULL;
     if (!strcmp(path,"/usr/share/nex-installer/timezones")) s="UTC\n";
+    /* Media edition: only the image-edition scenarios carry /cdrom/nex/edition=image; every other scenario is the
+     * classic partman path and must be unchanged by the image edition. */
+    else if (!strcmp(path,"/cdrom/nex/edition")) s=g_str_has_prefix(scenario,"image") ? "image\n" : "classic\n";
+    else if (!strcmp(path,"/proc/cmdline")) s="quiet\n";
     else if (!strcmp(path,"/proc/mounts")) s=!strcmp(scenario,"media") ? "/dev/xvda1 /cdrom iso9660 ro 0 0\n" : "";
     else if (g_str_has_prefix(path,"/sys/class/block/")) {
         if (g_str_has_suffix(path,"/ro")) s=!strcmp(scenario,"readonly") ? "1" : "0";
@@ -58,6 +63,7 @@ static gboolean contents(const gchar *path, gchar **out, gsize *length, GError *
         /* Mirror partners: half, ~5% smaller, just over 10% smaller, or a third equal member. */
         else if (g_str_has_suffix(path,"/size")) {
             if (!strcmp(scenario,"small")) s="2048";
+            else if (g_str_has_suffix(scenario,"20")) s="41943040"; /* 20 GiB: classic floor met, image floor not */
             else if (strstr(path,"/xvdb/")) {
                 if (!strcmp(scenario,"mismatch")) s="52428800";
                 else if (!strcmp(scenario,"near")) s="99614720";
@@ -86,7 +92,11 @@ static int disk_stat(const char *path, struct stat *st) {
     st->st_rdev=makedev(202,1); return 0;
 }
 static gboolean file_test(const gchar *path, GFileTest test) {
-    if (!strcmp(path,"/cdrom/nex/netinst.tsv")) {
+    if (!strcmp(path,"/sys/firmware/efi")) {
+        assert(test==G_FILE_TEST_IS_DIR);
+        return strcmp(scenario,"image-bios");
+    }
+    if (!strcmp(path,"/cdrom/nex/payloads.tsv")) {
         assert(test==G_FILE_TEST_EXISTS);
         return !strcmp(scenario,"netinst");
     }
@@ -121,6 +131,7 @@ int main(int argc, char **argv) {
         g_string_append_printf(disk,"%s;",names[i]);
         const char *bytes="53687091200";
         if (!strcmp(scenario,"capacity")) bytes="53687091712";
+        else if (g_str_has_suffix(scenario,"20")) bytes="21474836480";
         else if (partner && !strcmp(scenario,"mismatch")) bytes="26843545600";
         else if (partner && !strcmp(scenario,"near")) bytes="51002736640";
         else if (partner && !strcmp(scenario,"over")) bytes="47781511168";
@@ -133,6 +144,14 @@ int main(int argc, char **argv) {
     g_key_file_set_string(config,"Host","disk_serial",serial->str);
     g_key_file_set_string(config,"Host","disk_major_minor",dev->str);
     g_key_file_set_string(config,"Network","management","");
+    if (g_str_has_suffix(scenario,"repair")) {
+        /* Repair keeps the host's own identity: the wizard writes defaults and nex-config must not check them. */
+        g_key_file_set_string(config,"Install","mode","repair");
+        g_key_file_set_string(config,"Host","hostname","");
+        g_key_file_set_string(config,"Host","timezone","");
+        g_key_file_set_string(config,"Host","keymap","");
+        g_key_file_set_string(config,"Host","password","");
+    }
     validate(config,TRUE);
     g_key_file_free(config); return 0;
 }
@@ -284,6 +303,15 @@ with tempfile.TemporaryDirectory(prefix='nex-disk-check-') as directory:
     check('valid','/dev/xvda;/dev/sda_bad','supported installation disk')
     check('serial','/dev/xvda;/dev/xvdb','serial changed')
     check('valid','','Select the disk or disks')
+    # Edition boundaries: the classic partman path keeps its 16 GiB floor and ignores the image rules; the image
+    # edition needs UEFI and 24 GiB, and Repair is image-only and does not validate the host's own identity.
+    check('classic20','/dev/xvda')
+    check('image','/dev/xvda')
+    check('image','/dev/xvda;/dev/xvdb')
+    check('image20','/dev/xvda','below 24 GiB')
+    check('image-bios','/dev/xvda','UEFI firmware only')
+    check('image-repair','/dev/xvda')
+    check('classic-repair','/dev/xvda','Repair applies to the image edition only')
 print('PASS: actual disk validator accepts Xen/SCSI/virtio/NVMe whole disks, validates every mirror member, and rejects unsafe targets (simulated device boundary)')
 print('PASS: disk_summary_text reports single, equal mirror, 5%-apart, over-10% and empty selections')
 print('PASS: disk list columns share the width by weight and every divider drags narrower or wider (Xvfb)')
