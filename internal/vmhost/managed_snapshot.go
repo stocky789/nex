@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -790,23 +792,23 @@ func snapshotFirmwareSources(ctx context.Context, domain managedDomain, vmID, fi
 			return nil, errors.New("UEFI VM has no inspectable NVRAM state")
 		}
 		if err := firmwareVariablesFile(domain.OS.NVRAM.Path); err != nil {
-			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+			return nil, err
 		}
 		destination := filepath.Join(firstDiskRoot, "snapshot-"+operationID+"-nvram")
 		manifest, err := managedSnapshotManifest(ctx, domain.OS.NVRAM.Path)
 		if err != nil {
-			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+			return nil, err
 		}
 		artifacts = append(artifacts, managedSnapshotFirmwareArtifact{Kind: "nvram", SourcePath: domain.OS.NVRAM.Path, SnapshotPath: destination, SourceManifest: manifest})
 	}
 	if domain.Devices.TPM != nil && domain.Devices.TPM.Backend.Type == "emulator" {
 		source, err := managedTPMStateSource(domain, vmID)
 		if err != nil {
-			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+			return nil, err
 		}
 		manifest, err := managedSnapshotManifest(ctx, source)
 		if err != nil {
-			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+			return nil, err
 		}
 		destination := filepath.Join(firstDiskRoot, "snapshot-"+operationID+"-swtpm")
 		artifacts = append(artifacts, managedSnapshotFirmwareArtifact{Kind: "swtpm", SourcePath: source, SnapshotPath: destination, SourceManifest: manifest})
@@ -1459,21 +1461,55 @@ func (e *ManagedEngine) removePreflightSnapshot(ctx context.Context, operationID
 	return syncManagedDir(e.stateDir)
 }
 
-// managedSnapshotProbe runs a read-only libvirt query. A failure proves nothing about the VM
-// (libvirt may be restarting), so it is ErrOwnershipUnconfirmed and retryable, never a refusal.
+// managedSnapshotProbe runs a read-only libvirt query. A query libvirt never answered
+// (daemon or socket unreachable, client timed out or killed) proves nothing about the VM, so it
+// is ErrOwnershipUnconfirmed and retryable. libvirt's own answer, such as "Domain not found" or
+// "Domain snapshot not found", is final and stays a plain error.
 func managedSnapshotProbe(ctx context.Context, args ...string) ([]byte, error) {
 	b, err := managedVirsh(ctx, args...)
 	if err != nil {
-		return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+		if libvirtQueryUnanswered(err) {
+			return nil, errors.Join(ErrOwnershipUnconfirmed, err)
+		}
+		return nil, err
 	}
 	return b, nil
 }
 
+// libvirtUnansweredMarkers are the last-line reasons virsh prints when it could not reach
+// libvirtd or the connection broke mid-query (LC_ALL=C).
+var libvirtUnansweredMarkers = []string{
+	"failed to connect", "cannot recv data", "cannot write data", "end of file while reading data",
+	"connection refused", "connection reset", "broken pipe", "client socket is closed", "timed out",
+}
+
+func libvirtQueryUnanswered(err error) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+		return true // virsh did not run to completion: it could not start or was killed on timeout
+	}
+	text := strings.ToLower(err.Error())
+	return slices.ContainsFunc(libvirtUnansweredMarkers, func(marker string) bool { return strings.Contains(text, marker) })
+}
+
+// snapshotPreflightRetryWindow bounds how long a preflight journal that cannot confirm the VM
+// state keeps fencing it. No native effect exists before the intent is saved, so once the window
+// has passed the next attempt drops the journal like a refusal instead of re-driving it forever.
+const snapshotPreflightRetryWindow = 15 * time.Minute
+
+func (e *ManagedEngine) snapshotPreflightExpired(operationID string) bool {
+	j, err := e.readJournal(operationID + ".json")
+	return err == nil && j.RecoveryStage == "preflight" && !j.Result.ObservedAt.IsZero() && time.Since(j.Result.ObservedAt) > snapshotPreflightRetryWindow
+}
+
 func (e *ManagedEngine) failSnapshotPreflight(ctx context.Context, result protocol.Result, operationID string, cause error) (protocol.Result, error) {
 	if errors.Is(cause, ErrOwnershipUnconfirmed) {
-		// Transient (for example a libvirt restart): keep the preflight journal so the same ID re-drives.
-		result.Status, result.Error = "needs_attention", "Core could not yet confirm the VM state and keeps this operation; repeat the same operation ID ("+cause.Error()+")"
-		return result, nil
+		if !e.snapshotPreflightExpired(operationID) {
+			// Transient (for example a libvirt restart): keep the preflight journal so the same ID re-drives.
+			result.Status, result.Error = "needs_attention", "Core could not yet confirm the VM state and keeps this operation; repeat the same operation ID ("+cause.Error()+")"
+			return result, nil
+		}
+		cause = fmt.Errorf("the VM state could not be confirmed within %s, so Core dropped this operation; start it again (%w)", snapshotPreflightRetryWindow, cause)
 	}
 	if cleanupErr := e.removePreflightSnapshot(ctx, operationID); cleanupErr != nil {
 		result.Status, result.Error = "needs_attention", errors.Join(cause, cleanupErr).Error()

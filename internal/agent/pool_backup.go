@@ -180,6 +180,12 @@ func savePoolBackupRepositories(s *Store, state poolBackupRepositoriesState) err
 	}); err != nil {
 		return err
 	}
+	return writePoolBackupRepositories(s, state)
+}
+
+// writePoolBackupRepositories persists state whose authority capacity is already checked,
+// or whose change cannot grow the authority.
+func writePoolBackupRepositories(s *Store, state poolBackupRepositoriesState) error {
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -522,9 +528,14 @@ func sameSFTPDestination(a, b *protocol.BackupSFTPSource) bool {
 	return pinned == *b
 }
 
+// credentialReadable is false when this host has no usable credential: the sealing key is
+// lost, a receipt is damaged or the receipt is gone, the cases a re-registration repairs.
+// An I/O failure reading the vault says nothing about the credential, so it counts as
+// readable and the replacement keeps its typed confirmation.
 func credentialReadable(s *Store, repo protocol.BackupRepository) bool {
 	_, err := localBackupCredential(s, repo)
-	return err == nil
+	var pathErr *os.PathError
+	return err == nil || errors.As(err, &pathErr) && !errors.Is(err, os.ErrNotExist)
 }
 
 // projectBackupCredentialToMembers returns the members that did not receive the credential.
@@ -920,6 +931,10 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 			probeErr = work.Err()
 		}
 		cancel()
+		if ctx.Err() != nil {
+			// Shutdown or reconfiguration cut the probe short; it says nothing about the destination.
+			return ctx.Err()
+		}
 		now := time.Now().UTC()
 		repo.Health = protocol.BackupRepositoryHealth{Status: "online", ObservedAt: now}
 		repo.Access = protocol.StorageAccess{Status: "ok", Readable: true, Writable: true, ObservedAt: now}
@@ -941,6 +956,9 @@ func probePoolBackupRepositories(ctx context.Context, s *Store, timeout time.Dur
 	backupMemberAccessMu.Unlock()
 	if requirePoolAuthorityWritable(s) == nil {
 		retainBackupRepositoryOnMembers(ctx, s, membership)
+		if err := ImportPendingBackupCatalogs(ctx, s); err != nil && ctx.Err() == nil {
+			log.Printf("pending backup catalog import needs attention: %v", err)
+		}
 	}
 	return nil
 }
@@ -1019,7 +1037,9 @@ func savePoolBackupRepositoryAccess(s *Store, repo protocol.BackupRepository) er
 		current.Access = repo.Access
 	}
 	state.Repositories[repo.ID] = current
-	return savePoolBackupRepositories(s, state)
+	// Health and access are stripped from the replicated record, so this write cannot grow
+	// the authority and skips its whole-store capacity walk.
+	return writePoolBackupRepositories(s, state)
 }
 
 func savePoolBackupCatalogEntry(s *Store, point protocol.BackupRecoveryPoint) error {
@@ -1167,7 +1187,7 @@ func ReservePoolBackupRun(s *Store, run protocol.BackupRun) (protocol.BackupRun,
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
-	if backupRepositoryMutationBusy(s, run.RepositoryID, nil) {
+	if backupRepositoryRemoving(s, run.RepositoryID) {
 		return protocol.BackupRun{}, ErrBackupConflict
 	}
 	membership, err := Membership(s)

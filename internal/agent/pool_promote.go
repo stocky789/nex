@@ -1078,7 +1078,11 @@ func verifiedPoolPromotionReplica(s *Store, state poolPeerState, verdict *protoc
 		return nil
 	}
 	if err = replica.Valid(); err != nil {
-		poolPromotionBlocked(verdict, "replica-integrity", "blocked", err.Error(), nil, nil)
+		reason := err.Error()
+		if errors.Is(err, protocol.ErrPoolAuthorityReplicaSections) {
+			reason = "this host's stored pool authority replica predates this build; it cannot be promoted until the pool master pushes a new one"
+		}
+		poolPromotionBlocked(verdict, "replica-integrity", "blocked", reason, nil, nil)
 		return nil
 	}
 	if err = verifyPoolAuthorityReplica(state.CAPEM, replica); err != nil {

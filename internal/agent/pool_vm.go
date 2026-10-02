@@ -1091,9 +1091,15 @@ func (reservationUnconfirmed) Is(target error) bool {
 	return target == vmhost.ErrSnapshotReservationUnconfirmed
 }
 
+func (e reservationUnconfirmed) Unwrap() error { return e.error }
+
+// poolSnapshotSavedHeader marks a refusal that follows a saved reservation or settlement the
+// master could not yet get every ready member to acknowledge. It is a header, not message
+// text, so rewording the refusal cannot turn a retryable answer into an abandoned one.
+const poolSnapshotSavedHeader = "X-Nex-Snapshot-Saved"
+
 func snapshotReservationRefusal(response *http.Response, message string) error {
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-	if response.StatusCode >= 500 || strings.Contains(string(body), "not yet acknowledged") {
+	if response.StatusCode >= 500 || response.Header.Get(poolSnapshotSavedHeader) != "" {
 		return reservationUnconfirmed{errors.New(message)}
 	}
 	return errors.New(message)
@@ -2559,6 +2565,7 @@ func PoolVMHandler(s *Store) http.Handler {
 				ackErr = confirmPoolVMSnapshotReplica(r.Context(), s, nil, req.RecoveryEvidence)
 			}
 			if ackErr != nil {
+				w.Header().Set(poolSnapshotSavedHeader, "1")
 				http.Error(w, "snapshot state was saved but is not yet acknowledged by every ready member", http.StatusConflict)
 				return
 			}
@@ -2610,6 +2617,19 @@ func PoolVMMediaCommand(ctx context.Context, s *Store, cmd protocol.Command) pro
 	return update
 }
 
+// poolVMDeleteMatchesOwner reports whether a delete or release request names the VM v, this
+// host and its pool. poolSharedVM prefers a command's VM definition, so the request's own VM
+// identity is compared rather than assumed.
+func poolVMDeleteMatchesOwner(s *Store, cmd protocol.Command, v protocol.VMCreateSpec) bool {
+	id, pool, host := "", "", ""
+	if cmd.Delete != nil {
+		id, pool, host = cmd.Delete.VMID, cmd.Delete.PoolID, cmd.Delete.HostID
+	} else if cmd.ReleaseRetained != nil {
+		id, pool, host = cmd.ReleaseRetained.VMID, cmd.ReleaseRetained.PoolID, cmd.ReleaseRetained.HostID
+	}
+	return id == v.ID && pool == s.State.PoolID && host == s.State.HostID
+}
+
 // AdmitPoolVMExecution must wrap every managed create/start/stop.  Its returned callback
 // records only a confirmed local observation; it never frees ownership after an error/timeout.
 func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (func(protocol.Result, error) error, error) {
@@ -2652,13 +2672,7 @@ func AdmitPoolVMExecution(ctx context.Context, s *Store, cmd protocol.Command) (
 	// takes the same owner admission: the master refuses it while an update, restore or
 	// snapshot recovery is pending for the VM.
 	if (cmd.Kind == "vm-delete" || cmd.Kind == "vm-release-retained") && v.ID != "" {
-		pool, host := "", ""
-		if cmd.Delete != nil {
-			pool, host = cmd.Delete.PoolID, cmd.Delete.HostID
-		} else if cmd.ReleaseRetained != nil {
-			pool, host = cmd.ReleaseRetained.PoolID, cmd.ReleaseRetained.HostID
-		}
-		if pool != s.State.PoolID || host != s.State.HostID {
+		if !poolVMDeleteMatchesOwner(s, cmd, v) {
 			return nil, errors.New("VM delete does not match the local pool owner")
 		}
 		if err := poolVMRequestPeer(ctx, s, v.ID, "delete-check", nil, false, &v, nil); err != nil {

@@ -188,6 +188,28 @@ func (b sftpBackupStorage) requireWritableAuthority() error {
 	return poolAuthorityWritable(state)
 }
 
+// authorityNow checks writable pool authority for work that runs outside
+// poolPeerMu. The caller repeats it before each destructive step.
+func (b sftpBackupStorage) authorityNow() error {
+	if b.s == nil {
+		return ErrBackupUnavailable
+	}
+	return requirePoolAuthorityWritable(b.s)
+}
+
+// underAuthority runs fn under poolPeerMu once pool authority is writable. fn
+// is an operation's commit point, which may not cross a planned handoff; the
+// remote reads that plan it and the removals it fences run outside the lock,
+// which Membership and every authority check share.
+func (b sftpBackupStorage) underAuthority(fn func() error) error {
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	if err := b.requireWritableAuthority(); err != nil {
+		return err
+	}
+	return fn()
+}
+
 func (b sftpBackupStorage) connect(ctx context.Context) (*sftp.Client, func(), error) {
 	key, err := ssh.ParsePrivateKey([]byte(b.credentials.SSHPrivateKey))
 	if err != nil {
@@ -198,7 +220,7 @@ func (b sftpBackupStorage) connect(ctx context.Context) (*sftp.Client, func(), e
 		port = 22
 	}
 	address := net.JoinHostPort(b.repo.SFTPSource.Host, fmt.Sprint(port))
-	var connection net.Conn
+	anyOffered := false
 	var sshConnection ssh.Conn
 	var channels <-chan ssh.NewChannel
 	var requests <-chan *ssh.Request
@@ -224,17 +246,20 @@ func (b sftpBackupStorage) connect(ctx context.Context) (*sftp.Client, func(), e
 		// NewClientConn ignores ClientConfig.Timeout; the read deadline bounds the handshake too.
 		sshConnection, channels, requests, err = ssh.NewClientConn(progressConn{conn, 3 * sftpIOTimeout}, address, config)
 		if err == nil {
-			connection = conn
 			break
 		}
 		stopCancel()
 		conn.Close()
+		anyOffered = anyOffered || offered
 		var negotiation *ssh.AlgorithmNegotiationError
 		if pinned || ctx.Err() != nil || !offered && !errors.As(err, &negotiation) {
 			return nil, nil, err
 		}
 	}
-	if connection == nil {
+	if sshConnection == nil {
+		if !anyOffered {
+			return nil, nil, errors.New("backup SFTP server offers no supported host key type")
+		}
 		return nil, nil, errors.New("backup SFTP host key differs from pinned key")
 	}
 	done := make(chan struct{})
@@ -672,15 +697,15 @@ func (b sftpBackupStorage) publishOnClient(ctx context.Context, client *sftp.Cli
 	finalName := path.Join(point, sftpManifestName)
 	tempName := path.Join(point, ".nex-manifest")
 	if _, err := client.Lstat(finalName); err == nil {
-		poolPeerMu.Lock()
-		defer poolPeerMu.Unlock()
-		if err := b.requireWritableAuthority(); err != nil {
+		if err := b.underAuthority(func() error {
+			if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
+				return err
+			} else if deleted {
+				return ErrBackupConflict
+			}
+			return nil
+		}); err != nil {
 			return "", err
-		}
-		if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
-			return "", err
-		} else if deleted {
-			return "", ErrBackupConflict
 		}
 		if err := syncSFTPDir(client, point); err != nil {
 			return "", err
@@ -761,25 +786,27 @@ func (b sftpBackupStorage) publishOnClient(ctx context.Context, client *sftp.Cli
 			return "", err
 		}
 	}
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
-	if err := b.requireWritableAuthority(); err != nil {
-		return "", err
-	}
-	if _, err := client.Lstat(path.Join(b.root(), ".nex-abort-"+id)); err == nil {
-		return "", ErrBackupConflict
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
-		return "", err
-	} else if deleted {
-		return "", ErrBackupConflict
-	}
-	if err := client.Rename(tempName, finalName); err != nil {
-		if _, observed, readErr := b.readPoint(client, id); readErr != nil || observed != digest {
-			return "", err
+	// Only the fenced rename runs under the authority lock; the durability sync
+	// and the read-back of the published point follow outside it.
+	if err := b.underAuthority(func() error {
+		if _, err := client.Lstat(path.Join(b.root(), ".nex-abort-"+id)); err == nil {
+			return ErrBackupConflict
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
+		if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
+			return err
+		} else if deleted {
+			return ErrBackupConflict
+		}
+		if err := client.Rename(tempName, finalName); err != nil {
+			if _, observed, readErr := b.readPoint(client, id); readErr != nil || observed != digest {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
 	if err := syncSFTPDir(client, point); err != nil {
 		return "", err
@@ -820,8 +847,18 @@ func (b sftpBackupStorage) AbortIncomplete(ctx context.Context, id string) error
 }
 
 func (b sftpBackupStorage) abortIncompleteOnClient(ctx context.Context, client *sftp.Client, id string) error {
+	// The lock covers deciding what to abort, the abort record and the manifest
+	// claim, which together fence a late publication. Removing what the claim
+	// fenced off runs after unlock and re-checks authority before each step.
 	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			poolPeerMu.Unlock()
+		}
+	}
+	defer unlock()
 	if err := b.requireWritableAuthority(); err != nil {
 		return err
 	}
@@ -905,7 +942,7 @@ func (b sftpBackupStorage) abortIncompleteOnClient(ctx context.Context, client *
 	stagedValid := stagedErr == nil && json.Unmarshal(staged, &stagedManifest) == nil && stagedManifest.Valid() == nil
 	emptyAbort := abortErr == nil && (len(abort) == 0 && !stagedValid || len(abort) > 0 && bytes.HasPrefix([]byte("empty:"+string(intent)), abort))
 	if emptyAbort || abortErr != nil && !stagedValid {
-		return b.abortEmptyUpload(ctx, client, point, intentName, abortName, stagedName, claimedName, staged, intent, intentErr, abort, abortErr)
+		return b.abortEmptyUpload(ctx, client, point, intentName, abortName, stagedName, claimedName, staged, intent, intentErr, abort, abortErr, unlock)
 	}
 	if abortErr == nil && stagedErr == nil && !bytes.Equal(abort, staged) {
 		if len(abort) >= len(staged) || !bytes.Equal(abort, staged[:len(abort)]) {
@@ -966,8 +1003,12 @@ func (b sftpBackupStorage) abortIncompleteOnClient(ctx context.Context, client *
 		} else if len(entries) > 0 {
 			return ErrBackupConflict
 		}
+		unlock()
 		for _, entry := range entries {
 			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := b.authorityNow(); err != nil {
 				return err
 			}
 			if entry.Name() == ".nex-manifest" || entry.Name() == ".nex-abort-manifest" {
@@ -979,6 +1020,9 @@ func (b sftpBackupStorage) abortIncompleteOnClient(ctx context.Context, client *
 			if err := syncSFTPDir(client, point); err != nil {
 				return err
 			}
+		}
+		if err := b.authorityNow(); err != nil {
+			return err
 		}
 		if stagedErr == nil {
 			if err := client.Remove(claimedName); err != nil {
@@ -994,6 +1038,10 @@ func (b sftpBackupStorage) abortIncompleteOnClient(ctx context.Context, client *
 		if err := syncSFTPDir(client, b.root()); err != nil {
 			return err
 		}
+	}
+	unlock()
+	if err := b.authorityNow(); err != nil {
+		return err
 	}
 	if intentErr == nil {
 		if err := client.Remove(intentName); err != nil {
@@ -1036,7 +1084,7 @@ func (b sftpBackupStorage) claimAbortManifest(client *sftp.Client, stagedName, c
 	return nil
 }
 
-func (b sftpBackupStorage) abortEmptyUpload(ctx context.Context, client *sftp.Client, point, intentName, abortName, stagedName, claimedName string, staged, intent []byte, intentErr error, abort []byte, abortErr error) error {
+func (b sftpBackupStorage) abortEmptyUpload(ctx context.Context, client *sftp.Client, point, intentName, abortName, stagedName, claimedName string, staged, intent []byte, intentErr error, abort []byte, abortErr error, unlock func()) error {
 	if intentErr != nil || len(intent) != 64 {
 		return ErrBackupConflict
 	}
@@ -1076,12 +1124,20 @@ func (b sftpBackupStorage) abortEmptyUpload(ctx context.Context, client *sftp.Cl
 		if err := b.claimAbortManifest(client, stagedName, claimedName, path.Join(point, sftpManifestName), staged); err != nil {
 			return err
 		}
+		unlock()
+		if err := b.authorityNow(); err != nil {
+			return err
+		}
 		if err := client.Remove(claimedName); err != nil {
 			return err
 		}
 		if err := syncSFTPDir(client, point); err != nil {
 			return err
 		}
+	}
+	unlock()
+	if err := b.authorityNow(); err != nil {
+		return err
 	}
 	if err == nil {
 		if err := client.RemoveDirectory(point); err != nil {
@@ -1136,6 +1192,33 @@ func (b sftpBackupStorage) CopyArtifacts(ctx context.Context, id, localDir strin
 		}
 	}
 	return syncBackupDirectory(localDir)
+}
+
+func (b sftpBackupStorage) VerifyArtifacts(ctx context.Context, id string, manifest protocol.BackupManifest) error {
+	client, closeAll, err := b.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeAll()
+	if err := b.verify(client); err != nil {
+		return err
+	}
+	stored, _, err := b.readPoint(client, id)
+	if err != nil {
+		return err
+	}
+	if err := requireSameManifest(stored, manifest); err != nil {
+		return err
+	}
+	for _, artifact := range manifestArtifacts(manifest) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := b.checkArtifact(client, path.Join(b.point(id), artifact.Filename), artifact.Size, artifact.SHA256); err != nil {
+			return errors.Join(ErrBackupConflict, err)
+		}
+	}
+	return nil
 }
 
 func (b sftpBackupStorage) Entries(ctx context.Context) ([]string, error) {
@@ -1228,7 +1311,6 @@ func (b sftpBackupStorage) scanOnClient(ctx context.Context, client *sftp.Client
 		if err != nil {
 			return nil, err
 		} // A published point with missing or resized data blocks rebuild.
-		_ = b.sweepMarkers(client, id) // Best effort: unprotect reports a failure.
 		protected, err := b.protectedOnClient(client, id)
 		if err != nil {
 			return nil, err
@@ -1254,9 +1336,24 @@ func (b sftpBackupStorage) readProtectMarker(client *sftp.Client, id string) ([]
 	return data, nil
 }
 
+// protectedOnClient reads the marker. With none, a marker an unprotect set
+// aside and did not finish removing still protects the point until the next
+// protection write settles it; reading it never changes the repository.
 func (b sftpBackupStorage) protectedOnClient(client *sftp.Client, id string) (bool, error) {
 	data, err := b.readProtectMarker(client, id)
-	return data != nil, err
+	if data != nil || err != nil {
+		return data != nil, err
+	}
+	entries, err := client.ReadDir(b.point(id))
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".nex-protected.rm-") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // removeMarkerIfUnchanged removes name only while it still holds want. The
@@ -1359,15 +1456,21 @@ func (b sftpBackupStorage) SetProtected(ctx context.Context, id string, protecte
 }
 
 func (b sftpBackupStorage) setProtectedOnClient(client *sftp.Client, id string, protected bool) error {
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
-	if err := b.requireWritableAuthority(); err != nil {
+	notDeleting := func() error {
+		if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
+			return err
+		} else if deleted {
+			return ErrBackupConflict
+		}
+		return nil
+	}
+	// Settling marker leftovers and reading the marker run outside poolPeerMu;
+	// the marker changes below are conditional on what was read, so only they run under it.
+	if err := b.authorityNow(); err != nil {
 		return err
 	}
-	if _, deleted, err := b.readDeleteRecord(client, id); err != nil {
+	if err := notDeleting(); err != nil {
 		return err
-	} else if deleted {
-		return ErrBackupConflict
 	}
 	name := path.Join(b.point(id), ".nex-protected")
 	if err := b.sweepMarkers(client, id); err != nil {
@@ -1377,30 +1480,35 @@ func (b sftpBackupStorage) setProtectedOnClient(client *sftp.Client, id string, 
 	if err != nil {
 		return err
 	}
-	if !protected {
-		if current != nil {
-			return b.removeMarkerIfUnchanged(client, name, current)
-		}
+	if !protected && current == nil {
 		return nil
 	}
-	want := newBackupProtectMarker(id)
-	if current == nil {
-		return b.writeMarker(client, name, want)
-	}
-	// Keep the durable directory entry while refreshing the nonce. Even a
-	// partial write still protects the point; never unlink the old protection.
-	file, err := client.OpenFile(name, os.O_WRONLY)
-	if err != nil {
-		return err
-	}
-	_, writeErr := file.Write(want)
-	if writeErr == nil {
-		writeErr = file.Truncate(int64(len(want)))
-	}
-	if writeErr == nil {
-		writeErr = syncSFTPFile(file)
-	}
-	return errors.Join(writeErr, file.Close())
+	return b.underAuthority(func() error {
+		if err := notDeleting(); err != nil {
+			return err
+		}
+		if !protected {
+			return b.removeMarkerIfUnchanged(client, name, current)
+		}
+		want := newBackupProtectMarker(id)
+		if current == nil {
+			return b.writeMarker(client, name, want)
+		}
+		// Keep the durable directory entry while refreshing the nonce. Even a
+		// partial write still protects the point; never unlink the old protection.
+		file, err := client.OpenFile(name, os.O_WRONLY)
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write(want)
+		if writeErr == nil {
+			writeErr = file.Truncate(int64(len(want)))
+		}
+		if writeErr == nil {
+			writeErr = syncSFTPFile(file)
+		}
+		return errors.Join(writeErr, file.Close())
+	})
 }
 
 // sftpDeleteRecord keeps the exact published manifest bytes, so its digest
@@ -1512,30 +1620,38 @@ func (b sftpBackupStorage) SweepDeleteMarkers(ctx context.Context) {
 		return
 	}
 	defer closeAll()
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
+	if b.verify(client) != nil || b.authorityNow() != nil {
+		return
+	}
 	_ = b.retireSettledDeletes(client)
 }
 
 func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Client, id string) error {
-	poolPeerMu.Lock()
-	defer poolPeerMu.Unlock()
-	if err := b.requireWritableAuthority(); err != nil {
+	if err := b.authorityNow(); err != nil {
 		return err
 	}
-	if err := b.retireSettledDeletes(client); err != nil {
-		return err
+	// Housekeeping for other points: one damaged marker must not block this delete.
+	_ = b.retireSettledDeletes(client)
+	// The point is read outside poolPeerMu. Under it only authority, pins and the
+	// catalog are re-checked and the delete record, the commit point, is published;
+	// the removals it fences run outside, re-checking authority before each.
+	localChecks := func() (protocol.BackupRecoveryPoint, error) {
+		pins, err := ActiveBackupRestorePins(b.s)
+		if err != nil {
+			return protocol.BackupRecoveryPoint{}, err
+		}
+		if pins[id] {
+			return protocol.BackupRecoveryPoint{}, ErrBackupConflict
+		}
+		catalog, err := getCatalogPoint(b.s, b.repo.ID, id)
+		if err != nil || catalog.PoolID != b.repo.PoolID || catalog.Protected {
+			return protocol.BackupRecoveryPoint{}, ErrBackupConflict
+		}
+		return catalog, nil
 	}
-	pins, err := ActiveBackupRestorePins(b.s)
+	catalog, err := localChecks()
 	if err != nil {
 		return err
-	}
-	if pins[id] {
-		return ErrBackupConflict
-	}
-	catalog, err := getCatalogPoint(b.s, b.repo.ID, id)
-	if err != nil || catalog.PoolID != b.repo.PoolID || catalog.Protected {
-		return ErrBackupConflict
 	}
 	record, exists, err := b.readDeleteRecord(client, id)
 	if err != nil {
@@ -1554,6 +1670,7 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 		}
 	}
 	point := b.point(id)
+	var recordRaw []byte
 	if !exists {
 		manifest, digest, err := b.readPoint(client, id)
 		if err != nil || digest != catalog.ManifestSHA256 {
@@ -1571,13 +1688,24 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 			return ErrBackupConflict
 		}
 		record = sftpDeleteRecord{Manifest: manifestRaw, Digest: digest, manifest: manifest}
-		raw, err := json.Marshal(record)
+		if recordRaw, err = json.Marshal(record); err != nil {
+			return err
+		}
+	}
+	if err := b.underAuthority(func() error {
+		current, err := localChecks()
 		if err != nil {
 			return err
 		}
-		if err := b.publishDeleteRecord(client, id, raw); err != nil {
-			return err
+		if current.ManifestSHA256 != record.Digest {
+			return ErrBackupConflict
 		}
+		if exists {
+			return nil
+		}
+		return b.publishDeleteRecord(client, id, recordRaw)
+	}); err != nil {
+		return err
 	}
 	if err := syncSFTPDir(client, b.root()); err != nil {
 		return err
@@ -1608,12 +1736,18 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if err := b.authorityNow(); err != nil {
+				return err
+			}
 			if err := client.Remove(path.Join(point, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 			if err := syncSFTPDir(client, point); err != nil {
 				return err
 			}
+		}
+		if err := b.authorityNow(); err != nil {
+			return err
 		}
 		if err := client.RemoveDirectory(point); err != nil {
 			return err
@@ -1628,6 +1762,9 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 		if string(intentRaw) != record.Digest {
 			return ErrBackupConflict
 		}
+		if err := b.authorityNow(); err != nil {
+			return err
+		}
 		if err := client.Remove(intent); err != nil {
 			return err
 		}
@@ -1637,12 +1774,17 @@ func (b sftpBackupStorage) deleteOnClient(ctx context.Context, client *sftp.Clie
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := b.authorityNow(); err != nil {
+		return err
+	}
 	return b.writeMarker(client, path.Join(b.root(), ".nex-deleted-"+id), []byte(record.Digest))
 }
 
 // retireSettledDeletes removes settled prune records once their catalog entries
 // are gone. A record is needed only until then, to let an interrupted prune
-// retry Delete; kept forever, every rebuild would read each one.
+// retry Delete; kept forever, every rebuild would read each one. A marker that
+// cannot be settled is skipped and reported, so one damaged marker leaves the
+// others retirable.
 func (b sftpBackupStorage) retireSettledDeletes(client *sftp.Client) error {
 	catalog, err := loadPoolBackupCatalog(b.s)
 	if err != nil {
@@ -1658,6 +1800,7 @@ func (b sftpBackupStorage) retireSettledDeletes(client *sftp.Client) error {
 	if err != nil {
 		return err
 	}
+	var skipped error
 	for _, entry := range entries {
 		id, ok := strings.CutPrefix(entry.Name(), ".nex-deleted-")
 		if !ok || !protocol.ValidSnapshotOperationID(id) || cataloged[id] {
@@ -1665,20 +1808,24 @@ func (b sftpBackupStorage) retireSettledDeletes(client *sftp.Client) error {
 		}
 		settled, err := b.deleteSettled(client, id)
 		if err != nil {
-			return err
+			skipped = errors.Join(skipped, err)
+			continue
 		}
 		if !settled {
 			continue
 		}
 		// The record goes first: a lone completion marker is inert.
 		for _, name := range []string{b.deleteRecordName(id), path.Join(b.root(), entry.Name())} {
+			if err := b.authorityNow(); err != nil {
+				return errors.Join(skipped, err)
+			}
 			if err := client.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
+				return errors.Join(skipped, err)
 			}
 			if err := syncSFTPDir(client, b.root()); err != nil {
-				return err
+				return errors.Join(skipped, err)
 			}
 		}
 	}
-	return nil
+	return skipped
 }

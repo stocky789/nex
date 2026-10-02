@@ -1100,6 +1100,16 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	if membership, membershipErr := Membership(s); membershipErr == nil && membership.MasterHostID != s.State.HostID {
 		ReleaseUnusedPoolStorageReservations(ctx, s)
 	}
+	// Runs once before any command can start, so no running operation's work directory can be
+	// swept; only directories of operations this host no longer drives are removed.
+	sweepCtx, cancelSweep := context.WithTimeout(ctx, cfg.ProbeTimeout)
+	if err := vmhost.SweepOnlineBackupWork(sweepCtx, func(id string) bool {
+		entry, ok := s.State.Journal[id]
+		return ok && (entry.Status == "pending" || entry.Status == "needs_attention")
+	}); err != nil {
+		log.Printf("online backup work directories were not swept: %v", err)
+	}
+	cancelSweep()
 	cfg.history = newUsageHistory(filepath.Join(s.dir, "usage"), s.State.HostID)
 	sampler := newUsageSampler(cfg.history)
 	probes := NativeProbes(version.Version, sampler)
@@ -1263,6 +1273,7 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	preparingBackupRepo := map[string]bool{}
 	activeBackupCleanup := map[string]bool{}
 	activeBackupCatalog := map[string]bool{}
+	catalogReplies := map[string][]chan BackupResponse{}
 	cleanupNextAttempt := map[string]time.Time{}
 	peerBackupDone := make(chan peerBackupCompletion, 1)
 	directPeerDone := make(chan directPeerBackupCompletion, 1)
@@ -1639,20 +1650,24 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 		switch {
 		case isBackupCatalogKind(cmd.Kind) && cmd.CatalogImport != nil:
 		case cmd.Kind == "backup-orphan-cleanup" && cmd.OrphanCleanup != nil:
+		case cmd.Kind == "backup-repository-forget" && cmd.ForgetRepository != nil:
 		default:
 			return BackupResponse{Err: ErrBackupInvalid}
 		}
-		reserved := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd, ReserveOnly: true})
-		if reserved.Err != nil || reserved.Result == nil || reserved.Result.Status != "pending" {
-			return reserved
-		}
 		if activeBackupCatalog[cmd.OperationID] {
-			return reserved
+			return acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd, ReserveOnly: true})
 		}
+		// Take the slot before reserving the receipt: a full set of slots must leave nothing
+		// reserved that no worker would settle.
 		select {
 		case backupPrepSlots <- struct{}{}:
 		default:
 			return BackupResponse{Err: ErrBackupUnavailable}
+		}
+		reserved := acceptBackupRequest(ctx, s, BackupRequest{Command: &cmd, ReserveOnly: true})
+		if reserved.Err != nil || reserved.Result == nil || reserved.Result.Status != "pending" {
+			<-backupPrepSlots
+			return reserved
 		}
 		activeBackupCatalog[cmd.OperationID] = true
 		worker := &Store{dir: s.dir, State: copyState(s.State)}
@@ -1676,7 +1691,8 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 	for {
 		joined := false
 		if active == "" {
-			id := nextManagedCommand(s.State.Journal, activeSnapshot, peerBackupNext.skipping(preparingBackupRepo, time.Now()), liveLocalBackups)
+			id := nextManagedCommand(s.State.Journal, activeSnapshot, peerBackupNext.skipping(preparingBackupRepo, time.Now()), liveLocalBackups,
+				snapshotsOfLiveBackupVMs(s.State.Journal, liveLocalBackups))
 			noteQueuedBackupBlockers(s, id, activeSnapshot)
 			if id != "" {
 				// applyResponse already persisted the full command and admission order.
@@ -1713,7 +1729,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 							if errors.Is(workErr, ErrBackupConflict) {
 								run.Status, run.Stage, run.Error = "needs_attention", "catalog_verification", "master backup catalog cannot bind the selected restore point"
 								if err := SettlePoolBackupRun(s, run, nil); err != nil {
-									return err
+									peerBackupNext.observed(id, err.Error(), time.Now())
+									log.Printf("member backup %s cannot be settled yet: %v", id, err)
+									continue
 								}
 								if err := completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
 									OperationID: id, Status: "needs_attention", Error: run.Error, ObservedAt: time.Now().UTC(),
@@ -1733,7 +1751,9 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 							if reason != "" {
 								run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
 								if err := SettlePoolBackupRun(s, run, nil); err != nil {
-									return err
+									peerBackupNext.observed(id, err.Error(), now)
+									log.Printf("member backup %s cannot be settled yet: %v", id, err)
+									continue
 								}
 								if err := completeBackgroundManagedCommand(s, managedCompletion{result: protocol.Result{
 									OperationID: id, Status: run.Status, Error: reason, ObservedAt: now.UTC(),
@@ -1889,10 +1909,16 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 							continue
 						}
 					}
-					if isBackupCatalogKind(cmd.Kind) || cmd.Kind == "backup-orphan-cleanup" {
+					if isBackupCatalogKind(cmd.Kind) || cmd.Kind == "backup-orphan-cleanup" || cmd.Kind == "backup-repository-forget" {
 						response := startBackupCatalog(BackupRequest{Command: &cmd})
 						if response.Result != nil && response.Result.Status == "pending" {
+							delete(peerBackupNext, id)
 							preparingBackupRepo[id] = true
+							continue
+						}
+						if response.Result == nil && errors.Is(response.Err, ErrBackupUnavailable) {
+							// Every preparation slot is busy and nothing was reserved: try again shortly.
+							peerBackupNext.observed(id, response.Err.Error(), time.Now())
 							continue
 						}
 						if err := completeBackgroundManagedCommand(s, managedCompletion{result: catalogAttentionResult(id, response), background: true}, cfg.history); err != nil {
@@ -2038,6 +2064,17 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 				request.Reply <- startBackupCatalog(request)
 				break
 			}
+			if request.Command != nil && request.Command.Kind == "backup-repository-forget" {
+				// The caller waits for the settled outcome, but the detach and member sweep
+				// run off this loop.
+				response := startBackupCatalog(request)
+				if response.Result != nil && response.Result.Status == "pending" && activeBackupCatalog[request.Command.OperationID] {
+					catalogReplies[request.Command.OperationID] = append(catalogReplies[request.Command.OperationID], request.Reply)
+				} else {
+					request.Reply <- response
+				}
+				break
+			}
 			response := acceptBackupRequest(ctx, s, request)
 			var diskError persistenceError
 			if errors.As(response.Err, &diskError) {
@@ -2117,6 +2154,13 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 					return err
 				}
 			}
+			for _, reply := range catalogReplies[completion.command.OperationID] {
+				select {
+				case reply <- response:
+				default:
+				}
+			}
+			delete(catalogReplies, completion.command.OperationID)
 		case completion := <-preparedBackupDone:
 			completion.request.PreparedRepository = completion.repository
 			response := BackupResponse{Err: completion.err}
@@ -2490,12 +2534,12 @@ func Run(ctx context.Context, s *Store, cfg RunConfig) (runErr error) {
 			peer := done.peer
 			notePeerBackupAnswer(s, peerBackupNext, peer)
 			if peerBackupNotStarted(peer.err) {
-				peer.reply = poolBackupPeerResponse{Result: protocol.Result{OperationID: peer.run.OperationID, Status: "failed", Error: peer.err.Error(), ObservedAt: time.Now().UTC()}}
+				peer.reply = notStartedPeerReply(peer.run.OperationID, peer.err)
 				peer.err = nil
 			}
-			// An observation that is still unsettled leaves the entry needing attention.
-			if status := peer.reply.Result.Status; peer.err == nil && status != "succeeded" && status != "failed" &&
-				s.State.Journal[peer.run.OperationID].Status == "needs_attention" {
+			// An observation that is still unsettled leaves the entry needing attention,
+			// with the stage and reason it already has.
+			if peerObservationUnsettled(peer) && s.State.Journal[peer.run.OperationID].Status == "needs_attention" {
 				activeSnapshot = ""
 				break
 			}
@@ -2688,6 +2732,39 @@ func resultError(detail string) string {
 	return detail
 }
 
+// peerObservationUnsettled reports an observation that decides nothing: no terminal answer
+// from the member, or an error with no success behind it. Settling such an observation on a
+// run that already needs attention would only rewrite its stage and reason.
+func peerObservationUnsettled(peer peerBackupCompletion) bool {
+	status := peer.reply.Result.Status
+	if peer.err == nil {
+		return status != "succeeded" && status != "failed"
+	}
+	return status != "succeeded"
+}
+
+// snapshotsOfLiveBackupVMs lists the snapshot commands that must wait because a local backup
+// worker of the same VM is still alive, even after its run was reported stalled and released
+// the exclusive slot.
+func snapshotsOfLiveBackupVMs(journal map[string]JournalEntry, live map[string]bool) map[string]bool {
+	if len(live) == 0 {
+		return nil
+	}
+	vms := make(map[string]bool, len(live))
+	for id := range live {
+		if vm := managedCommandVMID(journal[id].Command); vm != "" {
+			vms[vm] = true
+		}
+	}
+	blocked := make(map[string]bool)
+	for id, entry := range journal {
+		if entry.Command != nil && snapshotCommand(entry.Command.Kind) && vms[managedCommandVMID(entry.Command)] {
+			blocked[id] = true
+		}
+	}
+	return blocked
+}
+
 // Admission order survives restarts and wall-clock adjustments. Older entries have no
 // order, so drain those first using their original receipt time and a stable tie-break.
 func nextManagedCommand(journal map[string]JournalEntry, activeSnapshot string, skip ...map[string]bool) string {
@@ -2855,7 +2932,7 @@ func commandOutcomes(journal map[string]JournalEntry, outcomes []protocol.Manage
 	for _, id := range ids {
 		entry := journal[id]
 		cmd := entry.Command
-		if seen[id] || cmd == nil || entry.PeerDispatched && (entry.Status != "pending" || entry.Error == "") || !managedCommand(cmd.Kind) {
+		if seen[id] || cmd == nil || entry.PeerDispatched || !managedCommand(cmd.Kind) {
 			continue
 		}
 		outcome := protocol.ManagedOutcome{OperationID: id, Kind: cmd.Kind, Status: entry.Status, Error: resultError(entry.Error)}

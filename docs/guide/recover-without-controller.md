@@ -68,13 +68,17 @@ master's reported repository, policy, run and catalog inventory without the old 
   existing master available if an exact complete replica cannot be verified.
   A disposable fixture passed fence-verified promotion with 1,052 retained
   seeded runs beyond 69 MB and exact retained promotion-task settlement;
-  bounded post-promotion backup/restore passed for all four destination kinds.
+  bounded post-promotion backup/restore passed for all four destination kinds on an earlier
+  build (see the [destination QA matrix](../qa/2026-09-28-backup-repository-destinations.md),
+  which does not accept the current tree).
   The final tracked enabled-build and genuine missed-slot gates remain open.
 - Promotion at `catalog-rebuild` with `needs_attention`: the new master has
   committed its identity but could not import an empty replicated catalog from
   the registered repositories. Restore repository access and check the
   host-reported transfer status. Core retries the import before re-pointing
-  members; do not start another promotion for the same authority.
+  members; do not start another promotion for the same authority. A cancelled attempt stays
+  retryable at `catalog-rebuild`; a repository that is simply unreachable no longer blocks the
+  change: it is recorded and its catalog is imported automatically once it is reachable.
 
 ## Verification
 

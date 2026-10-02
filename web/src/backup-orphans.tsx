@@ -22,6 +22,20 @@ export function cleanupBody(requestID: string, groups: OrphanGroup[], includePro
   return { request_id: requestID, vm_ids: groups.map(g => g.vm_id), include_protected: includeProtected, confirmation: typed, recovery_points: points, protected_points: protectedPoints };
 }
 
+export type CleanupPoll = { record: CleanupRecord } | { refusal: string } | { stalled: CleanupRecord };
+
+// pollCleanup reads Core's operation, then its cleanup record. null means Core has not planned the
+// cleanup yet. A failed operation with no record is a pure refusal (404), so its error is the answer.
+// A record still `running` behind a failed or needs-attention operation will never settle: stalled.
+export async function pollCleanup(api: API, base: string, id: string): Promise<CleanupPoll | null> {
+  const op = (await api<Operation[]>("operations")).find(o => o.id === id);
+  if (!op) throw new Error("Core has not reported this cleanup yet.");
+  if (op.status === "queued" || op.status === "dispatched") return null;
+  const record = await api<CleanupRecord>(`${base}/orphan-cleanups/${id}`).catch(e => { if (op.status === "failed") return null; throw e; });
+  if (!record) return { refusal: op.error || "Core refused the cleanup." };
+  return record.status === "running" && (op.status === "failed" || op.status === "needs_attention") ? { stalled: record } : { record };
+}
+
 const message = (e: unknown) => e instanceof Error ? e.message : String(e);
 
 export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; poolID: string; repo: BackupRepository; onClose: () => void }) {
@@ -37,35 +51,38 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
   const [record, setRecord] = useState<CleanupRecord | null>(null);
   const [refusal, setRefusal] = useState("");
   const [pollError, setPollError] = useState("");
+  const [stalled, setStalled] = useState(false);
   const misses = useRef(0);
   const chosen = query?.groups.filter(g => picked.includes(g.vm_id)) ?? [];
   const totals = cleanupBody("", chosen, includeProtected, typed);
   const want = orphanConfirmation(totals.recovery_points, totals.protected_points, includeProtected);
   // A changed selection or confirmation is a different request; an unchanged retry replays.
   useEffect(() => { requestID.current = rid("borphans"); }, [picked, includeProtected, typed]);
-  useEffect(() => {
-    api<OrphanQuery>(`${base}/orphans`).then(setQuery, e => setError(message(e)));
-  }, []);
+  const loadQuery = () => api<OrphanQuery>(`${base}/orphans`).then(setQuery, e => setError(message(e)));
+  useEffect(() => { void loadQuery(); }, []);
   // Core runs the cleanup; follow its record, and the operation for a refusal, which has no record.
   useEffect(() => {
-    if (!submitted || record?.status === "succeeded" || record?.status === "failed" || refusal) return;
+    if (!submitted || record?.status === "succeeded" || record?.status === "failed" || refusal || stalled) return;
     const timer = window.setInterval(async () => {
       try {
-        const op = (await api<Operation[]>("operations")).find(o => o.id === submitted);
-        if (!op) throw new Error("Core has not reported this cleanup yet.");
+        const result = await pollCleanup(api, base, submitted);
         misses.current = 0; setPollError("");
-        if (op.status === "queued" || op.status === "dispatched") return;
-        // Core writes the record once it has planned the cleanup. A failed cleanup that got that far
-        // still has per-point results; a pure refusal has none (404), so its error is the answer.
-        const found = await api<CleanupRecord>(`${base}/orphan-cleanups/${submitted}`).catch(e => { if (op.status === "failed") return null; throw e; });
-        if (found) setRecord(found);
-        else if (op.status === "failed") setRefusal(op.error || "Core refused the cleanup.");
+        if (!result) return;
+        if ("refusal" in result) setRefusal(result.refusal);
+        else if ("stalled" in result) { setRecord(result.stalled); setStalled(true); }
+        else setRecord(result.record);
       } catch (e) {
         if (++misses.current >= 15) setPollError(message(e));
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [submitted, record?.status, refusal]);
+  }, [submitted, record?.status, refusal, stalled]);
+  // After a refusal (for example changed counts) start over from a fresh look at the repository.
+  const reviewAgain = () => {
+    setSubmitted(""); setRefusal(""); setRecord(null); setStalled(false); setPollError(""); misses.current = 0;
+    setPicked([]); setTyped(""); setIncludeProtected(false); setQuery(null); setError("");
+    void loadQuery();
+  };
   const toggle = (id: string) => setPicked(current => current.includes(id) ? current.filter(x => x !== id) : [...current, id]);
   const submit = async () => {
     setBusy(true); setError("");
@@ -104,12 +121,13 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
         <button type="button" className="danger" disabled={busy || chosen.length === 0 || typed !== want} onClick={() => void submit()}>{busy ? "Requesting…" : "Delete recovery points"}</button>
       </div>
     </>}
-    {submitted && <div role="status">
+    {submitted && <div>
       {refusal && record?.error !== refusal && <p className="alert" role="alert">{refusal}</p>}
       {pollError && <p className="alert" role="alert">{pollError} The cleanup may still be running; check <a href="#/tasks">Tasks</a>.</p>}
-      {!record && !refusal && !pollError && <p>Waiting for Core to start the cleanup…</p>}
+      {stalled && <p className="alert" role="alert">Core reports this cleanup's task as failed or needing attention while its record still says running, so it may not finish. Review the repository again to see what remains, and check <a href="#/tasks">Tasks</a> for the cause.</p>}
+      {!record && !refusal && !pollError && <p role="status">Waiting for Core to start the cleanup…</p>}
       {record && <>
-        <p><Badge value={record.status} /> {counts.deleted ?? 0} deleted, {counts.skipped ?? 0} skipped, {counts.failed ?? 0} failed, {counts.pending ?? 0} waiting.</p>
+        <p role="status"><Badge value={record.status} /> {counts.deleted ?? 0} deleted, {counts.skipped ?? 0} skipped, {counts.failed ?? 0} failed, {counts.pending ?? 0} waiting.</p>
         {record.error && <p className="alert" role="alert">{record.error}</p>}
         <div className="table-scroll"><table className="records">
           <thead><tr><th>Recovery point</th><th>VM</th><th>Result</th></tr></thead>
@@ -118,7 +136,10 @@ export function OrphanedBackups({ api, poolID, repo, onClose }: { api: API; pool
           </tr>)}</tbody>
         </table></div>
       </>}
-      <div className="actions"><button type="button" onClick={onClose}>Close</button></div>
+      <div className="actions">
+        {(refusal || stalled) && <button type="button" onClick={reviewAgain}>Review again</button>}
+        <button type="button" onClick={onClose}>Close</button>
+      </div>
     </div>}
   </Panel>;
 }

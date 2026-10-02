@@ -3,6 +3,7 @@ package agent
 
 import (
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -177,25 +178,46 @@ func ApplyBackupScheduleTick(s *Store, now time.Time) ([]BackupScheduleTickResul
 		for _, run := range tick.Dispatch {
 			vm, err := lookupPoolVMSpec(s, run.VMID)
 			if err != nil {
-				return results, err
-			}
-			if policy.Limits.MaxConcurrentPerHost > 0 && activeHost[vm.HostID] >= policy.Limits.MaxConcurrentPerHost ||
-				policy.Limits.MaxConcurrentPerRepo > 0 && activeRepo[run.RepositoryID] >= policy.Limits.MaxConcurrentPerRepo {
-				run.Stage, run.Status, run.Error = "limit", "skipped_overlap", "backup policy concurrency limit reached"
-				if err := saveScheduledBackupRun(s, run); err != nil {
+				// A VM that left the pool or whose definition cannot be read fails only its own
+				// occurrence; the other policies and VMs still dispatch.
+				reason := "the VM definition could not be read"
+				if errors.Is(err, ErrBackupNotFound) {
+					reason = "the VM is no longer in this pool"
+				}
+				log.Printf("backup policy %s: occurrence %s for VM %s not started: %v", policy.ID, run.OperationID, run.VMID, err)
+				if err := recordUndispatchedBackupRun(s, run, "failed", "failed", reason); err != nil {
 					return results, err
 				}
 				continue
 			}
-			run, cmd, err := prepareScheduledBackupRun(s, run)
-			if err != nil {
-				return results, err
-			}
-			if _, err := ReservePoolBackupRun(s, run); err != nil {
-				if errors.Is(err, ErrBackupConflict) || errors.Is(err, ErrBackupPolicyNotFound) {
-					continue
+			if policy.Limits.MaxConcurrentPerHost > 0 && activeHost[vm.HostID] >= policy.Limits.MaxConcurrentPerHost ||
+				policy.Limits.MaxConcurrentPerRepo > 0 && activeRepo[run.RepositoryID] >= policy.Limits.MaxConcurrentPerRepo {
+				if err := recordUndispatchedBackupRun(s, run, "limit", "skipped_overlap", "backup policy concurrency limit reached"); err != nil {
+					return results, err
 				}
-				return results, err
+				continue
+			}
+			prepared, cmd, err := prepareScheduledBackupRun(s, run)
+			if err != nil {
+				log.Printf("backup policy %s: occurrence %s for VM %s not started: %v", policy.ID, run.OperationID, run.VMID, err)
+				if err := recordUndispatchedBackupRun(s, run, "failed", "failed", "the backup command could not be prepared"); err != nil {
+					return results, err
+				}
+				continue
+			}
+			run = prepared
+			if _, err := ReservePoolBackupRun(s, run); err != nil {
+				switch {
+				case errors.Is(err, ErrBackupPolicyNotFound):
+					// The policy was deleted mid-tick; its cursor is not saved either.
+				case errors.Is(err, ErrBackupConflict):
+					if err := recordUndispatchedBackupRun(s, run, "busy", "skipped_overlap", "the backup repository was busy with another operation"); err != nil {
+						return results, err
+					}
+				default:
+					return results, err
+				}
+				continue
 			}
 			activeHost[vm.HostID]++
 			activeRepo[run.RepositoryID]++
@@ -383,4 +405,12 @@ func queuePolicyRunNowBackup(s *Store, cmd protocol.Command, policyID, vmID stri
 		return nil // Core-local member runs use the master's peer scheduler.
 	}
 	return applyResponse(s, protocol.ReportResponse{Commands: []protocol.Command{cmd}})
+}
+
+// recordUndispatchedBackupRun persists a due occurrence that could not start, so a slot
+// never advances the policy cursor without a visible record.
+func recordUndispatchedBackupRun(s *Store, run protocol.BackupRun, stage, status, reason string) error {
+	run.Stage, run.Status, run.Error = stage, status, reason
+	run.UpdatedAt = time.Now().UTC()
+	return saveScheduledBackupRun(s, run)
 }

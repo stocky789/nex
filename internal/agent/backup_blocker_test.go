@@ -11,15 +11,16 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// A pending member-dispatched backup reports why it is waiting as a queued outcome, and the
-// reason clears when the member answers normally.
+// A pending Controller-dispatched backup reports why it is waiting as a queued outcome, and the
+// reason clears when the member answers normally. A member-side peer entry never reports one:
+// the master's own entry carries the reason.
 func TestPendingPeerBackupReportsBlockerReason(t *testing.T) {
 	s := &Store{dir: t.TempDir(), State: State{Journal: map[string]JournalEntry{"run-1": {
-		Status: "pending", PeerDispatched: true, RequestedAt: time.Now(),
+		Status: "pending", RequestedAt: time.Now(),
 		Command: &protocol.Command{OperationID: "run-1", Kind: protocol.BackupKindBackupNow, VM: &protocol.VMCreateSpec{ID: "vm-1"}},
 	}}}}
-	if got := commandOutcomes(s.State.Journal, nil); len(got) != 0 {
-		t.Fatalf("no reason, no outcome: %+v", got)
+	if got := commandOutcomes(s.State.Journal, nil); len(got) != 1 || got[0].Status != "queued" || got[0].Error != "" {
+		t.Fatalf("no reason yet: %+v", got)
 	}
 	noteBlocker(s, "run-1", peerBackupUnreachable)
 	got := commandOutcomes(s.State.Journal, nil)
@@ -27,7 +28,7 @@ func TestPendingPeerBackupReportsBlockerReason(t *testing.T) {
 		t.Fatalf("reason not reported: %+v", got)
 	}
 	noteBlocker(s, "run-1", "")
-	if got := commandOutcomes(s.State.Journal, nil); len(got) != 0 {
+	if got := commandOutcomes(s.State.Journal, nil); len(got) != 1 || got[0].Error != "" {
 		t.Fatalf("reason not cleared: %+v", got)
 	}
 	entry := s.State.Journal["run-1"]

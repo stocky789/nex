@@ -786,7 +786,7 @@
       }
     },
     &quot;409&quot;: {
-      &quot;description&quot;: &quot;First admission refused: not a master, invalid/expired/mismatched offer, invalid CSR or missing/invalid hostname, already admitted host, or persistence failure. An exact replay of a previously issued offer returns its original certificate.&quot;,
+      &quot;description&quot;: &quot;First admission refused: not a master, invalid/expired/mismatched offer, invalid CSR or missing/invalid hostname (409 \&quot;joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining host\&quot;), already admitted host, or persistence failure. An exact replay of a previously issued offer returns its original certificate.&quot;,
       &quot;content&quot;: {
         &quot;text/plain&quot;: {
           &quot;schema&quot;: {
@@ -2803,7 +2803,7 @@
       &quot;PoolMasterCertificate&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;Core peer: current pool master to ready member&quot;,
   &quot;requestBody&quot;: {
     &quot;required&quot;: true,
@@ -4502,7 +4502,7 @@
     },
     &quot;hostname&quot;: {
       &quot;type&quot;: &quot;string&quot;,
-      &quot;description&quot;: &quot;Name reported by the joining Core for its durable membership row: required, at most 200 UTF-8 bytes of printable characters with no leading or trailing space. A join without one is refused.&quot;
+      &quot;description&quot;: &quot;Name reported by the joining Core for its durable membership row: required, at most 200 UTF-8 bytes of printable characters with no leading or trailing space. The Go encoding omits an empty value, so the schema does not list it under required, but the master refuses a join without one (409); a joiner that predates hostname reporting must be upgraded and restarted.&quot;
     }
   },
   &quot;required&quot;: [

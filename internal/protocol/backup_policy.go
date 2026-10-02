@@ -300,9 +300,10 @@ func RetentionEligiblePrune(points []BackupRecoveryPoint, vmID string, retention
 	return keep, prune
 }
 
-// PoolBackupAuthority is the bounded replica section for master takeover of backup
-// repositories, job/schedule definitions, retained runs, and catalog index entries.
-// Full NFS recovery-point payloads are never embedded; catalog carries index only.
+// PoolBackupAuthority is the replica section for master takeover of backup repositories,
+// job/schedule definitions, retained runs, catalog index entries, pins, receipts and
+// orphan cleanups. It is replicated in pages bound by PoolBackupManifest. Recovery-point
+// payloads are never embedded; the catalog carries the index only.
 type PoolBackupAuthority struct {
 	Repositories     []BackupRepository      `json:"repositories,omitempty"`
 	Definitions      []BackupPolicy          `json:"definitions,omitempty"`
@@ -311,7 +312,7 @@ type PoolBackupAuthority struct {
 	Pins             []BackupRestorePin      `json:"pins,omitempty"`
 	MetadataReceipts []BackupMetadataReceipt `json:"metadata_receipts,omitempty"`
 	OrphanCleanups   []BackupOrphanCleanup   `json:"orphan_cleanups,omitempty"`
-	// Compact refs stay for observation and older readers; derived from Definitions/History.
+	// Compact refs are for observation only; derived from Definitions/History.
 	Policies []BackupPolicyRef `json:"policies,omitempty"`
 	Runs     []BackupRunRef    `json:"runs,omitempty"`
 }
@@ -346,6 +347,15 @@ func (m PoolBackupManifest) Valid() error {
 		m.PageCount <= 0 || m.PageCount > m.TotalBytes/5+1 || m.TotalBytes/m.PageCount > PoolBackupPageLimit ||
 		(m.TotalBytes/m.PageCount == PoolBackupPageLimit && m.TotalBytes%m.PageCount != 0) {
 		return errors.New("backup authority manifest exceeds bound or is invalid")
+	}
+	// Retained records are uncapped, but each is a frame of at least five bytes, so a
+	// manifest cannot claim more records than its bytes can hold.
+	room := m.TotalBytes / 5
+	for _, count := range []int{m.Repositories, m.Definitions, m.History, m.Catalog, m.Pins, m.MetadataReceipts, m.OrphanCleanups} {
+		if count > room {
+			return errors.New("backup authority manifest exceeds bound or is invalid")
+		}
+		room -= count
 	}
 	return nil
 }

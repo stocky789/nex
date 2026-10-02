@@ -265,8 +265,9 @@ func TestPoolBackupActivationSwitchesAllStoresWithPeerRecord(t *testing.T) {
 }
 
 func TestPoolBackupAuthorityManifestDoesNotCapRetainedRecordCount(t *testing.T) {
-	m := protocol.PoolBackupManifest{SHA256: strings.Repeat("a", 64), PageCount: 1,
-		TotalBytes: 5, History: 100001, Catalog: 100001, Pins: 100001, MetadataReceipts: 100001}
+	// 400,004 records of at least five bytes each, in the ten pages that hold them.
+	m := protocol.PoolBackupManifest{SHA256: strings.Repeat("a", 64), PageCount: 10,
+		TotalBytes: 2_500_000, History: 100001, Catalog: 100001, Pins: 100001, MetadataReceipts: 100001}
 	if err := m.Valid(); err != nil {
 		t.Fatalf("retained record count was capped: %v", err)
 	}

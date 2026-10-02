@@ -95,21 +95,75 @@ export type BackupRunPage = BackupPage<BackupRun> & {
   last_backup_run?: { status: string; updated_at: string };
 };
 
-export function refreshBackupPage<T extends { items: unknown[]; generation: string; next_cursor?: string }>(current: T | null, next: T, sameScope: boolean): T {
-  return sameScope && next.generation && current?.generation === next.generation && current.items.length > next.items.length
-    ? { ...next, items: current.items, next_cursor: current.next_cursor } : next;
+// maxBackupPages bounds every walk of Core pages (64 items each); a longer
+// history fails loudly instead of silently showing a truncated, misleading view.
+export const maxBackupPages = 100;
+
+type PageRequest<T> = (cursor: string, generation: string) => Promise<BackupPage<T>>;
+
+// walkBackupPages appends pages after `items` while Core reports a cursor and
+// returns the cursor that remains. stop may end the walk early once the caller
+// has what it needs.
+async function walkBackupPages<T>(first: BackupPage<T>, items: T[], requestPage: PageRequest<T>, stop?: (page: BackupPage<T>) => boolean): Promise<string | undefined> {
+  const seen = new Set<string>();
+  let page = first;
+  for (let pages = 1; page.next_cursor && !stop?.(page); pages++) {
+    const cursor = page.next_cursor;
+    if (seen.has(cursor)) throw new Error("Backup inventory paging repeated a cursor.");
+    if (pages >= maxBackupPages) throw new Error("Backup inventory is too large to load in full.");
+    seen.add(cursor);
+    page = await requestPage(cursor, first.generation);
+    if (page.generation !== first.generation) throw new Error("Backup inventory changed during loading.");
+    if (page.items.length === 0) throw new Error("Backup inventory paging returned an empty page.");
+    items.push(...page.items);
+    if (items.length > first.total) throw new Error("Backup inventory paging exceeded its reported total.");
+  }
+  return page.next_cursor;
 }
 
-export async function collectBackupPageItems<T>(first: BackupPage<T>, requestPage: (cursor: string, generation: string) => Promise<BackupPage<T>>): Promise<T[]> {
+export const pageURL = (base: string, cursor: string, generation: string) =>
+  `${base}${base.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`;
+
+export async function collectBackupPageItems<T>(first: BackupPage<T>, requestPage: PageRequest<T>): Promise<T[]> {
   const items = [...first.items];
-  let cursor = first.next_cursor;
-  while (cursor) {
-    const page = await requestPage(cursor, first.generation);
-    if (page.generation !== first.generation) throw new Error("Backup inventory changed during loading.");
-    items.push(...page.items);
-    cursor = page.next_cursor;
-  }
+  await walkBackupPages(first, items, requestPage);
   return items;
+}
+
+// refreshLoadedPages re-reads the span the operator has loaded ("Load more")
+// so mutable point fields (protected, last test) are never left stale. Core's
+// generation covers only which records exist, not their attributes. If the
+// generation moves mid-walk, the fresh first page wins and the walk restarts.
+export async function refreshLoadedPages<T, P extends BackupPage<T>>(first: P, loaded: number, requestPage: PageRequest<T>): Promise<P> {
+  const items = [...first.items];
+  try {
+    const next_cursor = await walkBackupPages(first, items, requestPage, () => items.length >= loaded);
+    return { ...first, items, next_cursor };
+  } catch (err) {
+    // Core answers 409 to a cursor whose generation moved; either way the fresh first page is the truth.
+    if ((err as { status?: number }).status === 409 || err instanceof Error && /changed during loading/.test(err.message)) return first;
+    throw err;
+  }
+}
+
+const settledRunStatuses = ["succeeded", "failed", "missed", "skipped_overlap"];
+
+// refreshRunHistory re-reads the newest pages of the run history and keeps the
+// cached remainder: settled runs never change, so the walk stops at the first
+// page that holds only known settled runs and no cached unsettled run is left
+// beyond it. A total that disagrees with the merged list (a forgotten
+// repository removed runs) falls back to the full walk.
+export async function refreshRunHistory(cached: BackupRun[] | null, first: BackupRunPage, requestPage: PageRequest<BackupRun>): Promise<BackupRun[]> {
+  if (!cached) return collectBackupPageItems(first, requestPage);
+  const known = new Map(cached.map(run => [run.operation_id, run]));
+  const fresh = [...first.items];
+  const volatile = new Set(cached.filter(run => !settledRunStatuses.includes(run.status)).map(run => run.operation_id));
+  const done = (page: BackupPage<BackupRun>) => page.items.every(run => settledRunStatuses.includes(known.get(run.operation_id)?.status ?? "")) &&
+    [...volatile].every(id => fresh.some(run => run.operation_id === id));
+  await walkBackupPages(first, fresh, requestPage, done);
+  const seen = new Set(fresh.map(run => run.operation_id));
+  const merged = [...fresh, ...cached.filter(run => !seen.has(run.operation_id))];
+  return merged.length === first.total ? merged : collectBackupPageItems(first, requestPage);
 }
 
 export type RecoveryPointFilter = { vm_id?: string; repository_id?: string; search?: string };
@@ -118,8 +172,7 @@ export type RecoveryPointFilter = { vm_id?: string; repository_id?: string; sear
 export async function loadRecoveryPoints(api: API, poolID: string, filter: RecoveryPointFilter, signal?: AbortSignal): Promise<BackupRecoveryPoint[]> {
   const base = `pools/${encodeURIComponent(poolID)}/backup-catalog?${new URLSearchParams(filter)}`;
   const response = await api<BackupCatalogPage>(base, "GET", undefined, undefined, undefined, signal);
-  return collectBackupPageItems(response, (cursor, generation) =>
-    api<BackupCatalogPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
+  return collectBackupPageItems(response, (cursor, generation) => api<BackupCatalogPage>(pageURL(base, cursor, generation), "GET", undefined, undefined, undefined, signal));
 }
 
 export function appendBackupPage<T>(current: BackupPage<T> | null, next: BackupPage<T>, key: (item: T) => string): BackupPage<T> {
@@ -131,10 +184,6 @@ export function appendBackupPage<T>(current: BackupPage<T> | null, next: BackupP
 export type BackupOpReply = { operation?: { id?: string }; id?: string };
 
 export const backupOpID = (reply: BackupOpReply) => reply.operation?.id || reply.id || "";
-
-export function stableBody<T>(pending: Record<string, T>, key: string, body: T): T {
-  return pending[key] ??= body;
-}
 
 export const rid = (prefix: string) => {
   const bytes = new Uint8Array(16);

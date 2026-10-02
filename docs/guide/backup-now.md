@@ -6,7 +6,8 @@ Development Phase 6 / S5 Controller UI for stopped and online full backup into a
 registered NFS, SMB3, S3-compatible or SFTP repository. Core validates the guest,
 captures disks
 (stopped convert or online libvirt push-mode), publishes a complete manifest, then
-catalogs the recovery point. Quiesced online capture and UEFI online remain refused.
+catalogs the recovery point. Running VMs are captured crash-consistent only: quiesced
+capture is not offered, and UEFI and vTPM online capture remain refused.
 
 ## Prerequisites
 
@@ -20,8 +21,8 @@ catalogs the recovery point. Quiesced online capture and UEFI online remain refu
 1. Choose the pool, then open **Backups** → **Recovery points**, or from the VM
    panel choose **Back up now** (`#/backups?vm=<id>&flow=backup-now`).
 2. Select **Back up now** if its slide-over is not already open. In **Destination**,
-   choose the VM and repository. For a running guest, choose Crash-consistent
-   (Quiesced is shown but refused until supported), then select **Review backup**.
+   choose the VM and repository. A running guest is captured crash-consistent; a shut-off
+   guest is captured stopped. Then select **Review backup**.
 3. In **Review and submit**, check the VM, repository, mode and included disks,
    then select **Back up now**. Navigation stays at the bottom of the panel.
 4. Follow the task on **Tasks**. When it succeeds, the recovery point appears in
@@ -40,14 +41,20 @@ time when the catalog is available. Closing the browser does not cancel accepted
 - A backup or run-now for a backup job or repository Core does not hold fails
   (`backup policy not found` or `backup repository not found`). Retrying the same operation
   ID does not help; fix the job or repository and start a new backup.
-- A run that settles failed with stage `peer_dispatch` was abandoned: its member left the pool,
-  became the pool master, or stayed silent for an hour. The outcome is unknown, so check the
-  repository catalog for the point (import the repository if it is missing) before starting a new backup.
+- A run that settles **Needs attention** with stage `peer_dispatch` was not observed to the end:
+  its member left the pool, became the pool master, or stayed silent for an hour. It is
+  never reported failed on silence alone; the run keeps its reservation and Core keeps
+  observing it. The outcome is unknown, so check the repository catalog for the point
+  (import the repository if it is missing) before starting a new backup.
 - **Stop the VM first** / shut-off required: use stopped mode; this flow does not
   power off automatically.
 - **Online backup requires a running VM**: the VM is shut off, so choose stopped mode.
 - UEFI online refused: shut down and use stopped backup, or wait for a later slice.
-- Quiesced refused: use Crash-consistent for running guests.
+- Quiesced refused (API): only stopped and crash-consistent capture exist.
+- Online backup to S3 or SFTP refused for lack of space: Core stages the disks under
+  `.nex-backup-work` on the filesystem that holds the VM images and needs free space of at least the
+  VMs' summed live disk capacity plus 6.25% plus 1 GiB. Free space or use a stopped backup; the run
+  fails cleanly and its work directory is removed. An online backup of a vTPM guest is refused.
 - No repositories: register one under **Settings** → **Backup repositories**.
 - Repository inventory loading or unavailable: wait for a fresh master report.
   The panel shows the read status; an unavailable read does not mean a destination
@@ -59,9 +66,11 @@ time when the catalog is available. Closing the browser does not cancel accepted
   member is offline; only new runs and metadata wait. Inspect the retained
   Core run and member status before retrying; keep the master available when
   an exact complete replica cannot be verified.
-  A disposable fixture passed complete-history promotion with directly seeded
-  runs beyond 69 MB and bounded post-promotion backup and restore on all four
-  destinations. Check the current authority and member access before retrying.
+  A disposable fixture on an earlier build (before the later backup-destination fixes; the
+  [QA matrix](../qa/2026-09-28-backup-repository-destinations.md) marks it as not accepting the
+  current tree) passed complete-history promotion with directly seeded runs beyond 69 MB and
+  bounded post-promotion backup and restore on all four destinations. Check the current
+  authority and member access before retrying.
 - Request refused or stuck: inspect the task and host operation before retrying. Reuse
   a request ID only for the identical request after the host reports a safe retry state.
   A member that cannot serve the repository does not hold back backups of other repositories; if it never
@@ -71,10 +80,12 @@ time when the catalog is available. Closing the browser does not cancel accepted
 - An uncertain reply keeps the panel on review with Back, Cancel and Close disabled.
   Inspect **Tasks** before using **Retry backup request**, which resends the same
   VM, repository, mode and request identity; do not create a second request to
-  resolve an unknown outcome.
+  resolve an unknown outcome. The unsettled request survives following the **Tasks** link
+  and coming back: the page shows the same retry button and replays the same request ID
+  and body. Switching pools clears filters, selection and drafts.
 - A backup still running on a member 12 hours after it was reserved, even if the member has stopped answering: Core marks it
-  **Needs attention** with "the backup has not finished ... Check the member host and the
-  repository" and frees the pool's backup slot. Core does not cancel it. Check that the member
+  **Needs attention** with "the backup has not finished ... Check that host and the
+  repository" and keeps the VM reserved. Core does not cancel it. Check that the member
   is running and the repository responds. If the backup later finishes, Core records its real
   result; do not start another backup of that VM until the run is settled.
   The task keeps that explanation while Core keeps checking the run; it changes only when the

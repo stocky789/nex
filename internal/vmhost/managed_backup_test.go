@@ -1929,3 +1929,71 @@ func TestBackupProtectMarkerSweepSettlesLeftovers(t *testing.T) {
 		t.Fatalf("leftovers after unprotect: %v", left)
 	}
 }
+
+// An online backup stages a qcow2 per disk on the images filesystem the guests run from. It is
+// refused before backup-begin when the staging images could not fit, instead of filling the
+// filesystem and pausing the guests.
+func TestCaptureOnlineDisksRefusesWhenWorkDirectoryCannotHoldTheDisks(t *testing.T) {
+	const vmID = "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	t.Setenv("VMHOST_LOG", log)
+	fakeCommand(t, "virsh", `echo "$3" >> "$VMHOST_LOG"; case "$3" in domblkinfo) printf 'Capacity:       %s\n' 10737418240;; *) exit 0;; esac`)
+	workDir := t.TempDir()
+	disks := []BackupDiskSource{{Target: "vda", Source: "/srv/vda.qcow2"}, {Target: "vdb", Source: "/srv/vdb.qcow2"}}
+	destinations := map[string]string{"vda": filepath.Join(workDir, "vda.qcow2"), "vdb": filepath.Join(workDir, "vdb.qcow2")}
+	previous := onlineBackupFreeBytes
+	t.Cleanup(func() { onlineBackupFreeBytes = previous })
+
+	onlineBackupFreeBytes = func(string) (uint64, error) { return 20 << 30, nil } // the 20 GiB of disks, but no headroom
+	err := CaptureOnlineDisks(context.Background(), vmID, disks, destinations)
+	if err == nil || !strings.Contains(err.Error(), "free beside the running guests") || errors.Is(err, ErrOnlineBackupUncertain) {
+		t.Fatalf("a work directory without headroom was accepted or reported uncertain: %v", err)
+	}
+	if calls, _ := os.ReadFile(log); strings.Contains(string(calls), "backup-begin") {
+		t.Fatalf("backup-begin ran although the staging images could not fit: %q", calls)
+	}
+
+	onlineBackupFreeBytes = func(string) (uint64, error) { return 30 << 30, nil }
+	if err := checkOnlineBackupSpace(context.Background(), vmID, disks, workDir); err != nil {
+		t.Fatalf("20 GiB of disks with 10 GiB of headroom was refused: %v", err)
+	}
+}
+
+// Only work directories of operations that are no longer unsettled are swept, and only once no
+// domain may still have a backup job writing.
+func TestSweepOnlineBackupWork(t *testing.T) {
+	root := t.TempDir()
+	previous := onlineBackupLocalRoot
+	onlineBackupLocalRoot = root
+	t.Cleanup(func() { onlineBackupLocalRoot = previous })
+	for _, name := range []string{"settled-op", "running-op"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name, "vda.qcow2"), []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unsettled := func(op string) bool { return op == "running-op" }
+	const vmID = "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
+	t.Setenv("VMHOST_VM_ID", vmID)
+
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_VM_ID";; domjobinfo) printf 'Job type: 1\n';; *) exit 2;; esac`)
+	if err := SweepOnlineBackupWork(context.Background(), unsettled); err == nil {
+		t.Fatal("swept while a backup job could still be writing")
+	}
+	if !fileExists(filepath.Join(root, "settled-op")) {
+		t.Fatal("a work directory was removed without proof that no job is writing")
+	}
+
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_VM_ID";; domjobinfo) printf 'Job type: 0\n';; *) exit 2;; esac`)
+	if err := SweepOnlineBackupWork(context.Background(), unsettled); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(root, "settled-op")) {
+		t.Fatal("settled operation's staging images were kept")
+	}
+	if !fileExists(filepath.Join(root, "running-op", "vda.qcow2")) {
+		t.Fatal("an unsettled operation's work directory was swept")
+	}
+}

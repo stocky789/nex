@@ -127,6 +127,107 @@ func forgetPoolBackupRepository(ctx context.Context, s *Store, req protocol.Forg
 	return nil
 }
 
+// backupForgetScope is what forgetting a repository removes from the master, and the first
+// reason it may not proceed.
+type backupForgetScope struct {
+	points    []protocol.BackupRecoveryPoint
+	runs      []protocol.BackupRun
+	protected int
+	blocker   string
+}
+
+// scopeBackupForget reads the jobs, runs, pins and recovery points that name repo. The
+// caller holds poolBackupAuthorityMu.
+func scopeBackupForget(s *Store, repo protocol.BackupRepository) (backupForgetScope, error) {
+	var scope backupForgetScope
+	block := func(reason string) {
+		if scope.blocker == "" {
+			scope.blocker = reason
+		}
+	}
+	policies, err := loadPoolBackupPolicies(s)
+	if err != nil {
+		return scope, err
+	}
+	jobs := 0
+	for _, policy := range policies.Policies {
+		if policy.RepositoryID == repo.ID {
+			jobs++
+		}
+	}
+	if jobs > 0 {
+		block(fmt.Sprintf("%d backup jobs use this repository; change their repository first", jobs))
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil {
+		return scope, err
+	}
+	for _, run := range runs {
+		if run.RepositoryID != repo.ID {
+			continue
+		}
+		// Missed, skipped and settled runs are history that goes with the repository; only a
+		// run that may still touch it blocks.
+		switch run.Status {
+		case "pending":
+			block("a backup, restore or test restore is running on this repository; wait for it to finish")
+		case "needs_attention":
+			block(fmt.Sprintf("operation %s on this repository needs attention (its outcome is uncertain); resolve it first", run.OperationID))
+		}
+		scope.runs = append(scope.runs, run)
+	}
+	catalog, err := loadPoolBackupCatalog(s)
+	if err != nil {
+		return scope, err
+	}
+	pins, err := loadPoolBackupPins(s)
+	if err != nil {
+		return scope, err
+	}
+	for _, point := range catalog {
+		if point.RepositoryID != repo.ID {
+			continue
+		}
+		for _, pin := range pins.Pins {
+			if pin.RecoveryPointID == point.ID {
+				block(pinRefusal(s, pin))
+			}
+		}
+		if poolBackupPruning[point.ID] {
+			block("retention is deleting recovery points from this repository; try again shortly")
+		}
+		if point.Protected {
+			scope.protected++
+		}
+		scope.points = append(scope.points, point)
+	}
+	return scope, nil
+}
+
+func pendingBackupForgetPath(s *Store, id string) string {
+	return filepath.Join(poolBackupStoreDir(s), "pool-backup-pending-forgets", id+".json")
+}
+
+// backupForgetPending reports a forget that passed its checks and began removing records;
+// a retry finishes it instead of checking the counts again.
+func backupForgetPending(s *Store, id string) bool {
+	_, err := os.Stat(pendingBackupForgetPath(s, id))
+	return err == nil
+}
+
+// backupRepositoryRemoving reports a repository that is being changed or forgotten, so new
+// runs and jobs must not start on it. The caller holds poolBackupAuthorityMu.
+func backupRepositoryRemoving(s *Store, id string) bool {
+	return backupRepositoryMutationBusy(s, id, nil) || backupForgetPending(s, id)
+}
+
+func rememberPendingBackupForget(s *Store, id string) error {
+	if err := os.MkdirAll(filepath.Dir(pendingBackupForgetPath(s, id)), 0700); err != nil {
+		return err
+	}
+	return vmhost.AtomicWrite(pendingBackupForgetPath(s, id), []byte("{}"), 0600)
+}
+
 func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol.ForgetRepositoryRequest) (protocol.BackupRepository, bool, error) {
 	// An orphan cleanup holds this for its whole run; forgetting under it would let it
 	// report points deleted that the destination still holds.
@@ -157,6 +258,9 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 		poolBackupAuthorityMu.Unlock()
 		err := finishPendingBackupDetach(ctx, s, req.RepositoryID)
 		poolBackupAuthorityMu.Lock()
+		if err == nil {
+			err = removeIfPresent(pendingBackupForgetPath(s, req.RepositoryID))
+		}
 		return protocol.BackupRepository{}, false, err
 	}
 	if backupRepositoryPointMetadataBusy(s, repo.ID) {
@@ -165,92 +269,63 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 	if req.Confirmation != repo.Name {
 		return repo, true, backupRefusal(fmt.Sprintf("type the repository name %q to confirm", repo.Name))
 	}
-	policies, err := loadPoolBackupPolicies(s)
+	scope, err := scopeBackupForget(s, repo)
 	if err != nil {
 		return repo, true, err
 	}
-	jobs := 0
-	for _, policy := range policies.Policies {
-		if policy.RepositoryID == repo.ID {
-			jobs++
+	if !backupForgetPending(s, repo.ID) {
+		if scope.blocker != "" {
+			return repo, true, backupRefusal(scope.blocker)
 		}
-	}
-	if jobs > 0 {
-		return repo, true, backupRefusal(fmt.Sprintf("%d backup jobs use this repository; change their repository first", jobs))
-	}
-	runs, err := listPoolBackupRuns(s)
-	if err != nil {
-		return repo, true, err
-	}
-	var repoRuns []protocol.BackupRun
-	for _, run := range runs {
-		if run.RepositoryID != repo.ID {
-			continue
+		if len(scope.points) != req.RecoveryPoints || scope.protected != req.ProtectedPoints {
+			return repo, true, backupRefusal(fmt.Sprintf("this repository now holds %d recovery points (%d protected), not the %d (%d protected) confirmed; review and confirm again",
+				len(scope.points), scope.protected, req.RecoveryPoints, req.ProtectedPoints))
 		}
-		if run.Status != "succeeded" && run.Status != "failed" {
-			return repo, true, backupRefusal("a backup, restore, test restore or catalog operation is running on this repository; wait for it to finish")
+		// Detach first and remember the mount: a failed unmount leaves the record, and a crash
+		// after the record is gone still retries from the pending detach.
+		// Journal admission stays on the Store owner; repository I/O does not hold authority.
+		if err := rememberPendingBackupDetach(s, repo); err != nil {
+			return repo, true, err
 		}
-		repoRuns = append(repoRuns, run)
-	}
-	catalog, err := loadPoolBackupCatalog(s)
-	if err != nil {
-		return repo, true, err
-	}
-	pins, err := loadPoolBackupPins(s)
-	if err != nil {
-		return repo, true, err
-	}
-	var points []protocol.BackupRecoveryPoint
-	protected := 0
-	for _, point := range catalog {
-		if point.RepositoryID != repo.ID {
-			continue
+		poolBackupAuthorityMu.Unlock()
+		detachErr := detachBackupRepositoryHost(ctx, repo)
+		poolBackupAuthorityMu.Lock()
+		if detachErr != nil {
+			return repo, true, fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, detachErr)
 		}
-		for _, pin := range pins.Pins {
-			if pin.RecoveryPointID == point.ID {
-				return repo, true, backupRefusal(pinRefusal(s, pin))
-			}
+		repos, err = loadPoolBackupRepositories(s)
+		if err != nil {
+			return repo, true, err
 		}
-		if poolBackupPruning[point.ID] {
-			return repo, true, backupRefusal("retention is deleting recovery points from this repository; try again shortly")
+		if current, ok := repos.Repositories[repo.ID]; !ok || !sameBackupRepositoryRegistration(current, repo) {
+			return repo, true, ErrBackupConflict
 		}
-		if point.Protected {
-			protected++
+		// The lock was open during the unmount: jobs, pins, runs and imported points may
+		// have arrived, and the operator confirmed only what they saw.
+		settled, err := scopeBackupForget(s, repo)
+		if err != nil {
+			return repo, true, err
 		}
-		points = append(points, point)
-	}
-	if len(points) != req.RecoveryPoints || protected != req.ProtectedPoints {
-		return repo, true, backupRefusal(fmt.Sprintf("this repository now holds %d recovery points (%d protected), not the %d (%d protected) confirmed; review and confirm again",
-			len(points), protected, req.RecoveryPoints, req.ProtectedPoints))
-	}
-	// Detach first and remember the mount: a failed unmount leaves the record, and a crash
-	// after the record is gone still retries from the pending detach.
-	// Journal admission stays on the Store owner; repository I/O does not hold authority.
-	if err := rememberPendingBackupDetach(s, repo); err != nil {
-		return repo, true, err
-	}
-	poolBackupAuthorityMu.Unlock()
-	detachErr := detachBackupRepositoryHost(ctx, repo)
-	poolBackupAuthorityMu.Lock()
-	if detachErr != nil {
-		return repo, true, fmt.Errorf("the mount of %q could not be removed on this host; try again: %w", repo.Name, detachErr)
-	}
-	repos, err = loadPoolBackupRepositories(s)
-	if err != nil {
-		return repo, true, err
-	}
-	if current, ok := repos.Repositories[repo.ID]; !ok || !sameBackupRepositoryRegistration(current, repo) {
-		return repo, true, ErrBackupConflict
+		if settled.blocker != "" {
+			return repo, true, backupRefusal(settled.blocker)
+		}
+		if len(settled.points) != len(scope.points) || settled.protected != scope.protected {
+			return repo, true, backupRefusal("this repository's recovery points changed while its mount was removed; review and confirm again")
+		}
+		scope = settled
+		if err := rememberPendingBackupForget(s, repo.ID); err != nil {
+			return repo, true, err
+		}
 	}
 	if err := retireBackupRepositoryCredential(s, repo); err != nil {
 		return repo, true, err
 	}
-	for _, point := range points {
+	for _, point := range scope.points {
 		if err := removeIfPresent(filepath.Join(poolBackupCatalogPath(s), point.ID+".json")); err != nil {
 			return repo, true, err
 		}
 	}
-	for _, run := range repoRuns {
+	for _, run := range scope.runs {
 		if err := removeIfPresent(filepath.Join(poolBackupRunsPath(s), run.OperationID+".json")); err != nil {
 			return repo, true, err
 		}
@@ -259,7 +334,10 @@ func dropPoolBackupRepositoryRecords(ctx context.Context, s *Store, req protocol
 	if err := savePoolBackupRepositories(s, repos); err != nil {
 		return repo, true, err
 	}
-	return repo, true, clearPendingBackupDetach(s, repo.ID)
+	if err := clearPendingBackupDetach(s, repo.ID); err != nil {
+		return repo, true, err
+	}
+	return repo, true, removeIfPresent(pendingBackupForgetPath(s, repo.ID))
 }
 
 // pinRefusal names the operation, and the test VM when there is one, that holds a recovery

@@ -12,6 +12,15 @@ export function releaseBlocker(vm: VM, host?: Host): string {
     : "";
 }
 
+// requestRelease sends the release. A failed attempt keeps its request_id so a retry replays the same
+// request; success releases it.
+export async function requestRelease(api: API, vmID: string, request: { current: string }, confirmation: string) {
+  request.current ||= crypto.randomUUID();
+  const result = await api<{ operation: { id: string } }>(`vms/${encodeURIComponent(vmID)}/release-retained`, "POST", { request_id: request.current, confirmation });
+  request.current = "";
+  return result;
+}
+
 // VMReleaseRetained deletes the original disks and vTPM state that restore replace kept beside the VM.
 export function VMReleaseRetained({ vm, host, api, reload, busy, unavailable, onNotice }: {
   vm: VM; host?: Host; api: API; reload: () => Promise<void>; busy: boolean; unavailable: boolean; onNotice: (text: string, operationID?: string) => void;
@@ -31,11 +40,8 @@ export function VMReleaseRetained({ vm, host, api, reload, busy, unavailable, on
   }, [open]);
   async function submit() {
     setWorking(true); setError("");
-    // A retry replays one request; typing a different confirmation is a new request.
-    request.current ||= crypto.randomUUID();
     try {
-      const result = await api<{ operation: { id: string } }>(`vms/${encodeURIComponent(vm.id)}/release-retained`, "POST", { request_id: request.current, confirmation: name });
-      request.current = "";
+      const result = await requestRelease(api, vm.id, request, name);
       setOpen(false);
       await reload();
       onNotice(`Release of retained originals queued for ${vm.name}. Follow its progress in Tasks.`, result.operation.id);

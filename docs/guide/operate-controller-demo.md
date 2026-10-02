@@ -35,10 +35,14 @@ invalidates sessions. Failed-candidate checks restore the prior image automatica
    Keep endpoint, account and trusted-peer values in private configuration. The
    installer does not configure firewall, SSH or the external TLS route for you.
 2. Publish an approved revision through Gitea's **Demo** workflow. Every main push
-   rebuilds the shared UI and demo executable, checks the exact image in a browser,
-   then sends it through the installed healthchecked wrapper. Pull requests check
-   without publishing. A manual workflow run can publish the selected main revision;
-   an existing immutable release tag cannot be replaced by a different rebuilt image.
+   rebuilds the shared UI and demo executable and checks the exact image in a browser (the
+   `demo` job); a separate `deploy` job then sends it through the installed healthchecked
+   wrapper, in its own concurrency group that is never cancelled. Pull requests check
+   without publishing. A manual workflow run can publish the selected main revision.
+   Re-running the same revision is safe: replaying the running release keeps its rollback
+   image, while a different rebuilt image under a retained non-current release tag is
+   refused. The deploy job needs the verified image in the same runner's Docker daemon;
+   a superseded verification run skips that revision's deploy, and the next push deploys.
    Missing deploy secrets or a failed check must fail publication, not count as success.
 3. Configure the public demo hostname at the HTTPS proxy to forward to the private
    server on **8081**, preserving the public Host and browser Origin. If trusted-client
@@ -103,6 +107,11 @@ update; its matching source remains inside that image.
   forwarding; never enable unrestricted trust of `X-Forwarded-For`.
 - **Publication fails:** the prior image is restored when one exists. Inspect the
   workflow result and local health; correct the image or configuration before retrying.
+  The wrapper also refuses an image whose layers inflate past 1 GiB in total, that has more
+  than 4,096 archive members, or that loads larger than 1 GiB; none of these changes the
+  running release.
+- **The demo does not start after a crash:** a leftover socket nobody is listening on is
+  removed automatically; a regular file at the socket path or a live server is refused.
 - **Archive upload times out:** the wrapper refuses an upload idle for 30 seconds or
   exceeding 600 seconds overall, releases its deployment lock and removes temporary
   files before importing an image. The current release stays unchanged; restore the

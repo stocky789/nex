@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.18. Add an enrolled Nex Core host to another host's pool from Nex
+Development product 0.4.19. Add an enrolled Nex Core host to another host's pool from Nex
 Controller: **Settings** → **Members** (with the pool chosen in the top-bar scope menu) →
 **Add host to pool**. The pool master owns membership and
 pool-wide configuration (shared storage, guest VLANs, and ISO library entries on those shared
@@ -122,6 +122,12 @@ Messages below are the exact text the interface shows.
 
 - **“only the master of its own single-host pool can join another pool”** — the selected host is
   already a member of a pool, or is a master with members of its own.
+- **“joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining
+  host”** — the joining host runs a Core that predates hostname reporting (for example a 0.4.18
+  Core that was not restarted after the upgrade). The master refuses the join and the joiner's
+  error and log carry this reason. Upgrade and restart Nex Core on the joining host, then retry.
+  Members of pools created before hostnames were reported keep an empty hostname: nothing
+  backfills it.
 - **“joining a pool with managed VMs is not supported; migrate or remove workloads first”** —
   remove the workloads, then retry. Nothing has been started.
 - **“joining a pool with existing remote storage is not supported; detach it first”** — detach the

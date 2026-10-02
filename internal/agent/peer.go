@@ -33,6 +33,11 @@ type peerJoinRequest struct {
 	Offer, HostID, CSRPEM string
 	Hostname              string `json:"hostname,omitempty"`
 }
+
+// errJoinHostnameRequired is the one refusal the master states to the joiner: a Core that
+// predates hostname reporting cannot join until it is upgraded and restarted.
+var errJoinHostnameRequired = errors.New("joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining host")
+
 type peerJoinResponse struct {
 	CertificatePEM string                  `json:"certificate_pem"`
 	Membership     protocol.PoolMembership `json:"membership"`
@@ -379,6 +384,10 @@ func PoolPeerHandler(s *Store) http.Handler {
 		}
 		response, err := acceptPeerJoin(s, request)
 		if err != nil {
+			if errors.Is(err, errJoinHostnameRequired) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, "join refused", http.StatusConflict)
 			return
 		}
@@ -451,7 +460,7 @@ func acceptPeerJoin(s *Store, request peerJoinRequest) (peerJoinResponse, error)
 		return peerJoinResponse{}, errors.New("invalid join identity")
 	}
 	if !protocol.ValidPoolHostname(request.Hostname) {
-		return peerJoinResponse{}, errors.New("joining Core must report a valid hostname")
+		return peerJoinResponse{}, errJoinHostnameRequired
 	}
 	// Check-then-bind is one critical section under this lock, which is why two concurrent
 	// redemptions cannot both admit a member. That is only sound because one process owns
@@ -858,7 +867,7 @@ func RetryPoolPeerOrigin(ctx context.Context, s *Store) error {
 	state, err := loadPoolPeer(s)
 	origin := state.PendingPeerOrigin
 	poolPeerMu.Unlock()
-	if origin == "" {
+	if err != nil || origin == "" {
 		return err
 	}
 	return AdvertisePoolPeerOrigin(ctx, s, origin)
@@ -969,6 +978,10 @@ func JoinPoolPeer(ctx context.Context, s *Store, masterURL, poolCAPEM, offer str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		reason, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		if text := strings.TrimSpace(strings.ToValidUTF8(string(reason), "")); text != "" {
+			return fmt.Errorf("pool master rejected join (HTTP %d): %s", resp.StatusCode, text)
+		}
 		return fmt.Errorf("pool master rejected join (HTTP %d)", resp.StatusCode)
 	}
 	var joined peerJoinResponse

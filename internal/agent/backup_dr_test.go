@@ -440,7 +440,7 @@ func TestCleanupOfFailedTestRestoreReleasesPin(t *testing.T) {
 	s := seedBackupMaster(t)
 	run := protocol.BackupRun{OperationID: "test-restore-op", Kind: protocol.BackupKindTestRestore, PoolID: "pool-1",
 		HostID: "member-1", RepositoryID: "repo-1", RecoveryPointID: "point-1", NewVMID: "never-created-vm",
-		Stage: "failed", Status: "failed", Error: "member never started this operation for 10m0s: member unreachable", CreatedAt: time.Now().UTC()}
+		Stage: "not_started", Status: "failed", Error: "member never started this operation for 10m0s: member unreachable", CreatedAt: time.Now().UTC()}
 	if err := savePoolBackupRun(s, run); err != nil {
 		t.Fatal(err)
 	}

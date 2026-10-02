@@ -6,9 +6,9 @@ Date: 2026-10-01
 
 This is a sanitized verification narrative, not an untouched log capture. Deployment
 addresses, administrator identities, SSH keys, cookies and machine identifiers are
-intentionally omitted. The selected website server runs Ubuntu 24.04.5 and Docker
-29.1.3 with the containerd image store. It hosts a separate, fictional read-only demo;
-no Nex Core host, libvirt instance, real VM, backup destination or restore was exercised.
+intentionally omitted, as are host, OS, runtime and network details of the deployment
+server. It hosts a separate, fictional read-only demo; no Nex Core host, libvirt instance,
+real VM, backup destination or restore was exercised.
 
 Published image revision: `f37168f3f60abdc5d6fed4dd05e776cc8c477eea`.
 This identifies an uncommitted worktree snapshot, not a Git commit or released version.
@@ -58,9 +58,9 @@ Executed checks:
   current SHA-256 above.
 
 The browser walkthrough used development loopback HTTP, not the externally restricted
-hostname. Public TLS subsequently validated, but the edge returned 401 even for the
-login page. The project owner confirmed intentional proxy IP allowlisting; it was
-preserved. No public-browser success or broader access is claimed. No product API
+hostname. No public-browser success is claimed: an outside browser could not reach the
+page, which the project owner confirmed was intentional access restriction that was
+preserved. No product API
 contract, durable Core state or real host behavior changed. Independent source review
 of the login separation, fixture consistency, catalog regressions and guide/API changes
 found no unresolved must-fix finding; the parent executed runtime checks.
@@ -107,58 +107,37 @@ capture was inspected. This extra run is not evidence of production TLS/cookie s
 
 ## Authentication, isolation and hosting
 
-Observed on the installed deployment:
+Checked on the installed deployment, without recording its host configuration:
 
-- Login cookies were Secure, HttpOnly, SameSite=Strict and scoped to `/`. An off-origin
-  login returned 403. Oversized login input returned 413 at the private proxy.
-- Console and upgrade attempts through nginx returned 404, not a stream or successful
-  response. Direct adapter tests also cover upgrade refusal and mutation boundaries.
-- Container UID/GID 64050, network mode `none`, no published ports, read-only root,
-  all capabilities dropped and no-new-privileges enabled. The only host mount is the
-  bounded Unix socket directory; no Docker socket, credentials or host data is mounted.
-- Runtime limits: 192 MiB memory without additional swap, one CPU, 64 PIDs,
-  1024 file descriptors, 8 MiB temporary space and rotated container logs.
-- Socket directory: separate 1 MiB tmpfs, 128 inodes, owner-only permissions,
-  `nosuid,nodev,noexec`; restored automatically before Docker on boot.
-- Separate non-root nginx service: private listener on 8081, 128 MiB memory limit,
-  restricted bind/peer addresses, filesystem protection and no-new-privileges.
-- Default-deny host ingress; SSH permits only selected administration/publishing
-  origins. Website/demo HTTP listeners permit the selected HTTPS proxies.
-- Effective SSH settings disable passwords, keyboard-interactive login, root login,
-  agent forwarding and X11 forwarding. Host security updates were installed; no
-  upgradable packages remained in the checked APT metadata after reboot.
-- Dedicated publishing account has no Docker-group membership and only the anchored,
-  single-revision deployment sudo rule. Its home/key/helper are root-owned. Its
-  publishing key rejected shell execution, arbitrary sudo and SSH forwarding.
-- Four separate `NEX_DEMO_DEPLOY_*` Gitea secrets were created successfully. Existing
-  website deployment credentials were not changed or passed to the demo job.
-- Proxy access logging is disabled. A harmless oversized-request error was actually
-  received by the dedicated journal namespace. Loaded settings use volatile storage,
-  an 8 MiB runtime retention limit, rate limiting and no forwarding to other log sinks.
+- Login cookies were Secure, HttpOnly and SameSite=Strict; an off-origin login was
+  refused and oversized login input was rejected at the proxy.
+- Console and upgrade attempts through the proxy were refused; direct adapter tests also
+  cover upgrade refusal and mutation boundaries.
+- The container runs as a dedicated non-root identity with no network, no published ports,
+  a read-only root, dropped capabilities and bounded CPU, memory, processes and logs. Its only
+  host mount is a small bounded socket directory; no Docker socket, credentials or host data is
+  mounted. The details are in [the deployment README](../../packaging/demo/README.md).
+- A separate non-root proxy service fronts the socket, with access logging disabled and
+  diagnostics kept volatile and bounded.
+- The publishing account has no Docker-group membership; its key rejected shell execution,
+  arbitrary sudo and SSH forwarding. Existing website credentials were not passed to the demo
+  job, and the four demo-specific secrets were created.
 
 ## Publication, rollback and reboot
 
 `demo-ci-deploy.sh` was executed with the configured restricted publishing credentials;
-it published the reviewed image, reported a healthy Unix endpoint and retained the
-previous image. This is a real script execution, not a Gitea workflow run.
+it published the reviewed image, reported a healthy endpoint and retained the previous
+image. This is a real script execution, not a Gitea workflow run.
 
-Two controlled disposable candidates were published through that same script:
+Two controlled disposable candidates were published through that same script: a missing
+executable and an existing executable without required assets. In both cases the prior image
+was restored healthy, and after the cleanup correction each failed candidate image was absent.
+Replaying the real image through its importer preserved its immutable configuration.
 
-1. Missing executable: Docker startup failed; the prior image was restored healthy.
-2. Existing executable without required assets: service health failed; the prior image
-   was restored healthy.
-
-After the cleanup correction, both cases were repeated: the prior service remained
-healthy and each failed candidate image was absent. Replaying the real image through
-its importer preserved its immutable configuration on Docker/containerd.
-
-The project owner explicitly authorized the host update and reboot. The boot identifier
-changed, the kernel advanced from `6.8.0-139-generic` to `6.8.0-146-generic`, and Docker,
-the demo proxy and the existing website service recovered active. The selected demo
-container recovered healthy without republishing; its socket tmpfs and journal
-namespace were recreated. A pre-reboot session returned 401, as documented; new login
-and the full browser walkthrough passed. The existing public website returned HTTP 200
-with its security headers after reboot.
+With the project owner's authorization the host was updated and rebooted. The demo container,
+proxy and the existing website recovered without republishing, the socket directory and journal
+namespace were recreated, a pre-reboot session was rejected as documented, and a new login and
+the full browser walkthrough passed.
 
 ## Focused checks and independent review
 
@@ -194,14 +173,9 @@ the primary, not attributed to the reviewers. See BUG-1142 and BUG-1143 in the
 
 ## Remaining external gates and limits
 
-- Public TLS is configured and validates. The website operator intentionally limits
-  the proxy resource to selected IPs; an outside browser received 401 before the
-  demo page, so public-browser verification remains unavailable from that origin.
-  The restriction was preserved; no application/firewall access was widened.
-  The temporary direct verification allowance was removed from both the firewall and
-  service allowlist. A direct administration-origin HTTP request timed out; a permitted
-  loopback-origin request through the installed private proxy returned 200, its Unix
-  healthcheck passed and the existing public website still returned 200.
+- Public-browser verification is unavailable: access to the public origin is deliberately
+  restricted by its operator, and that restriction was preserved. A permitted loopback-origin
+  request through the installed proxy returned 200 and its health check passed.
 - Git history remains owner-controlled. Automatic publication starts after the change
   is committed/pushed; the first actual Gitea run and runner isolation are not verified
   by local script execution or the existence of workflow files.
@@ -212,7 +186,7 @@ the primary, not attributed to the reviewers. See BUG-1142 and BUG-1143 in the
 - Logout clears the browser cookie, not copied stateless cookies; restart/expiry
   invalidate them. Volatile proxy diagnostics are deliberately discarded on reboot.
 
-API impact: **existing contract** — restricted reuse of Controller client contracts;
+API impact: **new contract** for the demo-only API; restricted reuse of Controller client contracts;
 production Controller/Core and peer contracts do not change. Guide impact: **updated**.
 State owner: **none** — fictional build inputs and disposable sessions are not durable
 product/pool state; deployment selection is hosting infrastructure metadata.

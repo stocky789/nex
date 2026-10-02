@@ -811,6 +811,11 @@ func acceptBackupRequestUnrecorded(ctx context.Context, s *Store, request Backup
 			mutation, err := reserveBackupRepositoryMutation(s, request.PeerRepository.ID)
 			poolBackupAuthorityMu.Unlock()
 			if err != nil {
+				if errors.Is(err, ErrBackupConflict) {
+					// Another operation holds the repository, for example the master's access
+					// probe. The caller sees a retryable 409, not a permanent refusal.
+					err = ErrBackupUnavailable
+				}
 				return BackupResponse{Err: err}
 			}
 			defer mutation.release()

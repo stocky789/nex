@@ -189,10 +189,17 @@ func linkPoolBackupBlob(s *Store, hash, path string) error {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// Link under a temporary name and rename over the page, so a crash or a reader never sees
+	// the page missing and a page of a verified root is replaced in one step.
+	temporary := path + ".link"
+	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Link(blob, path); err != nil {
+	if err := os.Link(blob, temporary); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
 		return err
 	}
 	return syncPoolBackupDirectory(filepath.Dir(path))
@@ -386,9 +393,25 @@ func requirePoolBackupMembersCurrent(s *Store, membership protocol.PoolMembershi
 	if err != nil || generation == 0 || digest == "" {
 		return errors.New("backup authority growth requires current signed pool authority")
 	}
-	for _, member := range required {
-		status, err := refreshPoolBackupMemberStatus(s, member)
-		if err != nil {
+	// The caller holds poolBackupAuthorityMu, so the members are asked at once: the wait is one
+	// member timeout however many are down, not one per member.
+	type observation struct {
+		status protocol.PoolReplicaStatus
+		err    error
+	}
+	observed := make([]observation, len(required))
+	var asking sync.WaitGroup
+	for i, member := range required {
+		asking.Add(1)
+		go func() {
+			defer asking.Done()
+			observed[i].status, observed[i].err = refreshPoolBackupMemberStatus(s, member)
+		}()
+	}
+	asking.Wait()
+	for _, seen := range observed {
+		status := seen.status
+		if seen.err != nil {
 			log.Printf("backup authority growth refused: authenticated member replica status unavailable")
 			return errors.New("backup authority growth requires every ready pool member to hold the current replica")
 		}
@@ -655,20 +678,75 @@ func poolBackupAuthorityLarge(stored, edit *protocol.PoolBackupManifest) bool {
 		stored.MetadataReceipts+edit.MetadataReceipts > 100000
 }
 
-// stagePoolBackupAuthorityFromStore writes a root's pages only when that root
-// is not already staged.
+// poolBackupStagedRoots remembers, per store, the root whose pages this process last verified
+// or wrote, so an unchanged authority is not re-read in full on every probe tick. The remembered
+// root is still checked for presence and size before it is trusted, and a failed push forgets it.
+var poolBackupStagedRoots = map[string]string{}
+var poolBackupStagedMu sync.Mutex
+
+func rememberStagedPoolBackupRoot(s *Store, root string) {
+	poolBackupStagedMu.Lock()
+	poolBackupStagedRoots[s.dir] = root
+	poolBackupStagedMu.Unlock()
+}
+
+func forgetStagedPoolBackupRoot(s *Store) {
+	poolBackupStagedMu.Lock()
+	delete(poolBackupStagedRoots, s.dir)
+	poolBackupStagedMu.Unlock()
+}
+
+func poolBackupPagesPresent(s *Store, m *protocol.PoolBackupManifest) bool {
+	total := 0
+	for index := range m.PageCount {
+		info, err := os.Lstat(poolBackupPageFile(s, m.SHA256, index))
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+		total += int(info.Size())
+	}
+	return total == m.TotalBytes
+}
+
+// poolBackupRootStaged reports whether the pages of m are already staged and intact.
+func poolBackupRootStaged(s *Store, m *protocol.PoolBackupManifest) bool {
+	poolBackupStagedMu.Lock()
+	remembered := poolBackupStagedRoots[s.dir] == m.SHA256
+	poolBackupStagedMu.Unlock()
+	if remembered && poolBackupPagesPresent(s, m) {
+		return true
+	}
+	if verifyPoolBackupAuthorityPages(s, m) != nil {
+		return false
+	}
+	rememberStagedPoolBackupRoot(s, m.SHA256)
+	return true
+}
+
+// stagePoolBackupAuthorityFromStore stages the store's current root and reports its manifest.
 func stagePoolBackupAuthorityFromStore(s *Store) (*protocol.PoolBackupManifest, error) {
 	m, err := encodePoolBackupAuthorityFromStore(s, nil)
-	if err != nil || m == nil || verifyPoolBackupAuthorityPages(s, m) == nil {
+	if err != nil || m == nil {
 		return m, err
+	}
+	return m, stagePoolBackupReplicaPages(s, m)
+}
+
+// stagePoolBackupReplicaPages makes the pages of m, a manifest just built from the store,
+// readable for the push. It writes them only when that root is not already staged, in one walk
+// that must end at the same root. The caller holds poolBackupAuthorityMu, so the store cannot
+// move on.
+func stagePoolBackupReplicaPages(s *Store, m *protocol.PoolBackupManifest) error {
+	if m == nil || poolBackupRootStaged(s, m) {
+		return nil
 	}
 	temporary, err := newPoolBackupStage(s)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer releasePoolBackupStage(temporary)
 	index := 0
-	m, err = encodePoolBackupAuthorityFromStore(s, func(page []byte) error {
+	staged, err := encodePoolBackupAuthorityFromStore(s, func(page []byte) error {
 		path := filepath.Join(temporary, fmt.Sprintf("%04d", index))
 		index++
 		poolBackupBlobMu.Lock()
@@ -679,35 +757,29 @@ func stagePoolBackupAuthorityFromStore(s *Store) (*protocol.PoolBackupManifest, 
 		}
 		return os.Link(poolBackupBlobFile(s, hash), path)
 	})
-	if err != nil || m == nil {
-		return nil, err
+	if err != nil {
+		return err
+	}
+	if staged == nil || staged.SHA256 != m.SHA256 {
+		return errors.New("backup authority changed while its pages were staged")
 	}
 	if err := syncPoolBackupDirectory(temporary); err != nil {
-		return nil, err
+		return err
 	}
 	parent := filepath.Join(s.dir, poolBackupPageDir)
 	poolBackupBlobMu.Lock()
 	defer poolBackupBlobMu.Unlock()
 	if err := os.RemoveAll(filepath.Join(parent, m.SHA256)); err != nil {
-		return nil, err
+		return err
 	}
 	if err := os.Rename(temporary, filepath.Join(parent, m.SHA256)); err != nil {
-		return nil, err
+		return err
 	}
-	return m, syncPoolBackupDirectory(parent)
-}
-
-// stagePoolBackupReplicaPages makes a built replica's backup pages readable for
-// the push. The caller holds poolBackupAuthorityMu, so the store cannot move on.
-func stagePoolBackupReplicaPages(s *Store, m *protocol.PoolBackupManifest) error {
-	if m == nil || verifyPoolBackupAuthorityPages(s, m) == nil {
-		return nil
+	if err := syncPoolBackupDirectory(parent); err != nil {
+		return err
 	}
-	staged, err := stagePoolBackupAuthorityFromStore(s)
-	if err == nil && (staged == nil || staged.SHA256 != m.SHA256) {
-		err = errors.New("backup authority changed while its pages were staged")
-	}
-	return err
+	rememberStagedPoolBackupRoot(s, m.SHA256)
+	return nil
 }
 
 func readPoolBackupPage(s *Store, m *protocol.PoolBackupManifest, index int) ([]byte, error) {

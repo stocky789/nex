@@ -294,7 +294,8 @@ func registrationApplied(raw string) bool {
 // The guard is narrow on purpose: only a row whose operation failed *and* whose command no host
 // has reported as applied is discardable, so this can never delete the projection of a live
 // pool resource. Anything else is left to the caller's ordinary relayed-removal path.
-func (c *Controller) discardFailedRegistration(w http.ResponseWriter, user, id, kind string) bool {
+func (c *Controller) discardFailedRegistration(w http.ResponseWriter, user, id string) bool {
+	const kind = "network-register"
 	tx, err := c.db.Begin()
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "storage unavailable")
@@ -534,7 +535,7 @@ func (c *Controller) networkLifecycle(w http.ResponseWriter, r *http.Request, us
 	// A registration the master refused published nothing on any host, so discarding it is
 	// local and takes no body. Answered before the removal body is even read, exactly as
 	// deleteMedia answers a failed import.
-	if action == "remove" && identifierValid(id) && c.discardFailedRegistration(w, user, id, "network-register") {
+	if action == "remove" && identifierValid(id) && c.discardFailedRegistration(w, user, id) {
 		return
 	}
 	var body resourceLifecycleAPIRequest
@@ -1046,14 +1047,14 @@ func (c *Controller) adoptManaged(tx *sql.Tx, host string, inv *protocol.Invento
 		// Every matching queued observation refreshes the silence clock, even when
 		// Core's reason is unchanged. Observing queued work is not a settlement.
 		if knownOwnOperation && o.Status == "queued" {
-			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
+			if _, err = tx.Exec("UPDATE operations SET error=CASE WHEN status='needs_attention' THEN error ELSE ? END,updated_at=? WHERE id=? AND host_id=? AND kind=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), o.OperationID, host, o.Kind); err != nil {
 				return err
 			}
 		}
 		// Adopted tasks are passive mirrors: only Core moves them, and they are never
 		// dispatched by this Controller. Terminal history must not regress to queued.
 		if known[requestID] && o.Status == "queued" {
-			if _, err = tx.Exec("UPDATE operations SET error=?,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
+			if _, err = tx.Exec("UPDATE operations SET error=CASE WHEN status='needs_attention' THEN error ELSE ? END,updated_at=? WHERE host_id=? AND kind=? AND request_id=? AND status IN ('queued','dispatched','needs_attention')", clip(o.Error, 4096), stamp(), host, o.Kind, requestID); err != nil {
 				return err
 			}
 		}

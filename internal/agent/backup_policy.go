@@ -97,6 +97,11 @@ func UpsertPoolBackupPolicy(s *Store, policy protocol.BackupPolicy) (protocol.Ba
 	if _, err := GetPoolBackupRepository(s, policy.RepositoryID); err != nil {
 		return protocol.BackupPolicy{}, err
 	}
+	// A forget in progress has already counted the repository's jobs; a new one would
+	// point at a repository that is about to be gone.
+	if backupRepositoryRemoving(s, policy.RepositoryID) {
+		return protocol.BackupPolicy{}, ErrBackupConflict
+	}
 	membership, err := Membership(s)
 	if err != nil {
 		return protocol.BackupPolicy{}, ErrBackupUnavailable
@@ -408,7 +413,7 @@ func walkPoolBackupAuthorityRecords(s *Store, emit func(byte, any) error) (bool,
 			case 7:
 				var cleanup protocol.BackupOrphanCleanup
 				err = json.Unmarshal(raw, &cleanup)
-				record, id = cleanup, cleanup.OperationID
+				record, valid, id = cleanup, cleanup.Valid(), cleanup.OperationID
 			}
 			if err != nil || valid != nil || id+".json" != entry.Name() {
 				return false, errors.New(group.corrupt)

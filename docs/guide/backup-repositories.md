@@ -32,9 +32,9 @@ when Core must rediscover retained points.
   not create it. Core mounts these repositories `nosuid,nodev,noexec` (data
   only); SMB3 mounts also use `vers=3.1.1,seal`.
 - S3: an HTTPS S3-compatible endpoint, bucket/prefix and scoped access key. Core
-  hosts must trust the endpoint certificate. Core signs requests for region
-  `us-east-1` and uses path-style addressing (`https://endpoint/bucket/key`);
-  there is no region field, so the provider must accept both. The provider must
+  hosts must trust the endpoint certificate. Core uses path-style addressing
+  (`https://endpoint/bucket/key`) and signs requests for the optional **Region** you enter
+  (default `us-east-1`), so the provider must accept both. The provider must
   pass Core's conditional create/delete, multipart, readback and owner checks;
   registration refuses a provider that does not.
 - SFTP: an existing confined repository root, an account with an SSH private key,
@@ -102,18 +102,26 @@ longer use it. Forgetting never deletes anything from the destination.
 Core forgets the repository, its recovery points and its run history, and removes its
 mount and saved credential from the pool master and each member. A protected recovery
 point is forgotten too, once you have confirmed the counts shown. Core refuses before
-removal while a backup job uses the repository (move each such job with **Change repository**;
-deleted-VM overrides are removed when you save), any backup, restore, test restore or
-catalog operation remains unfinished, including `needs_attention`, a point remains
-reserved, cleanup or retention is active, the name is wrong, or the counted points changed.
-The refusal names unfinished restores and their test VMs where applicable.
+removal while a backup job uses the repository (move each such job with **Change repository**
+or delete it), a backup, restore or test restore of it is `pending` or `needs_attention`, a
+point remains reserved or pinned, cleanup or retention is active, another change to the
+repository is running, the name is wrong, or the counted points changed. Missed, skipped,
+succeeded and failed runs are history and are removed with the repository. A catalog import
+or rebuild creates no run, so Core does not refuse for one; instead the import or rebuild is
+refused at its commit once the repository is forgotten. Core checks again after it detaches
+the mount and refuses if a new job, run or pin appeared meanwhile. New runs and jobs for the
+repository are refused (conflict) while it is being registered or forgotten. The refusal
+names unfinished restores and their test VMs where applicable.
 
 Mount detachment and credential removal can be interrupted after some local work has
 finished. Restore access, let the mount become idle, and retry the **same request**:
-Core resumes its pending removal and receipt rather than starting another forget.
-An already recorded terminal refusal retains that outcome; correct its cause before
-submitting a new request. Unreachable members retain their exact old registration until
-the master's reconciliation reaches them; newer registrations are not removed by an old retry.
+Core records a removal intent before it removes records, and a retry under the same request
+resumes that removal (without re-running the blocker and count checks) and its receipt
+rather than starting another forget. While that intent exists new jobs and runs for the
+repository get a conflict. An already recorded terminal refusal retains that outcome;
+correct its cause before submitting a new request. Unreachable members retain their exact
+old registration until the master's reconciliation reaches them; newer registrations are
+not removed by an old retry.
 
 To use a forgotten destination again, register it again with its **original repository
 ID** (see [Reuse a repository ID](#reuse-a-repository-id)), then select **Import points** to
@@ -157,9 +165,11 @@ space. Retention does not remove them once no backup job covers the VM.
    on an offline host is still in the inventory, so it is never listed. If Core cannot read
    its VM inventory it says so and lists nothing; nothing can be deleted then.
 2. Read any warning about a backup job that still lists a missing VM. **Change repository**
-   drops the deleted VMs from that job when you save it; a job whose VMs are all deleted cannot be
-   changed from the UI. There is no delete-job action in the UI: use
-   `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` with corrected `vm_ids`.
+   sends the job's VM list to Core unchanged, and Core refuses the change while the list
+   names a VM that is gone, so the job stays on its old repository. To stop such a job, select
+   **Delete** on it (see [Backup policies](backup-policies.md)), which removes only the job
+   definition; its recovery points stay and appear here. Its VM list can also be corrected
+   with `PUT /api/v1/pools/{id}/backup-policies/{policy_id}`.
 3. Select the VMs to clean up. Tick **Include protected recovery points** only if their
    protected points must go too; otherwise protected points are kept.
 4. Type the text shown, such as `delete 5 recovery points`. The number counts every point of
@@ -172,7 +182,9 @@ space. Retention does not remove them once no backup job covers the VM.
    or failed, listed with its VM's name. Skipped points stay in the repository and the catalog.
    When some points could not be deleted the panel still shows every point's result with Core's
    error above it. If the panel cannot read the result for about 30 seconds it says so and points
-   to **Tasks**; the cleanup may still be running.
+   to **Tasks**; the cleanup may still be running. When Core refuses the plan, or a cleanup
+   stalls (a failed or needs-attention task with a running record), the panel offers
+   **Review again**; the retry and replay behaviour is unchanged.
 
 Deleting removes each recovery point's data from the destination and then its catalog entry, the
 same way retention does; this cannot be undone. Core skips protected points unless included, points
@@ -180,14 +192,19 @@ held by an unfinished restore or test restore or named by a running backup, and 
 that exists again. Core checks the VMs and counts again when it runs and refuses, deleting
 nothing, if they changed since the panel counted them; open the panel again and review. Sending
 the same request again returns the same outcome, and a run that was interrupted continues from
-its recorded plan. A point the destination could not delete is shown as failed; fix the
+its recorded plan; Core saves progress every 25 points or two seconds, so after a crash up
+to 25 points are confirmed again rather than deleted twice. A point the destination could
+not delete is shown as failed with its reason (cut off at 4,096 bytes); fix the
 destination and run the cleanup again. The list is read from the pool master, so a new
-Controller shows the same list and history of cleanups.
+Controller shows the same list and history of cleanups. On S3, Core can clear a point whose
+manifest is sound but whose artifacts are missing or resized; a point with a missing or
+invalid manifest cannot be cleared from here and needs manual cleanup on the destination.
 
 ## Expected result
 
 The repository row shows its type and target. **Health** shows Core's latest online
-or offline probe with its observation time; it becomes unknown when no fresh report
+or offline probe with its observation time (**Last check** reads **Not checked** when Core has
+no observation); it becomes unknown when no fresh report
 is available. **Host access** lists only Core-observed member access. Old capacity
 and access remain last reported, not proof of current access. A fresh Controller
 adopts the same repository from authenticated pool-master inventory. A backup or
@@ -240,7 +257,9 @@ and test restore read every artifact and verify its digest.
 - SFTP registration fails: verify the root exists, the pinned host key matches,
   the key/account has the needed rights, and the server supports durable sync and
   exclusive rename. Core refuses a missing owner on adoption rather than claiming
-  an established repository as new.
+  an established repository as new. "server offers no supported host key type" means the
+  server offers no key algorithm Core can pin; "host key differs from pinned key" means the
+  key changed (see the rotation steps below).
 - To rotate SMB3/S3/SFTP credentials or change an SFTP host key on the same destination,
   [reuse the repository ID](#reuse-a-repository-id). To move a target, create and test a **new
   repository ID** at a separate directory, prefix or root. Use **Change repository**
@@ -272,24 +291,27 @@ and test restore read every artifact and verify its digest.
 - A host that joins another pool or is ejected unmounts and forgets the backup
   repositories of the pool it left and erases their backup credentials; its new
   pool delivers its own. Data on the share stays.
-- Every Core stores backup credentials encrypted under a host-local sealing key;
-  Core never keeps the cleartext secret beside the repository record. For SMB3,
-  after Core accepts the sealed credential it also writes a root-only
-  `mount.cifs` credentials file under `backup-smb-credentials/` and points the
-  mount unit at it with `credentials=`. systemd 257 cannot pass a decrypted
-  systemd credential into a `.mount` helper, so the remount path uses that
-  private file rather than TPM-unsealed material at each start. The sealing key
-  for Core's encrypted backup receipts lives in a root-only
-  `backup-credential-key` directory beside Core state; a copy of the state
-  directory alone does not open the credentials on another host, while root on
-  this host still can. After rebuilding or replacing a host, recreate its SMB3
+- Core stores the credential receipts for every backup destination encrypted under a
+  host-local sealing key; Core never keeps the cleartext secret beside the repository
+  record. For SMB3, systemd 257 cannot pass a decrypted systemd credential into a
+  `.mount` helper, so Core also writes the mount password in plaintext to a root-only
+  (mode 0600) `mount.cifs` credentials file at the fixed path
+  `/var/lib/nex-core-agent/backup-smb-credentials/<reference>` and points the mount unit
+  at it with `credentials=`. That path does not follow `--state-dir`, so a copy of the
+  default state directory contains the SMB3 password; protect backups of the host
+  accordingly. The sealing key for the encrypted receipts lives in a root-only
+  `backup-credential-key` directory in Core's state directory; a copy of the state
+  directory alone does not open the S3, SFTP or SMB3 receipts on another host, while root
+  on this host still can. If the key file is lost while receipts remain, Core refuses to
+  create a new one: restore the key file, or remove the receipts and register the
+  repositories again. After rebuilding or replacing a host, recreate its backup
   credentials. A damaged or unreadable sealed receipt marks only that repository
   offline until you register it again.
 - If Core stopped in the middle of removing a protection marker, a `.nex-protected.rm-*`
   file may remain beside the recovery point. Core puts it back when the point has no
   marker, and removes it when it matches the current one; any other leftover is kept for
   you to inspect.
-- Retiring or replacing an SMB3 credential also deletes its sealed mount file.
+- Retiring or replacing an SMB3 credential also deletes its mount credentials file.
 - Core refuses an SMB3 username that contains `=`.
 - A published point with unfinished retention may leave a task in
   `needs_attention`. Restore destination access and inspect that exact task and

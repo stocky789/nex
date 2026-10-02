@@ -612,3 +612,24 @@ func TestPoolPeerExactRoutesRejectWrongMethodWith405(t *testing.T) {
 		}
 	}
 }
+
+// A joiner that predates hostname reporting is told why it was refused, rather than an
+// opaque "join refused" that gives neither operator nor joiner log a cause.
+func TestPoolPeerJoinWithoutHostnameStatesTheRefusal(t *testing.T) {
+	master := peerStore(t, "master-1", "pool-1")
+	if err := EnsurePoolMembership(master); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(peerJoinRequest{Offer: "x", HostID: "member-1"})
+	w := httptest.NewRecorder()
+	PoolPeerHandler(master).ServeHTTP(w, httptest.NewRequest(http.MethodPost, poolJoinPath, strings.NewReader(string(body))))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "upgrade and restart Nex Core") {
+		t.Fatalf("hostname-less join: %d %q", w.Code, w.Body.String())
+	}
+	body, _ = json.Marshal(peerJoinRequest{Offer: "x", HostID: "member-1", Hostname: "member.example.test"})
+	w = httptest.NewRecorder()
+	PoolPeerHandler(master).ServeHTTP(w, httptest.NewRequest(http.MethodPost, poolJoinPath, strings.NewReader(string(body))))
+	if w.Code != http.StatusConflict || strings.TrimSpace(w.Body.String()) != "join refused" {
+		t.Fatalf("other refusal must stay opaque: %d %q", w.Code, w.Body.String())
+	}
+}

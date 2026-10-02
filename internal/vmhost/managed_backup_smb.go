@@ -9,17 +9,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"nex.local/nex/internal/protocol"
 )
 
 // backupSMBCredentialRoot holds one root-only mount.cifs credentials file per credential reference. The
-// mount unit reads it itself, so the repository remounts after a reboot without Core.
+// mount unit reads it itself, so the repository remounts after a reboot without Core. The root
+// is fixed, like the mount and unit roots the same unit names: it does not follow --state-dir.
 var backupSMBCredentialRoot = "/var/lib/nex-core-agent/backup-smb-credentials"
 
-var backupSMBPrepareMu sync.Mutex
+// backupSMBPrepare serializes the credential-file and mount-unit sequence of one repository. The
+// wait ends with the caller's context, and a stuck share holds up only its own repository.
+var backupSMBPrepare keyedLock
 
 // RemoveBackupSMBCredential deletes the mount credentials file of a credential reference.
 func RemoveBackupSMBCredential(reference string) error {
@@ -43,9 +45,12 @@ func PrepareBackupRepositorySMB(ctx context.Context, repo protocol.BackupReposit
 	if err != nil {
 		return protocol.BackupRepository{}, err
 	}
-	backupSMBPrepareMu.Lock()
-	defer backupSMBPrepareMu.Unlock()
 	registration := backupStorageRegistration(repo)
+	unlock, err := backupSMBPrepare.lock(ctx, registration.ID)
+	if err != nil {
+		return protocol.BackupRepository{}, err
+	}
+	defer unlock()
 	if err := checkExistingBackupRepositoryOwner(filepath.Join(remoteMountPath(registration), repo.SMBSource.Directory), repo.ID, repo.PoolID); err != nil {
 		return protocol.BackupRepository{}, err
 	}

@@ -48,8 +48,19 @@ digest. Import does not itself prove a point can boot after restore. Protected p
 protection. Active restore pins on the same master remain and block prune.
 Concurrent protection and test-restore verification updates are preserved. A rebuild
 also keeps a point that a backup publishes after the scan began; it does not erase that
-new point merely because the earlier listing did not contain it. Conflicting marker
-changes can be refused while another change is active; retry after that task settles.
+new point merely because the earlier listing did not contain it, and it rescans once
+before failing when a listed point is neither imported nor cataloged. A protection marker
+in the repository that the catalog does not know is adopted (the point becomes protected)
+unless the marker disappears while the point's metadata is reserved; an operator unprotect
+that completed after the scan still wins. The scan itself changes nothing in the repository.
+A leftover `.nex-protected.rm-*` marker counts as protection until the next protect or
+unprotect settles it. On S3, import and rebuild skip a damaged point (missing or resized
+artifact, invalid manifest) and the rebuild names it, as NFS and SMB3 do. Conflicting
+marker changes can be refused while another change is active; retry after that task settles.
+A repository forgotten while an import or rebuild runs is refused at the commit.
+After a pool master change, repositories the new master could not reach are recorded and
+their catalog is imported automatically once they are reachable (see
+[Pool authority](pool-authority-and-recovery.md)); until then import or rebuild them by hand.
 
 ## Troubleshooting
 

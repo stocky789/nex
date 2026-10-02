@@ -501,7 +501,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Controller queues removal of a backup repository from the pool on the master. Core drops the repository, its recovery-point records and run history, and each host&#x27;s sealed credential and mount; it never deletes destination data. It refuses with a failed Result while a backup job uses the repository, an operation on it is running, a recovery point of it is in use by an unfinished restore, the typed name is wrong or the recovery point counts differ from the confirmed ones. Replays by request_id return the recorded Result; a repository that is already forgotten succeeds.&quot;
+  &quot;semantics&quot;: &quot;Controller queues removal of a backup repository from the pool on the master. Core drops the repository, its recovery-point records and run history, and each host&#x27;s credential and mount; it never deletes destination data. It refuses with a failed Result while a backup job uses the repository, a backup, restore or test restore of it is pending or needs_attention, a recovery point of it is pinned or reserved, another change to it is running, the typed name is wrong or the recovery point counts differ from the confirmed ones. Replays by request_id return the recorded Result; a repository that is already forgotten succeeds.&quot;
 }</pre></section>
 <section><h2>backup-now</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -621,7 +621,7 @@
   &quot;result&quot;: {
     &quot;$ref&quot;: &quot;#/components/schemas/Result&quot;
   },
-  &quot;semantics&quot;: &quot;Controller queues deletion of a backup policy definition on the pool master. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. Replays by request_id return the recorded Result; a policy that is already gone succeeds only for the request_id that deleted it.&quot;
+  &quot;semantics&quot;: &quot;Controller queues deletion of a backup policy definition on the pool master. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. Replays by request_id return the recorded Result; a policy that is already gone succeeds only for the request_id that deleted it.&quot;
 }</pre></section>
 <section><h2>backup-policy-run-now</h2><pre>{
   &quot;transport&quot;: &quot;POST /api/v1/agent/report response.commands&quot;,
@@ -1455,12 +1455,12 @@
   }
 }</pre></details></section>
 <section id="listPoolJoinCandidates"><h2>GET <code>/api/v1/pools/{id}/join-candidates</code></h2>
-<p>Preview which hosts could join this pool</p><p>Administrator session. Read-only presentation of host-reported facts for the &quot;Add host to pool&quot; dialog: enrolled, non-revoked hosts in the same site that are not already in this pool, each with a compatibility preview composed from both hosts&#x27; own reported inventory (connection, agent version, capability lists, existing membership, managed VMs, non-local storage, NIC names against each pool VLAN&#x27;s uplink, CPU baseline). Each row is compatible, will_not_converge or refuses_join; eligible is false if and only if some row is refuses_join, and will_not_converge rows do not block a join. This is a preview, not an authorization: every refusal is decided again by Core when the join is submitted, and a candidate listed as eligible can still be refused. Implemented in development product 0.1.0.</p>
+<p>Preview which hosts could join this pool</p><p>Administrator session. Read-only presentation of host-reported facts for the &quot;Add host to pool&quot; dialog: enrolled, non-revoked hosts in the same site that are not already in this pool, each with a compatibility preview composed from both hosts&#x27; own reported inventory (connection, agent version, existing membership, managed VMs, non-local storage, NIC names against each pool VLAN&#x27;s uplink, CPU baseline). Each row is compatible, will_not_converge or refuses_join; eligible is false if and only if some row is refuses_join, and will_not_converge rows do not block a join. This is a preview, not an authorization: every refusal is decided again by Core when the join is submitted, and a candidate listed as eligible can still be refused. Implemented in development product 0.1.0.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;listPoolJoinCandidates&quot;,
   &quot;summary&quot;: &quot;Preview which hosts could join this pool&quot;,
-  &quot;description&quot;: &quot;Administrator session. Read-only presentation of host-reported facts for the \&quot;Add host to pool\&quot; dialog: enrolled, non-revoked hosts in the same site that are not already in this pool, each with a compatibility preview composed from both hosts&#x27; own reported inventory (connection, agent version, capability lists, existing membership, managed VMs, non-local storage, NIC names against each pool VLAN&#x27;s uplink, CPU baseline). Each row is compatible, will_not_converge or refuses_join; eligible is false if and only if some row is refuses_join, and will_not_converge rows do not block a join. This is a preview, not an authorization: every refusal is decided again by Core when the join is submitted, and a candidate listed as eligible can still be refused. Implemented in development product 0.1.0.&quot;,
+  &quot;description&quot;: &quot;Administrator session. Read-only presentation of host-reported facts for the \&quot;Add host to pool\&quot; dialog: enrolled, non-revoked hosts in the same site that are not already in this pool, each with a compatibility preview composed from both hosts&#x27; own reported inventory (connection, agent version, existing membership, managed VMs, non-local storage, NIC names against each pool VLAN&#x27;s uplink, CPU baseline). Each row is compatible, will_not_converge or refuses_join; eligible is false if and only if some row is refuses_join, and will_not_converge rows do not block a join. This is a preview, not an authorization: every refusal is decided again by Core when the join is submitted, and a candidate listed as eligible can still be refused. Implemented in development product 0.1.0.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9954,12 +9954,12 @@
   }
 }</pre></details></section>
 <section id="forgetBackupRepository"><h2>POST <code>/api/v1/pools/{id}/backup-repositories/{repo_id}/forget</code></h2>
-<p>Forget a backup repository</p><p>Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.</p>
+<p>Forget a backup repository</p><p>Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore or test restore of it is pending or needs_attention (missed, skipped, succeeded and failed runs are history and are removed with it), a recovery point is pinned or reserved, retention or another metadata change on it is running, the name is wrong, or the counts changed. A catalog import or rebuild creates no run and is instead refused at its commit once the repository is forgotten. Core re-checks jobs, pins and counts after detaching the mount and records a removal intent, so a retry with the same request_id resumes a partial removal. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;forgetBackupRepository&quot;,
   &quot;summary&quot;: &quot;Forget a backup repository&quot;,
-  &quot;description&quot;: &quot;Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and sealed credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts changed. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.&quot;,
+  &quot;description&quot;: &quot;Queues backup-repository-forget on the pool master. Requires administrator session, CSRF, a stable request_id distinct from repo_id, the repository name as confirmation and the recovery point counts the operator was shown. Core forgets the repository and its recovery-point and run-history records and removes each host&#x27;s mount and credential; destination data is never deleted, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles failed, changing nothing, while a backup job uses the repository, a backup, restore or test restore of it is pending or needs_attention (missed, skipped, succeeded and failed runs are history and are removed with it), a recovery point is pinned or reserved, retention or another metadata change on it is running, the name is wrong, or the counts changed. A catalog import or rebuild creates no run and is instead refused at its commit once the repository is forgotten. Core re-checks jobs, pins and counts after detaching the mount and records a removal intent, so a retry with the same request_id resumes a partial removal. Replaying the request_id for the same repository returns the recorded outcome (200); the same request_id for another repository is 409.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -9968,7 +9968,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -11155,12 +11155,12 @@
   &quot;description&quot;: &quot;Pause or resume a backup policy&quot;
 }</pre></details></section>
 <section id="deleteBackupPolicy"><h2>POST <code>/api/v1/pools/{id}/backup-policies/{policy_id}/delete</code></h2>
-<p>Delete a backup policy</p><p>Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.</p>
+<p>Delete a backup policy</p><p>Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;deleteBackupPolicy&quot;,
   &quot;summary&quot;: &quot;Delete a backup policy&quot;,
-  &quot;description&quot;: &quot;Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.&quot;,
+  &quot;description&quot;: &quot;Queues backup-policy-delete on the pool master. Requires administrator session, CSRF, a stable request_id distinct from policy_id and the policy name as confirmation. Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. An absent policy settles failed with &#x27;backup policy not found&#x27; under a new request_id. Replaying the request_id for the same policy returns the recorded outcome (200), including after the policy is already gone; the same request_id with a changed payload or another policy is 409.&quot;,
   &quot;tags&quot;: [
     &quot;Client \u2192 Controller&quot;
   ],
@@ -12462,7 +12462,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12535,8 +12535,28 @@
         }
       }
     },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;Pool master returned an invalid or oversized page, or the enrolled read-only channel failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;503&quot;: {
       &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;Pool master did not answer in time.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -12562,7 +12582,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12739,7 +12759,7 @@
       &quot;AdminSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;client&quot;,
   &quot;parameters&quot;: [
     {
@@ -12822,8 +12842,28 @@
         }
       }
     },
+    &quot;502&quot;: {
+      &quot;description&quot;: &quot;Pool master returned an invalid or oversized page, or the enrolled read-only channel failed.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;503&quot;: {
       &quot;description&quot;: &quot;Pool master unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;504&quot;: {
+      &quot;description&quot;: &quot;Pool master did not answer in time.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {

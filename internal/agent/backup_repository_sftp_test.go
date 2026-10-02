@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2018,5 +2020,356 @@ func TestSFTPFailedOwnerClaimReleasesOnlyItsMarker(t *testing.T) {
 				t.Fatal("corrected registration could not claim root:", err)
 			}
 		})
+	}
+}
+
+// stallSFTPDirSync blocks the first directory sync of dir after skip earlier
+// ones, which is how a stalled server holds a removal step.
+func stallSFTPDirSync(t *testing.T, dir string, skip int32) (entered, release chan struct{}) {
+	t.Helper()
+	entered, release = make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	syncSFTPDir = func(_ *sftp.Client, name string) error {
+		if name == dir && calls.Add(1) == skip+1 {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	return entered, release
+}
+
+func requireSFTPMembershipFree(t *testing.T, s *Store, entered, release chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operation never reached the stalled step")
+	}
+	member := make(chan struct{})
+	go func() { Membership(s); close(member) }()
+	select {
+	case <-member:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Membership blocked on poolPeerMu during SFTP I/O")
+	}
+}
+
+func TestSFTPDeleteRemovesFilesWithoutPoolPeerLock(t *testing.T) {
+	client := testSFTPClient(t)
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	entered, release := stallSFTPDirSync(t, filepath.Join(root, "point-1"), 0)
+	done := make(chan error, 1)
+	go func() { done <- storage.deleteOnClient(context.Background(), client, "point-1") }()
+	requireSFTPMembershipFree(t, store, entered, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSFTPDeleteStopsRemovingAfterAuthorityLoss(t *testing.T) {
+	client := testSFTPClient(t)
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	entered, release := stallSFTPDirSync(t, filepath.Join(root, "point-1"), 0)
+	done := make(chan error, 1)
+	go func() { done <- storage.deleteOnClient(context.Background(), client, "point-1") }()
+	requireSFTPMembershipFree(t, store, entered, release)
+	restrictPoolAuthority(t, store)
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("delete finished after authority was lost")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "point-1")); err != nil {
+		t.Fatalf("point directory removed after authority was lost: %v", err)
+	}
+}
+
+func TestSFTPAbortRemovalRunsWithoutPoolPeerLock(t *testing.T) {
+	client := testSFTPClient(t)
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, _ := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.publishOnClient(context.Background(), client, manifest, map[string]string{"disk.qcow2": filepath.Join(root, "missing-source")}, raw); err == nil {
+		t.Fatal("missing source unexpectedly published")
+	}
+	if err := os.WriteFile(filepath.Join(root, "point-1", "disk.qcow2"), []byte("partial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The manifest claim syncs the point directory under the lock; the removals that follow do not.
+	entered, release := stallSFTPDirSync(t, filepath.Join(root, "point-1"), 1)
+	done := make(chan error, 1)
+	go func() { done <- storage.abortIncompleteOnClient(context.Background(), client, "point-1") }()
+	requireSFTPMembershipFree(t, store, entered, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stallingConn blocks the next write once armed, holding the request that follows.
+type stallingConn struct {
+	net.Conn
+	armed            atomic.Bool
+	entered, release chan struct{}
+}
+
+func (c *stallingConn) Write(p []byte) (int, error) {
+	if c.armed.CompareAndSwap(true, false) {
+		close(c.entered)
+		<-c.release
+	}
+	return c.Conn.Write(p)
+}
+
+func TestSFTPSetProtectedReadsOutsidePoolPeerLock(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	server, err := sftp.NewServer(serverConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Serve()
+	conn := &stallingConn{Conn: clientConn, entered: make(chan struct{}), release: make(chan struct{})}
+	client, err := sftp.NewClientPipe(conn, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close(); server.Close() })
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	conn.armed.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- storage.setProtectedOnClient(client, "point-1", true) }()
+	requireSFTPMembershipFree(t, store, conn.entered, conn.release)
+	close(conn.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := storage.protectedOnClient(client, "point-1"); err != nil || !protected {
+		t.Fatalf("point not protected: %v %v", protected, err)
+	}
+}
+
+func TestSFTPDeleteIgnoresAnotherPointsDamagedMarker(t *testing.T) {
+	client := testSFTPClient(t)
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	// Another point's prune record whose completion marker names a different digest.
+	other, _ := testSFTPPoint(t, store.State.PoolID, "point-2")
+	otherRaw, err := json.Marshal(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(sftpDeleteRecord{Manifest: otherRaw, Digest: sha256Hex(otherRaw)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.publishDeleteRecord(client, "point-2", record); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nex-deleted-point-2"), []byte(strings.Repeat("f", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.deleteOnClient(context.Background(), client, "point-1"); err != nil {
+		t.Fatalf("another point's damaged marker blocked the delete: %v", err)
+	}
+}
+
+func TestSFTPSweepDeleteMarkersVerifiesRepositoryAndAuthority(t *testing.T) {
+	root := t.TempDir()
+	store, repo := testSFTPRepository(t, root)
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	digest, err := backend.Publish(ctx, manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := savePoolBackupCatalogEntry(store, protocol.BackupRecoveryPoint{ID: manifest.RecoveryPointID, RepositoryID: manifest.RepositoryID,
+		PoolID: manifest.PoolID, SourceVMID: manifest.SourceVMID, CapturedAt: manifest.CapturedAt, Consistency: manifest.Consistency, ManifestSHA256: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Delete(ctx, "point-1"); err != nil {
+		t.Fatal(err)
+	}
+	// The last prune removed the catalog entry, so its markers may now retire.
+	if err := os.Remove(filepath.Join(poolBackupCatalogPath(store), "point-1.json")); err != nil {
+		t.Fatal(err)
+	}
+	markers := []string{".nex-delete-point-1", ".nex-deleted-point-1"}
+	present := func() bool {
+		for _, name := range markers {
+			if _, err := os.Lstat(filepath.Join(root, name)); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+	if !present() {
+		t.Fatal("prune left no markers to retire")
+	}
+	sweeper := backend.(interface{ SweepDeleteMarkers(context.Context) })
+	owner, err := os.ReadFile(filepath.Join(root, "owner.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "owner.json"), []byte(`{"repository":"other","pool":"other"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sweeper.SweepDeleteMarkers(ctx)
+	if !present() {
+		t.Fatal("markers retired from a repository that no longer verifies")
+	}
+	if err := os.WriteFile(filepath.Join(root, "owner.json"), owner, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restrictPoolAuthority(t, store)
+	sweeper.SweepDeleteMarkers(ctx)
+	if !present() {
+		t.Fatal("a host without authority retired markers")
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(store)
+	if err == nil {
+		state.Restricted = nil
+		err = savePoolPeer(store, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweeper.SweepDeleteMarkers(ctx)
+	if present() {
+		t.Fatal("markers were not retired once verification and authority held")
+	}
+}
+
+func TestSFTPScanLeavesSetAsideMarkerAlone(t *testing.T) {
+	client := testSFTPClient(t)
+	stubSFTPSync(t, true)
+	root := t.TempDir()
+	store := seedBackupMaster(t)
+	storage := sftpBackupStorage{s: store, repo: protocol.BackupRepository{ID: "repo-1", PoolID: store.State.PoolID, SFTPSource: &protocol.BackupSFTPSource{Root: root}}}
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishTestSFTPPoint(t, storage, client, manifest, files, raw)
+	leftover := filepath.Join(root, "point-1", ".nex-protected.rm-crashed")
+	if err := os.WriteFile(leftover, []byte("protected\npoint-1\nnonce\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	points, err := storage.scanOnClient(context.Background(), client)
+	if err != nil || len(points) != 1 || !points[0].Protected {
+		t.Fatalf("set-aside marker did not keep the point protected: %+v %v", points, err)
+	}
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("scan moved the leftover: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "point-1", ".nex-protected")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scan restored the marker: %v", err)
+	}
+	if err := storage.setProtectedOnClient(client, "point-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := storage.protectedOnClient(client, "point-1"); err != nil || protected {
+		t.Fatalf("unprotect did not settle the leftover: %v %v", protected, err)
+	}
+}
+
+func TestSFTPVerifyArtifactsHashesStoredContent(t *testing.T) {
+	root := t.TempDir()
+	store, repo := testSFTPRepository(t, root)
+	backend, err := openBackupRepositoryStorage(store, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	manifest, files := testSFTPPoint(t, store.State.PoolID, "point-1")
+	if _, err := backend.Publish(ctx, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.VerifyArtifacts(ctx, "point-1", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "point-1", "disk.qcow2"), []byte("dusk"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.VerifyArtifacts(ctx, "point-1", manifest); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("same-size corruption not detected: %v", err)
+	}
+}
+
+// A server that offers only a host key type Core never negotiates has not
+// presented a different key, so the error must not say the pin differs.
+func TestSFTPConnectReportsUnsupportedHostKeyTypes(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := ssh.NewSignerWithAlgorithms(signer.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := startTestSFTPServer(t, legacy)
+	storage := sftpBackupStorage{repo: protocol.BackupRepository{SFTPSource: &protocol.BackupSFTPSource{
+		Host: "127.0.0.1", Port: port, HostKeySHA256: ssh.FingerprintSHA256(legacy.PublicKey()),
+	}}, credentials: protocol.StorageCredentials{Username: "backup", SSHPrivateKey: testSSHPrivateKey(t)}}
+	_, closeAll, err := storage.connect(context.Background())
+	if err == nil {
+		closeAll()
+		t.Fatal("a server with only an unsupported host key type connected")
+	}
+	if strings.Contains(err.Error(), "differs") || !strings.Contains(err.Error(), "host key type") {
+		t.Fatalf("unsupported host key type misreported: %v", err)
 	}
 }

@@ -35,14 +35,10 @@
     "reason": "No new durable state. The policy check and receipt write happen on the master under its authority lock, and a fresh Controller reads the same records through the existing inventory."
   },
   "verification": {
-    "method": "Focused Go tests in internal/agent (TestPendingCleanupReportsUnreachableMember, TestPolicyDeleteRacesRunReservation, TestDeleteMissingPolicyLeavesNoReceipt), each failing with its fix removed, plus a sanitized scenario-lab run on a three-host pool (blocked member cleanup, 20 concurrent delete versus run-now iterations with 0 anomalies, unknown-policy delete leaving no receipt, dialog spacing screenshots). Needs_attention runs still do not block a policy delete.",
+    "method": "Focused Go tests in internal/agent (TestPendingCleanupReportsUnreachableMember, TestPolicyDeleteRacesRunReservation, TestDeleteMissingPolicyLeavesNoReceipt), each failing with its fix removed, plus a sanitized scenario-lab run on a three-host pool (blocked member cleanup, 20 concurrent delete versus run-now iterations with 0 anomalies, unknown-policy delete leaving no receipt, dialog spacing screenshots); the raw lab logs and captures are ignored local files and are not tracked evidence. At the time of this record needs_attention runs did not block a policy delete; later review fixes (docs/changes/2026-10-02-review-findings-fixes.json) refuse a delete while any run of the job is pending or needs_attention.",
     "evidence": [
       "internal/agent/backup_blocker_test.go",
-      "internal/agent/backup_policy_delete_test.go",
-      ".cache/backup-scenario-lab/evidence/sixth-r61.json",
-      ".cache/backup-scenario-lab/evidence/sixth-r62.log",
-      ".cache/backup-scenario-lab/evidence/sixth-ui-tasks-waiting-blocked-7844.json",
-      ".cache/backup-scenario-lab/evidence/sixth-ui-dialogs.json"
+      "internal/agent/backup_policy_delete_test.go"
     ]
   }
 }

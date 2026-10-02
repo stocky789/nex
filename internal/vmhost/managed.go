@@ -6360,7 +6360,7 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 			}
 			return errors.New("an earlier interrupted delete for this VM is still unresolved: " + r.Error)
 		}
-		if id == req.VMID && (old.Command.Kind == "vm-create" || old.Command.Kind == "vm-update" || old.Command.Kind == "vm-power" || old.Command.Kind == "vm-media" || old.Command.Kind == "vm-delete") {
+		if id == req.VMID && vmChangeKind(old.Command.Kind) {
 			return errors.New("a change, power, media or delete request for this VM is still unresolved")
 		}
 	}
@@ -6378,14 +6378,45 @@ func (e *ManagedEngine) deleteVM(ctx context.Context, j *managedJournal, js []ma
 	cur.DiskChains = chains
 	paths := managedDeleteDiskPaths(js, cur)
 	j.Retained = append([]string{}, paths...)
+	// The vTPM state a restore replace kept is key material of this VM; it goes with the VM,
+	// bound to the trees the earlier edits recorded, like the live TPM state.
+	if j.RetainedTPM, err = collectRetainedTPM(ctx, req.VMID, js); err != nil {
+		return err
+	}
 	j.Stage = "undefining"
 	if err := e.verifyManagedDeleteFiles(ctx, js, *j); err != nil {
+		return err
+	}
+	if err := verifyRetainedTPM(ctx, req.VMID, j.RetainedTPM, js); err != nil {
 		return err
 	}
 	if err = e.save(*j); err != nil {
 		return err
 	}
 	return e.finishDelete(ctx, j, js, true)
+}
+
+// vmChangeKind names the operations that may not overlap a delete or a release of retained
+// originals of the same VM while one of them is pending or needs attention.
+func vmChangeKind(kind string) bool {
+	switch kind {
+	case "vm-create", "vm-update", "vm-power", "vm-media", "vm-delete":
+		return true
+	}
+	return false
+}
+
+// unresolvedVMChange reports another pending or needs_attention change of vmID.
+func unresolvedVMChange(js []managedJournal, operationID, vmID string) bool {
+	for _, old := range js {
+		if old.Command.OperationID == operationID || (old.Result.Status != "pending" && old.Result.Status != "needs_attention") {
+			continue
+		}
+		if id, _ := managedIdentity(old.Command); id == vmID && vmChangeKind(old.Command.Kind) {
+			return true
+		}
+	}
+	return false
 }
 
 // finishDelete runs the effects of a delete whose disk list is already journaled: undefine
@@ -6420,6 +6451,10 @@ func (e *ManagedEngine) finishDelete(ctx context.Context, j *managedJournal, js 
 	if defined[strings.ToLower(req.VMID)] {
 		return errors.New("VM domain is still defined after undefine")
 	}
+	if err := removeRetainedTPMTrees(ctx, req.VMID, j.RetainedTPM, js); err != nil {
+		return err
+	}
+	j.RetainedTPM = nil
 	if req.DeleteDisks {
 		j.Stage = "wiping"
 		if err := e.save(*j); err != nil {

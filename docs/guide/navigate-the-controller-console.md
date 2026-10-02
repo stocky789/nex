@@ -2,7 +2,7 @@
 
 ## Status
 
-Development build 0.4.18 of Nex Controller. The console replaces the earlier desktop layout
+Development build 0.4.19 of Nex Controller. The console replaces the earlier desktop layout
 (toolbar, resource tree, detail tabs and bottom task strip) with a labelled rail, a top bar,
 filterable lists with slide-over panels, a pool **Overview**, operational **Storage** and
 **Networks** screens and pool **Settings**. Every workflow reachable before remains reachable;
@@ -42,10 +42,11 @@ flows are available in matching development builds.
    - **Networks** (`#/networks`) — the pool's guest networks with **Name**, **VLAN**, **Uplink**,
      **Host access**, **VMs**, **Status** and **Actions**. The **VMs** count links to the VM list
      filtered to that network (`#/vms?network=<name>`).
-   - **Backups** (`#/backups`) — recovery points with VM/repository filters, **Back up now**,
-     **Restore as new**, **Replace**, **Protect**, **Test restore** and **Repositories**; **Backup jobs** sit above them on the same page, each expanding to its VMs.
-     covers schedules and retention; test-restore recording remains gated. Register destinations under
-     **Settings** → **Backup repositories**.
+   - **Backups** (`#/backups`) — two views: **Backup jobs** (schedules and retention, each job
+     expanding to its VMs) and **Recovery points** (VM and repository filters). **Back up now**
+     starts a backup; a selected recovery point offers **Restore…** (choose restore as new or
+     replace the original VM), **Protect** and **Test restore**; **Repositories** opens the
+     destinations. Register destinations under **Settings** → **Backup repositories**.
    - Pinned at the bottom: **Tasks** (`#/tasks`), **Events** (`#/events`) and **Settings**
      (`#/settings`, which opens its **Overview** section).
 

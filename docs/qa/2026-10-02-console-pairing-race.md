@@ -2,7 +2,7 @@
 
 ## Scope and ownership
 
-Development version 0.4.18, uncommitted worktree. BUG-1839 corrects the console
+Development version 0.4.19, uncommitted worktree. BUG-1839 corrects the console
 pairing failure found during the earlier [backup review verification](2026-10-02-backup-review-fixes.md).
 Controller retains only a transient in-memory admission flag; no pool setting,
 identity, guest work or durable record moves out of Core. Controller replacement

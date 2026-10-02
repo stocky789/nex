@@ -79,7 +79,8 @@ func serveBackupRunPage(w http.ResponseWriter, r *http.Request, s *Store) {
 	}
 	// A page generation covers which records exist and their order, not their
 	// status, so settlements and protection changes never restart a walk. Run
-	// order is fixed by the immutable creation time, and runs are never deleted.
+	// order is fixed by the immutable creation time; forgetting a repository removes
+	// its runs, which changes the ID list and so the generation.
 	ids := make([]string, len(runs))
 	for i, run := range runs {
 		ids[i] = run.OperationID

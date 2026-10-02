@@ -90,6 +90,37 @@ def uncertain_job(page, fixture):
     assert submissions[1] == submissions[0], 'Route changes must not replace an unresolved job intent'
 
 
+def uncertain_job_across_tasks(page, fixture):
+    submissions = []
+    def submit(route):
+        if route.request.method != 'POST':
+            route.fallback()
+            return
+        submissions.append(route.request.post_data_json)
+        if len(submissions) == 1:
+            route.fulfill(status=503, json={'error': 'Simulated uncertain response'})
+        else:
+            route.fulfill(status=202, json={'operation': {'id': 'operation-demo'}})
+    page.route('**/api/v1/pools/pool-demo/backup-policies', submit)
+    page.get_by_role('button', name='Create backup job', exact=True).click()
+    panel = page.locator('.slideover')
+    panel.get_by_label('Name', exact=True).fill('Retained job')
+    panel.get_by_role('combobox', name='Repository', exact=True).select_option('repo-demo')
+    panel.get_by_role('checkbox', name='db-primary', exact=True).check()
+    panel.get_by_role('button', name=re.compile('^Next:')).click()
+    panel.get_by_role('button', name=re.compile('^Next:')).click()
+    panel.get_by_role('button', name='Save backup job', exact=True).click()
+    expect(panel.get_by_role('button', name='Retry exact request')).to_be_visible()
+    # The message sends the operator to Tasks, which unmounts the page; the held request must survive.
+    page.evaluate("location.hash='/tasks'")
+    expect(page.get_by_role('tab', name='Backup jobs', exact=True)).to_have_count(0)
+    page.evaluate("location.hash='/backups'")
+    expect(panel.get_by_role('button', name='Retry exact request')).to_be_visible()
+    panel.get_by_role('button', name='Retry exact request').click()
+    expect(panel).to_have_count(0)
+    assert submissions[1] == submissions[0], 'Leaving for Tasks and returning must replay the same request_id and body'
+
+
 def repository_focus(page, fixture):
     opener = page.get_by_role('button', name='Change repository of Nightly servers', exact=True)
     opener.click()
@@ -327,8 +358,8 @@ def repository_deleted_override(page, fixture):
     panel.get_by_role('checkbox').check()
     panel.get_by_role('button', name='Save repository change', exact=True).click()
     expect(panel.get_by_role('button', name='Retry exact request', exact=True)).to_be_visible()
-    assert submissions[0]['vm_ids'] == ['vm-db', 'vm-web']
-    assert submissions[0]['overrides'] == [retained], 'Only the deleted VM override is pruned'
+    assert submissions[0]['vm_ids'] == ['vm-db', 'vm-web', 'vm-deleted'], 'The Controller sends Core-owned coverage unchanged, including VMs missing from its mirror'
+    assert submissions[0]['overrides'] == policy['overrides'], 'Overrides are sent as Core reported them'
     # New observations must not change an unresolved move's coverage or retained override.
     data['vms'][:] = [vm for vm in data['vms'] if vm['id'] != 'vm-web']
     policy['overrides'][1] = {**retained, 'capture_mode': 'stopped'}
@@ -344,6 +375,7 @@ CHECKS = {
     'retained-metadata': retained_metadata,
     'draft-route': draft_route,
     'uncertain-job': uncertain_job,
+    'uncertain-job-across-tasks': uncertain_job_across_tasks,
     'repository-focus': repository_focus,
     'phone-layout': phone_layout,
     'backup-refusal': backup_refusal,

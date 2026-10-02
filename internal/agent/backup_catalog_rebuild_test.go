@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,6 +282,9 @@ func TestPointMetadataReservationReleasedAfterMarkerFailure(t *testing.T) {
 	}
 }
 
+// An unchanged reimport must not walk the store once per point. Process read
+// counters include unrelated goroutines, so the test compares two sizes: linear
+// growth multiplies reads by the size ratio, a per-point walk by far more.
 func TestCatalogReimportReadsGrowLinearly(t *testing.T) {
 	readCalls := func() uint64 {
 		t.Helper()
@@ -297,39 +301,34 @@ func TestCatalogReimportReadsGrowLinearly(t *testing.T) {
 		}
 		return reads
 	}
-	s := seedBackupMaster(t)
-	mount := seedFlowRepository(t, s)
-	const count = 64
-	for i := range count {
-		seedPublishedPoint(t, mount, "repo-1", s.State.PoolID, fmt.Sprintf("point-%03d", i))
-	}
-	first, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first) != count {
-		t.Fatalf("initial import omitted published points: got %d want %d", len(first), count)
-	}
-	before := readCalls()
-	second, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
-	// Process counters cover actual file reads without a production instrumentation hook.
-	reads := readCalls() - before
-	t.Logf("unchanged reimport: %d read calls for %d points", reads, count)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(second) != len(first) {
-		t.Fatalf("reimport lost points: got %d want %d", len(second), len(first))
-	}
-	for i := range first {
-		if second[i] != first[i] {
-			t.Fatalf("reimport changed point: got %+v want %+v", second[i], first[i])
+	reimportReads := func(count int) uint64 {
+		t.Helper()
+		s := seedBackupMaster(t)
+		mount := seedFlowRepository(t, s)
+		for i := range count {
+			seedPublishedPoint(t, mount, "repo-1", s.State.PoolID, fmt.Sprintf("point-%03d", i))
 		}
+		first, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
+		if err != nil || len(first) != count {
+			t.Fatalf("initial import: %d points, %v", len(first), err)
+		}
+		before := readCalls()
+		second, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
+		reads := readCalls() - before
+		if err != nil || len(second) != len(first) {
+			t.Fatalf("reimport: %d points, %v", len(second), err)
+		}
+		for i := range first {
+			if second[i] != first[i] {
+				t.Fatalf("reimport changed point: got %+v want %+v", second[i], first[i])
+			}
+		}
+		return reads
 	}
-	// Allow generous linear overhead for manifests, authority admission and local
-	// commits, but not a catalog/authority walk for each selected point.
-	if reads > 32*count+256 {
-		t.Fatalf("unchanged reimport read the store per point: %d read calls for %d points", reads, count)
+	small, large := reimportReads(16), reimportReads(64)
+	t.Logf("unchanged reimport: %d read calls for 16 points, %d for 64", small, large)
+	if large > 8*small {
+		t.Fatalf("unchanged reimport reads grow faster than linearly: %d for 16 points, %d for 64", small, large)
 	}
 }
 
@@ -448,5 +447,95 @@ func TestCatalogPointLookupValidatesSelectedRecord(t *testing.T) {
 				t.Fatalf("unsafe record path accepted: %v", err)
 			}
 		})
+	}
+}
+
+// Protection is written to the repository before the catalog, so a marker the
+// catalog does not know belongs to a protect that never finished.
+func TestCatalogImportAdoptsRepositoryProtectionMarker(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := seedFlowRepository(t, s, "point-1")
+	if point, err := getCatalogPoint(s, "repo-1", "point-1"); err != nil || point.Protected {
+		t.Fatalf("seed point already protected: %+v %v", point, err)
+	}
+	if err := vmhost.WriteBackupProtectMarker(filepath.Join(mount, "point-1"), true); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := importPoolBackupCatalog(context.Background(), s, "repo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, err := getCatalogPoint(s, "repo-1", "point-1")
+	if err != nil || !point.Protected || len(imported) != 1 || !imported[0].Protected {
+		t.Fatalf("repository marker not adopted: catalog=%+v imported=%+v err=%v", point, imported, err)
+	}
+	if !vmhost.ReadBackupProtectMarker(filepath.Join(mount, "point-1")) {
+		t.Fatal("adopting the marker removed it")
+	}
+}
+
+// An unprotect that completes between the scan and the import must win over the
+// marker the scan saw.
+func TestCatalogImportKeepsUnprotectCompletedAfterScan(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := seedFlowRepository(t, s, "point-1")
+	req := protocol.ProtectRecoveryPointRequest{RepositoryID: "repo-1", RecoveryPointID: "point-1", Protected: true}
+	if _, err := SetPoolBackupPointProtected(s, req); err != nil {
+		t.Fatal(err)
+	}
+	previous := checkImportedBackupCatalogPointCapacity
+	checkImportedBackupCatalogPointCapacity = func(store *Store, points ...protocol.BackupRecoveryPoint) error {
+		req.Protected = false
+		if _, err := SetPoolBackupPointProtected(store, req); err != nil {
+			return err
+		}
+		return previous(store, points...)
+	}
+	t.Cleanup(func() { checkImportedBackupCatalogPointCapacity = previous })
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	if point, err := getCatalogPoint(s, "repo-1", "point-1"); err != nil || point.Protected {
+		t.Fatalf("import reverted an unprotect made after its scan: %+v %v", point, err)
+	}
+	if vmhost.ReadBackupProtectMarker(filepath.Join(mount, "point-1")) {
+		t.Fatal("import restored a removed marker")
+	}
+}
+
+func TestCatalogRebuildAcceptsPointPublishedAfterScan(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := seedFlowRepository(t, s, "point-1")
+	previous := listBackupCatalogRepositoryEntries
+	published := false
+	listBackupCatalogRepositoryEntries = func(ctx context.Context, backend backupRepositoryStorage) ([]string, error) {
+		if !published {
+			published = true
+			seedPublishedPoint(t, mount, "repo-1", s.State.PoolID, "point-2")
+		}
+		return previous(ctx, backend)
+	}
+	t.Cleanup(func() { listBackupCatalogRepositoryEntries = previous })
+	imported, err := RebuildPoolBackupCatalogFromRepository(context.Background(), s, "repo-1")
+	if err != nil {
+		t.Fatalf("a point published after the scan failed the rebuild: %v", err)
+	}
+	if len(imported) != 2 {
+		t.Fatalf("rebuild missed the new point: %+v", imported)
+	}
+	if _, err := getCatalogPoint(s, "repo-1", "point-2"); err != nil {
+		t.Fatalf("new point not cataloged: %v", err)
+	}
+}
+
+func TestCatalogRebuildStillReportsUnreadablePoint(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := seedFlowRepository(t, s, "point-1")
+	if err := os.MkdirAll(filepath.Join(mount, "point-broken"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RebuildPoolBackupCatalogFromRepository(context.Background(), s, "repo-1")
+	if err == nil || !strings.Contains(err.Error(), "point-broken") {
+		t.Fatalf("unreadable point not reported by name: %v", err)
 	}
 }

@@ -1372,8 +1372,10 @@ func TestSnapshotReadonlyDiskTargetsForceSnapshotNo(t *testing.T) {
 	}
 }
 
-// Every libvirt query on the snapshot preflight and execution paths proves nothing when it fails
-// (libvirt may be restarting), so each must classify as ErrOwnershipUnconfirmed, not a refusal.
+// Every libvirt query on the snapshot preflight and execution paths proves nothing when libvirt
+// never answered it (daemon or socket unreachable, killed on timeout), so each must classify as
+// ErrOwnershipUnconfirmed, not a refusal. libvirt's own answer, such as a missing domain or
+// snapshot, is final: retrying it would fence the VM forever.
 func TestSnapshotProbeFailureIsUnconfirmedNotRefusal(t *testing.T) {
 	e := NewManaged(filepath.Join(t.TempDir(), "managed"))
 	vm := managedTestVM()
@@ -1403,15 +1405,69 @@ func TestSnapshotProbeFailureIsUnconfirmedNotRefusal(t *testing.T) {
 		"revert-snapshot-list": func() error { return refuseSnapshotDeleteWithChildren(ctx, vm.ID, "n") },
 	}
 	for name, check := range checks {
-		t.Run(name, func(t *testing.T) {
-			fail := strings.TrimPrefix(name, "revert-")
-			t.Setenv("FAIL_VIRSH", fail)
-			fakeCommand(t, "virsh", `[ "$3" = "$FAIL_VIRSH" ] && exit 1
+		for _, reason := range []struct {
+			name, stderr string
+			unconfirmed  bool
+		}{
+			{"daemon unreachable", "Failed to connect socket to '/run/libvirt/libvirt-sock': No such file or directory", true},
+			{"connection lost", "Cannot recv data: Connection reset by peer", true},
+			{"timeout", "Timed out during operation: cannot acquire state change lock", true},
+			{"domain missing", "Domain not found: no domain with matching name 'gone'", false},
+			{"snapshot missing", "Domain snapshot not found: no domain snapshot with matching name 'gone'", false},
+		} {
+			t.Run(name+"/"+reason.name, func(t *testing.T) {
+				fail := strings.TrimPrefix(name, "revert-")
+				t.Setenv("FAIL_VIRSH", fail)
+				t.Setenv("VIRSH_REASON", reason.stderr)
+				fakeCommand(t, "virsh", `[ "$3" = "$FAIL_VIRSH" ] && { echo "error: $VIRSH_REASON" >&2; exit 1; }
 case "$3" in domstate) echo "shut off";; dominfo) echo "Autostart: disable";; esac`)
-			if err := check(); !errors.Is(err, ErrOwnershipUnconfirmed) {
-				t.Fatalf("%s failure is not unconfirmed: %v", name, err)
-			}
-		})
+				err := check()
+				if err == nil || errors.Is(err, ErrOwnershipUnconfirmed) != reason.unconfirmed {
+					t.Fatalf("%s failure %q: unconfirmed=%t want %t (%v)", name, reason.name, errors.Is(err, ErrOwnershipUnconfirmed), reason.unconfirmed, err)
+				}
+			})
+		}
+	}
+	t.Run("killed client", func(t *testing.T) {
+		fakeCommand(t, "virsh", `kill -9 $$`)
+		if _, err := managedSnapshotAbsent(ctx, vm.ID, "n"); !errors.Is(err, ErrOwnershipUnconfirmed) {
+			t.Fatalf("a killed virsh is not unconfirmed: %v", err)
+		}
+	})
+}
+
+// Firmware sources that fail local validation are refusals, not an unconfirmed query: no retry
+// can change a NVRAM path outside libvirt's directory or a TPM source it does not own.
+func TestSnapshotFirmwareSourceValidationIsARefusal(t *testing.T) {
+	vm := managedTestVM()
+	uefi := managedDomain{}
+	uefi.OS.Firmware = "efi"
+	uefi.OS.NVRAM = &nvramXML{Path: "/tmp/outside-libvirt/OVMF_VARS.fd"}
+	if _, err := snapshotFirmwareSources(context.Background(), uefi, vm.ID, t.TempDir(), "op-1"); err == nil || errors.Is(err, ErrOwnershipUnconfirmed) {
+		t.Fatalf("NVRAM outside libvirt's directory = %v, want a definite refusal", err)
+	}
+}
+
+// A preflight that keeps failing to reach libvirt holds its journal only for the retry window.
+func TestSnapshotPreflightUnconfirmedExpires(t *testing.T) {
+	e, vm := NewManaged(filepath.Join(t.TempDir(), "managed")), managedTestVM()
+	if err := os.MkdirAll(e.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{OperationID: "snapshot-preflight-stale", Kind: "snapshot-create", VM: &vm, Snapshot: &protocol.VMSnapshotRequest{Name: "point"}}
+	record := managedSnapshotRecord{SnapshotID: command.OperationID, Name: "point", CreatedAt: time.Now().UTC()}
+	started := time.Now().UTC().Add(-snapshotPreflightRetryWindow - time.Minute)
+	j := managedJournal{Command: command, Result: protocol.Result{OperationID: command.OperationID, Status: "pending", ObservedAt: started},
+		Stage: "snapshot-preflight", RecoveryStage: "preflight", Snapshot: &record}
+	if err := e.saveSnapshotJournal(j); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.failSnapshotPreflight(context.Background(), protocol.Result{OperationID: command.OperationID, Status: "failed"}, command.OperationID, ErrOwnershipUnconfirmed)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("expired preflight result = %+v, %v", result, err)
+	}
+	if _, err := e.readJournal(command.OperationID + ".json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired preflight journal kept: %v", err)
 	}
 }
 

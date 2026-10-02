@@ -170,8 +170,12 @@ func poolClusterMembership(s *Store) (protocol.PoolMembership, error) {
 	}
 	// Fail closed on identity and signature even when Verified was previously true: a
 	// tampered on-disk replica must not steer cluster membership or witness selection.
-	if replica.PoolID != membership.PoolID || replica.MasterHostID != membership.MasterHostID || replica.MemberHostID != s.State.HostID ||
-		replica.Valid() != nil || verifyPoolAuthorityReplica(state.CAPEM, replica) != nil {
+	if replica.PoolID != membership.PoolID || replica.MasterHostID != membership.MasterHostID || replica.MemberHostID != s.State.HostID {
+		return protocol.PoolMembership{}, errors.New("pool cluster authority replica is invalid")
+	}
+	if err := replica.Valid(); errors.Is(err, protocol.ErrPoolAuthorityReplicaSections) {
+		return protocol.PoolMembership{}, errors.New("pool cluster authority replica predates this build; wait for the pool master to push a new one")
+	} else if err != nil || verifyPoolAuthorityReplica(state.CAPEM, replica) != nil {
 		return protocol.PoolMembership{}, errors.New("pool cluster authority replica is invalid")
 	}
 	if replica.Membership.Generation > membership.Generation {

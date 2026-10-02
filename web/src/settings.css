@@ -64,13 +64,10 @@
 }
 
 /* Backups: one filter row above the table, and row actions in a single right-aligned line. */
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-.toolbar input[type="search"] { flex: 1 1 260px; width: auto; }
-.toolbar select { flex: 0 1 200px; width: auto; }
 .row-actions.inline { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; width: auto; white-space: nowrap; }
 .row-actions.inline > * { flex: none; white-space: nowrap; }
 .row-actions.inline select { width: 150px; min-height: 26px; }
-.records th:last-child { width: 1%; }
+:is(.backup-jobs, .backup-points, .backup-repos) th:last-child { width: 1%; }
 
 /* Backup jobs: one tbody per job; its VMs expand underneath. */
 .job-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -84,10 +81,6 @@
 .job-row:hover { background: var(--sunken); }
 .job-name { display: flex; align-items: flex-start; gap: 6px; }
 .job-name small, .job-vm-name small { display: block; }
-.twisty { flex: none; display: grid; place-items: center; width: 24px; min-height: 24px; height: 24px; padding: 0; border: 0; background: none; color: var(--muted); }
-.twisty:hover { color: var(--text); background: var(--sunken); }
-.twisty .icon { transform: rotate(-90deg); transition: transform .18s cubic-bezier(.25, 1, .5, 1); }
-.job.open .twisty .icon { transform: rotate(0); }
 .job-vm { background: var(--canvas); animation: job-vm-in .18s cubic-bezier(.25, 1, .5, 1); }
 .job-vm:hover { background: var(--sunken); }
 .job-vm-name { padding-left: 30px; font-weight: 600; }
@@ -95,7 +88,7 @@
 .empty-state { display: grid; justify-items: start; gap: 6px; padding: 12px 0 4px; }
 .empty-state p { margin: 0; color: var(--muted); max-width: 60ch; }
 @keyframes job-vm-in { from { opacity: 0; transform: translateY(-4px); } }
-@media (prefers-reduced-motion: reduce) { .twisty .icon { transition: none; } .job-vm { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .job-vm { animation: none; } }
 
 /* Restore and back-up steps: one column, so summaries and buttons keep their natural size. */
 .stack { display: grid; gap: 10px; align-content: start; }
@@ -117,8 +110,6 @@
 .backup-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
 .backup-filters { display: grid; align-content: start; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: var(--radius-panel); background: var(--panel); }
 .backup-filters :is(input[type="search"], select) { width: 100%; min-width: 0; }
-.backup-filters .toolbar { display: grid; gap: 12px; margin: 0; }
-.backup-filters .toolbar > :is(input, select) { width: 100%; }
 .backup-filter-toggle { display: none; }
 .backup-list { min-width: 0; }
 .backup-workspace .job-toolbar { gap: 8px 12px; }
@@ -152,7 +143,7 @@
   .backup-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .backup-filter-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; }
   .backup-filters { display: none; }
-  .backup-filters.open, .backup-layout.filters-open .backup-filters { display: grid; }
+  .backup-filters.open { display: grid; }
 }
 
 @media (max-width: 600px) {
@@ -167,8 +158,7 @@
   .backup-workspace .job-vm-name { padding-left: 6px; }
   .backup-workspace .row-actions.inline { flex-wrap: wrap; white-space: normal; }
   .backup-workspace .row-actions.inline > * { max-width: 100%; white-space: normal; }
-  .backup-workspace :is(button, .chip, .twisty), .backup-panel button { min-height: 36px; }
-  .backup-workspace .twisty { width: 36px; height: 36px; }
+  .backup-workspace :is(button, .chip), .backup-panel button { min-height: 36px; }
   .backup-workspace .job-toolbar-end { width: 100%; margin-left: 0; }
   .backup-panel .backup-summary { grid-template-columns: minmax(0, 1fr); }
   .backup-panel .backup-summary dt { padding-bottom: 0; border-bottom: 0; }
@@ -177,7 +167,6 @@
   .slideover-footer > .actions { flex-wrap: wrap; gap: 8px; }
 }
 
-.backup-filters[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .backup-tabs button, .backup-choice, .backup-workspace :is(.backup-points, .backup-jobs) tbody tr { transition: none; }
 }

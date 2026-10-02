@@ -125,6 +125,9 @@ func New(config Config) (*Server, error) {
 
 func (s *Server) Close() error { return errors.Join(s.root.Close(), s.docs.Close()) }
 
+// sourceWriteWindow bounds one /source download (about 1 Mbit/s for the archive).
+const sourceWriteWindow = 20 * time.Minute
+
 func reply(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -133,7 +136,7 @@ func reply(w http.ResponseWriter, status int, value any) {
 func fail(w http.ResponseWriter, status int, message string) { reply(w, status, row{"error": message}) }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -179,6 +182,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", `attachment; filename="nex-demo-source.tar.gz"`)
+		// The listener-wide write timeout would cut the ~130 MB archive for slow clients.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(sourceWriteWindow))
 		http.ServeContent(w, r, "nex-demo-source.tar.gz", info.ModTime(), file)
 		return
 	}
@@ -236,6 +241,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !info.Mode().IsRegular() {
 		fail(w, 404, "not found")
 		return
+	}
+	if strings.HasPrefix(name, "/chunks/") {
+		// Chunk file names embed a content hash.
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 	http.ServeContent(w, r, name, info.ModTime(), file)
 }

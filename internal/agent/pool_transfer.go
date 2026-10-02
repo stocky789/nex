@@ -1557,21 +1557,11 @@ func freezePoolAuthority(s *Store, record *poolTransferRecord) error {
 	return errors.New("pool authority kept changing while it was being frozen; nothing was changed, so start the master change again")
 }
 
-// unsettledBackupTransferRefusal ignores pending runs reserved on the host being ejected or
-// on a member that is not ready: no member can settle them, and they must not pin the pool.
+// unsettledBackupTransferRefusal ignores backup operations reserved on the host being ejected
+// or on a member that is not ready: no member can settle them, and they must not pin the
+// pool. It changes nothing unless it returns nil, and then it only settles aged receipts.
 func unsettledBackupTransferRefusal(s *Store, action, targetHostID string) error {
-	// An operation whose durable run or receipt already ended succeeded or failed is
-	// settled; only its journal entry is stale, so it must not pin the pool.
-	live := map[string]JournalEntry{}
-	for id, entry := range s.State.Journal {
-		if entry.Status == "needs_attention" && backupOperationEnded(s, id) {
-			continue
-		}
-		live[id] = entry
-	}
-	if hasUnsettledBackup(live, "") {
-		return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
-	}
+	unresolved := errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
 	runs, err := listPoolBackupRuns(s)
 	if err != nil {
 		return errors.New("backup run history is unavailable while freezing pool authority")
@@ -1580,16 +1570,44 @@ func unsettledBackupTransferRefusal(s *Store, action, targetHostID string) error
 	if err != nil {
 		return errors.New("pool membership is unavailable while freezing pool authority")
 	}
-	for _, run := range runs {
+	// A run whose owner cannot settle it: the ejected host, a host that left the pool, or a
+	// member that is not ready.
+	unsettleable := func(run protocol.BackupRun) bool {
+		if run.HostID == "" || run.HostID == s.State.HostID {
+			return false
+		}
 		owner, found := poolMemberByID(membership, run.HostID)
-		if run.Status == "pending" && !(action == "eject" && run.HostID == targetHostID) && (run.HostID == "" || run.HostID == s.State.HostID || found && owner.Status == "ready") {
-			return errors.New("backup operation is unresolved; finish or reconcile it before changing pool authority")
+		return action == "eject" && run.HostID == targetHostID || !found || owner.Status != "ready"
+	}
+	byID := make(map[string]protocol.BackupRun, len(runs))
+	for _, run := range runs {
+		byID[run.OperationID] = run
+	}
+	// An operation whose durable run or receipt already ended succeeded or failed is
+	// settled; only its journal entry is stale, so it must not pin the pool.
+	live := map[string]JournalEntry{}
+	for id, entry := range s.State.Journal {
+		if entry.Status == "needs_attention" && backupOperationEnded(s, id) {
+			continue
+		}
+		if run, ok := byID[id]; ok && unsettleable(run) {
+			continue
+		}
+		live[id] = entry
+	}
+	if hasUnsettledBackup(live, "") {
+		return unresolved
+	}
+	for _, run := range runs {
+		if run.Status == "pending" && !unsettleable(run) {
+			return unresolved
 		}
 	}
 	receipts, err := listPoolBackupMetadataReceipts(s)
 	if err != nil {
 		return errors.New("backup operation receipts are unavailable while freezing pool authority")
 	}
+	var aged []protocol.BackupMetadataReceipt
 	for _, receipt := range receipts {
 		if receipt.Status != "pending" {
 			continue
@@ -1597,6 +1615,9 @@ func unsettledBackupTransferRefusal(s *Store, action, targetHostID string) error
 		if time.Since(receipt.ObservedAt) <= peerBackupRunLimit {
 			return errors.New("backup operation is unresolved (" + receipt.OperationID + ", " + receipt.Kind + "); finish or reconcile it before changing pool authority")
 		}
+		aged = append(aged, receipt)
+	}
+	for _, receipt := range aged {
 		// Nothing has progressed it for the run limit, so it is not running work. Record the
 		// reason; promotion settles an unresolved receipt this way too.
 		receipt.Status, receipt.ObservedAt = "needs_attention", time.Now().UTC()

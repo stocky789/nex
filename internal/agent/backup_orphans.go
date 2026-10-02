@@ -23,6 +23,12 @@ const poolBackupOrphanCleanupsDir = "pool-backup-orphan-cleanups"
 // relay wait (10 s); points not sized in time are counted, not guessed.
 var orphanSizingBudget = 6 * time.Second
 
+// The cleanup record is rewritten whole, so a long plan saves every few points, not each.
+const (
+	orphanCheckpointPoints   = 25
+	orphanCheckpointInterval = 2 * time.Second
+)
+
 // orphanView is a repository's recovery points whose VM is not in the master's VM inventory.
 type orphanView struct {
 	repo     protocol.BackupRepository
@@ -57,49 +63,18 @@ func poolVMIDs(s *Store) (map[string]bool, error) {
 }
 
 func viewBackupOrphans(s *Store, repositoryID string) (orphanView, error) {
+	view, policies, catalog, err := snapshotBackupOrphans(s, repositoryID)
+	if err != nil {
+		return orphanView{}, err
+	}
+	// The inventory is read after the catalog, so a VM created and backed up in between is
+	// never reported as an orphan. It is read outside the authority lock, which poolVMMu
+	// must not be taken under.
 	vms, err := poolVMIDs(s)
 	if err != nil {
 		return orphanView{}, err
 	}
-	poolBackupAuthorityMu.Lock()
-	defer poolBackupAuthorityMu.Unlock()
-	if err := masterBackupPool(s, s.State.PoolID); err != nil {
-		return orphanView{}, err
-	}
-	if err := requirePoolAuthorityWritable(s); err != nil {
-		return orphanView{}, err
-	}
-	repos, err := loadPoolBackupRepositories(s)
-	if err != nil {
-		return orphanView{}, err
-	}
-	view := orphanView{byVM: map[string][]protocol.BackupRecoveryPoint{}, inUse: map[string]bool{}, busyVMs: map[string]bool{}}
-	var ok bool
-	if view.repo, ok = repos.Repositories[repositoryID]; !ok {
-		return orphanView{}, ErrBackupRepoNotFound
-	}
-	catalog, err := loadPoolBackupCatalog(s)
-	if err != nil {
-		return orphanView{}, err
-	}
-	if view.inUse, err = ActiveBackupRestorePins(s); err != nil {
-		return orphanView{}, err
-	}
-	runs, err := listPoolBackupRuns(s)
-	if err != nil {
-		return orphanView{}, err
-	}
-	for _, run := range runs {
-		if run.RepositoryID == repositoryID && run.Status == "pending" {
-			view.busyVMs[run.VMID] = true
-			view.inUse[run.RecoveryPointID] = true
-		}
-	}
-	policies, err := loadPoolBackupPolicies(s)
-	if err != nil {
-		return orphanView{}, err
-	}
-	for _, policy := range policies.Policies {
+	for _, policy := range policies {
 		for _, id := range policy.VMIDs {
 			if policy.RepositoryID == repositoryID && !vms[id] {
 				view.warnings = append(view.warnings, fmt.Sprintf("backup job %q still lists VM %s, which is not in the pool", policy.Name, id))
@@ -113,6 +88,49 @@ func viewBackupOrphans(s *Store, repositoryID string) (orphanView, error) {
 		}
 	}
 	return view, nil
+}
+
+// snapshotBackupOrphans reads the repository, its busy state and the catalog consistently.
+func snapshotBackupOrphans(s *Store, repositoryID string) (orphanView, map[string]protocol.BackupPolicy, []protocol.BackupRecoveryPoint, error) {
+	poolBackupAuthorityMu.Lock()
+	defer poolBackupAuthorityMu.Unlock()
+	if err := masterBackupPool(s, s.State.PoolID); err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	if err := requirePoolAuthorityWritable(s); err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	view := orphanView{byVM: map[string][]protocol.BackupRecoveryPoint{}, inUse: map[string]bool{}, busyVMs: map[string]bool{}}
+	var ok bool
+	if view.repo, ok = repos.Repositories[repositoryID]; !ok {
+		return orphanView{}, nil, nil, ErrBackupRepoNotFound
+	}
+	catalog, err := loadPoolBackupCatalog(s)
+	if err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	if view.inUse, err = ActiveBackupRestorePins(s); err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	for _, run := range runs {
+		if run.RepositoryID == repositoryID && run.Status == "pending" {
+			view.busyVMs[run.VMID] = true
+			view.inUse[run.RecoveryPointID] = true
+		}
+	}
+	policies, err := loadPoolBackupPolicies(s)
+	if err != nil {
+		return orphanView{}, nil, nil, err
+	}
+	return view, policies.Policies, catalog, nil
 }
 
 // queryBackupOrphans is read-only. Sizes come from the destination's manifests within a fixed
@@ -222,6 +240,11 @@ func loadOrphanCleanup(s *Store, operationID string) (protocol.BackupOrphanClean
 
 func saveOrphanCleanup(s *Store, rec protocol.BackupOrphanCleanup) error {
 	rec.UpdatedAt = time.Now().UTC()
+	// The record is replicated in the pool authority; one the authority refuses would stop
+	// every later publication, so it is never written.
+	if err := rec.Valid(); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -244,7 +267,7 @@ func planOrphanCleanup(s *Store, operationID string, req protocol.OrphanCleanupR
 		return rec, err
 	}
 	if view.busyVMs[""] {
-		return rec, backupRefusal("a catalog operation is running on this repository; wait for it to finish")
+		return rec, backupRefusal("a restore or test restore is running on this repository; wait for it to finish")
 	}
 	points, protected := 0, 0
 	for _, vmID := range req.VMIDs {
@@ -297,23 +320,46 @@ func cleanupBackupOrphans(ctx context.Context, s *Store, operationID string, req
 	if err != nil {
 		return rec, err
 	}
-	for i := range rec.Points {
-		if rec.Points[i].Status != "pending" {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return rec, err
-		}
-		if err := orphanAuthority(s); err != nil {
-			return rec, err
-		}
-		result := &rec.Points[i]
-		if err := deleteOrphanedPoint(ctx, s, backend, req, result); err != nil {
-			result.Status, result.Reason = "failed", err.Error()
+	// The plan is rewritten whole, so progress is checkpointed in batches. A crash repeats at
+	// most one batch, and deleting an already deleted point is confirmed, not repeated.
+	unsaved, lastSave := 0, time.Now()
+	checkpoint := func(force bool) error {
+		if unsaved == 0 || !force && unsaved < orphanCheckpointPoints && time.Since(lastSave) < orphanCheckpointInterval {
+			return nil
 		}
 		if err := saveOrphanCleanup(s, rec); err != nil {
-			return rec, err
+			return err
 		}
+		unsaved, lastSave = 0, time.Now()
+		return nil
+	}
+	loopErr := func() error {
+		for i := range rec.Points {
+			if rec.Points[i].Status != "pending" {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := orphanAuthority(s); err != nil {
+				return err
+			}
+			result := &rec.Points[i]
+			if err := deleteOrphanedPoint(ctx, s, backend, req, result); err != nil {
+				result.Status, result.Reason = "failed", resultError(err.Error())
+			}
+			unsaved++
+			if err := checkpoint(false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if saveErr := checkpoint(true); loopErr == nil {
+		loopErr = saveErr
+	}
+	if loopErr != nil {
+		return rec, loopErr
 	}
 	if sweeper, ok := backend.(interface{ SweepDeleteMarkers(context.Context) }); ok {
 		sweeper.SweepDeleteMarkers(ctx)

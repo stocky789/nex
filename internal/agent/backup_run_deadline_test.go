@@ -18,7 +18,7 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-// A member run still pending past peerBackupRunLimit settles needs_attention with a reason
+// A member run still pending past stalledRunLimit settles needs_attention with a reason
 // and stays observable, so a later member result still lands on it.
 func TestStalledMemberRunSettlesNeedsAttention(t *testing.T) {
 	lab := newTransferLab(t, 1)

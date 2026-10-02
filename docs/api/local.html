@@ -2716,18 +2716,18 @@
   }
 }</pre></details></section>
 <section id="forgetBackupRepositoryLocal"><h2>POST <code>/api/local/v1/pool/backup-repositories/{id}/forget</code></h2>
-<p>Forget a backup repository</p><p>Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.</p>
+<p>Forget a backup repository</p><p>Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, a backup, restore or test restore of it is pending or needs_attention, a recovery point is pinned or reserved, another change to it is running, the name is wrong or the counts changed. A retry with the same operation_id resumes a partial removal. Exact operation_id replay returns the recorded Result.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;forgetBackupRepositoryLocal&quot;,
   &quot;summary&quot;: &quot;Forget a backup repository&quot;,
-  &quot;description&quot;: &quot;Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.&quot;,
+  &quot;description&quot;: &quot;Forgets the repository, its recovery-point and run-history records and each host&#x27;s mount and credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, a backup, restore or test restore of it is pending or needs_attention, a recovery point is pinned or reserved, another change to it is running, the name is wrong or the counts changed. A retry with the same operation_id resumes a partial removal. Exact operation_id replay returns the recorded Result.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -2818,6 +2818,26 @@
     },
     &quot;404&quot;: {
       &quot;description&quot;: &quot;Repository not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;Operation conflicts with retained work, or this Core is not enrolled.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Backup operation unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -3465,12 +3485,12 @@
   &quot;description&quot;: &quot;Pause or resume a backup policy schedule&quot;
 }</pre></details></section>
 <section id="deleteBackupPolicyLocal"><h2>POST <code>/api/local/v1/pool/backup-policies/{id}/delete</code></h2>
-<p>Delete a backup policy</p><p>Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.</p>
+<p>Delete a backup policy</p><p>Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.</p>
 <details><summary>Complete operation contract (parameters, authentication, responses)</summary>
 <pre>{
   &quot;operationId&quot;: &quot;deleteBackupPolicyLocal&quot;,
   &quot;summary&quot;: &quot;Delete a backup policy&quot;,
-  &quot;description&quot;: &quot;Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.&quot;,
+  &quot;description&quot;: &quot;Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.&quot;,
   &quot;security&quot;: [
     {
       &quot;LocalSession&quot;: []
@@ -3568,6 +3588,16 @@
     },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;Operation ID reused with a different payload, or this host is not the pool master.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Backup operation unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4568,7 +4598,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -4646,7 +4676,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -4774,6 +4804,16 @@
           }
         }
       }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Backup operation unavailable.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
     }
   }
 }</pre></details></section>
@@ -4789,7 +4829,7 @@
       &quot;LocalSession&quot;: []
     }
   ],
-  &quot;x-introduced-version&quot;: &quot;0.4.18&quot;,
+  &quot;x-introduced-version&quot;: &quot;0.4.19&quot;,
   &quot;x-audience&quot;: &quot;host-local client&quot;,
   &quot;parameters&quot;: [
     {
@@ -4825,6 +4865,26 @@
     },
     &quot;404&quot;: {
       &quot;description&quot;: &quot;Not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;409&quot;: {
+      &quot;description&quot;: &quot;This Core is not enrolled.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Backup operation unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {
@@ -4928,8 +4988,28 @@
         }
       }
     },
+    &quot;404&quot;: {
+      &quot;description&quot;: &quot;VM not found.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
     &quot;409&quot;: {
       &quot;description&quot;: &quot;Host is not enrolled, the operation_id was used with a different request, or Core refused at acceptance because the pool master holds pending recovery, a retained snapshot or an unfinished update for the VM or the host journals an unfinished restore, snapshot or VM operation for it.&quot;,
+      &quot;content&quot;: {
+        &quot;application/json&quot;: {
+          &quot;schema&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/Error&quot;
+          }
+        }
+      }
+    },
+    &quot;503&quot;: {
+      &quot;description&quot;: &quot;Backup operation unavailable.&quot;,
       &quot;content&quot;: {
         &quot;application/json&quot;: {
           &quot;schema&quot;: {

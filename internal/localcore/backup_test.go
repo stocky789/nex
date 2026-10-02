@@ -274,3 +274,28 @@ func TestOrphanedBackupRoutes(t *testing.T) {
 		t.Fatalf("result request %+v", request)
 	}
 }
+
+// A reply that carries no result must not be served as a 200 "null".
+func TestBackupDestructiveRoutesRefuseEmptyReply(t *testing.T) {
+	s, _ := testService(t)
+	requests := backupIngressChannel(t, s)
+	go func() {
+		for request := range requests {
+			request.Reply <- agent.BackupResponse{}
+		}
+	}()
+	cookie, csrf := loginLocal(t, s)
+	for name, route := range map[string]struct {
+		path string
+		body map[string]any
+	}{
+		"forget": {"/api/local/v1/pool/backup-repositories/repo-1/forget", map[string]any{"operation_id": "forget-1", "confirmation": "Primary"}},
+		"orphan-cleanup": {"/api/local/v1/pool/backup-repositories/repo-1/orphan-cleanups",
+			map[string]any{"operation_id": "orphans-1", "vm_ids": []string{"vm-gone"}, "confirmation": "delete 2 recovery points", "recovery_points": 2}},
+		"policy-delete": {"/api/local/v1/pool/backup-policies/pol-1/delete", map[string]any{"operation_id": "policy-del-1", "confirmation": "Nightly"}},
+	} {
+		if w := callLocal(s, http.MethodPost, route.path, route.body, cookie, csrf, "https://core.test"); w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s with an empty reply = %d %s", name, w.Code, w.Body.String())
+		}
+	}
+}

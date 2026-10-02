@@ -12,8 +12,9 @@ import (
 )
 
 // The old master's planned-change command returns before the new master answers, so its
-// journal receipt settles from the durable pool membership (the target is now the master),
-// never from a transfer record that may be gone or replaced by then.
+// journal receipt settles once the durable pool membership shows the target as master AND this
+// host's finished source record is for the same operation. A record that is gone or replaced
+// leaves the receipt needing attention: it never reports success it cannot prove.
 func TestPlannedMasterChangeReceiptSettlesFromMembership(t *testing.T) {
 	s := seedBackupMaster(t)
 	// host-a leads the pool. The change to host-b has not happened yet.

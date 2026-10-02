@@ -213,3 +213,29 @@ func TestRetentionRulesAreAUnion(t *testing.T) {
 		t.Fatalf("pruned %v; want the two unprotected points beyond keep_latest, which skips the age-protected one", ids)
 	}
 }
+
+func TestPoolBackupManifestBoundsRecordCountsByBytes(t *testing.T) {
+	const totalBytes = 500_000_000
+	valid := PoolBackupManifest{SHA256: strings.Repeat("a", 64), TotalBytes: totalBytes, PageCount: totalBytes/PoolBackupPageLimit + 1}
+	// Retained histories are not capped at a fixed number of records.
+	valid.History, valid.Catalog = 150_000, 150_000
+	if err := valid.Valid(); err != nil {
+		t.Fatalf("large retained record counts were refused: %v", err)
+	}
+	for name, edit := range map[string]func(*PoolBackupManifest){
+		"history beyond the bytes": func(m *PoolBackupManifest) { m.History = m.TotalBytes/5 + 1 },
+		"counts that sum past bytes": func(m *PoolBackupManifest) {
+			m.History, m.Catalog, m.Pins = m.TotalBytes/10, m.TotalBytes/10, m.TotalBytes/10
+		},
+		"negative orphan cleanups":     func(m *PoolBackupManifest) { m.OrphanCleanups = -1 },
+		"more repositories than cap":   func(m *PoolBackupManifest) { m.Repositories = PoolBackupMaxRepositories + 1 },
+		"more definitions than cap":    func(m *PoolBackupManifest) { m.Definitions = PoolBackupMaxDefinitions + 1 },
+		"pages larger than page limit": func(m *PoolBackupManifest) { m.PageCount = 1 },
+	} {
+		m := valid
+		edit(&m)
+		if m.Valid() == nil {
+			t.Fatalf("%s: manifest accepted: %+v", name, m)
+		}
+	}
+}

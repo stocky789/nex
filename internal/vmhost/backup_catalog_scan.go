@@ -35,6 +35,9 @@ func WriteBackupProtectMarker(pointDir string, protected bool) error {
 		}
 		return removeBackupProtectMarkerIfUnchanged(path, current)
 	}
+	if err := sweepBackupProtectMarkers(pointDir); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(map[string]any{"protected": true, "nonce": rand.Text()})
 	if err != nil {
 		return err
@@ -99,6 +102,18 @@ func sweepBackupProtectMarkers(pointDir string) error {
 	return nil
 }
 
+// BackupProtectMarkerLeftover reports a marker an unprotect set aside and did not
+// finish removing, with no marker in its place. Until a write settles it the point
+// stays protected. Read-only.
+func BackupProtectMarkerLeftover(pointDir string) bool {
+	path := filepath.Join(pointDir, backupProtectMarkerName)
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	leftovers, _ := filepath.Glob(path + ".rm-*")
+	return len(leftovers) > 0
+}
+
 // ReadBackupProtectMarker reports whether the repository payload is protected from prune.
 func ReadBackupProtectMarker(pointDir string) bool {
 	raw, err := os.ReadFile(filepath.Join(pointDir, backupProtectMarkerName))
@@ -116,7 +131,8 @@ func ReadBackupProtectMarker(pointDir string) bool {
 
 // ScanBackupRepositoryPoints validates published manifests under a repository root and
 // returns catalog entries. Incomplete points or missing/resized artifacts are skipped with
-// no catalog invent; artifact digests are verified when the point is restored.
+// no catalog invent; artifact digests are verified when the point is restored. It only
+// reads: leftover protection markers are settled by the next protection write.
 func ScanBackupRepositoryPoints(repoRoot, repositoryID, poolID string) ([]protocol.BackupRecoveryPoint, error) {
 	if !filepath.IsAbs(repoRoot) || filepath.Clean(repoRoot) != repoRoot {
 		return nil, errors.New("backup repository root is invalid")
@@ -138,7 +154,6 @@ func ScanBackupRepositoryPoints(repoRoot, repositoryID, poolID string) ([]protoc
 			continue
 		}
 		pointDir := filepath.Join(repoRoot, name)
-		_ = sweepBackupProtectMarkers(pointDir) // Best effort: unprotect reports a failure.
 		manifest, digest, err := ReadBackupManifest(pointDir)
 		if err != nil {
 			continue
@@ -156,7 +171,7 @@ func ScanBackupRepositoryPoints(repoRoot, repositoryID, poolID string) ([]protoc
 			ID: manifest.RecoveryPointID, RepositoryID: repositoryID, PoolID: manifest.PoolID,
 			SourceVMID: manifest.SourceVMID, SourceVMName: manifest.SourceVMName, PolicyID: manifest.PolicyID,
 			CapturedAt: manifest.CapturedAt, Consistency: manifest.Consistency,
-			ManifestSHA256: digest, Protected: ReadBackupProtectMarker(pointDir),
+			ManifestSHA256: digest, Protected: ReadBackupProtectMarker(pointDir) || BackupProtectMarkerLeftover(pointDir),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

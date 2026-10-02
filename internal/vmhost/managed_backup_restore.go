@@ -1361,6 +1361,12 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 	if cur.Command.VM.Name != req.Confirmation {
 		return errors.New("confirmation must be the VM's name")
 	}
+	if cur.Command.VM.PoolID != req.PoolID || cur.Command.VM.HostID != req.HostID {
+		return errors.New("VM pool or host does not match this host's record")
+	}
+	if unresolvedVMChange(js, j.Command.OperationID, req.VMID) {
+		return errors.New("a change, power, media or delete request for this VM is still unresolved")
+	}
 	if state, err := ManagedVMState(ctx, req.VMID); err != nil || state != "shut off" {
 		return errors.New("stop the VM before releasing its retained originals")
 	}
@@ -1386,7 +1392,6 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 	}()
 	if j.Stage != "wiping" {
 		var files []string
-		tpm := []managedRetainedTPM{}
 		for _, old := range js {
 			if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != req.VMID || old.Result.Status != "succeeded" {
 				continue
@@ -1399,19 +1404,10 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 					files = append(files, path)
 				}
 			}
-			if old.BackupTPMPreviousSHA256 == "" {
-				continue
-			}
-			if !protocol.ValidSnapshotOperationID(old.Command.OperationID) {
-				return errors.New("retained original TPM operation is invalid")
-			}
-			kept, err := managedSnapshotManifest(ctx, restoreTPMPath(req.VMID, old.Command.OperationID))
-			if err != nil || kept.Exists && kept.SHA256 != old.BackupTPMPreviousSHA256 {
-				return errors.New("retained original TPM state changed; inspect it on the host")
-			}
-			if kept.Exists {
-				tpm = append(tpm, managedRetainedTPM{OperationID: old.Command.OperationID, Manifest: kept})
-			}
+		}
+		tpm, err := collectRetainedTPM(ctx, req.VMID, js)
+		if err != nil {
+			return err
 		}
 		if len(files) == 0 && len(tpm) == 0 {
 			return errors.New("VM has no retained original disks")
@@ -1454,6 +1450,43 @@ func (e *ManagedEngine) releaseRetainedOriginals(ctx context.Context, j *managed
 }
 
 var removeRetainedTPM = os.RemoveAll
+
+// collectRetainedTPM freezes the pre-replace vTPM trees that earlier successful edits of vmID
+// kept, each bound to the manifest its journal recorded. A tree already gone is skipped.
+func collectRetainedTPM(ctx context.Context, vmID string, js []managedJournal) ([]managedRetainedTPM, error) {
+	tpm := []managedRetainedTPM{}
+	for _, old := range js {
+		if old.Command.Kind != "vm-update" || old.Command.VM == nil || old.Command.VM.ID != vmID ||
+			old.Result.Status != "succeeded" || old.BackupTPMPreviousSHA256 == "" {
+			continue
+		}
+		if !protocol.ValidSnapshotOperationID(old.Command.OperationID) {
+			return nil, errors.New("retained original TPM operation is invalid")
+		}
+		kept, err := managedSnapshotManifest(ctx, restoreTPMPath(vmID, old.Command.OperationID))
+		if err != nil || kept.Exists && kept.SHA256 != old.BackupTPMPreviousSHA256 {
+			return nil, errors.New("retained original TPM state changed; inspect it on the host")
+		}
+		if kept.Exists {
+			tpm = append(tpm, managedRetainedTPM{OperationID: old.Command.OperationID, Manifest: kept})
+		}
+	}
+	return tpm, nil
+}
+
+// removeRetainedTPMTrees removes admitted retained vTPM trees after proving each is still the
+// tree its journal recorded; an interrupted removal resumes with only what remains of it.
+func removeRetainedTPMTrees(ctx context.Context, vmID string, targets []managedRetainedTPM, js []managedJournal) error {
+	if err := verifyRetainedTPM(ctx, vmID, targets, js); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if err := removeRetainedTPM(restoreTPMPath(vmID, target.OperationID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func verifyRetainedTPM(ctx context.Context, vmID string, targets []managedRetainedTPM, js []managedJournal) error {
 	if len(targets) == 0 {

@@ -51,9 +51,6 @@ const (
 	peerBackupStartLimit = 10 * time.Minute
 	// A pending run whose member gives the same non-answer this long needs observation.
 	peerBackupSilentLimit = time.Hour
-	// A run reserved this long ago that a member still reports as running settles
-	// needs_attention. It is not failed: the member may yet finish, and then its
-	// outcome is recorded. Long enough for a very large full backup.
 	peerBackupUnreachable = "member unreachable"
 )
 
@@ -61,7 +58,8 @@ const (
 const peerBackupRunLimit = 12 * time.Hour
 
 // stalledRunLimit is the deadline after which a run that still has not finished settles
-// needs_attention. Only a lab build (-tags lab) can shorten it.
+// needs_attention. It is not failed: the worker may yet finish, and then its outcome is
+// recorded. Long enough for a very large full backup. Only a lab build (-tags lab) can shorten it.
 var stalledRunLimit = peerBackupRunLimit
 
 // peerBackoff holds each run's next observation time in memory. Losing it on
@@ -146,6 +144,17 @@ func notePeerBackupAnswer(s *Store, next peerBackoff, c peerBackupCompletion) {
 // errPeerBackupNotStarted marks a member that has no record of the operation. A
 // member journals every operation before running it, so the run can settle failed.
 var errPeerBackupNotStarted = errors.New("member never started this operation")
+
+// stageNotStarted is the run stage of a failure the member never began; cleanup reads it
+// instead of matching the error text.
+const stageNotStarted = "not_started"
+
+func notStartedPeerReply(id string, err error) poolBackupPeerResponse {
+	return poolBackupPeerResponse{
+		Result: protocol.Result{OperationID: id, Status: "failed", Error: err.Error(), ObservedAt: time.Now().UTC()},
+		Run:    &protocol.BackupRun{Stage: stageNotStarted},
+	}
+}
 
 func peerBackupNotStarted(err error) bool {
 	var permanent permanentPeerBackupError
@@ -562,8 +571,14 @@ func postPeerCapability(ctx context.Context, work pendingPeerBackup, name, route
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(reply) != nil {
-		return peerCapabilityChanged(name)
+	if err := decoder.Decode(reply); err != nil {
+		var syntax *json.SyntaxError
+		var shape *json.UnmarshalTypeError
+		if errors.As(err, &syntax) || errors.As(err, &shape) || strings.HasPrefix(err.Error(), "json: unknown field") {
+			return peerCapabilityChanged(name)
+		}
+		// A reset or short body says nothing about the member's identity.
+		return fmt.Errorf("member %s backup capability unavailable", name)
 	}
 	return nil
 }
@@ -698,17 +713,21 @@ func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pend
 			continue
 		}
 		if reason := unobservablePeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
-			run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
-			if err := settlePoolBackupRun(context.Background(), s, run, nil); err != nil {
-				log.Printf("member backup occurrence remains unsettled: %v", err)
-			}
+			settleUnobservableRun(s, run, reason)
 			notBefore.observed(run.OperationID, reason, now)
 			continue
 		}
 		cmd := protocol.Command{OperationID: run.OperationID, Kind: protocol.BackupKindBackupNow,
 			Backup: &protocol.BackupNowRequest{RepositoryID: run.RepositoryID, Consistency: run.CaptureMode, PolicyID: run.PolicyID}}
-		if vm, err := lookupPoolVMSpec(s, run.VMID); err == nil {
+		vm, vmErr := lookupPoolVMSpec(s, run.VMID)
+		switch {
+		case vmErr == nil:
 			cmd.VM = &vm
+		case !errors.Is(vmErr, ErrBackupNotFound):
+			// A read error is not an answer about the VM; try again later.
+			log.Printf("member backup %s cannot read its VM yet: %v", run.OperationID, vmErr)
+			notBefore.observed(run.OperationID, vmErr.Error(), now)
+			continue
 		}
 		work, err := peerBackupWorkForCommand(s, cmd, run)
 		if err != nil {
@@ -717,10 +736,7 @@ func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pend
 			}
 			notBefore.observed(run.OperationID, err.Error(), now)
 			if reason := unobservablePeerBackupReason(membership, s.State.HostID, run, notBefore, now); reason != "" {
-				run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
-				if settleErr := settlePoolBackupRun(context.Background(), s, run, nil); settleErr != nil {
-					log.Printf("member backup occurrence remains unsettled: %v", settleErr)
-				}
+				settleUnobservableRun(s, run, reason)
 				notBefore.observed(run.OperationID, reason, now)
 			}
 			continue
@@ -729,6 +745,19 @@ func nextPendingPeerBackup(s *Store, notBefore peerBackoff, now time.Time) (pend
 		return work, true
 	}
 	return pendingPeerBackup{}, false
+}
+
+// settleUnobservableRun records that a run's member cannot be observed. A run already
+// recorded with this reason is left alone, so it is not rewritten every pass. The error is
+// logged and the settlement retried on the next pass.
+func settleUnobservableRun(s *Store, run protocol.BackupRun, reason string) {
+	if run.Status == "needs_attention" && run.Stage == "peer_dispatch" && run.Error == reason {
+		return
+	}
+	run.Status, run.Stage, run.Error = "needs_attention", "peer_dispatch", reason
+	if err := settlePoolBackupRun(context.Background(), s, run, nil); err != nil {
+		log.Printf("member backup occurrence remains unsettled: %v", err)
+	}
 }
 
 // stalledPeerBackupReason explains a run still pending stalledRunLimit after it was reserved, or "".
@@ -792,7 +821,7 @@ func unobservablePeerBackupReason(membership protocol.PoolMembership, self strin
 // outcome on the master. A member with no record of the run never started it.
 func settlePeerBackupCompletion(ctx context.Context, s *Store, completion peerBackupCompletion) {
 	if peerBackupNotStarted(completion.err) {
-		completion.reply = poolBackupPeerResponse{Result: protocol.Result{Status: "failed", Error: completion.err.Error()}}
+		completion.reply = notStartedPeerReply("", completion.err)
 		completion.err = nil
 	}
 	if completion.err != nil {
@@ -873,7 +902,7 @@ func callPeerBackup(ctx context.Context, work pendingPeerBackup) peerBackupCompl
 		return err
 	}
 	if backupCommandTargetHost(work.command) != work.member.HostID {
-		result.err = notStarted(permanentPeerBackupError{errors.New("the VM moved off the reserved host before its backup started")})
+		result.err = notStarted(permanentPeerBackupError{errors.New("the VM is gone or moved off the reserved host before its backup started")})
 		return result
 	}
 	// The member prepares the destination for the preflight and again for the backup.
@@ -938,7 +967,8 @@ func validatePeerBackupReply(ctx context.Context, work pendingPeerBackup, reply 
 		}
 		return permanentPeerBackupError{errors.New("member backup peer returned inconsistent status")}
 	}
-	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Hashing every artifact of a large point takes far longer than reading its manifest.
+	verifyCtx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 	return verifyPeerBackupPoint(verifyCtx, work, reply)
 }
@@ -1004,13 +1034,16 @@ func verifyPeerBackupPoint(ctx context.Context, work pendingPeerBackup, reply po
 		manifest.Consistency != point.Consistency {
 		return permanentPeerBackupError{errors.New("member backup point failed master repository verification")}
 	}
+	// The master hashes the artifacts itself before it catalogs the point or retention
+	// deletes older ones; the member's own verification is not taken on trust.
+	if err := backend.VerifyArtifacts(ctx, point.ID, manifest); err != nil {
+		return peerBackupVerificationError(ctx, backend, err, message)
+	}
 	return nil
 }
 
 // peerBackupVerificationError treats a point the master cannot find or read back in a
 // reachable repository as a content failure. Only an unreachable repository is retried.
-// The member only publishes a manifest after its artifacts verify, so the master's
-// check reads the manifest and artifact sizes, never the artifact content.
 func peerBackupVerificationError(ctx context.Context, backend backupRepositoryStorage, err error, message string) error {
 	if errors.Is(err, ErrBackupConflict) || errors.Is(err, ErrBackupInvalid) ||
 		backend != nil && ctx.Err() == nil && backend.Verify(ctx) == nil {

@@ -799,6 +799,8 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 	}
 	poolReplicaMu.Lock()
 	defer poolReplicaMu.Unlock()
+	poolBackupPushSessionMu.Lock()
+	defer poolBackupPushSessionMu.Unlock()
 	poolBackupBlobMu.Lock()
 	defer poolBackupBlobMu.Unlock()
 	if replica.BackupManifest != nil {
@@ -851,6 +853,11 @@ func acceptPoolAuthorityReplica(s *Store, master protocol.PoolMember, replica pr
 		return protocol.PoolReplicaAck{}, errors.New("pool authority replica could not be stored")
 	}
 	delete(poolReplicaRefusals, s.dir)
+	// The replica is stored: its push is over, and its pages must not be rewritten through a
+	// session that is still open for it.
+	if session, ok := poolBackupPushSessions[s.dir]; ok && session.generation <= replica.Generation {
+		delete(poolBackupPushSessions, s.dir)
+	}
 	poolReplicaPolls[s.dir] = record.ReceivedAt
 	return protocol.PoolReplicaAck{HostID: s.State.HostID, Generation: replica.Generation, Digest: digest,
 		SanlockHostGeneration: localSanlockGeneration, CorosyncKeyReady: corosyncKeyReady, Verified: true}, nil
@@ -1259,13 +1266,11 @@ var advancePoolAuthorityGenerationForPush = advancePoolAuthorityGeneration
 // store, safe to call from every probe tick, and safe to retry: a member acknowledges the
 // same generation idempotently.
 func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Duration) error {
-	// The backup lock is taken before the single-flight flag, so a push waiting
-	// behind a long backup write does not turn every other caller away as busy.
-	poolBackupAuthorityMu.Lock()
+	// The flag comes first, so at most one push per store ever waits for the backup lock;
+	// every other caller is turned away as busy instead of queueing behind it.
 	poolReplicaMu.Lock()
 	if poolReplicaPushing[s.dir] {
 		poolReplicaMu.Unlock()
-		poolBackupAuthorityMu.Unlock()
 		return errPoolAuthorityReplicaBusy
 	}
 	poolReplicaPushing[s.dir] = true
@@ -1275,8 +1280,12 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 		delete(poolReplicaPushing, s.dir)
 		poolReplicaMu.Unlock()
 	}()
-	replica, digest, err := numberPoolAuthorityReplicaForPush(ctx, s)
-	poolBackupAuthorityMu.Unlock()
+	// NFS and sanlock preparation is slow when a mount hangs and ctx cannot interrupt it, so
+	// it runs before the backup lock: a stalled mount delays this push, never a backup write.
+	if err := preparePoolStorageLeaseForPush(ctx, s); err != nil {
+		return err
+	}
+	replica, digest, err := numberPoolAuthorityReplicaForPush(ctx, s, timeout)
 	if err != nil {
 		return err
 	}
@@ -1344,20 +1353,49 @@ func PushPoolAuthorityReplicas(ctx context.Context, s *Store, timeout time.Durat
 	return failed
 }
 
-// numberPoolAuthorityReplicaForPush runs under poolBackupAuthorityMu.
-func numberPoolAuthorityReplicaForPush(ctx context.Context, s *Store) (protocol.PoolAuthorityReplica, string, error) {
+// preparePoolStorageLeaseForPush selects and prepares this host's storage lease. It must not
+// run under poolBackupAuthorityMu.
+var preparePoolStorageLeaseForPush = func(ctx context.Context, s *Store) error {
 	if err := reconcilePoolStorageLeaseSelection(s); err != nil {
-		return protocol.PoolAuthorityReplica{}, "", err
+		return err
 	}
 	membership, err := Membership(s)
 	if err != nil {
-		return protocol.PoolAuthorityReplica{}, "", err
+		return err
 	}
 	if membership.StorageLease != nil {
-		if _, err = preparePoolStorageLeaseHost(ctx, s, membership, true); err != nil {
-			return protocol.PoolAuthorityReplica{}, "", err
+		_, err = preparePoolStorageLeaseHost(ctx, s, membership, true)
+	}
+	return err
+}
+
+// lockPoolBackupAuthority takes poolBackupAuthorityMu, giving up when ctx ends so a writer
+// stuck inside the lock cannot leave a blocked push behind every probe tick.
+func lockPoolBackupAuthority(ctx context.Context) error {
+	for delay := time.Millisecond; !poolBackupAuthorityMu.TryLock(); delay = min(2*delay, 50*time.Millisecond) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
 		}
 	}
+	return nil
+}
+
+// numberPoolAuthorityReplicaForPush builds the replica, stages its backup pages and numbers it
+// in one hold of poolBackupAuthorityMu, so the pages, the digest and the generation describe
+// one backup state. The wait for the lock is bounded by timeout.
+func numberPoolAuthorityReplicaForPush(ctx context.Context, s *Store, timeout time.Duration) (protocol.PoolAuthorityReplica, string, error) {
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	waiting, cancel := context.WithTimeout(ctx, timeout)
+	err := lockPoolBackupAuthority(waiting)
+	cancel()
+	if err != nil {
+		return protocol.PoolAuthorityReplica{}, "", errors.New("pool authority replica push could not take the backup authority lock")
+	}
+	defer poolBackupAuthorityMu.Unlock()
 	replica, digest, err := buildPoolAuthorityReplica(s)
 	if err == nil {
 		err = stagePoolBackupReplicaPages(s, replica.BackupManifest)
@@ -1589,6 +1627,7 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		for index := progress.NextIndex; index < manifest.PageCount; index++ {
 			page, pageErr := readPoolBackupPage(s, manifest, index)
 			if pageErr != nil {
+				forgetStagedPoolBackupRoot(s) // Verify the whole root again on the next push.
 				return pageErr
 			}
 			reuseResponse, reuseErr := post(poolBackupPageUpload{ManifestSHA256: manifest.SHA256, Index: index, ReuseSHA256: poolBackupHash(page)})
@@ -1634,6 +1673,7 @@ func pushPoolReplicaToMember(ctx context.Context, s *Store, member protocol.Pool
 		return errors.New("pool member did not acknowledge the authority replica")
 	}
 	if response.StatusCode != http.StatusOK || !ack.Verified || ack.Generation != replica.Generation || ack.Digest != digest {
+		forgetStagedPoolBackupRoot(s) // A refusal may name pages the master staged wrongly.
 		refusal := errors.New("pool member refused the authority replica")
 		if ack.Error != "" {
 			refusal = errors.New(ack.Error)

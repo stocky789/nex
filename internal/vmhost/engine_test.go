@@ -613,12 +613,19 @@ func TestExclusiveDiskProbeFailureIsUnconfirmedNotConflict(t *testing.T) {
 	}
 	id, other := "5fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d", "6fd4c1fa-5c4c-43cf-91c2-8f42ef87db8d"
 	t.Setenv("VMHOST_IDS", id+"\n"+other)
-	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; *) exit 1;; esac`)
-	if err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: disk}); !errors.Is(err, ErrOwnershipUnconfirmed) {
-		t.Fatalf("dumpxml failure: %v", err)
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; *) echo "error: Cannot recv data" >&2; exit 1;; esac`)
+	err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: disk})
+	if !errors.Is(err, ErrOwnershipUnconfirmed) || !strings.Contains(err.Error(), other) || !strings.Contains(err.Error(), "Cannot recv data") {
+		t.Fatalf("dumpxml failure must be unconfirmed and name the domain and cause: %v", err)
 	}
 	fakeCommand(t, "virsh", `exit 1`)
 	if err := e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: disk}); !errors.Is(err, ErrOwnershipUnconfirmed) {
 		t.Fatalf("list failure: %v", err)
+	}
+	// libvirt answered with a definition Core cannot read: that will not change on a retry.
+	fakeCommand(t, "virsh", `case "$3" in list) printf '%s\n' "$VMHOST_IDS";; *) echo "<domain><devices><disk";; esac`)
+	err = e.exclusiveDisk(context.Background(), journal{Operation: Operation{VMID: id}, Disk: disk})
+	if err == nil || errors.Is(err, ErrOwnershipUnconfirmed) || !strings.Contains(err.Error(), other) {
+		t.Fatalf("unparseable domain definition must be a refusal naming the domain: %v", err)
 	}
 }

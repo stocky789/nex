@@ -608,3 +608,192 @@ func TestCatalogRebuildRestoresPolicyIDForRetention(t *testing.T) {
 		}
 	}
 }
+
+func restrictPoolAuthority(t *testing.T, s *Store) {
+	t.Helper()
+	poolPeerMu.Lock()
+	defer poolPeerMu.Unlock()
+	state, err := loadPoolPeer(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Restricted = &poolRestrictedRecord{Kind: poolRestrictedUnconfirmed, Reason: poolUnconfirmedReason, Since: time.Now().UTC()}
+	if err := savePoolPeer(s, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func restoreFilesystemTestBackend(t *testing.T, s *Store, mount string) filesystemBackupStorage {
+	t.Helper()
+	repo, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: mount,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := openBackupRepositoryStorage(s, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return backend.(filesystemBackupStorage)
+}
+
+// A hung share must not hold the pool-wide authority lock: mount inspection and
+// reads happen before it, and it covers only the commit.
+func TestFilesystemDeleteAndAbortReachTheMountOutsidePoolPeerMu(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-a")
+	backend := restoreFilesystemTestBackend(t, s, mount)
+	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
+		t.Fatal(err)
+	}
+	previous, previousRead := verifyBackupRepository, verifyBackupRepositoryRead
+	t.Cleanup(func() { verifyBackupRepository, verifyBackupRepositoryRead = previous, previousRead })
+	var calls, held int
+	observe := func() {
+		calls++
+		if !poolPeerMu.TryLock() {
+			held++
+			return
+		}
+		poolPeerMu.Unlock()
+	}
+	verifyBackupRepository = func(ctx context.Context, repo protocol.BackupRepository) error {
+		observe()
+		return previous(ctx, repo)
+	}
+	verifyBackupRepositoryRead = func(ctx context.Context, repo protocol.BackupRepository) error {
+		observe()
+		return previousRead(ctx, repo)
+	}
+	if err := backend.AbortIncomplete(context.Background(), "point-lost"); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Delete(context.Background(), "point-a"); err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 || held != 0 {
+		t.Fatalf("mount checks: %d calls, %d ran under poolPeerMu", calls, held)
+	}
+}
+
+func TestFilesystemRecordedDeleteWaitsForAuthority(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-a")
+	backend := restoreFilesystemTestBackend(t, s, mount)
+	raw, err := os.ReadFile(filepath.Join(mount, "point-a", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := vmhost.ReadBackupManifest(filepath.Join(mount, "point-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := json.Marshal(filesystemDeleteIntent{Manifest: raw, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vmhost.AtomicWrite(filepath.Join(mount, ".nex-delete-point-a"), intent, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restrictPoolAuthority(t, s)
+	backend.SweepDeleteMarkers(context.Background())
+	if _, err := os.Lstat(filepath.Join(mount, "point-a", "manifest.json")); err != nil {
+		t.Fatalf("a host without authority kept deleting: %v", err)
+	}
+	poolPeerMu.Lock()
+	state, err := loadPoolPeer(s)
+	if err == nil {
+		state.Restricted = nil
+		err = savePoolPeer(s, state)
+	}
+	poolPeerMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.SweepDeleteMarkers(context.Background())
+	if _, err := os.Lstat(filepath.Join(mount, "point-a")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recorded delete was not finished once authority returned: %v", err)
+	}
+}
+
+func TestFilesystemScanLeavesSetAsideProtectionMarkerAlone(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-a")
+	backend := restoreFilesystemTestBackend(t, s, mount)
+	marker := filepath.Join(mount, "point-a", ".nex-protected")
+	leftover := marker + ".rm-crashed"
+	if err := os.WriteFile(leftover, []byte(`{"protected":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	points, err := backend.Scan(context.Background())
+	if err != nil || len(points) != 1 || !points[0].Protected {
+		t.Fatalf("set-aside marker did not keep the point protected: %+v %v", points, err)
+	}
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("scan moved the leftover: %v", err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scan restored the marker: %v", err)
+	}
+	if protected, err := backend.Protected(context.Background(), "point-a"); err != nil || !protected {
+		t.Fatalf("Protected ignored the set-aside marker: %v %v", protected, err)
+	}
+	if err := vmhost.WriteBackupProtectMarker(filepath.Join(mount, "point-a"), false); err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := backend.Protected(context.Background(), "point-a"); err != nil || protected {
+		t.Fatalf("unprotect did not settle the leftover: %v %v", protected, err)
+	}
+}
+
+func TestFilesystemVerifyArtifactsHashesStoredContent(t *testing.T) {
+	s := seedBackupMaster(t)
+	mount := t.TempDir()
+	seedPublishedPoint(t, mount, "repo-1", "pool-1", "point-a")
+	backend := restoreFilesystemTestBackend(t, s, mount)
+	manifest, _, err := backend.StatPoint(context.Background(), "point-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.VerifyArtifacts(context.Background(), "point-a", manifest); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(mount, "point-a", manifest.Disks[0].Filename)
+	raw, err := os.ReadFile(artifact)
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("artifact unreadable: %v", err)
+	}
+	raw[0] ^= 0xff
+	if err := os.WriteFile(artifact, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.VerifyArtifacts(context.Background(), "point-a", manifest); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("same-size corruption not detected: %v", err)
+	}
+}
+
+func TestReadBoundedBackupFileRefusesOversizeAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(file, bytes.Repeat([]byte("x"), 11), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedBackupFile(file, 10); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("oversize file read: %v", err)
+	}
+	if raw, err := readBoundedBackupFile(file, 11); err != nil || len(raw) != 11 {
+		t.Fatalf("file at the limit refused: %v", err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedBackupFile(link, 100); err == nil {
+		t.Fatal("symlink followed")
+	}
+}

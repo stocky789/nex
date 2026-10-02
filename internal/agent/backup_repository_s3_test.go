@@ -93,7 +93,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated>")
 		for k := range f.uploads {
 			if strings.HasPrefix(k, r.URL.Query().Get("prefix")) {
-				_, _ = io.WriteString(w, "<Upload><Key>"+k+"</Key><UploadId>test-upload</UploadId></Upload>")
+				_, _ = io.WriteString(w, "<Upload><Key>"+fakeS3XMLText(k)+"</Key><UploadId>test-upload</UploadId></Upload>")
 			}
 		}
 		_, _ = io.WriteString(w, "</ListMultipartUploadsResult>")
@@ -106,7 +106,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.uploads[key] = map[int][]byte{}
 		w.Header().Set("Content-Type", "application/xml")
-		_, _ = io.WriteString(w, "<InitiateMultipartUploadResult><Bucket>backups</Bucket><Key>"+key+"</Key><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>")
+		_, _ = io.WriteString(w, "<InitiateMultipartUploadResult><Bucket>backups</Bucket><Key>"+fakeS3XMLText(key)+"</Key><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>")
 		return
 	}
 	if r.URL.Query().Has("uploadId") {
@@ -138,7 +138,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.objects[key] = body
 			delete(f.uploads, key)
 			w.Header().Set("Content-Type", "application/xml")
-			_, _ = io.WriteString(w, "<CompleteMultipartUploadResult><Bucket>backups</Bucket><Key>"+key+"</Key><ETag>\"complete\"</ETag></CompleteMultipartUploadResult>")
+			_, _ = io.WriteString(w, "<CompleteMultipartUploadResult><Bucket>backups</Bucket><Key>"+fakeS3XMLText(key)+"</Key><ETag>\"complete\"</ETag></CompleteMultipartUploadResult>")
 		case http.MethodDelete:
 			delete(f.uploads, key)
 			f.aborts++
@@ -428,6 +428,12 @@ func TestS3AbortResumesPartiallyFencedArtifacts(t *testing.T) {
 	if err := b.AbortIncomplete(ctx, manifest.RecoveryPointID); err != nil {
 		t.Fatalf("settled fence retry: %v", err)
 	}
+}
+
+func fakeS3XMLText(text string) string {
+	var escaped bytes.Buffer
+	_ = xml.EscapeText(&escaped, []byte(text))
+	return escaped.String()
 }
 
 func fakeS3ETag(body []byte) string {
@@ -1847,8 +1853,8 @@ func TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced(t *
 		return saved
 	}
 	broken := register("a-broken", "one", "register-1")
-	// Losing the key makes the sealed receipt unreadable; the next receipt gets a new key.
-	if err := os.Remove(filepath.Join(s.dir, "backup-credential-key", "key.cred")); err != nil {
+	// Replacing the key makes the sealed receipt unreadable; the next receipt uses the new key.
+	if err := os.WriteFile(filepath.Join(s.dir, "backup-credential-key", "key.cred"), append([]byte("sealed:"), make([]byte, 32)...), 0600); err != nil {
 		t.Fatal(err)
 	}
 	good := register("b-good", "two", "register-2")
@@ -1985,5 +1991,234 @@ func TestS3LocalRegistrationSerializesAmbiguousClaimCleanup(t *testing.T) {
 	}
 	if err := backend.Verify(ctx); err != nil {
 		t.Fatalf("failed claim removed successful owner: %v", err)
+	}
+}
+
+// requireMembershipFree fails when Membership cannot take poolPeerMu while a
+// request to the service is stalled, which is how a hung bucket would hold the pool.
+func requireMembershipFree(t *testing.T, s *Store, release chan struct{}) {
+	t.Helper()
+	member := make(chan struct{})
+	go func() { Membership(s); close(member) }()
+	select {
+	case <-member:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Membership blocked on poolPeerMu during S3 I/O")
+	}
+}
+
+// stallS3 blocks the first request that matches until release is closed.
+func stallS3(fake *fakeS3, match func(*http.Request) bool) (entered, release chan struct{}) {
+	entered, release = make(chan struct{}), make(chan struct{})
+	var once atomic.Bool
+	fake.onRequest = func(r *http.Request) {
+		if match(r) && once.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+	return entered, release
+}
+
+func TestS3DeleteRemovesObjectsWithoutPoolPeerLock(t *testing.T) {
+	b, fake := testS3Storage(t)
+	manifest := publishS3TestPoint(t, b, []byte("disk bytes"))
+	catalogS3Point(t, b, manifest)
+	entered, release := stallS3(fake, func(r *http.Request) bool {
+		return r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/disk.qcow2")
+	})
+	done := make(chan error, 1)
+	go func() { done <- b.Delete(context.Background(), manifest.RecoveryPointID) }()
+	<-entered
+	requireMembershipFree(t, b.s, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestS3DeleteRefusesAfterAuthorityLoss(t *testing.T) {
+	b, fake := testS3Storage(t)
+	manifest := publishS3TestPoint(t, b, []byte("disk bytes"))
+	catalogS3Point(t, b, manifest)
+	entered, release := stallS3(fake, func(r *http.Request) bool {
+		return r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/manifest.json")
+	})
+	done := make(chan error, 1)
+	go func() { done <- b.Delete(context.Background(), manifest.RecoveryPointID) }()
+	<-entered
+	restrictPoolAuthority(t, b.s)
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("delete kept removing after authority was lost")
+	}
+	fake.mu.Lock()
+	_, kept := fake.objects[b.pointKey(manifest.RecoveryPointID, "disk.qcow2")]
+	fake.mu.Unlock()
+	if !kept {
+		t.Fatal("artifact removed after authority was lost")
+	}
+}
+
+func TestS3SetProtectedReadsMarkerWithoutPoolPeerLock(t *testing.T) {
+	b, fake := testS3Storage(t)
+	manifest := publishS3TestPoint(t, b, []byte("disk bytes"))
+	entered, release := stallS3(fake, func(r *http.Request) bool {
+		return r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/.nex-protected")
+	})
+	done := make(chan error, 1)
+	go func() { done <- b.SetProtected(context.Background(), manifest.RecoveryPointID, true) }()
+	<-entered
+	requireMembershipFree(t, b.s, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if protected, err := b.Protected(context.Background(), manifest.RecoveryPointID); err != nil || !protected {
+		t.Fatalf("point not protected: %v %v", protected, err)
+	}
+}
+
+func TestS3AbortClaimReadsWithoutPoolPeerLock(t *testing.T) {
+	b, fake := testS3Storage(t)
+	manifest := publishDeniedS3Point(t, b, fake, []byte("unpublished disk bytes"))
+	entered, release := stallS3(fake, func(r *http.Request) bool {
+		return r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/.nex-intent-"+manifest.RecoveryPointID)
+	})
+	done := make(chan error, 1)
+	go func() { done <- b.AbortIncomplete(context.Background(), manifest.RecoveryPointID) }()
+	<-entered
+	requireMembershipFree(t, b.s, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestS3PublishVerifiesCommittedPointWithoutPoolPeerLock(t *testing.T) {
+	b, fake := testS3Storage(t)
+	var committed atomic.Bool
+	entered, release := stallS3(fake, func(r *http.Request) bool {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/manifest.json") {
+			committed.Store(true)
+		}
+		return r.Method == http.MethodHead && strings.HasSuffix(r.URL.Path, "/disk.qcow2") && committed.Load()
+	})
+	payload := []byte("disk bytes")
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.Publish(context.Background(), testS3Manifest(payload), map[string]string{"disk.qcow2": writeS3Stage(t, payload)})
+		done <- err
+	}()
+	<-entered
+	requireMembershipFree(t, b.s, release)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A commit write that stalls is cut off by its own deadline, so the pool-wide
+// lock it runs under is held for seconds, not for the service's whole timeout.
+func TestS3CommitWriteHoldsPoolPeerLockOnlyBriefly(t *testing.T) {
+	previous := s3BackupCommitTimeout
+	s3BackupCommitTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { s3BackupCommitTimeout = previous })
+	b, fake := testS3Storage(t)
+	fake.manifestPutEntered, fake.releaseManifestPut = make(chan struct{}), make(chan struct{})
+	fake.blockManifestPutOnce.Store(true)
+	payload := []byte("disk bytes")
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.Publish(context.Background(), testS3Manifest(payload), map[string]string{"disk.qcow2": writeS3Stage(t, payload)})
+		done <- err
+	}()
+	<-fake.manifestPutEntered
+	member := make(chan struct{})
+	go func() { Membership(b.s); close(member) }()
+	select {
+	case <-member:
+	case <-time.After(5 * time.Second):
+		close(fake.releaseManifestPut)
+		t.Fatal("a stalled commit write held poolPeerMu past its deadline")
+	}
+	close(fake.releaseManifestPut)
+	// A write that landed after its deadline is settled by reading the exact
+	// manifest back, so either outcome is valid; the lock was what mattered.
+	<-done
+}
+
+func TestS3ScanSkipsDamagedPointAndDeleteClearsIt(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	payload := []byte("disk bytes")
+	good := publishS3TestPoint(t, b, payload)
+	damaged := testS3Manifest(payload)
+	damaged.RecoveryPointID = "point-2"
+	if _, err := b.Publish(ctx, damaged, map[string]string{"disk.qcow2": writeS3Stage(t, payload)}); err != nil {
+		t.Fatal(err)
+	}
+	catalogS3Point(t, b, good)
+	catalogS3Point(t, b, damaged)
+	fake.mu.Lock()
+	delete(fake.objects, b.pointKey(damaged.RecoveryPointID, "disk.qcow2"))
+	fake.mu.Unlock()
+	points, err := b.Scan(ctx)
+	if err != nil || len(points) != 1 || points[0].ID != good.RecoveryPointID {
+		t.Fatalf("damaged point wedged the scan: %+v %v", points, err)
+	}
+	if err := b.Delete(ctx, damaged.RecoveryPointID); err != nil {
+		t.Fatalf("damaged point could not be cleared: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for key := range fake.objects {
+		if strings.Contains(key, "/"+damaged.RecoveryPointID+"/") {
+			t.Fatalf("damaged point left %s", key)
+		}
+	}
+}
+
+// The owner object is JSON, which escapes characters a valid prefix may hold.
+func TestS3RegistersPrefixWhoseOwnerRecordIsLong(t *testing.T) {
+	s, _, repo := testS3Registration(t, strings.Repeat("&", 800))
+	if repo.Valid() != nil {
+		t.Skip("prefix is no longer valid")
+	}
+	prepared, err := prepareS3BackupRepository(context.Background(), s, repo, testS3Credential)
+	if err != nil {
+		t.Fatalf("owner record longer than the read cap refused registration: %v", err)
+	}
+	if prepared.RemoteIdentity == nil {
+		t.Fatal("registration returned no identity")
+	}
+}
+
+func TestS3CopyArtifactsRefusesRelativeDirWithoutCreatingIt(t *testing.T) {
+	b, _ := testS3Storage(t)
+	manifest := publishS3TestPoint(t, b, []byte("disk bytes"))
+	relative := "relative-s3-restore-" + t.Name()
+	t.Cleanup(func() { _ = os.RemoveAll(relative) })
+	if err := b.CopyArtifacts(context.Background(), manifest.RecoveryPointID, relative, manifest); !errors.Is(err, ErrBackupInvalid) {
+		t.Fatalf("relative directory accepted: %v", err)
+	}
+	if _, err := os.Stat(relative); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("relative directory was created: %v", err)
+	}
+}
+
+func TestS3VerifyArtifactsHashesStoredContent(t *testing.T) {
+	b, fake := testS3Storage(t)
+	ctx := context.Background()
+	manifest := publishS3TestPoint(t, b, []byte("disk bytes"))
+	if err := b.VerifyArtifacts(ctx, manifest.RecoveryPointID, manifest); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.objects[b.pointKey(manifest.RecoveryPointID, "disk.qcow2")] = []byte("disk byteX")
+	fake.mu.Unlock()
+	if err := b.VerifyArtifacts(ctx, manifest.RecoveryPointID, manifest); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("same-size corruption not detected: %v", err)
 	}
 }

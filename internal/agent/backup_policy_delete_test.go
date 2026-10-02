@@ -174,3 +174,33 @@ func TestDeleteMissingPolicyLeavesNoReceipt(t *testing.T) {
 		t.Fatalf("receipt written for a missing policy: %v", err)
 	}
 }
+
+// A run of uncertain outcome can still settle as a success and then apply the policy's
+// retention, so it holds the policy like a pending run does.
+func TestPolicyDeleteRefusedWhileRunNeedsAttention(t *testing.T) {
+	master := seedBackupMaster(t)
+	policy := testPolicy()
+	if err := savePoolBackupPolicies(master, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	run := protocol.BackupRun{OperationID: "run-1", Kind: protocol.BackupKindScheduled, PoolID: "pool-1", VMID: "vm-1", RepositoryID: "repo-1",
+		PolicyID: policy.ID, Stage: "publishing", Status: "needs_attention", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := savePoolBackupRun(master, run); err != nil {
+		t.Fatal(err)
+	}
+	req := protocol.DeleteBackupPolicyRequest{PolicyID: policy.ID, Confirmation: policy.Name}
+	var refusal backupRefusal
+	if err := deletePoolBackupPolicy(master, req); !errors.As(err, &refusal) {
+		t.Fatalf("delete with an unresolved run: %v", err)
+	}
+	if _, err := GetPoolBackupPolicy(master, policy.ID); err != nil {
+		t.Fatalf("policy removed under an unresolved run: %v", err)
+	}
+	run.Status, run.Stage = "failed", "failed"
+	if err := savePoolBackupRun(master, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := deletePoolBackupPolicy(master, req); err != nil {
+		t.Fatalf("delete after the run settled: %v", err)
+	}
+}

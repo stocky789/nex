@@ -79,10 +79,13 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 				byID[point.ID] = point
 			}
 		}
+		scannedProtected := make(map[string]bool, len(scanned))
 		for i, point := range scanned {
+			scannedProtected[point.ID] = point.Protected
 			if prior, ok := byID[point.ID]; ok {
 				// The catalog holds the operator's latest protection choice; the scanned
-				// marker may predate an unprotect made during the scan.
+				// marker may predate an unprotect made during the scan, so a marker the
+				// catalog does not know is re-read under the point's reservation below.
 				point.Protected = prior.Protected
 				if prior.LastTestResult != "" {
 					point.LastTestResult = prior.LastTestResult
@@ -124,6 +127,17 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 				if err != nil {
 					return point, err
 				}
+				// Protection is written to the repository before the catalog, so a marker
+				// with no catalog record is a protect that never finished (or an operator's):
+				// adopt it. No protect or unprotect of this point can run while it is reserved.
+				adopted := false
+				if scannedProtected[point.ID] && !point.Protected {
+					marked, err := backend.Protected(ctx, point.ID)
+					if err != nil {
+						return point, err
+					}
+					point.Protected, adopted = marked, marked
+				}
 				// Reuse bulk admission only for an existing record that is still unchanged.
 				// New records and concurrent metadata changes need fresh admission.
 				if prior, cataloged := byID[point.ID]; !cataloged || prior != admitted || point != admitted || !unchanged {
@@ -131,12 +145,12 @@ func importPoolBackupCatalog(ctx context.Context, s *Store, repositoryID string)
 						return point, err
 					}
 				}
-				if point.Protected {
+				if point.Protected && !adopted {
 					if err := backend.SetProtected(ctx, point.ID, true); err != nil {
 						return point, err
 					}
 				}
-				return commitBackupPointMetadata(ctx, s, point, true)
+				return commitBackupPointMetadata(ctx, s, point, !adopted)
 			}()
 			if writeErr != nil {
 				return imported, writeErr
@@ -175,13 +189,34 @@ func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repos
 	if err != nil {
 		return imported, err
 	}
+	// A backup may publish a point between the scan and the listing. A listed
+	// point that is neither imported nor cataloged is scanned for once more
+	// before it is reported as unreadable.
+	for attempt := 0; ; attempt++ {
+		rescan, err := settleRebuiltCatalog(ctx, s, backend, repositoryID, imported, attempt == 0)
+		if err != nil {
+			return imported, err
+		}
+		if !rescan {
+			return imported, nil
+		}
+		if imported, err = importPoolBackupCatalog(ctx, s, repositoryID); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// settleRebuiltCatalog removes the stale catalog entries of a repository after an import.
+// It reports rescan instead of failing when canRescan and a listed point is neither imported
+// nor cataloged.
+func settleRebuiltCatalog(ctx context.Context, s *Store, backend backupRepositoryStorage, repositoryID string, imported []protocol.BackupRecoveryPoint, canRescan bool) (rescan bool, err error) {
 	// Only records observed before the unlocked listing can be stale candidates.
 	// Settlement after that snapshot must survive even if the listing missed it.
 	poolBackupAuthorityMu.Lock()
 	before, err := loadPoolBackupCatalog(s)
 	poolBackupAuthorityMu.Unlock()
 	if err != nil {
-		return imported, err
+		return false, err
 	}
 	candidates := make(map[string]protocol.BackupRecoveryPoint, len(before))
 	for _, point := range before {
@@ -191,29 +226,43 @@ func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repos
 	}
 	entries, err := listBackupCatalogRepositoryEntries(ctx, backend)
 	if err != nil {
-		return imported, err
+		return false, err
 	}
 	poolBackupAuthorityMu.Lock()
 	defer poolBackupAuthorityMu.Unlock()
 	if err := requirePoolAuthorityWritable(s); err != nil {
-		return imported, err
+		return false, err
 	}
 	pins, err := loadPoolBackupPins(s)
 	if err != nil {
-		return imported, err
+		return false, err
 	}
 	existing, err := loadPoolBackupCatalog(s)
 	if err != nil {
-		return imported, err
+		return false, err
 	}
 	seen := make(map[string]bool, len(imported))
 	for _, point := range imported {
 		seen[point.ID] = true
 	}
-	for _, name := range entries {
-		if name != "" && name[0] != '.' && protocol.ValidSnapshotOperationID(name) && !seen[name] {
-			return imported, errors.New("repository contains an unreadable or invalid recovery point: " + name)
+	current := make(map[string]bool, len(existing))
+	for _, point := range existing {
+		if point.RepositoryID == repositoryID {
+			current[point.ID] = true
 		}
+	}
+	for _, name := range entries {
+		if name == "" || name[0] == '.' || !protocol.ValidSnapshotOperationID(name) || seen[name] {
+			continue
+		}
+		// A point cataloged after the snapshot was published after the scan began.
+		if _, observed := candidates[name]; !observed && current[name] {
+			continue
+		}
+		if canRescan {
+			return true, nil
+		}
+		return false, errors.New("repository contains an unreadable or invalid recovery point: " + name)
 	}
 	for _, point := range existing {
 		prior, candidate := candidates[point.ID]
@@ -224,11 +273,11 @@ func RebuildPoolBackupCatalogFromRepository(ctx context.Context, s *Store, repos
 			}
 			path := filepath.Join(poolBackupCatalogPath(s), point.ID+".json")
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return imported, err
+				return false, err
 			}
 		}
 	}
-	return imported, nil
+	return false, nil
 }
 
 type retainedOriginalRecord struct {

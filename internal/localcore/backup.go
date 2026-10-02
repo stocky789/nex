@@ -192,6 +192,10 @@ func (s *Service) forgetBackupRepository(w http.ResponseWriter, r *http.Request)
 		writeBackupError(w, response.Err)
 		return
 	}
+	if response.Result == nil {
+		fail(w, http.StatusServiceUnavailable, "forget backup repository result unavailable")
+		return
+	}
 	reply(w, http.StatusOK, response.Result)
 }
 
@@ -239,6 +243,10 @@ func (s *Service) cleanupOrphanedBackups(w http.ResponseWriter, r *http.Request)
 	}
 	if err != nil {
 		writeBackupError(w, err)
+		return
+	}
+	if response.Result == nil {
+		fail(w, http.StatusServiceUnavailable, "orphaned backup cleanup result unavailable")
 		return
 	}
 	reply(w, http.StatusOK, response.Result)
@@ -385,6 +393,10 @@ func (s *Service) deleteBackupPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if response.Err != nil {
 		writeBackupError(w, response.Err)
+		return
+	}
+	if response.Result == nil {
+		fail(w, http.StatusServiceUnavailable, "backup policy delete result unavailable")
 		return
 	}
 	reply(w, http.StatusOK, response.Result)

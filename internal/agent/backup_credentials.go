@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -50,18 +51,74 @@ type sealedBackupCredential struct {
 
 var errBackupCredentialUnencrypted = errors.New("backup credential receipt is not encrypted")
 
-var errBackupCredentialKeyMissing = errors.New("backup credential key is missing")
+var errBackupCredentialKeyMissing = errors.New("backup credential key is missing while receipts remain: restore it, or remove the backup credential receipts and register the repositories again")
 
 var errBackupCredentialUndecryptable = errors.New("backup credential receipt cannot be decrypted")
 
 // backupCredentialKeyName is the systemd credential name the receipt key is sealed under.
 const backupCredentialKeyName = "nex-backup-key"
 
-// backupCredentialKey returns the AES key, sealed at rest by systemd-creds (host key or
-// TPM2) in its own root-only directory apart from the receipts it protects. Order: decrypt the
-// sealed file; else, only when writing a receipt, create and seal a new key. A key lost while receipts remain is reported, not
-// replaced by one that would leave every receipt unreadable. The caller holds clusterSecretMu.
-func backupCredentialKey(s *Store, create bool) ([]byte, error) {
+// cachedBackupCredentialKey remembers the AEAD of one sealed key file. The sealed bytes are
+// the cache key, so replacing key.cred in any way, even in place, misses the cache.
+type cachedBackupCredentialKey struct {
+	sealed []byte
+	aead   cipher.AEAD
+}
+
+// backupCredentialKeyCache spares a systemd-creds exec for every receipt opened: one list of
+// N receipts would otherwise run N execs. It is guarded by its own leaf mutex, never held
+// across an exec.
+var (
+	backupCredentialKeyMu    sync.Mutex
+	backupCredentialKeyCache = map[string]cachedBackupCredentialKey{}
+)
+
+func cacheBackupCredentialKey(s *Store, sealed []byte, key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	backupCredentialKeyMu.Lock()
+	backupCredentialKeyCache[s.dir] = cachedBackupCredentialKey{sealed: sealed, aead: aead}
+	backupCredentialKeyMu.Unlock()
+	return aead, nil
+}
+
+func forgetBackupCredentialKey(s *Store) {
+	backupCredentialKeyMu.Lock()
+	delete(backupCredentialKeyCache, s.dir)
+	backupCredentialKeyMu.Unlock()
+}
+
+// backupCredentialReceiptsExist reports whether any receipt file is on disk, readable or not.
+func backupCredentialReceiptsExist(s *Store) (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(s.dir, clusterSecretDirectory, "backup"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// backupCredentialAEAD returns the cipher for the receipt key, which is sealed at rest by
+// systemd-creds (host key or TPM2) in its own root-only directory apart from the receipts it
+// protects. Order: decrypt the sealed file (once, then served from the cache while the file
+// is unchanged); else, only when writing a receipt, create and seal a new key. A key lost
+// while receipts remain is reported, never replaced by one that would leave every receipt
+// unreadable. The first decrypt after a start or a key change execs systemd-creds, so a
+// caller that can should call this before taking clusterSecretMu.
+func backupCredentialAEAD(s *Store, create bool) (cipher.AEAD, error) {
 	if s == nil || !filepath.IsAbs(s.dir) || filepath.Clean(s.dir) != s.dir {
 		return nil, errors.New("invalid backup credential key directory")
 	}
@@ -71,19 +128,36 @@ func backupCredentialKey(s *Store, create bool) ([]byte, error) {
 	defer cancel()
 	info, err := os.Lstat(path)
 	if err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 1<<16 {
 			return nil, errors.New("backup credential key must be private")
+		}
+		sealed, err := os.ReadFile(path)
+		if err != nil {
+			return nil, errors.New("backup credential key is invalid")
+		}
+		backupCredentialKeyMu.Lock()
+		hit := backupCredentialKeyCache[s.dir]
+		backupCredentialKeyMu.Unlock()
+		if hit.aead != nil && bytes.Equal(hit.sealed, sealed) {
+			return hit.aead, nil
 		}
 		key, err := vmhost.OpenCredential(ctx, backupCredentialKeyName, path)
 		if err != nil || len(key) != 32 {
+			forgetBackupCredentialKey(s)
 			return nil, errors.New("backup credential key is invalid")
 		}
-		return key, nil
+		return cacheBackupCredentialKey(s, sealed, key)
 	}
 	if !os.IsNotExist(err) {
 		return nil, err
 	}
+	forgetBackupCredentialKey(s)
 	if !create {
+		return nil, errBackupCredentialKeyMissing
+	}
+	if exist, err := backupCredentialReceiptsExist(s); err != nil {
+		return nil, err
+	} else if exist {
 		return nil, errBackupCredentialKeyMissing
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -96,19 +170,14 @@ func backupCredentialKey(s *Store, create bool) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	return key, vmhost.SealCredential(ctx, backupCredentialKeyName, path, key)
-}
-
-func backupCredentialAEAD(s *Store, create bool) (cipher.AEAD, error) {
-	key, err := backupCredentialKey(s, create)
+	if err := vmhost.SealCredential(ctx, backupCredentialKeyName, path, key); err != nil {
+		return nil, err
+	}
+	sealed, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
+	return cacheBackupCredentialKey(s, sealed, key)
 }
 
 func backupCredentialAAD(poolID, hostID, reference string) []byte {
@@ -541,6 +610,8 @@ func BackupCredentialReceipts(s *Store) ([]protocol.StorageCredentialReceipt, er
 	if err != nil {
 		return nil, err
 	}
+	// Warm the key cache here, outside clusterSecretMu, so the locked reads never exec.
+	_, _ = backupCredentialAEAD(s, false)
 	backupCredentialPreparationMu.Lock()
 	defer backupCredentialPreparationMu.Unlock()
 	clusterSecretMu.Lock()

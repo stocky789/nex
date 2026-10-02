@@ -10,7 +10,7 @@ User=root
 StateDirectory=nex-core-agent
 StateDirectoryMode=0700
 UMask=0077
-# Mount credentials are sealed with systemd-creds; make sure the host key exists (runs unsandboxed).
+# The backup credential receipt key is sealed with systemd-creds; make sure the host key exists (runs unsandboxed).
 ExecStartPre=+-/usr/bin/systemd-creds setup
 ExecStartPre=/bin/mkdir -p /var/lib/libvirt/images
 ExecStartPre=/bin/chmod 0711 /var/lib/libvirt/images
@@ -32,7 +32,6 @@ ReadWritePaths=-/etc/network
 # the agent must never rely on mounts made inside this service's private namespace.
 ReadWritePaths=-/var/lib/nex-storage
 ReadWritePaths=-/var/lib/nex-core-agent/storage-credentials
-ReadWritePaths=-/var/lib/nex-core-agent/backup-credential-key
 # Root-only fence password scripts are consumed by Pacemaker, never passed through Controller.
 ReadWritePaths=-/var/lib/nex-core-agent/storage-cluster
 ReadWritePaths=-/etc/systemd/system

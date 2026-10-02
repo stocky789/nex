@@ -278,13 +278,20 @@ func (c *Controller) agentConsole(w http.ResponseWriter, r *http.Request, host s
 	}
 	s.agentClaimed = true
 	c.consoles.mu.Unlock()
+	fall := func() {
+		c.consoles.mu.Lock()
+		s.agentClaimed = false
+		c.consoles.mu.Unlock()
+	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
+		fall()
 		fail(w, 500, "connection cannot carry a console")
 		return
 	}
 	conn, rw, err := hj.Hijack()
 	if err != nil {
+		fall()
 		fail(w, 500, "connection cannot carry a console")
 		return
 	}
@@ -293,6 +300,7 @@ func (c *Controller) agentConsole(w http.ResponseWriter, r *http.Request, host s
 		err = rw.Flush()
 	}
 	if err != nil {
+		fall()
 		conn.Close()
 		return
 	}

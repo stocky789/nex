@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { API, Host } from "./types";
-import { AccessLights, Badge, MiniBar, Section, date, size, type HostAccess } from "./ui";
+import { AccessLights, Badge, MiniBar, Section, checkedAt, date, size, type HostAccess } from "./ui";
 import { Icon } from "./icons";
 import { confirmMatches } from "./managed";
 import { OrphanedBackups } from "./backup-orphans";
@@ -379,7 +379,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
       </div>
       <form className="vm-fields" onSubmit={onCreate}>
         {formError && <p className="why" role="alert">{formError}</p>}
-        {createUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry this exact registration.</p>}
+        {createUncertain && <p className="why" role="status">The previous reply was uncertain. Retry this exact registration, or check <a href="#/tasks" target="_blank" rel="noreferrer">Tasks (opens in a new tab)</a>. Leaving this form discards the held request, so keep it open.</p>}
         <label>Name<input required maxLength={100} value={name} autoFocus disabled={fieldsDisabled} onChange={e => change(() => setName(e.target.value))} /></label>
         <label>Repository ID<input value={repoID} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" placeholder="Optional; generated when empty" autoComplete="off" disabled={fieldsDisabled} onChange={e => change(() => setRepoID(e.target.value))} /></label>
         <p className="note">Leave empty for a new repository. To bring back a forgotten destination, or to replace a lost credential or an SFTP host key, enter the repository's original ID (shown under its name in the list); its recovery points are kept.</p>
@@ -422,7 +422,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
     </section>}
     {rows === null && !error ? <p className="muted">Loading…</p> : null}
     {rows && rows.length === 0 ? <p className="empty">No backup repositories. Create a destination first.</p> : null}
-    {rows && rows.length > 0 ? <div className="table-scroll"><table className="records resources">
+    {rows && rows.length > 0 ? <div className="table-scroll"><table className="records resources backup-repos">
       <thead><tr><th>Name</th><th>Target</th><th>Capacity</th><th>Health</th><th>Host access</th><th>Last check</th><th><span className="sr-only">Actions</span></th></tr></thead>
       <tbody>
         {rows.map(repo => <tr key={repo.id}>
@@ -431,7 +431,7 @@ export function BackupRepositories({ api, poolID, masterHostID, hosts, busy, una
           <td>{capacityCell(repo, repositoryHealth(repo) === "online")}</td>
           <td>{healthSummary(repo)}</td>
           <td><AccessLights items={hostAccess(repo, hosts, masterHostID)} /></td>
-          <td><span className="muted">{repo.health?.observed_at ? date(repo.health.observed_at) : "Not checked"}</span></td>
+          <td><span className="muted">{checkedAt(repo.health?.observed_at)}</span></td>
           <td className="row-actions">
             <button type="button" className="sm" disabled={blocked || Boolean(working)} title={createWhy || undefined} aria-label={`Test access to ${repo.name}`} onClick={() => void onTest(repo)}>
               {working === `test-${repo.id}` ? "Testing…" : "Test access"}

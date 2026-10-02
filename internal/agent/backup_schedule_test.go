@@ -584,6 +584,77 @@ func TestApplyBackupScheduleTickHonorsHostLimitAndVMOverride(t *testing.T) {
 	}
 }
 
+func TestApplyBackupScheduleTickMissingVMDoesNotStarveOtherPolicies(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	gone, live := testPolicy(), testPolicy()
+	gone.ID, gone.ScheduleID, gone.VMIDs = "pol-a", "sch-a", []string{"vm-gone"}
+	live.ID, live.ScheduleID = "pol-b", "sch-b"
+	last := time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	gone.LastDispatchAt, live.LastDispatchAt = last, last
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{gone.ID: gone, live.ID: live}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("one policy with a VM that left the pool aborted the tick: %v", err)
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, run := range runs {
+		statuses[run.PolicyID] = run.Status
+	}
+	if statuses["pol-a"] != "failed" || statuses["pol-b"] != "pending" {
+		t.Fatalf("occurrences = %v, want pol-a failed and pol-b pending", statuses)
+	}
+	for _, id := range []string{"pol-a", "pol-b"} {
+		stored, err := GetPoolBackupPolicy(s, id)
+		if err != nil || !stored.LastDispatchAt.After(last) {
+			t.Fatalf("%s cursor did not advance: %+v %v", id, stored, err)
+		}
+	}
+}
+
+func TestApplyBackupScheduleTickRecordsSlotWhenRepositoryBusy(t *testing.T) {
+	s := seedBackupMaster(t)
+	vms, err := loadPoolVMs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vms.VMs["vm-1"] = poolVMRecord{PoolID: "pool-1", VMID: "vm-1", HostID: "host-a", State: "stopped", Epoch: 1, Spec: *poolVMTestSpec("vm-1", "host-a")}
+	if err := savePoolVMs(s, vms); err != nil {
+		t.Fatal(err)
+	}
+	policy := testPolicy()
+	policy.LastDispatchAt = time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC)
+	if err := savePoolBackupPolicies(s, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}}); err != nil {
+		t.Fatal(err)
+	}
+	poolBackupAuthorityMu.Lock()
+	mutation, err := reserveBackupRepositoryMutation(s, policy.RepositoryID)
+	poolBackupAuthorityMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutation.release()
+	if _, err := ApplyBackupScheduleTick(s, time.Date(2026, 9, 27, 2, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := listPoolBackupRuns(s)
+	if err != nil || len(runs) != 1 || runs[0].Status != "skipped_overlap" || runs[0].VMID != "vm-1" {
+		t.Fatalf("a due slot hit a busy repository without a run record: %+v %v", runs, err)
+	}
+}
+
 func TestApplyBackupScheduleTickDoesNotClobberConcurrentCASUpsert(t *testing.T) {
 	s := seedBackupMaster(t)
 	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{

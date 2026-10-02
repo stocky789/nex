@@ -3,13 +3,18 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
 )
 
 // stagePoolBackupAuthorityActivationPages writes every backup store into a new tree.
@@ -123,6 +128,11 @@ func stagePoolBackupAuthorityActivationPages(s *Store, manifest *protocol.PoolBa
 		return nil
 	}
 	if manifest != nil {
+		// The visitor reserves repositories, resolves credentials and mounts native units from
+		// each page, so the whole root is proven against its signed digest before any page is acted on.
+		if err := verifyPoolBackupAuthorityPages(s, manifest); err != nil {
+			return "", nil, nil, err
+		}
 		if err := walkPoolBackupAuthorityPages(s, manifest, visit); err != nil {
 			return "", nil, nil, err
 		}
@@ -190,8 +200,85 @@ func syncPoolBackupTree(root string) error {
 
 var importPoolBackupCatalogForActivation = importPoolBackupCatalog
 
-// The signed catalog was empty, so scan every repository before reporting the
-// takeover complete. A partial import remains retryable from catalog-rebuild.
+// poolBackupCatalogPendingFile lists the repositories the promoted master adopted while it
+// could not reach them, so their catalogs are still imported once they answer.
+const poolBackupCatalogPendingFile = "pool-backup-catalog-pending.json"
+
+var poolBackupCatalogPendingMu sync.Mutex
+
+func loadPendingBackupCatalogImports(s *Store) (map[string]bool, error) {
+	pending := map[string]bool{}
+	raw, err := os.ReadFile(filepath.Join(s.dir, poolBackupCatalogPendingFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return pending, nil
+	}
+	var ids []string
+	if err != nil || json.Unmarshal(raw, &ids) != nil {
+		return nil, errors.New("pending backup catalog imports are unavailable")
+	}
+	for _, id := range ids {
+		pending[id] = true
+	}
+	return pending, nil
+}
+
+func savePendingBackupCatalogImports(s *Store, pending map[string]bool) error {
+	path := filepath.Join(s.dir, poolBackupCatalogPendingFile)
+	if len(pending) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	ids := slices.Sorted(maps.Keys(pending))
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return vmhost.AtomicWrite(path, raw, 0600)
+}
+
+// ImportPendingBackupCatalogs imports the catalog of every repository the promoted master
+// adopted unreachable, once the probe has found it reachable. It is idempotent, leaves a
+// repository that still fails for the next probe, and does nothing on a host that is not master.
+func ImportPendingBackupCatalogs(ctx context.Context, s *Store) error {
+	poolBackupCatalogPendingMu.Lock()
+	defer poolBackupCatalogPendingMu.Unlock()
+	pending, err := loadPendingBackupCatalogImports(s)
+	if err != nil || len(pending) == 0 {
+		return err
+	}
+	if masterBackupPool(s, "") != nil {
+		return nil
+	}
+	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return err
+	}
+	var failed error
+	for _, id := range slices.Sorted(maps.Keys(pending)) {
+		repo, ok := repos.Repositories[id]
+		if !ok {
+			delete(pending, id) // forgotten since: nothing left to import
+			continue
+		}
+		if repo.Access.Status == "failed" {
+			continue // still unreachable; the probe records when it answers
+		}
+		if _, err := importPoolBackupCatalogForActivation(ctx, s, id); err != nil {
+			failed = errors.Join(failed, fmt.Errorf("backup catalog import of repository %s: %w", id, err))
+			continue
+		}
+		delete(pending, id)
+	}
+	return errors.Join(failed, savePendingBackupCatalogImports(s, pending))
+}
+
+// The signed catalog was empty, so scan every repository before reporting the takeover
+// complete. A repository this host cannot reach does not hold the takeover up: it is recorded
+// failed and its catalog is imported by ImportPendingBackupCatalogs once the probe finds it
+// reachable. An import that fails for another reason, or a cancelled context, leaves the stage
+// at catalog-rebuild to be retried.
 func reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store, record *poolTransferRecord) error {
 	fail := func(err error) error {
 		record.LastError = poolTransferError(err)
@@ -206,9 +293,19 @@ func reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store
 	if err != nil {
 		return fail(err)
 	}
+	poolBackupCatalogPendingMu.Lock()
+	defer poolBackupCatalogPendingMu.Unlock()
+	pending, err := loadPendingBackupCatalogImports(s)
+	if err != nil {
+		return fail(err)
+	}
 	for _, repo := range repos.Repositories {
+		if err := ctx.Err(); err != nil {
+			return err // Not a verdict on any repository: this attempt is simply over.
+		}
 		if repo.Access.Status == "failed" {
-			continue // Adopted unreachable; its catalog imports with catalog-rebuild once it is reachable.
+			pending[repo.ID] = true // Adopted unreachable; imported when it answers.
+			continue
 		}
 		backend, err := openBackupRepositoryStorage(s, repo)
 		if err == nil {
@@ -218,15 +315,23 @@ func reconcilePoolBackupCatalogAfterAuthorityAdopt(ctx context.Context, s *Store
 			cancel()
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err() // A shutdown cut the check short; the repository was not found unreachable.
+			}
 			markBackupRepositoryUnreachable(&repo)
 			if saveErr := savePoolBackupRepositoryAccess(s, repo); saveErr != nil {
 				return fail(saveErr)
 			}
+			pending[repo.ID] = true
 			continue
 		}
 		if _, err := importPoolBackupCatalogForActivation(ctx, s, repo.ID); err != nil {
 			return fail(fmt.Errorf("promoted backup catalog import failed: %w", err))
 		}
+		delete(pending, repo.ID)
+	}
+	if err := savePendingBackupCatalogImports(s, pending); err != nil {
+		return fail(err)
 	}
 	record.Stage, record.Status, record.LastError = "repoint", "pending", ""
 	return savePoolTransfer(s, record)

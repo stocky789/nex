@@ -157,7 +157,7 @@ separate backup/disaster-recovery workflow or physical fencing hardware.
   Inspect the original operation; do not choose a new ID to bypass its protection.
 - **503 or a lost response:** availability or acceptance may be uncertain. Query the same operation
   ID and retry the exact original request. Never infer that no effect occurred from a timeout.
-- **`needs_attention` with "cannot confirm VM or domain storage state":** libvirt was briefly unavailable (for example during a restart) so Core could not check the VM's power state, autostart setting, definition, snapshots or storage while preparing or running a snapshot create, delete or revert. Core keeps the operation; repeat the same operation ID once the host is back.
+- **`needs_attention` with "cannot confirm VM or domain storage state":** libvirt was briefly unavailable (for example during a restart) so Core could not check the VM's power state, autostart setting, definition, snapshots or storage while preparing or running a snapshot create, delete or revert. Core keeps the operation and retries for up to 15 minutes from when it started; repeat the same operation ID once the host is back. After that window the next attempt fails and clears the operation. A VM, domain or snapshot that libvirt reports as missing is not retried: the operation fails outright and its journal is cleared.
 - **`needs_attention` with "the pool master has not confirmed the snapshot reservation":**
   the owning host holds the operation and keeps retrying. Check that the pool master and every
   ready member are reachable; no new request or manual cleanup is needed. When it appears for a

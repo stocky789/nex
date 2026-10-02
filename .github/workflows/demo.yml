@@ -8,11 +8,17 @@ on:
 permissions:
   contents: read
 concurrency:
+  # Never cancel a live deploy or its rollback. PRs have separate ref groups.
   group: nex-demo-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   demo:
     if: github.server_url != 'https://github.com' # github.com runs github.yml only
+    # Heavy verification shares the runner with phase1/release. Cancelling it is
+    # harmless: nothing is deployed until the separate deploy job below.
+    concurrency:
+      group: nex-shared-runner
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -57,8 +63,24 @@ jobs:
           .cache/demo-qa-venv/bin/python -m playwright install --with-deps chromium
           .cache/demo-qa-venv/bin/python tests/integration/demo_browser.py \
             --binary .cache/nex-demo --ui-dir .cache/demo-web --docs-dir .cache/demo-docs --source-archive .cache/demo-source.tar.gz
+  deploy:
+    # Separate concurrency group: phase1/release cancel-in-progress must never
+    # cancel a live deploy or its rollback. Re-running the same SHA is idempotent.
+    # Uses the Docker image built by the demo job on this runner's Docker daemon.
+    needs: [demo]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.server_url != 'https://github.com'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: nex-demo-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # No secrets are read for PR verification. Required secrets fail, never skip,
+      # on main publication. Use isolated disposable runners for untrusted PRs.
       - name: Deploy main through the fixed healthchecked wrapper
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           NEX_DEPLOY_HOST: ${{ secrets.NEX_DEMO_DEPLOY_HOST }}
           NEX_DEPLOY_USER: ${{ secrets.NEX_DEMO_DEPLOY_USER }}

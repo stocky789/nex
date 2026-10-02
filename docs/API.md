@@ -411,18 +411,17 @@ restore-as-new from local copies. Authenticated host-local routes:
 | `GET /api/local/v1/pool/backup-repositories/{id}/orphans` | Read-only orphaned-backup query (see the Controller relay row); `409` when the master's VM inventory is unavailable |
 | `POST /api/local/v1/pool/backup-repositories/{id}/orphan-cleanups` | `{operation_id,vm_ids,include_protected?,confirmation,recovery_points,protected_points}`; deletes the chosen missing VMs' recovery points (see the Controller relay row); `200` with the recorded Result, `failed` carrying a refusal or the count of points that could not be deleted |
 | `GET /api/local/v1/pool/backup-orphan-cleanups/{operation_id}` | The master's record of one cleanup: `status` (`running`, `succeeded`, `failed`) and every planned point's `deleted`, `skipped` (with reason), `failed` or `pending` outcome; `404` until the cleanup has been planned |
-
 | `GET /api/local/v1/pool/backup-catalog` | Completed recovery-point index from `pool-backup-catalog/` |
 | `GET /api/local/v1/pool/backup-runs` | Retained run records from `pool-backup-runs/` |
 | `GET /api/local/v1/pool/backup-policies` | Master's durable policy list |
 | `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment); update requires `policy.expected_revision` matching the current durable revision; missing/stale values conflict |
 | `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}` |
-| `POST /api/local/v1/pool/backup-policies/{id}/delete` | `{operation_id,confirmation}`; removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while a run of the policy is pending or when `confirmation` is not the policy name; `200` with the recorded Result, exact `operation_id` replay returns it (also once the policy is gone), a changed payload is `409`, an absent policy under a new `operation_id` is `404` |
+| `POST /api/local/v1/pool/backup-policies/{id}/delete` | `{operation_id,confirmation}`; removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while any run of the policy is `pending` or `needs_attention` or when `confirmation` is not the policy name; `200` with the recorded Result, exact `operation_id` replay returns it (also once the policy is gone), a changed payload is `409`, an absent policy under a new `operation_id` is `404` |
 | `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; `202` |
 | `GET /api/local/v1/pool/backup-operations/{operation_id}` | Retained `Result` for backup-now or restore-as-new |
 | `POST /api/local/v1/pool/vms/{id}/backup` | `{operation_id,repository_id,consistency?}`; `consistency` omitted/`stopped` for shut-off guests, or `crash` for online crash-consistent; `quiesced` is refused until proven; UEFI online is refused; `202` with durable `Result` |
 | `POST /api/local/v1/pool/backup-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; restore-as-new copies artifacts locally, reconstructs from the captured VM spec, places disks on `storage_id`, and registers a new stopped VM with disconnected NICs before succeeding; a missing catalog point fails before run reservation or native work, while uncertain reservation errors retain `needs_attention` |
-| `POST /api/local/v1/pool/backup-restore-replace` | `{operation_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace:true}`; retains originals, places restored disks, exclusive cutover updates the stopped definition (disconnected NICs), settles `replaced`/`succeeded`; pre-cutover failure keeps originals; mid-cutover failure is `needs_attention` with exact stage; never succeeds at cutover-ready alone; refuses powered/in-place overwrite |
+| `POST /api/local/v1/pool/backup-restore-replace` | `{operation_id,repository_id,recovery_point_id,original_vm_id,storage_id,confirm_replace:true}`; retains originals, places restored disks, exclusive cutover updates the stopped definition (the VM keeps its current NICs and MAC addresses), settles `replaced`/`succeeded`; pre-cutover failure keeps originals; mid-cutover failure is `needs_attention` with exact stage; never succeeds at cutover-ready alone; refuses powered/in-place overwrite |
 | `POST /api/local/v1/pool/backup-protect` | `{operation_id,repository_id,recovery_point_id,protected}`; catalog + repository `.nex-protected` marker |
 | `POST /api/local/v1/pool/backup-test-restore` | `{operation_id,repository_id,recovery_point_id,new_vm_id,new_vm_name,storage_id}`; `202` |
 | `POST /api/local/v1/pool/backup-test-verify` | `{operation_id,repository_id,recovery_point_id,test_vm_id,result}` with `passed`\|`failed`; Core proves this is the current VM created by the exact successful test restore |
@@ -465,7 +464,7 @@ retention can settle from that validated point while writes are denied. A
 policy backup that still owes retention pruning remains unresolved until
 writes recover. A fresh backup still requires the write checks, and an absent
 point does not become a successful replay.
-API impact: **existing contract**; no route or schema change.
+API impact: **changed contract** relative to the previous release: new `smb3`, `s3` and `sftp` repository kinds with their nonsecret source schemas, the health and access schemas, the forget, orphan-cleanup and release-retained routes below, and removal of the `BackupSupport` capability handshake. NFS records decode unchanged.
 
 For a non-NFS registration, first call `POST /api/v1/storage/credentials` with
 `registration_request_id=backup-credential:<kind>:<registration request_id>`,
@@ -501,8 +500,8 @@ removes the newly created managed mount unit. Exact replay retains that
 request's failed result; after fixing the service, a new request can use the
 same repository ID and a fresh credential handoff where applicable. An
 uncertain unit cleanup is reported as a rollback error rather than treated as
-a successful registration. API impact: **existing contract**; no route or
-schema change.
+a successful registration. API impact: **changed contract**; see the destination
+schema paragraph above for the routes and schemas this release adds.
 
 SMB3 replacement keeps the previous mount unit and credential until commit. Definite
 preparation failure restores prior access; uncertain rollback preserves both credential
@@ -564,9 +563,9 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | `GET /api/v1/pools/{id}/backup-repositories` | Master's inventory list; `503` when `backup_repositories_reported` is false |
 | `POST /api/v1/pools/{id}/backup-repositories` | `{request_id,name,kind,source?,smb_source?,s3_source?,sftp_source?,credential_ref?,credential_request_id?,id?,replace_confirmation?}`; one matching source; non-NFS requires `id` (`400` without it, because its receipt is bound to that ID), a matching Core receipt; queues `backup-repository-register` on the master; Core refuses same-ID NFS source or observed filesystem identity replacement; use a new ID for a move; a same-ID SMB3/S3/SFTP registration with the same destination replaces the credential only when the master cannot read the old one (repository health reports `offline` until then; otherwise the operation fails with "this repository already has a working credential; confirm replacing it with the repository ID, or forget the repository first"); **reusing an ID** is explicit: registering a forgotten repository again with its original `id` recreates it with the same identity, and `replace_confirmation` equal to `id` (`400` otherwise) replaces an existing repository's credential (readable or not) and, for SFTP, its pinned host key: Core then verifies the destination's owner marker instead of claiming it, keeps the recovery points, run history and creation time, and refuses a different kind, host, port, root or source, an unknown repository, an owner mismatch or a missing marker; members adopt the master's name and credential reference on their next access probe; `202` acknowledges queueing, not Core acceptance |
 | `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/test` | `{request_id}`; queues `backup-repository-test`; `202` |
-| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget` | `{request_id,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`, `confirmation` is the repository name and the counts are what the operator was shown; queues `backup-repository-forget` on the master; `202`, exact replay `200`, changed payload for the same `request_id` `409`. Core drops the repository, its recovery-point records and its run history, then each host's mount and sealed credential; it never deletes destination data, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles `failed` with the reason, changing nothing, while a backup job uses the repository, a backup, restore, test restore or catalog operation on it is running, a recovery point is in use by an unfinished restore or test restore, the name is wrong, or the counts differ from the master's current ones. An unknown repository succeeds (a repeat sweep of the members). Protected recovery points are dropped once the counts are confirmed; replaying the `request_id` for the same repository is `200` with the recorded operation, for another repository `409`; an unknown pool is `404` |
+| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/forget` | `{request_id,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`, `confirmation` is the repository name and the counts are what the operator was shown; queues `backup-repository-forget` on the master; `202`, exact replay `200`, changed payload for the same `request_id` `409`. Core drops the repository, its recovery-point records and its run history, then each host's mount and credential; it never deletes destination data, and registering the same destination again then rebuilding the catalog restores the recovery points. The command settles `failed` with the reason, changing nothing, while a backup job uses the repository, a backup, restore or test restore of it is `pending` or `needs_attention` (missed, skipped, succeeded and failed runs are history and are removed with it), a recovery point is pinned or reserved, retention or another metadata change on the repository is running, the name is wrong, or the counts differ from the master's current ones. Catalog import and rebuild create no run: they are refused at their commit once the repository is forgotten. Core checks jobs, pins and counts again after the mount is detached and refuses if they changed, and records a removal intent so a retry with the same `request_id` resumes a partial removal; meanwhile new jobs and runs on the repository get a conflict. An unknown repository succeeds (a repeat sweep of the members). Protected recovery points are dropped once the counts are confirmed; replaying the `request_id` for the same repository is `200` with the recorded operation, for another repository `409`; an unknown pool is `404` |
 | `GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphans` | Read-only. Recovery points in the repository whose VM id is not in the pool master's durable VM inventory, grouped per VM: `vm_id`, last known `vm_name`, `recovery_points`, `protected_points`, `size_bytes` (from destination manifests; `size_unknown_points` counts points it could not size), `oldest`, `newest`, `in_use`; plus `warnings` for backup jobs that still list a missing VM. A VM on an offline host is still in the inventory and is never an orphan. `409` with the reason when the master cannot establish its inventory (or is not the writable authority), `503` when the master is unreachable |
-| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups` | `{request_id,vm_ids,include_protected?,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`; `vm_ids` are chosen explicitly (no wildcard); counts are the totals shown for those VMs; `confirmation` is `delete N recovery points`, or `delete N recovery points including P protected` with `include_protected`; queues `backup-orphan-cleanup` on the master; `202`, exact replay `200`, changed payload `409`. Core re-checks the orphan status and counts at execution and fails the command, deleting nothing, when they differ. It then deletes each planned point's destination data and catalog entry through the retention delete (data first). Protected points are skipped unless `include_protected`; points pinned by an unfinished restore or test restore, or named by a pending run, are always skipped, and a VM that exists again is skipped. The plan and per-point results are durable on the master, so a repeated or interrupted command continues from the plan; replay and unknown-pool answers as for forget |
+| `POST /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups` | `{request_id,vm_ids,include_protected?,confirmation,recovery_points,protected_points}`; `request_id` differs from `repo_id`; `vm_ids` are chosen explicitly (no wildcard); counts are the totals shown for those VMs; `confirmation` is `delete N recovery points`, or `delete N recovery points including P protected` with `include_protected`; queues `backup-orphan-cleanup` on the master; `202`, exact replay `200`, changed payload `409`. Core re-checks the orphan status and counts at execution and fails the command, deleting nothing, when they differ. It then deletes each planned point's destination data and catalog entry through the retention delete (data first). Protected points are skipped unless `include_protected`; points pinned by an unfinished restore or test restore, or named by a pending run, are always skipped, and a VM that exists again is skipped. A point's `reason` is capped at 4,096 bytes. The plan and per-point results are durable on the master and checkpointed every 25 points or two seconds, so a repeated or interrupted command continues from the plan (after a crash up to 25 points are re-confirmed); replay and unknown-pool answers as for forget |
 | `GET /api/v1/pools/{id}/backup-repositories/{repo_id}/orphan-cleanups/{request_id}` | Read-only relay of the master's cleanup record (`status`, `error`, per-point `recovery_point_id`, `vm_id`, `status`, `reason`); `404` until planned; a record of another repository is `404`; Core's refusal passes through as `409` |
 | `GET /api/v1/pools/{id}/backup-catalog` | Current master's bounded recovery-point page |
 | `GET /api/v1/pools/{id}/backup-runs` | Current master's bounded run page |
@@ -574,7 +573,7 @@ Controller relay (administrator session, Origin and CSRF; Core remains authorita
 | `POST /api/v1/pools/{id}/backup-policies` | Create policy; omitted `schedule_id` defaults to the policy ID; queues `backup-policy-upsert`; `202` |
 | `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update policy with positive `expected_revision`; omitted `schedule_id` uses the master's reported schedule ID, or `503` if unavailable; missing/zero revision is `400`, stale revision fails the queued Core operation; queues `backup-policy-upsert`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
-| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete` | `{request_id,confirmation}`; `request_id` differs from `policy_id`, `confirmation` is required; queues `backup-policy-delete` on the master: removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while a run of the policy is pending or when `confirmation` is not the policy name. An absent policy settles `failed` ("backup policy not found") under a new `request_id`; replaying the `request_id` is `200` with the recorded operation (also once the policy is gone), a changed payload or another policy is `409`; unknown pool `404`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete` | `{request_id,confirmation}`; `request_id` differs from `policy_id`, `confirmation` is required; queues `backup-policy-delete` on the master: removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while any run of the policy is `pending` or `needs_attention` or when `confirmation` is not the policy name. An absent policy settles `failed` ("backup policy not found") under a new `request_id`; replaying the `request_id` is `200` with the recorded operation (also once the policy is gone), a changed payload or another policy is `409`; unknown pool `404`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 | `POST /api/v1/vms/{id}/release-retained` | `{request_id,confirmation}`; `confirmation` is the VM's current name; queues `vm-release-retained` on the VM's host; `202`, exact replay `200`, changed payload `409`, another release/change/power/media/delete pending for the VM `409`, unknown VM `404`. See [Releasing retained originals](#releasing-retained-originals) |
 | `POST /api/v1/vms/{id}/backup` | `{request_id,repository_id,consistency?}`; queues `backup-now` on the pool master with the VM owner host in the command; `202` |
@@ -773,13 +772,20 @@ Joining another pool or being ejected erases the former pool's backup receipts.
 Backup credential receipts are encrypted at rest on every Core (AES-256-GCM under a random
 per-host key sealed by `systemd-creds` (`backup-credential-key/key.cred` in the Core state
 directory, root-only, opened by Core itself) and apart from the receipts in `storage-cluster/secrets/backup/`; the pool, host and receipt
-reference are authenticated data). Only writing a receipt creates the key: a key that is
-missing while receipts remain is reported as such, never replaced. Core refuses a plaintext,
-tampered or other-key receipt and reports the `backup-credentials` check as failed while it
-keeps serving the others. The SMB3 mount password is written to a root-only `mount.cifs` credentials file,
-`backup-smb-credentials/<reference>`, that the mount unit names with `credentials=` (systemd
+reference are authenticated data). The key is created only while the host holds no receipt;
+when `key.cred` is missing but receipts remain, a write is refused with
+`backup credential key is missing while receipts remain` and the key is never silently
+replaced. Restore `key.cred`, or remove the receipts in `storage-cluster/secrets/backup/`
+and register the repositories again. Replacing `key.cred` with a different key leaves the
+receipts unreadable (register again). Core refuses a plaintext, tampered or other-key
+receipt and reports the `backup-credentials` check as failed while it keeps serving the
+others; the sealed key is opened once per key file and not once per receipt. The SMB3 mount
+password is **not** sealed: it is written in plaintext to a root-only (0600) `mount.cifs`
+credentials file at the fixed path `/var/lib/nex-core-agent/backup-smb-credentials/<reference>`
+(not derived from `--state-dir`), which the mount unit names with `credentials=` (systemd
 257 cannot pass a credential to a mount helper), so the share remounts after a reboot;
-retiring or abandoning a receipt deletes that file. The password is not in logs, diagnostics
+retiring or abandoning a receipt deletes that file. A copy of the default state directory
+therefore contains the SMB3 password. The password is not in logs, diagnostics
 or the replicated authority.
 Restore-as-new, replace and test-restore use
 `POST /api/v1/pool/backup/restore` with
@@ -925,6 +931,11 @@ modes stage under the NFS root, validate a complete manifest (`complete=true`,
 `success=1`) including matching firmware when present, then publish with
 sync → rename → sync parent. Initial publication and an exact same-key retry
 verify artifact digests before catalog settlement.
+An online backup to an S3 or SFTP repository stages its disks in `.nex-backup-work` on the VM
+images' filesystem and is refused before `backup-begin` unless that filesystem has free space of at
+least the summed live disk capacity plus 1/16 plus 1 GiB (a plain error: the run fails and its work
+directory is cleaned); stale per-operation work directories are swept only after proving no running
+domain has a backup job. An online backup of a TPM guest is refused at admission.
 Exact retries reuse the retained operation; changed input returns `409`. A published
 recovery-point directory for the same operation id settles succeeded without
 re-publishing (exact same-key retry after a lost reply or interrupted catalog write).
@@ -978,11 +989,46 @@ native operations lock; otherwise it remains `needs_attention`.
 Core CLI:
 `nex-core-local rebuild-backup-catalog --agent-state-dir … --repository-id …`.
 
-**Bounded member backup runs.** API impact: **existing contract**. A backup run reserved on a member that is
+**Bounded member backup runs.** API impact: **changed contract** (run stage and reason values). A backup run reserved on a member that is
 still `pending` 12 hours after its `created_at` settles on the pool master as `needs_attention`, stage
-`run_deadline`, with an `error` naming what to check, and releases the pool's backup slot. Core does not
-cancel the member's work and keeps observing it: a later member result settles the same run. No new field
+`run_deadline`, with an `error` naming what to check, and keeps the VM reserved until the run settles. Core does not
+cancel the member's work and keeps observing it: a later member result settles the same run. A run the
+member never started settles `failed` with stage `not_started`; a member that left the pool, became master or
+stayed silent for an hour leaves the run `needs_attention` with stage `peer_dispatch`. No new field
 or endpoint.
+
+**Run dispatch, scheduler and lock behaviour (0.4.19).** API impact: **changed contract**; no route
+or schema change, but these statuses, stages and refusals are now observable:
+
+- A member's backup or restore POST that finds the repository's mutation held (for example by the
+  master's health probe) answers a retryable `409` instead of a permanent `400`; the master retries it
+  and the run is not reported as never started. A failure the member never started carries run stage
+  `not_started`. A run that already needs attention keeps its stage and reason across later
+  unreachable observations, and a peer-dispatched backup is no longer reported as a queued outcome by
+  the member.
+- Before it catalogs a member-published point or applies retention, the master hashes every artifact
+  against the manifest (SHA-256, up to one hour); a mismatch is permanent and an unreachable
+  repository is retried.
+- A pool master change or eject is no longer blocked by a pending or `needs_attention` journal entry
+  whose run belongs to the ejected, departed or non-ready member, and the refusal check no longer
+  settles aged receipts when it refuses.
+- Snapshot commands for a VM wait while a stalled local backup of that VM still has a live worker. A
+  catalog import, rebuild or orphan cleanup that finds every preparation slot busy is retried rather
+  than settled `needs_attention`. A cleanup that needs attention keeps its original reason while its
+  member is unreachable.
+- Scheduler tick: a VM that left the pool, or a command that cannot be prepared, records a `failed`
+  run for that occurrence and the tick continues with the other policies; a due slot on a busy
+  repository records `skipped_overlap` with stage `busy`; a deleted policy is skipped without a
+  record. Policy upsert and run reservation are refused (`409`) while the repository is being
+  registered or forgotten.
+- `PoolBackupManifest` is rejected when its record counts could not fit its `total_bytes` (each
+  record frame is at least 5 bytes, so the counts may not exceed `total_bytes/5`).
+- Authority push, page staging and activation: the push no longer holds the backup-authority lock
+  across storage-lease preparation or member round-trips; at most one push per Store waits for the
+  lock (others get an immediate busy answer) and the wait is bounded by the push timeout. After a
+  master change, repositories the new master found unreachable are recorded in
+  `pool-backup-catalog-pending.json` and their catalog is imported automatically once their access
+  recovers; a cancelled context never marks a repository unreachable.
 
 ### Backup policies and schedules (Phase 6 / S6)
 
@@ -993,7 +1039,7 @@ Core-owned job/schedule definitions, master scheduler and retention. Authenticat
 | `GET /api/local/v1/pool/backup-policies` | Master's durable policy list from `pool-backup-policies.json` |
 | `POST /api/local/v1/pool/backup-policies` | `{operation_id,policy}`; create/update; `pool_id` optional (filled from enrollment, must match when supplied); updates require `policy.expected_revision` equal to the current durable revision; missing/stale values return `409`, success returns `200` with saved policy |
 | `POST /api/local/v1/pool/backup-policies/{id}/pause` | `{operation_id,paused}`; toggles pause; recalculates next dispatch when resumed |
-| `POST /api/local/v1/pool/backup-policies/{id}/delete` | `{operation_id,confirmation}`; removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while a run of the policy is pending or when `confirmation` is not the policy name; `200` with the recorded Result, a changed payload is `409`, an absent policy under a new `operation_id` is `404` |
+| `POST /api/local/v1/pool/backup-policies/{id}/delete` | `{operation_id,confirmation}`; removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while any run of the policy is `pending` or `needs_attention` or when `confirmation` is not the policy name; `200` with the recorded Result, a changed payload is `409`, an absent policy under a new `operation_id` is `404` |
 | `POST /api/local/v1/pool/backup-policies/{id}/run-now` | `{operation_id,vm_id}`; reserves one run without moving next dispatch; `202` |
 
 If a scheduled or policy Run-now backup published its new point but retention
@@ -1039,7 +1085,7 @@ Controller relay:
 | `POST /api/v1/pools/{id}/backup-policies` | Create; queues `backup-policy-upsert` on the master; `202` |
 | `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` | Update with positive `expected_revision`; missing/zero is `400`, stale fails the queued Core operation; queues `backup-policy-upsert`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/pause` | `{request_id,paused}`; `202` |
-| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete` | `{request_id,confirmation}`; `request_id` differs from `policy_id`, `confirmation` is required; queues `backup-policy-delete` on the master: removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while a run of the policy is pending or when `confirmation` is not the policy name. An absent policy settles `failed` ("backup policy not found") under a new `request_id`; replaying the `request_id` is `200` with the recorded operation (also once the policy is gone), a changed payload or another policy is `409`; unknown pool `404`; `202` |
+| `POST /api/v1/pools/{id}/backup-policies/{policy_id}/delete` | `{request_id,confirmation}`; `request_id` differs from `policy_id`, `confirmation` is required; queues `backup-policy-delete` on the master: removes only the policy definition (schedule, VM list, retention rules) on the pool master, so no further runs are scheduled; recovery points, run history and repository data are never deleted, and retention no longer applies to the points the policy created (they stay restorable and removable through the recovery point flows). Refused (`failed`, nothing changed) while any run of the policy is `pending` or `needs_attention` or when `confirmation` is not the policy name. An absent policy settles `failed` ("backup policy not found") under a new `request_id`; replaying the `request_id` is `200` with the recorded operation (also once the policy is gone), a changed payload or another policy is `409`; unknown pool `404`; `202` |
 | `POST /api/v1/pools/{id}/backup-policies/{policy_id}/run-now` | `{request_id,vm_id}`; `202` |
 
 `expected_revision` is a request-only compare-and-set value. Core increments its
@@ -1277,6 +1323,42 @@ limited to 100 UTF-8 bytes. Current Core can advertise 35 after capability negot
 an older Controller that rejects that follow-up report leaves the host stale and blocks
 appliance adoption. Upgrade Controller before retrying the original deployment; do not
 create another VM.
+
+**Hard cutover in 0.4.19 (no compatibility layer).** Report decoding stays strict and the
+backup-repository work removed the `backup-v1` handshake (`BackupSupport`), the capability gates
+for pool join, maintenance, authority transfer, resource removal and VM placement, and the
+reported backup catalog/run fields that the paged inventory replaced. Consequences, all of which
+are by design:
+
+- Upgrade the Controller first, then upgrade **and restart** Nex Core on every host in the same
+  window. A master still running 0.4.18 that reports `backup_catalog*`, `backup_runs*` or a
+  repository `generation` is refused by the upgraded Controller with `400 invalid JSON request:
+  unknown field <name>; upgrade or restart Nex Core on the reporting host` (the message names the
+  first unknown field and, on `/api/v1/agent/*` routes only, adds the upgrade hint). That host
+  stays stale in the Controller, with its pool inventory unmirrored, until its Core is restarted
+  on the new build; nothing is queued or converted for it.
+- A Core that joins a pool must report a valid `hostname`. The master refuses a joiner without one
+  with `409 joining Core did not report a valid hostname; upgrade and restart Nex Core on the
+  joining host`; the joiner's error and log carry that reason (the first 256 bytes of the
+  master's reply). Other join refusals keep the opaque `join refused`.
+- `PoolMember.hostname` is reported by Core when it initialises or joins a pool. Members of pools
+  created before hostnames were reported have none, and nothing backfills it: the field stays
+  empty.
+- Per-recovery-point pin state written by a release before the per-operation pin key is refused
+  with an error naming the file; finish or clean up unfinished restores on the old release and
+  remove that file. Catalog points created before policy tagging are never pruned by a
+  policy's retention.
+- Pool peers (members and master) must run the same Core build for backup repository
+  forgetting, retention sweeps, the paged authority replica and the SMB3/S3/SFTP capability
+  routes; an older member without a route cannot run the work and is reported by name.
+- Controller reads: `GET /api/v1/operations` keeps the queuing host of a run-now task when the
+  command's `host_id` is empty; a queued observation refresh updates `updated_at` but never
+  overwrites the `error` of a `needs_attention` row; the relayed orphan-cleanup refusal is capped at
+  512 bytes; a non-NFS registration without a repository ID is refused only for the `smb3`, `s3`
+  and `sftp` kinds (an unknown kind gets the kind validation error); a failed host-console upgrade
+  releases its admission so the same ticket can be retried.
+- Host-local API: forget, orphan-cleanup and policy-delete answer `503` when Core returns no
+  result (release-retained already did).
 
 ## Execution and observations
 
@@ -1698,10 +1780,11 @@ changes from the Phase 4 defect batch; the defects themselves are `BUG-0325`, `B
 Controller-scoped list — its own operation history and audit trail. No pool-scoped state is created,
 kept or deleted by any of it.
 
-**Discarding a registration a host refused.** A pool VLAN or storage repository registration the
-pool master rejected published nothing on any host: it is this Controller's own request history, not
-pool state, and no host holds a record a removal could be relayed to. It is therefore discarded
-locally, exactly as a failed ISO import already was.
+**Discarding a registration a host refused.** A pool VLAN registration the pool master rejected
+published nothing on any host: it is this Controller's own request history, not pool state, and no
+host holds a record a removal could be relayed to. It is therefore discarded locally, exactly as a
+failed ISO import already was. A refused storage-repository registration is not discarded: it is not
+listed and only its replay record remains (see `GET /api/v1/storage` below).
 
 - `DELETE /api/v1/networks/{id}` on a registration whose operation `status` is `failed` and which no
   host reports as applied takes **no body**, relays nothing, deletes only the Controller's
@@ -1763,7 +1846,7 @@ is accepted rather than refused as already active. This matches the pool-join re
 `499`.
 
 **Verification status.** Implemented and covered by Go `-race` Controller tests, each written and
-observed failing before its fix: the network and storage discards including the applied-row refusal
+observed failing before its fix: the network discard including the applied-row refusal
 and the previously unaddressable empty ID; a create against a member whose repository access is
 stale warning without refusing, while a fresh member is not warned about; the relayed
 `pool identity is held` refusal answering `409` with the guidance, `retryable` and the preserved
@@ -1776,7 +1859,7 @@ review of the discard actions, the warning surfaces or the add-host retry banner
 ### Controller-driven pool join (`POST /api/v1/pools/{id}/members`)
 
 API impact: **new contract**, implemented. Three Controller routes, one Core command kind, one
-host-local read route, two report-envelope fields, one inventory field and one capability. The
+host-local read route, two report-envelope fields and one inventory field. The
 Controller makes exactly two calls and drives nothing: it asks the pool master for a single-use
 join invitation, and it hands that invitation to the joining host as one durable command. The
 joining Core performs the whole peer exchange with the master itself, over the pool mTLS peer
@@ -1862,7 +1945,7 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   returns the original operation with `200` and starts no second join; the same `request_id` with
   any changed field, `master_url` included, is `409 request_id already used with another payload`.
   `404` for `pool not found` / `host not found`. `409` for a host already in the pool, a master or
-  joining host that is not fresh and active, a missing capability on either side, a host that is
+  joining host that is not fresh and active, a host that is
   not the master of its own single-host pool, managed VMs, existing remote storage, an already
   active pool request, and for any
   refusal the master itself decided, relayed verbatim — a `failed` result that carries no message
@@ -1890,7 +1973,7 @@ the same HTTPS `Origin` and `X-CSRF-Token`, like every other Controller mutation
   record about its members. A `500 membership lookup failed` response means the membership
   lookup failed before a projection could be returned; this read-only request is safe to retry.
 - `GET /api/v1/pools/{id}/join-candidates` — the compatibility preview for the dialog, composed
-  from host-reported inventory only: connection, agent version, capabilities, existing
+  from host-reported inventory only: connection, agent version, existing
   membership, managed VMs, non-local storage, NIC names against each pool VLAN uplink, and CPU
   baseline. Each row is `compatible`, `will_not_converge` or `refuses_join`; `eligible` is false
   if and only if some row is `refuses_join`, and `will_not_converge` rows do not block a join.
@@ -1990,7 +2073,7 @@ otherwise unchanged.
 ### Host maintenance mode (POST /api/v1/pools/{id}/members/{host_id}/maintenance)
 
 API impact: **new contract**, implemented. One Controller route, one Core command kind
-(`pool-maintenance`), two membership inventory fields and one capability. Maintenance is a durable
+(`pool-maintenance`) and two membership inventory fields. Maintenance is a durable
 per-host drain flag that the **pool master** keeps inside the membership record it already owns, in
 its own `pool-peer.json`. The Controller relays one command and projects what the master reports;
 it records no drain of its own, and a fresh Controller adopts the flag from
@@ -2077,7 +2160,7 @@ against, and Core accepts none. The guest list an operator should see first is r
 members projection instead. `202 {host_id, enabled, operation}`; an exact retry of the same
 `request_id` and payload returns the original operation with `200`. `400 pool, host and a stable
 request_id are required`. `404 pool not found` / `host not found`. `409` for `the pool master must
-be fresh and active to record maintenance`, the missing capability above, `the pool master has not
+be fresh and active to record maintenance`, `the pool master has not
 reported its membership; maintenance cannot be recorded yet`, `this host is not a member of the
 selected pool`, `the pool master reports membership generation <n>; reload the pool and retry`, and
 the shared `request_id already used with another payload` / `request_id already used for another
@@ -2134,7 +2217,7 @@ do not close the Phase 4 gate; see the [current native-acceptance record](qa/202
 
 API impact: **new contract**, implemented. One peer route on the **member**, one signed payload,
 one inventory field on each side, four observation fields on the master's membership record, one
-health check and one capability. No Controller route and no Controller storage: the fields below
+health check. No Controller route and no Controller storage: the fields below
 reach an operator through the existing members projection, read out of host reports.
 
 **What it is for.** The pool master's durable authority — membership, the `pool-vms.json` owner
@@ -2148,10 +2231,10 @@ promotes a member or opens the sealed key *merely by holding a replica*; the sep
 [fence-verified promotion workflow](#fence-verified-manual-promotion-and-safe-rejoin-post-apiv1poolsidmasterpromote-post-apiv1poolsidmembershost_idfence-profile)
 performs those actions only after its checks pass.
 
-**Capability.** `pool-authority-replica-v1`, v2 list only, on both peers. A master with it and a
-member without it records that member at replica generation `0` with `pool member does not support
-pool-authority-replica-v1; upgrade it before relying on its replica`; the master never degrades to
-an unsigned or partial copy.
+**No capability handshake.** The master pushes the replica to every ready member. A member that has
+not been upgraded and restarted cannot accept it: its acknowledgement stays at replica generation
+`0` with the member's refusal, and the master never degrades to an unsigned or partial copy.
+Upgrade every Core host to the same build before relying on replicas.
 
 **Peer route (on the member), `AuthenticatePoolMaster`, pinned mutual TLS.**
 
@@ -2294,7 +2377,7 @@ the Phase 4 gate; see the [current native-acceptance record](qa/2026-09-19-phase
 ### Planned master change and member eject (POST /api/v1/pools/{id}/master, DELETE /api/v1/pools/{id}/members/{host_id})
 
 API impact: **new contract**, implemented. Three Controller routes, one Core command kind, two peer
-routes, one signed statement, two inventory fields and one capability. The Controller relays one
+routes, one signed statement and two inventory fields. The Controller relays one
 durable command to the pool's current master and stores nothing else: no stage, no timer, no
 generation, no membership, no digest. Core runs the whole transfer itself, so a Controller that is
 restarted, replaced or disconnected mid-transfer keeps nothing to recover and re-projects the
@@ -2332,7 +2415,7 @@ the same `request_id` with a changed payload.
   powering it off`). Neither field is accepted on the master-change or eject route: each route has
   its own body struct, so a fence confirmation aimed at the wrong one is `400 invalid JSON request`.
 
-**Unreachable backup repositories.** API impact: **existing contract**. A master change or promotion is
+**Unreachable backup repositories.** API impact: **changed contract** (a pending catalog import is now recorded and retried). A master change or promotion is
 never refused because the candidate cannot reach, read or resolve the credential of a backup
 repository. The candidate adopts the record with `health.status` `offline`, `access.status` `failed` and
 the reason in `health.error`/`access.error`; NFS/SMB3 records have no `mount_path` on it. The catalog import
@@ -3918,7 +4001,9 @@ The authenticated owner reserves capture using the pinned mTLS `snapshot-reserve
 action on `/api/v1/pool/vms/{vm_id}`. The exact acknowledgement binds operation, VM, metadata,
 capture time, owner, definition and immutable intent before native effects. Names are unique
 within the VM and the catalog is bounded to 32 retained points. Snapshot identity is the original
-operation ID. Members read the master's catalog through
+operation ID. A `409` that follows state the master saved but has not yet acknowledged carries the response
+header `X-Nex-Snapshot-Saved`; requesters key their retry on that header, never on message text.
+Members read the master's catalog through
 `GET /api/v1/pool/vms/{vm_id}/snapshots`; they do not substitute a local native list when authority
 is unavailable. Host-local operator ingress is documented under the snapshot development workflow.
 
@@ -5248,7 +5333,13 @@ The aggregate admitted release record must fit the managed journal's 1 MiB reade
 limit. Oversized admission fails before any unlink and does not leave oversized manifest
 fields in the failure receipt. All journal writes enforce that same byte boundary.
 Released paths stop counting as storage-detach dependencies. The Controller-less route accepts
-only a VM on the host it runs on.
+only a VM on the host it runs on. The engine also refuses a release whose request names another
+pool or host than the VM's record, and while another create, update, power, media or delete of the
+VM is pending or `needs_attention`. Deleting the VM (with or without its disks) removes the vTPM
+trees a restore replace retained: they are collected into the journaled `retained_tpm` before the
+domain is undefined, re-verified after it and then removed, so no separate release step exists after
+a delete; a retained tree that changed since admission refuses the delete before the domain is
+undefined, and an interrupted removal resumes with only what remains.
 
 Checks: `go test -count=1 ./internal/vmhost -run ReleaseRetained`,
 `go test -count=1 ./internal/agent -run ReleaseRetainedRequest`,
@@ -5279,8 +5370,10 @@ restart closes open consoles and the browser reports it; guests are unaffected. 
 setting is introduced, so nothing needs a pool-master record.
 Host-tunnel admission is single-use under the console hub lock, before the HTTP
 upgrade starts. A duplicate receives `404` even while the first handshake is in
-flight or after the browser has consumed the queued tunnel. If that first
-handshake fails, open a new console ticket rather than retrying the consumed token.
+flight or after the browser has consumed the queued tunnel. If the host's
+upgrade fails before the `101` response is flushed (no hijack support, a failed hijack or a failed
+write), the admission is released and the same ticket can be retried; once the tunnel is
+established, open a new console ticket rather than retrying the consumed token.
 This applies to both VM and host consoles and persists no state.
 
 Controller prefers HTTP/1.1 in TLS negotiation so these upgrades can hijack the connection;

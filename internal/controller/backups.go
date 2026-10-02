@@ -282,7 +282,7 @@ func (c *Controller) createBackupRepository(w http.ResponseWriter, r *http.Reque
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	repoID := body.ID
-	if repoID == "" && body.Kind != protocol.BackupRepoKindNFS {
+	if repoID == "" && (body.Kind == protocol.BackupRepoKindSMB3 || body.Kind == protocol.BackupRepoKindS3 || body.Kind == protocol.BackupRepoKindSFTP) {
 		// The credential receipt is already bound to the caller's repository ID.
 		fail(w, 400, "id is required for a destination with a credential")
 		return
@@ -374,7 +374,7 @@ func (c *Controller) relayBackupOrphans(w http.ResponseWriter, r *http.Request, 
 	case status == 404:
 		fail(w, 404, "not found")
 	case status == 409 && refusal != "":
-		fail(w, 409, refusal)
+		fail(w, 409, clip(refusal, 512))
 	case status == 400:
 		fail(w, 400, "invalid orphaned backups request")
 	case status != 200:

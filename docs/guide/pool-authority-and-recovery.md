@@ -2,7 +2,7 @@
 
 ## Status
 
-Development product 0.4.18. This page covers what a pool member holds as a copy of the pool
+Development product 0.4.19. This page covers what a pool member holds as a copy of the pool
 master's authority and how to read that copy's state (**Settings** → **Members** → each host's
 **Authority copy** check), how to **change which host is the pool master**, how to **eject a host
 from a pool**, how Nex Core **configures each host's own management controller** for fencing, how to
@@ -1077,6 +1077,17 @@ statement at a higher generation.
 That is expected while it cannot reach any host of the pool. It keeps running its own virtual
 machines. As soon as it can reach one, it learns that its certificate is no longer admitted and
 re-initializes itself as its own single-host pool. Do not re-enrol or rebuild it to hurry this up.
+
+### A new master has not imported a repository's catalog
+
+After a master change or promotion, the new master imports each backup repository's catalog
+before it re-points members. A repository it could not reach does not block the change: Core
+records it in `pool-backup-catalog-pending.json` and imports its catalog automatically on a
+later health probe, once the repository's access is no longer failed (a cancelled or timed-out
+attempt never marks it unreachable). Until then its recovery points are missing from the catalog;
+run **Import points** on the repository row to do it by hand. Replica pushes no longer hold the
+authority lock while preparing storage leases or waiting on members, and at most one push per host
+waits at a time, so a stuck member only delays its own replica.
 
 ### The change is interrupted
 

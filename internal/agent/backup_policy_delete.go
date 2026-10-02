@@ -37,8 +37,15 @@ func deletePoolBackupPolicy(s *Store, req protocol.DeleteBackupPolicyRequest) er
 		return err
 	}
 	for _, run := range runs {
-		if run.PolicyID == policy.ID && run.Status == "pending" {
+		if run.PolicyID != policy.ID {
+			continue
+		}
+		switch run.Status {
+		case "pending":
 			return backupRefusal(fmt.Sprintf("backup run %s of this job is still running; wait for it to finish", run.OperationID))
+		case "needs_attention":
+			// Reconciliation can still settle it as a success, and retention then applies.
+			return backupRefusal(fmt.Sprintf("backup run %s of this job needs attention; resolve it before deleting the job", run.OperationID))
 		}
 	}
 	delete(state.Policies, policy.ID)

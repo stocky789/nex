@@ -14,7 +14,7 @@ UMask=0077
 # not apply while this unit owns the embedded agent.
 StateDirectory=nex/core-local nex-core-agent
 StateDirectoryMode=0700
-# Creates the host key that seals SMB mount credentials (systemd-creds encrypt needs it).
+# Creates the host key that seals the backup credential receipt key (systemd-creds encrypt needs it).
 ExecStartPre=-/usr/bin/systemd-creds setup
 ExecStartPre=/usr/lib/nex/core-local-setup init
 ExecStart=/usr/lib/nex/core-local-setup run

@@ -122,3 +122,61 @@ func TestBackupRepositoryHealthTimeoutDoesNotOverlapProbe(t *testing.T) {
 		t.Fatalf("timeout health = %+v, %v", repos, err)
 	}
 }
+
+func healthTestRepository(t *testing.T) *Store {
+	t.Helper()
+	s := seedBackupMaster(t)
+	if _, err := upsertTestBackupRepository(s, protocol.BackupRepository{
+		ID: "repo-1", PoolID: "pool-1", Name: "Primary", Kind: protocol.BackupRepoKindNFS,
+		Source: protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/export/backups"}, MountPath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// A health observation cannot grow the replicated authority, so recording it never
+// re-reads every authority record: a record the authority walk rejects does not stop it.
+func TestBackupRepositoryHealthSaveDoesNotWalkTheAuthority(t *testing.T) {
+	s := healthTestRepository(t)
+	if err := os.MkdirAll(orphanCleanupsPath(s), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphanCleanupPath(s, "cleanup-bad"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := probePoolBackupRepositories(context.Background(), s, time.Second); err != nil {
+		t.Fatalf("health observation was refused by the authority walk: %v", err)
+	}
+	repos, err := ListPoolBackupRepositories(s)
+	if err != nil || len(repos) != 1 || repos[0].Health.Status != "online" {
+		t.Fatalf("health = %+v, %v", repos, err)
+	}
+}
+
+// Shutting down mid-probe says nothing about the destination, so it is not recorded offline.
+func TestBackupProbeCancelledByShutdownIsNotRecordedOffline(t *testing.T) {
+	s := healthTestRepository(t)
+	oldVerify := verifyBackupRepository
+	defer func() { verifyBackupRepository = oldVerify }()
+	release := make(chan struct{})
+	defer close(release)
+	started := make(chan struct{})
+	verifyBackupRepository = func(context.Context, protocol.BackupRepository) error {
+		close(started)
+		<-release
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- probePoolBackupRepositories(ctx, s, time.Minute) }()
+	<-started
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a cancelled probe pass reported success")
+	}
+	repos, err := ListPoolBackupRepositories(s)
+	if err != nil || len(repos) != 1 || repos[0].Health.Status == "offline" || repos[0].LastHealthTransition != nil {
+		t.Fatalf("shutdown was recorded as an outage: %+v, %v", repos, err)
+	}
+}

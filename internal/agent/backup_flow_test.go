@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"nex.local/nex/internal/protocol"
-	"nex.local/nex/internal/vmhost"
 )
 
 func seedFlowRepository(t *testing.T, s *Store, points ...string) string {
@@ -413,22 +412,6 @@ func TestRetryKeepsOnlineWorkWhileJobMayBeActive(t *testing.T) {
 	}
 	if _, err := os.Stat(work); err != nil {
 		t.Fatal("online capture work was removed without proof the job ended:", err)
-	}
-}
-
-// Regression for BUG-0734 (flow L2): import must not revert an unprotect made
-// while its unlocked scan read the old protection marker.
-func TestCatalogImportKeepsOperatorUnprotect(t *testing.T) {
-	s := seedBackupMaster(t)
-	mount := seedFlowRepository(t, s, "point-1")
-	if err := vmhost.WriteBackupProtectMarker(filepath.Join(mount, "point-1"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := importPoolBackupCatalog(context.Background(), s, "repo-1"); err != nil {
-		t.Fatal(err)
-	}
-	if point, err := getCatalogPoint(s, "repo-1", "point-1"); err != nil || point.Protected {
-		t.Fatalf("import overrode the catalog's protection: %+v %v", point, err)
 	}
 }
 

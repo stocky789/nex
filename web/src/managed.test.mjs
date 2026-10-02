@@ -521,7 +521,7 @@ console.log("managed.test.mjs: pool resource removal ok");
   const { placementWarningNotice } = await import(moduleURL);
   const managedSource = readFileSync(new URL("./managed.tsx", import.meta.url), "utf8");
   const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1", "pool-resource-removal-v1"], inventory: null };
+  const master = { id: "host-1", pool_id: "pool-1", hostname: "core-a", connection: "fresh", revoked: false, capabilities: ["managed-vm-v1"], inventory: null };
   const base = { ...props, masterHostID: "host-1", hosts: [master] };
 
   // Networking: the discard replaces Rename/Remove on a failed row and appears nowhere else.

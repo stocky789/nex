@@ -900,3 +900,154 @@ func TestPeerRepositoryTargetedForgetOversizedBodyFailsClosed(t *testing.T) {
 		t.Fatalf("bounded retain could not remove observed stale registration: err=%v detached=%d", err, detached)
 	}
 }
+
+func forgetTestPoint(id, repositoryID string) protocol.BackupRecoveryPoint {
+	return protocol.BackupRecoveryPoint{ID: id, RepositoryID: repositoryID, PoolID: "pool-1", SourceVMID: "vm-1", CapturedAt: time.Now().UTC(),
+		Consistency: protocol.BackupCaptureStopped, ManifestSHA256: strings.Repeat("a", 64)}
+}
+
+func forgetTestRun(id, status string) protocol.BackupRun {
+	return protocol.BackupRun{OperationID: id, Kind: protocol.BackupKindScheduled, PoolID: "pool-1", VMID: "vm-1", RepositoryID: "repo-1",
+		Stage: "settled", Status: status, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+}
+
+func forgetDetachNothing(t *testing.T) {
+	t.Helper()
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(context.Context, protocol.BackupRepository) error { return nil }
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+}
+
+// Missed and skipped scheduler runs are history, so they never block forgetting.
+func TestForgetTreatsMissedAndSkippedRunsAsHistory(t *testing.T) {
+	forgetDetachNothing(t)
+	master, _, _ := orphanSafetyLab(t)
+	for id, status := range map[string]string{"run-missed": "missed", "run-skipped": "skipped_overlap", "run-done": "succeeded", "run-failed": "failed"} {
+		if err := savePoolBackupRun(master, forgetTestRun(id, status)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := forgetPoolBackupRepository(context.Background(), master, protocol.ForgetRepositoryRequest{RepositoryID: "repo-1", Confirmation: "Primary"}); err != nil {
+		t.Fatalf("history blocked forgetting: %v", err)
+	}
+	if runs, err := listPoolBackupRuns(master); err != nil || len(runs) != 0 {
+		t.Fatalf("history was kept for a forgotten repository: %+v %v", runs, err)
+	}
+}
+
+// Jobs added while the mount is being removed are checked again before anything goes.
+func TestForgetRechecksJobsAddedWhileUnmounting(t *testing.T) {
+	master, _, _ := orphanSafetyLab(t)
+	vm := poolVMTestSpec("vm-1", "master-1")
+	if err := savePoolVMs(master, poolVMState{VMs: map[string]poolVMRecord{vm.ID: {PoolID: vm.PoolID, VMID: vm.ID, HostID: vm.HostID, State: "stopped", Spec: *vm}}}); err != nil {
+		t.Fatal(err)
+	}
+	var upsertErr error
+	previous := detachBackupRepositoryNative
+	detachBackupRepositoryNative = func(context.Context, protocol.BackupRepository) error {
+		// The normal route refuses while the repository is being forgotten...
+		_, upsertErr = UpsertPoolBackupPolicy(master, testPolicy())
+		// ...so reach past it, as an admission that raced the first check would.
+		poolBackupAuthorityMu.Lock()
+		defer poolBackupAuthorityMu.Unlock()
+		policy := testPolicy()
+		return savePoolBackupPolicies(master, poolBackupPoliciesState{Policies: map[string]protocol.BackupPolicy{policy.ID: policy}})
+	}
+	t.Cleanup(func() { detachBackupRepositoryNative = previous })
+	err := forgetPoolBackupRepository(context.Background(), master, protocol.ForgetRepositoryRequest{RepositoryID: "repo-1", Confirmation: "Primary"})
+	var refusal backupRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a job added during the unmount was ignored: %v", err)
+	}
+	if !errors.Is(upsertErr, ErrBackupConflict) {
+		t.Fatalf("policy upsert was admitted while the repository was being forgotten: %v", upsertErr)
+	}
+	if _, err := GetPoolBackupRepository(master, "repo-1"); err != nil {
+		t.Fatalf("repository dropped under a job that uses it: %v", err)
+	}
+}
+
+// A forget interrupted after it started removing records finishes under the same
+// operation, and nothing starts on the repository meanwhile.
+func TestForgetResumesAfterPartialRemoval(t *testing.T) {
+	forgetDetachNothing(t)
+	master, _, _ := orphanSafetyLab(t)
+	for _, point := range []protocol.BackupRecoveryPoint{forgetTestPoint("point-1", "repo-1"), forgetTestPoint("point-2", "repo-1")} {
+		if err := savePoolBackupCatalogEntry(master, point); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := savePoolBackupRun(master, forgetTestRun("run-1", "succeeded")); err != nil {
+		t.Fatal(err)
+	}
+	runs := poolBackupRunsPath(master)
+	if err := os.Chmod(runs, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runs, 0700) })
+	request := BackupRequest{Command: ptr(forgetCommand("forget-1", "repo-1", "Primary", 2, 0))}
+	if first := acceptBackupRequest(context.Background(), master, request); first.Err == nil {
+		t.Fatalf("expected the removal to be interrupted: %+v", first)
+	}
+	if catalog, _ := loadPoolBackupCatalog(master); len(catalog) != 0 {
+		t.Fatalf("interrupted forget did not reach the catalog: %+v", catalog)
+	}
+	run := protocol.BackupRun{OperationID: "run-new", Kind: protocol.BackupKindBackupNow, PoolID: "pool-1", VMID: "vm-1", RepositoryID: "repo-1",
+		Stage: "reserved", Status: "pending", CreatedAt: time.Now().UTC()}
+	if _, err := ReservePoolBackupRun(master, run); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("a run started on a repository being forgotten: %v", err)
+	}
+	if err := os.Chmod(runs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	second := acceptBackupRequest(context.Background(), master, request)
+	if second.Err != nil || second.Result == nil || second.Result.Status != "succeeded" {
+		t.Fatalf("the same operation did not resume: %+v", second)
+	}
+	if _, err := GetPoolBackupRepository(master, "repo-1"); !errors.Is(err, ErrBackupRepoNotFound) {
+		t.Fatalf("repository survived the resumed forget: %v", err)
+	}
+	if left, _ := listPoolBackupRuns(master); len(left) != 0 {
+		t.Fatalf("run history survived: %+v", left)
+	}
+	if backupForgetPending(master, "repo-1") {
+		t.Fatal("the forget intent outlived the forget")
+	}
+}
+
+// An import or rebuild that was running when its repository was forgotten cannot put
+// recovery points back.
+func TestCatalogCommitRefusesForgottenRepository(t *testing.T) {
+	forgetDetachNothing(t)
+	master, _, _ := orphanSafetyLab(t)
+	if err := forgetPoolBackupRepository(context.Background(), master, protocol.ForgetRepositoryRequest{RepositoryID: "repo-1", Confirmation: "Primary"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := commitBackupPointMetadata(context.Background(), master, forgetTestPoint("point-1", "repo-1"), true); !errors.Is(err, ErrBackupRepoNotFound) {
+		t.Fatalf("a forgotten repository regained a recovery point: %v", err)
+	}
+	if catalog, _ := loadPoolBackupCatalog(master); len(catalog) != 0 {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+}
+
+// Pin state written one pin per recovery point by an older release is refused with a
+// message that names the file, instead of a bare invalid error.
+func TestOldPerRecoveryPointPinFileIsExplained(t *testing.T) {
+	s := seedBackupMaster(t)
+	pin := protocol.BackupRestorePin{RecoveryPointID: "point-1", OperationID: "restore-1", Kind: protocol.BackupPinKindNew, CreatedAt: time.Now().UTC()}
+	raw, err := json.Marshal(poolBackupPinsState{Pins: map[string]protocol.BackupRestorePin{pin.RecoveryPointID: pin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(poolBackupPinsPath(s)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(poolBackupPinsPath(s), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = loadPoolBackupPins(s)
+	if !errors.Is(err, ErrBackupInvalid) || !strings.Contains(err.Error(), poolBackupPinsFile) {
+		t.Fatalf("old pin state error = %v", err)
+	}
+}

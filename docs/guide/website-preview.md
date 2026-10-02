@@ -43,7 +43,8 @@ capabilities. Release information links to a development-download page for dispo
 evaluation; that link is not a supported-release claim or clearance to distribute an
 unreleased image. Check the selected build's release notes and licensing limits.
 Navigation, the roadmap and questions also work with
-JavaScript disabled. The architecture illustration is explanatory, not live host inventory.
+JavaScript disabled. The Gallery's light/dark slider needs JavaScript; without it the
+slider is hidden and the screenshots show a static 50/50 light and dark split. The architecture illustration is explanatory, not live host inventory.
 
 The roadmap states no delivery dates. A milestone marked as built means the work is in a
 real build with its checks recorded; it is not a claim of a supported release, and a

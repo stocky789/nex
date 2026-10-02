@@ -2497,13 +2497,13 @@
       "post": {
         "operationId": "forgetBackupRepositoryLocal",
         "summary": "Forget a backup repository",
-        "description": "Forgets the repository, its recovery-point and run-history records and each host's mount and sealed credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, an operation on it is running, a recovery point is in use by an unfinished restore, the name is wrong or the counts changed. Exact operation_id replay returns the recorded Result.",
+        "description": "Forgets the repository, its recovery-point and run-history records and each host's mount and credential on this pool master; destination data is never deleted. Refuses (a failed Result, nothing changed) while a backup job uses it, a backup, restore or test restore of it is pending or needs_attention, a recovery point is pinned or reserved, another change to it is running, the name is wrong or the counts changed. A retry with the same operation_id resumes a partial removal. Exact operation_id replay returns the recorded Result.",
         "security": [
           {
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.4.18",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -2594,6 +2594,26 @@
           },
           "404": {
             "description": "Repository not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with retained work, or this Core is not enrolled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup operation unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3235,7 +3255,7 @@
       "post": {
         "operationId": "deleteBackupPolicyLocal",
         "summary": "Delete a backup policy",
-        "description": "Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while a run of the policy is pending, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.",
+        "description": "Removes only the policy definition (schedule, VM list and retention rules) on the pool master, so no further runs are scheduled for it. Recovery points, run history and repository data are never deleted; retention no longer applies to the points the policy created, which stay restorable and removable through the recovery point flows. Refused (a failed Result, nothing changed) while any run of the policy is pending or needs_attention, or when the confirmation is not the policy name. Exact operation_id replay returns the recorded Result, including after the policy is gone; a changed payload under the same operation_id is 409; an absent policy under a new operation_id is 404.",
         "security": [
           {
             "LocalSession": []
@@ -3333,6 +3353,16 @@
           },
           "409": {
             "description": "Operation ID reused with a different payload, or this host is not the pool master.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup operation unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4323,7 +4353,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.4.18",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -4400,7 +4430,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.4.18",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -4528,6 +4558,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Backup operation unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4542,7 +4582,7 @@
             "LocalSession": []
           }
         ],
-        "x-introduced-version": "0.4.18",
+        "x-introduced-version": "0.4.19",
         "x-audience": "host-local client",
         "parameters": [
           {
@@ -4578,6 +4618,26 @@
           },
           "404": {
             "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This Core is not enrolled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup operation unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4680,8 +4740,28 @@
               }
             }
           },
+          "404": {
+            "description": "VM not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Host is not enrolled, the operation_id was used with a different request, or Core refused at acceptance because the pool master holds pending recovery, a retained snapshot or an unfinished update for the VM or the host journals an unfinished restore, snapshot or VM operation for it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup operation unavailable.",
             "content": {
               "application/json": {
                 "schema": {

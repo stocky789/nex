@@ -181,6 +181,11 @@ func claimBackupRepositoryOwnerExact(root, repositoryID, poolID string) error {
 		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
+		// The marker existed when the claim was refused. If it is gone now, nothing owns the
+		// repository yet: that is a lost race to retry, not a claim.
+		if _, _, readErr := ReadBackupRepositoryOwner(root); errors.Is(readErr, os.ErrNotExist) {
+			return errors.New("backup repository owner marker disappeared while it was being claimed; try again")
+		}
 		return checkExistingBackupRepositoryOwner(root, repositoryID, poolID)
 	}
 	return nil
@@ -742,7 +747,8 @@ func BackupSpecAndDiskDigests(vm protocol.VMCreateSpec, disks []BackupDiskSource
 }
 
 // CaptureBackupFirmwareArtifacts copies matching NVRAM/swtpm state beside disk artifacts.
-// Online UEFI is refused before this runs; BIOS guests return an empty set.
+// Online UEFI and online TPM guests are refused before this runs (RefuseOnlineBackupAdmission);
+// BIOS guests without a TPM return an empty set.
 func CaptureBackupFirmwareArtifacts(ctx context.Context, vmID, workRoot string, running bool) ([]protocol.BackupFirmwareArtifact, error) {
 	if !uuidPattern.MatchString(vmID) || !filepath.IsAbs(workRoot) {
 		return nil, errors.New("backup firmware capture arguments are invalid")

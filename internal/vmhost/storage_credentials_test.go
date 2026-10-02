@@ -3,6 +3,7 @@ package vmhost
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -437,5 +438,96 @@ func TestStorageCredentialDecryptFailureIsRefused(t *testing.T) {
 	}
 	if got, err := PoolStorageCredential(stateDir, receipt.Receipt); err == nil {
 		t.Fatalf("undecryptable credential was read: %+v", got)
+	}
+}
+
+// A crash between writing the credentials file and the receipt, or inside an atomic write,
+// leaves a secret no receipt names and nothing would ever retire. The listing every report
+// makes removes it, and nothing a receipt names.
+func TestStorageCredentialListingSweepsOrphanedSecrets(t *testing.T) {
+	state := t.TempDir()
+	receipt, err := SaveStorageCredential(state, testCredentialHandoff())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(state, credentialDirectory)
+	orphan := filepath.Join(dir, strings.Repeat("a", 48))
+	temp := filepath.Join(dir, ".write-123456")
+	legacyKey := filepath.Join(dir, "receipt-key")
+	other := filepath.Join(dir, "operator notes.txt")
+	for _, p := range []string{orphan, temp, legacyKey, other} {
+		if err := os.WriteFile(p, []byte("password=left-behind\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed, err := StorageCredentialReceipts(state)
+	if err != nil || len(listed) != 1 || listed[0].Receipt != receipt.Receipt {
+		t.Fatalf("listing = %+v, %v", listed, err)
+	}
+	for _, p := range []string{orphan, temp, legacyKey} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sweep: %v", filepath.Base(p), err)
+		}
+	}
+	for _, p := range []string{filepath.Join(dir, receipt.Receipt), other} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("sweep removed %s: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+// A receipt written with the secret inside the JSON (the layout before the credentials
+// file held it alone) is rewritten without it, and a retry of the same handoff still matches.
+func TestStorageCredentialListingScrubsLegacyPlaintextReceipt(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := credentialPath(state, handoff.Offer.RequestID)
+	legacy, err := json.Marshal(struct {
+		protocol.StorageCredentialReceipt
+		Username string `json:"username"`
+		Secret   string `json:"secret"`
+		Proof    string `json:"proof"`
+	}{receipt, handoff.Credentials.Username, handoff.Credentials.Secret, "keyed-proof-from-the-old-layout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StorageCredentialReceipts(state); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(b), handoff.Credentials.Secret) {
+		t.Fatalf("legacy receipt still holds the secret: %q, %v", b, err)
+	}
+	if again, err := SaveStorageCredential(state, handoff); err != nil || again.Receipt != receipt.Receipt {
+		t.Fatalf("retry of the saved handoff after the scrub: %+v, %v", again, err)
+	}
+}
+
+// The proof of a retired receipt would stay an offline guess oracle for the retired password.
+func TestStorageCredentialRetirementDropsProof(t *testing.T) {
+	state := t.TempDir()
+	handoff := testCredentialHandoff()
+	receipt, err := SaveStorageCredential(state, handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retireStorageCredential(state, receipt.Receipt, "pool-1", "host-1", false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(credentialPath(state, handoff.Offer.RequestID))
+	if err != nil || strings.Contains(string(b), `"proof"`) {
+		t.Fatalf("retired tombstone keeps a proof: %q, %v", b, err)
+	}
+	changed := handoff
+	changed.Credentials.Secret = "another"
+	if _, err := SaveStorageCredential(state, changed); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("replay on a retired receipt = %v", err)
 	}
 }

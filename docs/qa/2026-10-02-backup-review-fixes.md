@@ -2,7 +2,7 @@
 
 ## Scope and state ownership
 
-Development version 0.4.18, uncommitted review-fix worktree. Covers the 32 deduplicated
+Development version 0.4.19, uncommitted review-fix worktree. Covers the 32 deduplicated
 findings in BUG-1801–BUG-1832 and integration corrections BUG-1833–BUG-1838.
 No real host, disk, destination, deployment server or published release was changed.
 
@@ -170,6 +170,22 @@ row selector. Build mode and route-readiness/accessibility selectors were correc
 no production behavior was changed to satisfy those failures. Captures include
 `vm-stacked-cpu.png`, `host-stacked-cpu.png`, `overview-light.png`, `overview-dark.png`
 and `backups-phone.png` under the local demo evidence directory.
+
+## Second review wave (follow-up fixes)
+
+A second review of the branch against `origin/dev` produced a follow-up fix set recorded in
+[the review-findings change record](../changes/2026-10-02-review-findings-fixes.json) and
+BUG-1840 to BUG-1866 in the [bug ledger](../BUG_LEDGER.md). Each fixer ran focused Go,
+web and Python tests for its own area (named per entry in the ledger) while sibling fixes were
+still landing; several of those runs hit failures in files owned by another fixer that were
+later corrected. This report claims no whole-suite result for the follow-up: the project-wide
+validation is a separate step. New regressions were mostly added with their fix and were
+**not** run against the old code, except where a ledger entry says otherwise (for example
+`TestActivationVerifiesWholeRootBeforeActingOnPages`, checked by mutation). The demo deploy
+wrapper was exercised with a fake Docker, not with real Docker and a real compression bomb, and
+the Playwright browser tests were compiled but not run for these fixes. The two commits that
+added and removed a private-path test executable remain in branch history; that history was not
+touched, and merging the branch as a single squash commit avoids publishing the executable.
 
 ## Limits
 

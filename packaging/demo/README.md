@@ -72,10 +72,18 @@ directory; it never receives the Docker socket, deployment secrets or host data.
 
 ## Build, check and publish
 
-The Demo workflow runs on every main push, pull request and manual dispatch. It checks
-the backend and current UI, builds the image, extracts its exact binary/UI/source/docs,
-and exercises browser navigation against that artifact. Only main publication reads
-deploy secrets. Missing secrets fail publication instead of silently reporting success.
+The Demo workflow runs on every main push, pull request and manual dispatch. Its `demo`
+job checks the backend and current UI, builds the image, extracts its exact
+binary/UI/source/docs, and exercises browser navigation against that artifact; it has
+job-level concurrency in the shared runner group, so cancelling it is harmless. A separate
+`deploy` job (`needs: demo`, main push or manual dispatch only) has its own
+`nex-demo-deploy` concurrency group with cancel-in-progress disabled, so a newer
+verification run never cancels a live deploy or its rollback, and only that job reads deploy
+secrets. It relies on the verified image still being in the Docker daemon of the same runner;
+that arrangement, and the Gitea runner's support for job-level `concurrency`, were not verified
+(a workflow-level `nex-demo-<ref>` group remains as a fallback). A verification run that shares
+a concurrency group with a later run can be superseded and skip that revision's deploy; the next
+push deploys. Missing secrets fail publication instead of silently reporting success.
 The GitHub workflow mirror skips on github.com, following the project's forge policy.
 
 For a manually selected approved revision, build and run the same checks:
@@ -104,11 +112,23 @@ replacement, and repacks only the validated image before Docker imports it. Runt
 mounts, network, identity, entrypoint and origin come from installed root configuration,
 not from image metadata or transport arguments.
 
-Both decompressed input and normalized output are limited to 768 MiB, including
-repeated layer references and tar overhead. Failed candidates are removed after
-successful rollback, without deleting the selected or retained image. Replaying the
-same image is supported; a different rebuild cannot overwrite an existing release
-tag. Publish a new source revision when intentionally replacing such an image.
+The archive and its normalized output are limited to 768 MiB, including repeated layer
+references and tar overhead, and to 4,096 tar members. Each layer is also stream-decompressed
+during inspection against one 1 GiB inflation budget shared by all layers (gzip, xz and bz2 are
+counted; zstd layers are refused), so a small archive cannot inflate past the disk it will be
+loaded into. After `docker image load` the image size is checked against a 1 GiB cap, and an
+oversized, unverifiable or mismatched image is removed. Stale `import-*` working directories are
+swept once the deploy lock is held. Failed candidates are removed after successful rollback,
+without deleting the selected or retained image. Replaying the release that is already running is
+idempotent: the rollback image is kept, and a rebuilt image with a new config ID is kept and
+restarted rather than raising an immutable-tag error. A different image under a retained
+non-current release tag is still refused. Publish a new source revision when intentionally
+replacing such an image. At start, `nex-demo` removes its socket path only when it is a socket
+nobody is listening on; a regular file or a live server is still refused. The `/source` download has
+a 20-minute per-response write window and a proxy limit of 10 requests per minute (burst 6); the
+login limit counts only POST requests. Hashed `/chunks/*` files are cached immutably for a year while
+the shell stays `no-store`, and the CSP no longer allows inline styles. The Docker drop-in uses
+`Wants=`, not `Requires=`, so stopping the socket mount does not stop unrelated containers.
 
 Publication is serialized. It imports the image before replacing the old container,
 starts the candidate, checks its Unix `/healthz`, and restores the prior image on

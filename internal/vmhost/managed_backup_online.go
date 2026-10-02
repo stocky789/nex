@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -91,6 +92,23 @@ func prepareLocalOnlineBackupRoot(ctx context.Context) error {
 	return os.Chown(onlineBackupLocalRoot, uid, gid)
 }
 
+// liveDiskCapacity reports the guest-visible capacity of a running domain's disk.
+func liveDiskCapacity(ctx context.Context, vmID, target string) (uint64, error) {
+	info, err := managedVirsh(ctx, "domblkinfo", vmID, target)
+	if err != nil {
+		return 0, err
+	}
+	match := backupCapacityRe.FindSubmatch(info)
+	if match == nil {
+		return 0, errors.New("live disk capacity is unavailable for online backup")
+	}
+	capacity, err := strconv.ParseUint(string(match[1]), 10, 64)
+	if err != nil || capacity == 0 || capacity > onlineBackupMaxDiskBytes {
+		return 0, errors.New("live disk capacity is invalid for online backup")
+	}
+	return capacity, nil
+}
+
 // PrepareOnlineBackupTarget creates a reusable qcow2 target as libvirt-qemu mode 0600
 // sized to the live disk capacity. Default backup-begin output creation is never used.
 func PrepareOnlineBackupTarget(ctx context.Context, vmID, target, path string) error {
@@ -104,24 +122,16 @@ func PrepareOnlineBackupTarget(ctx context.Context, vmID, target, path string) e
 		}
 		return err
 	}
-	info, err := managedVirsh(ctx, "domblkinfo", vmID, target)
+	capacity, err := liveDiskCapacity(ctx, vmID, target)
 	if err != nil {
 		return err
-	}
-	match := backupCapacityRe.FindSubmatch(info)
-	if match == nil {
-		return errors.New("live disk capacity is unavailable for online backup")
-	}
-	capacity := string(match[1])
-	if _, err := strconv.ParseInt(capacity, 10, 64); err != nil || capacity == "0" {
-		return errors.New("live disk capacity is invalid for online backup")
 	}
 	if err := PrepareOnlineBackupWorkDir(ctx, filepath.Dir(path)); err != nil {
 		return err
 	}
 	// umask 077 → mode 0600; run as libvirt-qemu so QEMU can write push-mode outputs.
 	script := `umask 077; exec qemu-img create -f qcow2 "$1" "$2"`
-	if _, err := run(ctx, "runuser", "-u", "libvirt-qemu", "--", "sh", "-c", script, "sh", path, capacity); err != nil {
+	if _, err := run(ctx, "runuser", "-u", "libvirt-qemu", "--", "sh", "-c", script, "sh", path, strconv.FormatUint(capacity, 10)); err != nil {
 		_ = os.Remove(path)
 		return err
 	}
@@ -134,6 +144,83 @@ func PrepareOnlineBackupTarget(ctx context.Context, vmID, target, path string) e
 		return errors.New("online backup target is not owner-only mode 0600")
 	}
 	return nil
+}
+
+// onlineBackupMaxDiskBytes bounds one live disk's capacity (1 PiB) so the sum over a VM's
+// disks cannot overflow.
+const onlineBackupMaxDiskBytes = 1 << 50
+
+// onlineBackupFreeBytes is what Core may still write on the filesystem holding path.
+var onlineBackupFreeBytes = func(path string) (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+	return stat.Bavail * uint64(stat.Bsize), nil
+}
+
+// checkOnlineBackupSpace refuses an online backup whose staging images could not fit beside the
+// running guests. The work directory is on the images filesystem, QEMU fills a qcow2 per disk, and
+// a full filesystem pauses the guests, so the worst case is the summed live capacity plus qcow2
+// metadata and working room, checked before any job starts.
+func checkOnlineBackupSpace(ctx context.Context, vmID string, disks []BackupDiskSource, workDir string) error {
+	var total uint64
+	for _, disk := range disks {
+		capacity, err := liveDiskCapacity(ctx, vmID, disk.Target)
+		if err != nil {
+			return err
+		}
+		total += capacity
+	}
+	required := total + total/16 + 1<<30
+	free, err := onlineBackupFreeBytes(workDir)
+	if err != nil {
+		return fmt.Errorf("free space for the online backup work directory cannot be read: %w", err)
+	}
+	if free < required {
+		return fmt.Errorf("the online backup needs %d GiB free beside the running guests and the work directory has %d GiB; free space on the VM storage or run a stopped backup",
+			(required+1<<30-1)>>30, free>>30)
+	}
+	return nil
+}
+
+// SweepOnlineBackupWork removes the per-operation work directories under the local online
+// backup root that belong to no unsettled operation. Cleanup is otherwise per operation, so
+// the directory of an operation that is never driven again would hold its staging images
+// forever. Nothing is removed unless no domain has a backup job that may still be writing.
+func SweepOnlineBackupWork(ctx context.Context, unsettled func(operationID string) bool) error {
+	entries, err := os.ReadDir(onlineBackupLocalRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for _, entry := range entries {
+		if !entry.IsDir() || !protocol.ValidSnapshotOperationID(entry.Name()) || unsettled(entry.Name()) {
+			continue
+		}
+		stale = append(stale, filepath.Join(onlineBackupLocalRoot, entry.Name()))
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	// Only an active domain can have a backup job; list without --all names those.
+	active, err := managedVirsh(ctx, "list", "--uuid")
+	if err != nil {
+		return fmt.Errorf("libvirt domains cannot be listed to prove no online backup job is writing: %w", err)
+	}
+	for _, id := range strings.Fields(string(active)) {
+		if err := OnlineBackupJobInactive(ctx, id); err != nil {
+			return err
+		}
+	}
+	var failed error
+	for _, path := range stale {
+		failed = errors.Join(failed, os.RemoveAll(path))
+	}
+	return failed
 }
 
 // OnlineBackupDiskXML builds domainbackup XML with explicit per-disk file targets.
@@ -306,6 +393,9 @@ func CaptureOnlineDisks(ctx context.Context, vmID string, disks []BackupDiskSour
 		return err
 	}
 	workDir := filepath.Dir(destinations[disks[0].Target])
+	if err := checkOnlineBackupSpace(ctx, vmID, disks, workDir); err != nil {
+		return err
+	}
 	xmlPath := filepath.Join(workDir, "backup.xml")
 	if err := AtomicWrite(xmlPath, []byte(xmlBody), 0600); err != nil {
 		return err

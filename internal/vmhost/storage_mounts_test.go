@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -878,17 +879,34 @@ func TestRecheckRepairsAStaleRemoteMountOnlyWhenNothingUsesIt(t *testing.T) {
 }
 
 func TestRemotePreparationWaitHonoursContext(t *testing.T) {
-	if err := lockRemotePreparation(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer unlockRemotePreparation()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
 	s := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1,
 		Kind: protocol.StorageKindNFS, Source: protocol.StorageSource{NFS: &protocol.NFSStorageSource{Server: "nfs.example.test", Export: "/backups"}}}
+	unlock, err := remotePreparation.lock(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
 	if _, err := prepareNFS(ctx, s, ""); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("preparation waited past its request: %v", err)
 	}
+}
+
+// A mount stuck on a hung server holds only its own slot: another repository still prepares.
+func TestRemotePreparationOfOneMountDoesNotBlockAnother(t *testing.T) {
+	unlock, err := remotePreparation.lock(context.Background(), "hung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	other, err := remotePreparation.lock(ctx, "healthy")
+	if err != nil {
+		t.Fatalf("an unrelated mount waited on the hung one: %v", err)
+	}
+	other()
 }
 
 func TestNFSBackupMountIsDataOnlyAndVMStorageMountIsNot(t *testing.T) {
@@ -931,18 +949,36 @@ func TestFailedRemoteMountReportsMountHelperMessage(t *testing.T) {
 	t.Cleanup(func() { nativeRun, storageMountRoot, storageUnitRoot = oldRun, oldMount, oldUnit })
 	root := t.TempDir()
 	storageMountRoot, storageUnitRoot = filepath.Join(root, "mounts"), filepath.Join(root, "units")
+	var journalArgs []string
+	helper := "mount error(13): Permission denied\n"
 	nativeRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch {
 		case name == "systemctl" && args[0] == "enable" && args[1] == "--now":
 			return nil, errors.New("systemctl failed: exit status 1: Job failed")
 		case name == "journalctl":
-			return []byte("mount error(13): Permission denied\n"), nil
+			journalArgs = args
+			return []byte(helper), nil
 		}
 		return nil, nil
 	}
 	nfs := protocol.StorageRegistration{ID: "nfs", PoolID: "pool", HostID: "host", Generation: 1, Kind: protocol.StorageKindNFS}
+	before := time.Now().Unix()
 	_, err := prepareRemote(context.Background(), nfs, "nfs.example.test:/vms", "nfs4", "vers=4,hard,_netdev")
 	if err == nil || !strings.Contains(err.Error(), "Job failed") || !strings.Contains(err.Error(), "mount error(13): Permission denied") {
 		t.Fatalf("mount failure lost the helper message: %v", err)
+	}
+	// An earlier attempt's lines in the unit journal are not this attempt's failure.
+	since := strings.Join(journalArgs, " ")
+	i := strings.Index(since, "--since @")
+	if i < 0 {
+		t.Fatalf("journal read is not limited to this attempt: %v", journalArgs)
+	}
+	if got, perr := strconv.ParseInt(strings.Fields(since[i+len("--since @"):])[0], 10, 64); perr != nil || got < before {
+		t.Fatalf("journal window starts at %d, before the attempt (%d): %v", got, before, perr)
+	}
+	helper = strings.Repeat("x", 4*mountJournalLimit)
+	_, err = prepareRemote(context.Background(), nfs, "nfs.example.test:/vms", "nfs4", "vers=4,hard,_netdev")
+	if err == nil || len(err.Error()) > 2*mountJournalLimit {
+		t.Fatalf("journal text is not bounded: %d bytes", len(err.Error()))
 	}
 }

@@ -5,7 +5,8 @@
     "web/src/backup-policies.tsx",
     "web/src/ui.tsx",
     "web/src/settings.css",
-    "web/src/backups-panels.test.mjs",
+    "web/src/backups-replace.test.mjs",
+    "web/src/backups-test-restores.test.mjs",
     "web/src/backup-policies.test.mjs",
     "tests/integration/backup_workspace_browser.py",
     ".github/workflows/phase1.yml",
@@ -55,7 +56,8 @@
       "docs/qa/2026-10-01-backup-ui/results.json",
       "tests/integration/backup_workspace_browser.py",
       "web/src/backup-policies.test.mjs",
-      "web/src/backups-panels.test.mjs",
+      "web/src/backups-replace.test.mjs",
+      "web/src/backups-test-restores.test.mjs",
       ".github/workflows/phase1.yml",
       ".gitea/workflows/phase1.yml"
     ]

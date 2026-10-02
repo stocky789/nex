@@ -100,3 +100,41 @@ func TestEjectedHostDetachesFormerPoolBackupRepositories(t *testing.T) {
 		t.Fatalf("former pool repositories = %+v, %v; detached %v", state.Repositories, err, detached)
 	}
 }
+
+// Only a credential this host cannot use waives the typed confirmation for replacing it; a
+// failed read of the credential store does not.
+func TestReplacementConfirmationIsWaivedOnlyForUnusableCredential(t *testing.T) {
+	s := seedBackupMaster(t)
+	receipt, err := saveBackupCredential(s, protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{
+		RequestID: "credential-1", RegistrationRequestID: "backup-credential:s3:register-1",
+		PoolID: s.State.PoolID, HostID: s.State.HostID, RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute),
+	}, Credentials: protocol.StorageCredentials{Username: "example-user", Secret: "private-example-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := protocol.BackupRepository{ID: "repo-1", PoolID: s.State.PoolID, Name: "Cloud", Kind: protocol.BackupRepoKindS3,
+		CredentialRef: receipt.Receipt, S3Source: &protocol.BackupS3Source{Endpoint: "https://s3.example.test", Bucket: "backups"}}
+	requested := existing
+	requested.CredentialRef = "credential-2"
+	if err := backupReplacementError(s, existing, requested, false); !errors.Is(err, ErrBackupCredentialInUse) {
+		t.Fatalf("a working credential was replaced without confirmation: %v", err)
+	}
+	dir, err := backupCredentialDir(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0300); err != nil {
+		t.Fatal(err)
+	}
+	err = backupReplacementError(s, existing, requested, false)
+	_ = os.Chmod(dir, 0700)
+	if !errors.Is(err, ErrBackupCredentialInUse) {
+		t.Fatalf("a failed read of the credential store waived the confirmation: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(s.dir, "backup-credential-key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := backupReplacementError(s, existing, requested, false); err != nil {
+		t.Fatalf("a lost sealing key kept the credential from being replaced: %v", err)
+	}
+}

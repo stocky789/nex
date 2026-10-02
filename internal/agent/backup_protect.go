@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,8 +40,12 @@ func loadPoolBackupPins(s *Store) (poolBackupPinsState, error) {
 		state.Pins = map[string]protocol.BackupRestorePin{}
 	}
 	for key, pin := range state.Pins {
-		if pin.Valid() != nil || key != pin.OperationID {
+		if pin.Valid() != nil {
 			return poolBackupPinsState{}, ErrBackupInvalid
+		}
+		if key != pin.OperationID {
+			// Releases before the per-operation pin key stored one pin per recovery point.
+			return poolBackupPinsState{}, fmt.Errorf("%w: the restore pin state at %s uses the old per-recovery-point format; finish or clean up unfinished restores and test restores on the previous release, then remove that file", ErrBackupInvalid, poolBackupPinsPath(s))
 		}
 	}
 	return state, nil
@@ -278,6 +283,11 @@ func commitBackupPointMetadata(ctx context.Context, s *Store, point protocol.Bac
 		}
 		var current protocol.BackupRecoveryPoint
 		if err == nil {
+			// A forgotten repository must not regain catalog entries from an import or rebuild
+			// that was already running when it was forgotten.
+			err = requireBackupPointRepository(s, point.RepositoryID)
+		}
+		if err == nil {
 			current, _, err = mergeBackupPointMetadata(s, point, preserveProtection)
 		}
 		if err == nil {
@@ -298,6 +308,22 @@ func commitBackupPointMetadata(ctx context.Context, s *Store, point protocol.Bac
 		}
 		point = current
 	}
+}
+
+// requireBackupPointRepository refuses catalog writes for a repository that is gone or
+// being forgotten. The caller holds poolBackupAuthorityMu.
+func requireBackupPointRepository(s *Store, repositoryID string) error {
+	repos, err := loadPoolBackupRepositories(s)
+	if err != nil {
+		return err
+	}
+	if _, ok := repos.Repositories[repositoryID]; !ok {
+		return ErrBackupRepoNotFound
+	}
+	if backupForgetPending(s, repositoryID) {
+		return ErrBackupConflict
+	}
+	return nil
 }
 
 // SetPoolBackupPointProtected updates catalog + repository protect marker.

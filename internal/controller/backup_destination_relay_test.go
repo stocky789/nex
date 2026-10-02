@@ -12,7 +12,7 @@ import (
 	"nex.local/nex/internal/protocol"
 )
 
-func TestBackupDestinationRelayFailsClosedWithoutCoreSupport(t *testing.T) {
+func TestBackupRepositoryRegistrationValidation(t *testing.T) {
 	a := newClient(t)
 	master := a.enroll(a.token(a.site(), ""), csr(t))
 	pool := a.poolOf(master.HostID)
@@ -45,6 +45,9 @@ func TestBackupDestinationRelayFailsClosedWithoutCoreSupport(t *testing.T) {
 	a.call("POST", path, map[string]any{
 		"request_id": "repo-register-3", "id": "repo-3", "name": "Unknown", "kind": "unknown",
 	}, nil, 400)
+	if body := a.call("POST", path, map[string]any{"request_id": "repo-register-4", "name": "Unknown", "kind": "unknown"}, nil, 400).Body.String(); strings.Contains(body, "id is required") {
+		t.Fatalf("an unknown kind was reported as a missing id: %s", body)
+	}
 
 	var payload, command string
 	if err := a.c.db.QueryRow("SELECT payload,command FROM managed_resources WHERE request_id=?", "repo-register-1").Scan(&payload, &command); err != nil {

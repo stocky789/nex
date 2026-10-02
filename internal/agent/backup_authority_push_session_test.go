@@ -124,6 +124,13 @@ func TestBackupAuthorityPushSessionRefusesForgedStaleAndExpired(t *testing.T) {
 	send := func(sha string, data []byte) int {
 		return postPage(t, master, lab, poolBackupPageUpload{ManifestSHA256: sha, Index: 0, Data: data})
 	}
+	// The accepted replica ended its push: its stored pages are not writable through the session.
+	if code := send(manifest.SHA256, page); code != http.StatusConflict {
+		t.Fatalf("page of a session whose replica was accepted = %d", code)
+	}
+	if code := postPage(t, master, lab, json.RawMessage(posts.opens[0])); code != http.StatusOK {
+		t.Fatalf("reopening the session for the stored replica = %d", code)
+	}
 	if code := send(manifest.SHA256, page); code != http.StatusNoContent {
 		t.Fatalf("page of the open session = %d", code)
 	}
@@ -211,15 +218,19 @@ func TestBackupAuthorityPushSessionSlidesOnAcceptedPages(t *testing.T) {
 	lab := promotionLab(t, 1)
 	master := lab.host("master-1")
 	seedLargeBackupRuns(t, master, 300)
+	posts := recordPagePosts(lab)
 	pushReplicas(t, master)
 	replica, _, err := buildPoolAuthorityReplica(master)
 	manifest := replica.BackupManifest
-	if err != nil || manifest == nil {
-		t.Fatalf("manifest = %#v %v", manifest, err)
+	if err != nil || manifest == nil || len(posts.opens) != 1 {
+		t.Fatalf("manifest = %#v opens = %d %v", manifest, len(posts.opens), err)
 	}
 	page, err := readPoolBackupPage(master, manifest, 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if code := postPage(t, master, lab, json.RawMessage(posts.opens[0])); code != http.StatusOK {
+		t.Fatalf("reopening the session = %d", code)
 	}
 	member := lab.host("member-1")
 	soon := time.Now().Add(time.Minute)

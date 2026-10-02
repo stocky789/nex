@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"time"
 
 	"nex.local/nex/internal/protocol"
@@ -296,7 +295,7 @@ func testRestoreCleanable(run protocol.BackupRun) bool {
 // A member that never started a test restore holds nothing to clean, so the master settles
 // its own record of the run.
 func testRestoreNeverStarted(run protocol.BackupRun) bool {
-	return run.Status == "failed" && strings.Contains(run.Error, errPeerBackupNotStarted.Error())
+	return run.Status == "failed" && run.Stage == stageNotStarted
 }
 
 func matchingTestRestoreRunIn(runs []protocol.BackupRun, req protocol.TestRestoreCleanupRequest) (protocol.BackupRun, error) {

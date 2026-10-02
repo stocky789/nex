@@ -46,7 +46,7 @@ func newFixtures(now time.Time) *fixtures {
 		id, name, site, environment string
 		hosts, vms                  int
 	}{{"pool-harbor", "Harbor production", "site-harbor", "production", 5, 20}, {"pool-lab", "Harbor research", "site-harbor", "lab", 3, 12}, {"pool-meadow", "Meadow edge", "site-meadow", "edge", 3, 12}}
-	capabilities := []string{"managed-vm-v1", "vm-tags-v1", "usage-history-v1", "host-hardware-v1", "host-management-network-v1", "vm-cpu-baseline-v1", "pool-members-v1", "backup-v1", "backup-policy-v1"}
+	capabilities := []string{"managed-vm-v1", "vm-tags-v1", "usage-history-v1", "host-hardware-v1", "management-network-v1", "vm-cpu-baseline-v1"}
 	vmNames := []string{"atlas-web", "atlas-database", "cedar-files", "maple-build", "willow-desktop", "aurora-lab", "birch-firewall", "meadow-api", "meadow-monitor", "juniper-archive"}
 	osNames := []string{"Debian GNU/Linux 13", "Ubuntu 24.04 LTS", "Windows Server 2025", "Fedora Linux 43", "Windows 11", "FreeBSD 14.3", "Debian GNU/Linux 13", "Alpine Linux 3.22", "Ubuntu 24.04 LTS", "Rocky Linux 9"}
 	osIDs := []string{"debian", "ubuntu", "mswindows", "fedora", "mswindows", "freebsd", "debian", "alpine", "ubuntu", "rocky"}

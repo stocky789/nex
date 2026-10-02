@@ -279,11 +279,15 @@ func SettlePoolVMSnapshot(ctx context.Context, s *Store, evidence protocol.PoolV
 	return poolVMSnapshotSettlementPeer(ctx, s, evidence)
 }
 
+// poolPushBusyWait bounds how long pushReplicasWaitingForBusy waits for a background push.
+var poolPushBusyWait = 10 * time.Second
+
 // pushReplicasWaitingForBusy pushes the replica, waiting briefly for a background push to
 // finish instead of failing the snapshot reservation on it. A push already in flight may
-// predate the reservation, so the caller still needs a push of its own.
+// predate the reservation, so the caller still needs a push of its own. The wait ends at
+// poolPushBusyWait or when ctx ends, and then reports the busy refusal.
 func pushReplicasWaitingForBusy(ctx context.Context, s *Store) error {
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(poolPushBusyWait)
 	for {
 		err := PushPoolAuthorityReplicas(ctx, s, 20*time.Second)
 		if !errors.Is(err, errPoolAuthorityReplicaBusy) || time.Now().After(deadline) {

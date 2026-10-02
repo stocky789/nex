@@ -1187,10 +1187,19 @@ func TestQueuedObservationRefreshesMirrorSilenceClock(t *testing.T) {
 			if status, _ := task(); status != "needs_attention" {
 				t.Fatalf("expired silence: %s", status)
 			}
+			var silenced string
+			if err := a.c.db.QueryRow("SELECT error FROM operations WHERE request_id=?", requestID).Scan(&silenced); err != nil || silenced == "" {
+				t.Fatalf("silence did not record a reason: %q %v", silenced, err)
+			}
 			age()
+			outcome.Error = "core waiting reason"
 			report(outcome)
 			if status, updated := task(); status != "needs_attention" || updated <= expired {
 				t.Fatalf("queued reappearance must refresh without settling: %s at %s", status, updated)
+			}
+			var kept string
+			if err := a.c.db.QueryRow("SELECT error FROM operations WHERE request_id=?", requestID).Scan(&kept); err != nil || kept != silenced {
+				t.Fatalf("queued observation overwrote the needs_attention reason: %q, was %q (%v)", kept, silenced, err)
 			}
 		})
 	}

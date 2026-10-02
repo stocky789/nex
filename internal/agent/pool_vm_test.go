@@ -2426,16 +2426,53 @@ func TestPoolVMUpdateCommitKeepsTagsInMasterRecord(t *testing.T) {
 }
 
 func TestUnacknowledgedMasterReservationStaysRetryable(t *testing.T) {
-	saved := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("snapshot state was saved but is not yet acknowledged by every ready member"))}
-	if err := snapshotReservationRefusal(saved, "refused"); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
+	saved := &http.Response{StatusCode: http.StatusConflict, Header: http.Header{poolSnapshotSavedHeader: {"1"}}, Body: io.NopCloser(strings.NewReader("master wording may change"))}
+	err := snapshotReservationRefusal(saved, "refused")
+	if !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
 		t.Fatalf("saved-but-unacknowledged reservation must stay retryable: %v", err)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped == nil || unwrapped.Error() != "refused" {
+		t.Fatalf("the refusal cause was dropped from the chain: %v", unwrapped)
 	}
 	lost := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("reply lost"))}
 	if err := snapshotReservationRefusal(lost, "refused"); !errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
 		t.Fatalf("a server error may follow a saved reservation and must stay retryable: %v", err)
 	}
-	refused := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("another snapshot recovery operation is pending"))}
+	// Message text carries no meaning: only the marker the master sets does.
+	refused := &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("snapshot state was saved but is not yet acknowledged by every ready member"))}
 	if err := snapshotReservationRefusal(refused, "refused"); errors.Is(err, vmhost.ErrSnapshotReservationUnconfirmed) {
 		t.Fatalf("a plain refusal must not be retryable: %v", err)
+	}
+}
+
+// A delete or release request is admitted only for the VM the request names, this host and its
+// pool: poolSharedVM prefers a command's VM definition, so a command carrying both a VM and a
+// different delete target must not be admitted against the wrong VM.
+func TestPoolVMDeleteMatchesOwnerChecksVMIdentity(t *testing.T) {
+	s := peerStore(t, "host-a", "pool-1")
+	const vmID, otherID = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	v := poolVMTestSpec(vmID, s.State.HostID)
+	del := func(id, pool, host string) protocol.Command {
+		return protocol.Command{Kind: "vm-delete", Delete: &protocol.VMDeleteRequest{VMID: id, PoolID: pool, HostID: host}}
+	}
+	release := func(id, pool, host string) protocol.Command {
+		return protocol.Command{Kind: "vm-release-retained", ReleaseRetained: &protocol.VMReleaseRetainedRequest{VMID: id, PoolID: pool, HostID: host, Confirmation: "x"}}
+	}
+	for name, build := range map[string]func(id, pool, host string) protocol.Command{"delete": del, "release": release} {
+		if !poolVMDeleteMatchesOwner(s, build(vmID, s.State.PoolID, s.State.HostID), *v) {
+			t.Fatalf("%s: the owner's own request was refused", name)
+		}
+		for label, cmd := range map[string]protocol.Command{
+			"another VM":   build(otherID, s.State.PoolID, s.State.HostID),
+			"another pool": build(vmID, "pool-2", s.State.HostID),
+			"another host": build(vmID, s.State.PoolID, "host-b"),
+		} {
+			if poolVMDeleteMatchesOwner(s, cmd, *v) {
+				t.Fatalf("%s for %s was admitted", name, label)
+			}
+		}
+	}
+	if poolVMDeleteMatchesOwner(s, protocol.Command{Kind: "vm-delete"}, *v) {
+		t.Fatal("a delete without its request was admitted")
 	}
 }

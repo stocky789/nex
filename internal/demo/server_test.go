@@ -23,6 +23,12 @@ func testServer(t *testing.T) *Server {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Mkdir(filepath.Join(dir, "chunks"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "chunks", "page-ABC123.js"), []byte("export {};"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	docs := t.TempDir()
 	for name, content := range map[string]string{"index.html": "<!doctype html><title>API reference</title>", "reference.css": "main { color: black }", "openapi.json": `{"openapi":"3.1.0","paths":{}}`, "private.go": "private docs source must not be served"} {
 		if err := os.WriteFile(filepath.Join(docs, name), []byte(content), 0600); err != nil {
@@ -415,5 +421,39 @@ func TestCookieWorksThroughHTTPTransport(t *testing.T) {
 	}
 	if res.StatusCode != 200 || report.PoolID != "pool-harbor" || masters != 1 {
 		t.Fatalf("invalid pool authority: %d %s", res.StatusCode, body)
+	}
+}
+
+func TestHashedChunksAreImmutableAndShellIsNot(t *testing.T) {
+	s := testServer(t)
+	if w := request(s, "GET", "/chunks/page-ABC123.js", "", nil, nil); w.Code != 200 || !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+		t.Fatalf("hashed chunk must be immutable: %d %v", w.Code, w.Header())
+	}
+	if w := request(s, "GET", "/", "", nil, nil); w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("shell must not be cached: %v", w.Header())
+	}
+}
+
+func TestSourceDownloadOutlivesListenerWriteTimeout(t *testing.T) {
+	s := testServer(t)
+	archive := make([]byte, 64<<20)
+	if err := os.WriteFile(s.config.SourceArchive, archive, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(s)
+	server.Config.WriteTimeout = 100 * time.Millisecond
+	server.StartTLS()
+	defer server.Close()
+	request, _ := http.NewRequest("GET", server.URL+"/source", nil)
+	request.Host = "demo.example.com"
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	time.Sleep(500 * time.Millisecond) // slow client: outlast the listener timeout
+	n, err := io.Copy(io.Discard, response.Body)
+	if err != nil || n != int64(len(archive)) {
+		t.Fatalf("slow source download truncated: %d of %d, %v", n, len(archive), err)
 	}
 }

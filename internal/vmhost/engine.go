@@ -1449,11 +1449,12 @@ func (e *Engine) exclusiveDisks(ctx context.Context, j journal, paths []string) 
 		for _, args := range [][]string{{"dumpxml", id}, {"dumpxml", id, "--inactive"}} {
 			b, err := e.virsh(ctx, args...)
 			if err != nil {
-				return ErrOwnershipUnconfirmed
+				return errors.Join(ErrOwnershipUnconfirmed, fmt.Errorf("domain %s definition cannot be read: %w", id, err))
 			}
 			files, err := domainDiskSourceFiles(b)
 			if err != nil {
-				return ErrOwnershipUnconfirmed
+				// libvirt answered; a definition Core cannot parse will not parse on a retry.
+				return fmt.Errorf("domain %s definition cannot be inspected for exclusive ownership: %w", id, err)
 			}
 			for _, head := range files {
 				otherHead, statErr := os.Stat(head)

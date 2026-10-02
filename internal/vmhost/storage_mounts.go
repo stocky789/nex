@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,20 +21,25 @@ const nexMountMarker = "# Managed by Nex Core; do not edit\n"
 
 var errStorageNotMounted = errors.New("remote storage is not mounted")
 
-// ponytail: one slot keeps preparation and rollback ordered; use per-unit locks if mount throughput matters.
-var remotePreparation = make(chan struct{}, 1)
+// keyedLock is one waiter-at-a-time lock per key whose wait ends with the caller's context.
+// A holder stuck on a hung server blocks only callers of the same key. The key set is
+// bounded by the validated registration and repository IDs.
+type keyedLock struct{ slots sync.Map }
 
-// lockRemotePreparation waits for the slot only as long as the caller's request lives.
-func lockRemotePreparation(ctx context.Context) error {
+func (k *keyedLock) lock(ctx context.Context, key string) (unlock func(), err error) {
+	v, _ := k.slots.LoadOrStore(key, make(chan struct{}, 1))
+	slot := v.(chan struct{})
 	select {
-	case remotePreparation <- struct{}{}:
-		return nil
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
-func unlockRemotePreparation() { <-remotePreparation }
+// remotePreparation keeps one mount's preparation and rollback ordered. It is per mount, not
+// global, so a hung share cannot stall every other NFS or SMB preparation on the host.
+var remotePreparation keyedLock
 
 const nfsVolumesPath = "/proc/fs/nfsfs/volumes"
 
@@ -85,13 +91,14 @@ func systemdMountUnit(path string) string {
 }
 
 func prepareNFS(ctx context.Context, s protocol.StorageRegistration, extraOptions string) (access storageAccess, retErr error) {
-	if err := lockRemotePreparation(ctx); err != nil {
-		return storageAccess{}, err
-	}
-	defer unlockRemotePreparation()
 	if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil || s.StorageKind() != protocol.StorageKindNFS {
 		return storageAccess{}, errors.New("invalid NFS storage registration")
 	}
+	unlock, err := remotePreparation.lock(ctx, s.ID)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	defer unlock()
 	v := s.Source.NFS
 	if s.Identity.NFS != nil && (s.Identity.NFS.Server != v.Server || s.Identity.NFS.Export != v.Export) {
 		return storageAccess{}, errors.New("NFS identity does not match registration")
@@ -146,13 +153,14 @@ func prepareSMB(ctx context.Context, s protocol.StorageRegistration) (access sto
 // prepareSMBWithAdmission runs admit on the selected directory only after the share marker
 // matches, so a wrong share is never claimed, and inside the rollback of a new mount.
 func prepareSMBWithAdmission(ctx context.Context, s protocol.StorageRegistration, extraOptions string, admit func(string) error) (access storageAccess, retErr error) {
-	if err := lockRemotePreparation(ctx); err != nil {
-		return storageAccess{}, err
-	}
-	defer unlockRemotePreparation()
 	if err := protocol.ValidateStoredStorageRegistration(s, false); err != nil || s.StorageKind() != protocol.StorageKindSMB {
 		return storageAccess{}, errors.New("invalid SMB storage registration")
 	}
+	unlock, err := remotePreparation.lock(ctx, s.ID)
+	if err != nil {
+		return storageAccess{}, err
+	}
+	defer unlock()
 	credential, err := credentialFile(ctx, s)
 	if err != nil {
 		return storageAccess{}, err
@@ -549,8 +557,9 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 		return "", err
 	}
 	if !changed {
+		started := time.Now()
 		if _, err := nativeRun(ctx, "systemctl", "enable", "--now", unit); err != nil {
-			return "", withMountJournal(ctx, unit, err)
+			return "", withMountJournal(ctx, unit, started, err)
 		}
 		return path, nil
 	}
@@ -570,14 +579,21 @@ func prepareRemote(ctx context.Context, s protocol.StorageRegistration, source, 
 }
 
 // withMountJournal adds the mount helper's own message to a failed unit start; systemctl
-// itself only says "Job failed".
-func withMountJournal(ctx context.Context, unit string, err error) error {
-	out, _ := nativeRun(ctx, "journalctl", "-u", unit, "-n", "5", "--no-pager", "-o", "cat")
-	if tail := strings.TrimSpace(string(out)); tail != "" {
+// itself only says "Job failed". Only lines since this attempt began are used, so an earlier
+// attempt's messages are never reported as this one's, and the text is bounded.
+func withMountJournal(ctx context.Context, unit string, since time.Time, err error) error {
+	out, _ := nativeRun(ctx, "journalctl", "-u", unit, "--since", "@"+strconv.FormatInt(since.Unix(), 10), "-n", "5", "--no-pager", "-o", "cat")
+	tail := strings.TrimSpace(string(out))
+	if len(tail) > mountJournalLimit {
+		tail = strings.ToValidUTF8(tail[:mountJournalLimit], "") + "…"
+	}
+	if tail != "" {
 		return fmt.Errorf("%w: %s", err, tail)
 	}
 	return err
 }
+
+const mountJournalLimit = 1024
 
 // ensureStorageMountRoot repairs only Nex's configured local mount-root. It never chmods a
 // mounted repository leaf or administrator path; service UMask=0077 must not hide mounts from QEMU.

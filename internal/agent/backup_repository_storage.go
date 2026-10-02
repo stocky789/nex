@@ -34,6 +34,9 @@ type backupRepositoryStorage interface {
 	StatPoint(context.Context, string) (protocol.BackupManifest, string, error)
 	Publish(context.Context, protocol.BackupManifest, map[string]string) (string, error)
 	CopyArtifacts(context.Context, string, string, protocol.BackupManifest) error
+	// VerifyArtifacts streams every artifact of the point from the repository
+	// and checks its size and SHA-256 against the manifest. It copies nothing.
+	VerifyArtifacts(context.Context, string, protocol.BackupManifest) error
 	Scan(context.Context) ([]protocol.BackupRecoveryPoint, error)
 	Entries(context.Context) ([]string, error)
 	Protected(context.Context, string) (bool, error)
@@ -196,6 +199,28 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 	if !protocol.ValidSnapshotOperationID(pointID) {
 		return ErrBackupInvalid
 	}
+	if err := requirePoolAuthorityWritable(b.s); err != nil {
+		return err
+	}
+	// Mount inspection and the publication probe can stall on a hung share, so they
+	// run before the authority lock; only the fence write is the commit under it.
+	if err := b.Verify(ctx); err != nil {
+		return err
+	}
+	if err := b.writeAbortFence(pointID); err != nil {
+		return err
+	}
+	// With the fence in place a delayed rename of the staging directory fails, so a
+	// staging copy left by a failed publish can go.
+	if err := os.RemoveAll(filepath.Join(b.repo.MountPath, ".staging-"+pointID)); err != nil {
+		return err
+	}
+	return syncBackupDirectory(b.repo.MountPath)
+}
+
+// writeAbortFence commits the abort fence under poolPeerMu once authority and
+// the catalog still allow it.
+func (b filesystemBackupStorage) writeAbortFence(pointID string) error {
 	poolPeerMu.Lock()
 	defer poolPeerMu.Unlock()
 	state, err := loadPoolPeer(b.s)
@@ -203,9 +228,6 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 		return err
 	}
 	if err := poolAuthorityWritable(state); err != nil {
-		return err
-	}
-	if err := b.Verify(ctx); err != nil {
 		return err
 	}
 	if _, err := getCatalogPoint(b.s, b.repo.ID, pointID); err == nil {
@@ -241,15 +263,7 @@ func (b filesystemBackupStorage) AbortIncomplete(ctx context.Context, pointID st
 		_ = f.Close()
 		return err
 	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	// With the fence in place a delayed rename of the staging directory fails, so a
-	// staging copy left by a failed publish can go.
-	if err := os.RemoveAll(filepath.Join(b.repo.MountPath, ".staging-"+pointID)); err != nil {
-		return err
-	}
-	return syncBackupDirectory(b.repo.MountPath)
+	return f.Close()
 }
 
 func (b filesystemBackupStorage) CopyArtifacts(ctx context.Context, pointID, localDir string, manifest protocol.BackupManifest) error {
@@ -257,6 +271,33 @@ func (b filesystemBackupStorage) CopyArtifacts(ctx context.Context, pointID, loc
 		return err
 	}
 	return vmhost.CopyBackupArtifactsLocal(ctx, filepath.Join(b.repo.MountPath, pointID), localDir, manifest)
+}
+
+func (b filesystemBackupStorage) VerifyArtifacts(ctx context.Context, pointID string, manifest protocol.BackupManifest) error {
+	stored, _, err := b.StatPoint(ctx, pointID)
+	if err != nil {
+		return err
+	}
+	if err := requireSameManifest(stored, manifest); err != nil {
+		return err
+	}
+	for _, artifact := range manifestArtifacts(manifest) {
+		open := func() (io.ReadCloser, error) {
+			f, err := openNoFollow(filepath.Join(b.repo.MountPath, pointID, artifact.Filename), syscall.O_RDONLY|syscall.O_NONBLOCK)
+			if err != nil {
+				return nil, err
+			}
+			if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+				f.Close()
+				return nil, errors.Join(ErrBackupConflict, err)
+			}
+			return f, nil
+		}
+		if err := verifyArtifactStream(ctx, open, artifact.Size, artifact.SHA256); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b filesystemBackupStorage) Scan(ctx context.Context) ([]protocol.BackupRecoveryPoint, error) {
@@ -347,7 +388,7 @@ func (b filesystemBackupStorage) Protected(ctx context.Context, pointID string) 
 		return false, err
 	}
 	pointDir := filepath.Join(b.repo.MountPath, pointID)
-	if vmhost.ReadBackupProtectMarker(pointDir) {
+	if vmhost.ReadBackupProtectMarker(pointDir) || vmhost.BackupProtectMarkerLeftover(pointDir) {
 		return true, nil
 	}
 	_, err := os.Stat(filepath.Join(pointDir, ".nex-protected"))
@@ -380,9 +421,27 @@ func (b filesystemBackupStorage) Delete(ctx context.Context, pointID string) err
 	return b.finishDelete(pointID, intent)
 }
 
-// recordDeleteIntent checks authority, pins and protection under poolPeerMu and
-// durably records what the delete will remove.
+// recordDeleteIntent durably records what the delete will remove. The mount is
+// read before poolPeerMu is taken, so a hung share cannot hold the pool-wide
+// lock; under it only authority, pins and the catalog are re-checked and the
+// intent is written.
 func (b filesystemBackupStorage) recordDeleteIntent(ctx context.Context, pointID string) (filesystemDeleteIntent, map[string]bool, error) {
+	protected, err := b.Protected(ctx, pointID)
+	if err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	if protected {
+		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	}
+	intent, exists, err := b.readDeleteIntent(pointID)
+	if err != nil {
+		return filesystemDeleteIntent{}, nil, err
+	}
+	if !exists {
+		if intent, err = b.planDeleteIntent(ctx, pointID); err != nil {
+			return filesystemDeleteIntent{}, nil, err
+		}
+	}
 	poolPeerMu.Lock()
 	defer poolPeerMu.Unlock()
 	state, err := loadPoolPeer(b.s)
@@ -400,55 +459,66 @@ func (b filesystemBackupStorage) recordDeleteIntent(ctx context.Context, pointID
 		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
 	catalog, err := getCatalogPoint(b.s, b.repo.ID, pointID)
-	if err != nil || catalog.PoolID != b.repo.PoolID || catalog.Protected {
+	if err != nil || catalog.PoolID != b.repo.PoolID || catalog.Protected || intent.Digest != catalog.ManifestSHA256 {
 		return filesystemDeleteIntent{}, nil, ErrBackupConflict
 	}
-	protected, err := b.Protected(ctx, pointID)
-	if err != nil {
-		return filesystemDeleteIntent{}, nil, err
-	}
-	if protected {
-		return filesystemDeleteIntent{}, nil, ErrBackupConflict
-	}
-	intent, exists, err := b.readDeleteIntent(pointID)
-	if err != nil {
-		return filesystemDeleteIntent{}, nil, err
-	}
-	if exists {
-		if intent.Digest != catalog.ManifestSHA256 {
-			return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	if !exists {
+		raw, err := json.Marshal(intent)
+		if err != nil {
+			return filesystemDeleteIntent{}, nil, err
 		}
-		return intent, pins, nil
+		if err := vmhost.AtomicWrite(b.deleteIntentPath(pointID), raw, 0600); err != nil {
+			return filesystemDeleteIntent{}, nil, err
+		}
 	}
+	return intent, pins, nil
+}
+
+// planDeleteIntent reads the published point and returns the intent that
+// would remove exactly it.
+func (b filesystemBackupStorage) planDeleteIntent(ctx context.Context, pointID string) (filesystemDeleteIntent, error) {
 	pointDir := filepath.Join(b.repo.MountPath, pointID)
 	manifest, digest, err := b.StatPoint(ctx, pointID)
-	if err != nil || digest != catalog.ManifestSHA256 {
-		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+	if err != nil {
+		return filesystemDeleteIntent{}, ErrBackupConflict
 	}
 	root, _, err := openFilesystemDeleteDir(pointDir, manifest)
 	if err != nil {
-		return filesystemDeleteIntent{}, nil, err
+		return filesystemDeleteIntent{}, err
 	}
 	if root == nil {
-		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+		return filesystemDeleteIntent{}, ErrBackupConflict
 	}
 	root.Close()
-	manifestRaw, err := os.ReadFile(filepath.Join(pointDir, "manifest.json"))
+	manifestRaw, err := readBoundedBackupFile(filepath.Join(pointDir, "manifest.json"), 1<<20)
 	if err != nil {
-		return filesystemDeleteIntent{}, nil, err
+		return filesystemDeleteIntent{}, err
 	}
 	if sha256Hex(manifestRaw) != digest {
-		return filesystemDeleteIntent{}, nil, ErrBackupConflict
+		return filesystemDeleteIntent{}, ErrBackupConflict
 	}
-	intent = filesystemDeleteIntent{Manifest: manifestRaw, Digest: digest}
-	raw, err := json.Marshal(intent)
+	return filesystemDeleteIntent{Manifest: manifestRaw, Digest: digest}, nil
+}
+
+// readBoundedBackupFile reads a regular file of at most limit bytes without
+// following a symlink, so a share writer cannot swap in a huge file or device.
+func readBoundedBackupFile(path string, limit int64) ([]byte, error) {
+	f, err := openNoFollow(path, syscall.O_RDONLY|syscall.O_NONBLOCK)
 	if err != nil {
-		return filesystemDeleteIntent{}, nil, err
+		return nil, err
 	}
-	if err := vmhost.AtomicWrite(b.deleteIntentPath(pointID), raw, 0600); err != nil {
-		return filesystemDeleteIntent{}, nil, err
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, errors.Join(ErrBackupConflict, err)
 	}
-	return intent, pins, nil
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, ErrBackupConflict
+	}
+	return raw, nil
 }
 
 // finishDelete removes a point recorded by its delete intent. It is safe to repeat.
@@ -456,6 +526,11 @@ func (b filesystemBackupStorage) finishDelete(pointID string, intent filesystemD
 	var manifest protocol.BackupManifest
 	if err := json.Unmarshal(intent.Manifest, &manifest); err != nil {
 		return ErrBackupConflict
+	}
+	// Removal runs outside poolPeerMu, so authority is re-checked before each step.
+	authority := func() error { return requirePoolAuthorityWritable(b.s) }
+	if err := authority(); err != nil {
+		return err
 	}
 	pointDir := filepath.Join(b.repo.MountPath, pointID)
 	root, litter, err := openFilesystemDeleteDir(pointDir, manifest)
@@ -480,6 +555,9 @@ func (b filesystemBackupStorage) finishDelete(pointID string, intent filesystemD
 			return err
 		}
 		for _, name := range append(filesystemDeleteNames(manifest), litter...) {
+			if err := authority(); err != nil {
+				return err
+			}
 			if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
@@ -487,6 +565,9 @@ func (b filesystemBackupStorage) finishDelete(pointID string, intent filesystemD
 		if err := syncBackupDirectory(pointDir); err != nil {
 			return err
 		}
+	}
+	if err := authority(); err != nil {
+		return err
 	}
 	if err := os.Remove(pointDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -509,7 +590,7 @@ func (b filesystemBackupStorage) sweepDeleteIntents(pins map[string]bool) {
 		if _, err := getCatalogPoint(b.s, b.repo.ID, id); !errors.Is(err, ErrBackupNotFound) {
 			continue
 		}
-		if b.finishDelete(id, intent) == nil {
+		if b.finishDelete(id, intent) == nil && requirePoolAuthorityWritable(b.s) == nil {
 			_ = os.Remove(b.deleteIntentPath(id))
 		}
 	}
@@ -566,7 +647,7 @@ func (b filesystemBackupStorage) readDeleteIntent(id string) (filesystemDeleteIn
 	if !info.Mode().IsRegular() || info.Size() > 2<<20 {
 		return intent, false, ErrBackupConflict
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readBoundedBackupFile(path, 2<<20)
 	if err != nil {
 		return intent, false, err
 	}
@@ -652,10 +733,6 @@ func syncBackupDirectory(path string) error {
 	return dir.Sync()
 }
 
-func backupRepositoryEntryCouldBePoint(name string) bool {
-	return !strings.HasPrefix(name, ".") && protocol.ValidSnapshotOperationID(name)
-}
-
 // openNoFollow opens path without following a final symlink. A symlink fails
 // with the raw ELOOP errno.
 func openNoFollow(path string, flags int) (*os.File, error) {
@@ -677,6 +754,47 @@ func hashLimited(r io.Reader, size int64) (n int64, digest string, err error) {
 	h := sha256.New()
 	n, err = io.Copy(h, io.LimitReader(r, size+1))
 	return n, hex.EncodeToString(h.Sum(nil)), err
+}
+
+// requireSameManifest compares encodings: a manifest read back from storage went
+// through JSON, so DeepEqual would fail on time.Time.
+func requireSameManifest(stored, manifest protocol.BackupManifest) error {
+	left, _ := json.Marshal(stored)
+	right, _ := json.Marshal(manifest)
+	if !bytes.Equal(left, right) {
+		return ErrBackupConflict
+	}
+	return nil
+}
+
+// ctxReader stops a long read once its context ends.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+// verifyArtifactStream hashes one stored artifact without keeping a copy.
+func verifyArtifactStream(ctx context.Context, open func() (io.ReadCloser, error), size int64, digest string) error {
+	r, err := open()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	n, sum, err := hashLimited(ctxReader{ctx, r}, size)
+	if err != nil {
+		return err
+	}
+	if n != size || sum != digest {
+		return ErrBackupConflict
+	}
+	return nil
 }
 
 // manifestArtifacts lists the disk and firmware artifacts of a manifest by

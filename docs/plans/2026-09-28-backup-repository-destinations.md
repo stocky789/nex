@@ -1,7 +1,8 @@
 # Backup repository destinations and health
 
-Date: 2026-09-28. Status: implementation plan; no new destination or automatic
-repository health check is implemented by this document. Owner: project owner.
+Date: 2026-09-28. Status: plan and decision record. The tracked Core implements NFS,
+SMB3, S3 and SFTP destinations and the Core health worker; none is release-accepted (see
+the [destination QA report](../qa/2026-09-28-backup-repository-destinations.md)). Owner: project owner.
 
 Parent: [recovery delivery](2026-09-25-recovery-snapshots-backups-restores.md).
 This expands the NFS-only destination scope after the original Phase 6 disposable
@@ -83,11 +84,11 @@ link. Mixed-version native checks remain open. API impact: **changed
 contract** for the additive peer join and Core membership fields; Controller
 uses the existing members response name field. State owner: **Core** membership
 on the master, replicated in signed authority and re-adopted from inventory.
-Core now waits for live authenticated format support from every ready peer
-before backfilling a legacy name, and waits for an explicit Controller
-acknowledgement before reporting the field to a strict older Controller.
-Lost-response join replay remains valid after a focused regression fix;
-native mixed-version upgrade is still open.
+There is no mixed-version backfill (owner decision below): a joiner that does not
+report a valid hostname is refused with a stated reason, an existing member's
+hostname is not backfilled, and a strict Controller refuses an unrestarted older
+Core's report with a 400 naming the unknown field. Lost-response join replay
+remains valid after a focused regression fix.
 Four staggered policies subsequently dispatched one succeeded backup and
 point per destination on the promoted master with the fresh Controller
 stopped. Core-local inventory ended at 37 points and 98 runs; the four test
@@ -277,7 +278,7 @@ former writer before the new master writes or prunes.
 | Kind | Required Core proof before claiming support |
 |---|---|
 | NFS | Preserve mounted source/FS identity, owner marker, same-filesystem atomic publication and existing recovery checks. Re-run its regression as the baseline. |
-| SMB3 | Reuse sealed SMB 3.1.1 mount and share-root identity marker with private credentials. Verify selected directory, QEMU write access and exact source on each host. Prove exclusive owner claim, file sync, publication visibility/durability, rename and reconnect behavior on the supported Samba profile; adapt publication if directory sync is unsupported. |
+| SMB3 | Reuse the SMB 3.1.1 mount and share-root identity marker with a root-only mount credentials file (not sealed). Verify selected directory, QEMU write access and exact source on each host. Prove exclusive owner claim, file sync, publication visibility/durability, rename and reconnect behavior on the supported Samba profile; adapt publication if directory sync is unsupported. |
 | S3 | Use a native Core object client, not FUSE. Bind endpoint, bucket and prefix; scope the key. Upload and verify immutable artifacts, create the manifest last with conditional write, then read/validate it before catalog settlement. Require tested conditional create, read/list visibility and writer fencing from each advertised S3-compatible service. Never treat an owner object alone as a distributed lock. |
 | SFTP | Pin the SSH host key and confine the account to one repository root. Probe actual read/write/list/rename behavior. Use a server profile whose exclusive create, rename, sync and reconnect semantics pass fault tests, or use a manifest-last publication rule that does not depend on unproven atomic rename. |
 
@@ -434,13 +435,11 @@ orphaned when the repository record write fails after preparation;
 `RetireUnusedBackupCredential` takes the backup lock on the Run loop; retired
 credential tombstones grow without bound; SMB3 `.write-*` temp files are not
 swept at start; restores inherited by an emergency promotion are not
-re-observed; probe loops read the live Store off the Run loop; the remaining
-older-Core pool capability gates, `ReadPoint`, the unbound restore allocation
-shim and `markLegacyPeerBackupJournal` await legacy cleanup.
+re-observed; probe loops read the live Store off the Run loop. The older-Core pool
+capability gates and the `backup-v1` handshake are no longer deferred: they were removed in 0.4.19.
 
 **Remaining gates:** run the common matrix above on the current tree, with a detached
-lab NFS/SMB3 mount unit from older builds; real-host boot verification of sealed SMB3
-credentials; the final enabled-build guide walkthrough and live browser review; a signed
+lab NFS/SMB3 mount unit from older builds; real-host boot verification of the SMB3 mount credentials file; the final enabled-build guide walkthrough and live browser review; a signed
 package/ISO component and source review before distribution; forge CI after an
 owner-authorized push. No CI run exists for this candidate.
 

@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Root-owned, serialized demo deployment. Accept one SHA and gzip docker-save on stdin."""
 import fcntl
+import bz2
 import gzip
 import hashlib
 import io
 import json
+import lzma
 import os
 from pathlib import Path, PurePosixPath
 import re
 import select
+import shutil
 import signal
 import stat
 import subprocess
@@ -24,6 +27,10 @@ RUNTIME = Path('/run/nex-demo')
 CONTAINER = 'nex-demo'
 UID = 64050
 MAX_ARCHIVE = 768 * 1024 * 1024
+MAX_MEMBERS = 4096
+# Docker decompresses compressed layers on load; bound what they can inflate to.
+MAX_INFLATED = 1024 * 1024 * 1024
+MAX_IMAGE_SIZE = 1024 * 1024 * 1024
 ARCHIVE_IDLE_TIMEOUT = 30
 ARCHIVE_TOTAL_TIMEOUT = 600
 TAG = re.compile(r'^nex-demo:[0-9a-f]{40}$')
@@ -95,12 +102,37 @@ def receive_archive(temporary):
             output.write(chunk)
 
 
-def import_image(release, temporary):
+def inflated_size(archive, member, budget):
+    """Return the layer's decompressed size, aborting as soon as it exceeds budget."""
+    with archive.extractfile(member) as raw:
+        head = raw.read(6)
+        raw.seek(0)
+        if head.startswith(b'\x28\xb5\x2f\xfd'):
+            raise ValueError('zstd-compressed image layers are not supported')
+        if head.startswith(b'\x1f\x8b'):
+            stream = gzip.GzipFile(fileobj=raw)
+        elif head.startswith(b'\xfd7zXZ'):
+            stream = lzma.LZMAFile(raw)
+        elif head.startswith(b'BZh'):
+            stream = bz2.BZ2File(raw)
+        else:
+            return member.size
+        total = 0
+        while chunk := stream.read(1024 * 1024):
+            total += len(chunk)
+            if total > budget:
+                raise ValueError('image layers inflate beyond the allowed size')
+        return total
+
+
+def import_image(release, temporary, current=None):
     path = temporary / 'image.tar'
     expected = 'nex-demo:' + release
     with tarfile.open(path, mode='r:') as archive:
         names = set()
         for member in archive:
+            if len(names) >= MAX_MEMBERS:
+                raise ValueError('image archive has too many members')
             name = PurePosixPath(member.name)
             if name.is_absolute() or '..' in name.parts or member.name in names:
                 raise ValueError('unsafe or duplicate archive path')
@@ -131,9 +163,12 @@ def import_image(release, temporary):
         layers = entry.get('Layers')
         if not isinstance(layers, list) or not layers:
             raise ValueError('image has no layers')
+        inflated = 0
         for layer in layers:
-            if not archive.getmember(layer).isfile():
+            layer_member = archive.getmember(layer)
+            if not layer_member.isfile():
                 raise ValueError('invalid image layer')
+            inflated += inflated_size(archive, layer_member, MAX_INFLATED - inflated)
         expected_id = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
         # Repack only the validated classic Docker manifest/config/layers. OCI
         # index annotations or legacy repositories cannot introduce extra tags.
@@ -161,11 +196,24 @@ def import_image(release, temporary):
                 member.size = source_member.size
                 output.addfile(member, archive.extractfile(source_member))
     existing_id = image_config_id(expected)
-    if existing_id is not None and existing_id != expected_id:
+    if existing_id == expected_id:
+        return expected
+    if existing_id is not None:
+        if expected == current:
+            # Re-run of the running release: builds are not byte-reproducible, so
+            # keep the image that is already serving and rollback-able.
+            return expected
         raise ValueError('refusing to overwrite an immutable release tag')
     command(DOCKER, 'image', 'load', '--input', str(validated))
-    if image_config_id(expected) != expected_id:
-        raise ValueError('loaded image does not match the validated archive')
+    try:
+        size = int(command(DOCKER, 'image', 'inspect', '--format', '{{.Size}}', expected).stdout)
+        if image_config_id(expected) != expected_id:
+            raise ValueError('loaded image does not match the validated archive')
+        if size > MAX_IMAGE_SIZE:
+            raise ValueError('loaded image exceeds the allowed size')
+    except BaseException:
+        command(DOCKER, 'image', 'rm', expected, check=False)
+        raise
     return expected
 
 
@@ -221,9 +269,17 @@ def healthy():
 def save_state(current, previous):
     path = STATE / 'releases.json'
     temporary = STATE / 'releases.json.new'
-    temporary.write_text(json.dumps({'current': current, 'previous': previous}) + '\n')
-    temporary.chmod(0o600)
+    with temporary.open('w') as file:
+        file.write(json.dumps({'current': current, 'previous': previous}) + '\n')
+        os.fchmod(file.fileno(), 0o600)
+        file.flush()
+        os.fsync(file.fileno())
     os.replace(temporary, path)
+    directory = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def interrupted(signum, frame):
@@ -243,6 +299,9 @@ def main():
         raise ValueError('/run/nex-demo must be the dedicated bounded tmpfs mount')
     with (STATE / 'deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        # The lock excludes other deployers, so leftovers are from killed ones.
+        for stale in STATE.glob('import-*'):
+            shutil.rmtree(stale, ignore_errors=True)
         signal.signal(signal.SIGTERM, interrupted)
         with tempfile.TemporaryDirectory(prefix='import-', dir=STATE) as directory:
             temporary = Path(directory)
@@ -254,7 +313,7 @@ def main():
                 old_retained = json.loads((STATE / 'releases.json').read_text()).get('previous')
                 if old_retained is not None and not TAG.fullmatch(old_retained):
                     raise ValueError('invalid retained release state')
-            target = import_image(sys.argv[1], temporary)
+            target = import_image(sys.argv[1], temporary, previous)
         changed = False
         try:
             # Mark before removal so interruption also restores the previous release.
@@ -263,7 +322,8 @@ def main():
             start(target)
             if not healthy():
                 raise RuntimeError('candidate did not become healthy within 60 seconds')
-            save_state(target, previous if previous != target else old_retained)
+            retained = previous if previous != target else old_retained
+            save_state(target, retained)
             changed = False
         finally:
             if changed:
@@ -280,9 +340,9 @@ def main():
                     print('nex-demo-deploy: failed first release removed; no prior release', file=sys.stderr)
                 if target not in (previous, old_retained):
                     command(DOCKER, 'image', 'rm', target, check=False)
-        if old_retained and old_retained not in (target, previous):
+        if old_retained and old_retained not in (target, retained):
             command(DOCKER, 'image', 'rm', old_retained, check=False)
-        print(f'nex-demo-deploy: healthy {target}; retained {previous or "no previous release"}')
+        print(f'nex-demo-deploy: healthy {target}; retained {retained or "no previous release"}')
 
 
 if __name__ == '__main__':

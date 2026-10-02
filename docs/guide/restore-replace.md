@@ -57,8 +57,9 @@ Core on the VM's host runs the release and records it, so it continues if the br
 Controller disconnects, and sending the same request again returns the same outcome. It fails,
 changing nothing, with the reason when the name is wrong, the VM is not shut off, the VM has
 snapshots (delete them first), a file is still used by another VM or lies outside the VM's
-storage directory, or the VM has no retained originals. While a restore, restore-replace, test restore, edit or snapshot
-operation on the VM is queued or unfinished the request is refused, so release only after the
+storage directory, or the VM has no retained originals. While a restore, restore-replace, test restore, edit, power, media, delete or snapshot
+operation on the VM is queued, pending or `needs_attention` the request is refused (Core also
+refuses a request whose pool or host differs from the VM's record), so release only after the
 replace has succeeded and try again. Without the Controller, use the host-local route
 `POST /api/local/v1/pool/vms/{id}/release-retained` with `operation_id` and `confirmation`
 (the VM name) on the host that runs the VM. The button appears for every VM, because Nex does
@@ -69,6 +70,10 @@ An interrupted vTPM release resumes only the exact tree Core admitted before del
 Missing already-removed files are allowed; changed remaining content, ownership or modes,
 new files, and the current VM's state are not. Keep the same operation, pool and VM when
 retrying; a request ID cannot be reused for another VM.
+
+Deleting the VM removes the same retained vTPM state, in both delete modes, so there is nothing
+to release afterwards. Core refuses the delete, before undefining the VM, if a retained tree
+changed since it was recorded; an interrupted removal resumes with only what remains.
 
 Older releases that began deleting vTPM state before Core recorded an exact per-file
 manifest cannot safely authenticate the remaining partial tree. They stay `needs_attention`

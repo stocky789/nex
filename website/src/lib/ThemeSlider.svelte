@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script lang="ts">
   // Dark capture over the light one; a transparent range input on top gives mouse, touch and
-  // keyboard dragging. static/theme-slider.js moves the split; without it the split stays at 50%.
+  // keyboard dragging. static/theme-slider.js enables the input and moves the split; without
+  // it the input stays disabled (and hidden) and the split stays at a static 50%.
   let { stem, alt, eager = false }: { stem: string; alt: string; eager?: boolean } = $props();
 </script>
 
@@ -10,7 +11,7 @@
   <img class="dark" src={`/gallery/${stem}-dark.png`} alt="" width="1440" height="1000" loading={eager ? "eager" : "lazy"} />
   <span class="tag light-tag" aria-hidden="true">Light</span>
   <span class="tag dark-tag" aria-hidden="true">Dark</span>
-  <input type="range" min="0" max="100" step="0.1" value="50" aria-label="Compare light and dark theme: drag to reveal" />
+  <input type="range" min="0" max="100" step="1" value="50" autocomplete="off" disabled aria-valuetext="50% light, 50% dark" aria-label="Compare light and dark theme: drag to reveal" />
   <span class="divider" aria-hidden="true"><span class="grip">‹ ›</span></span>
 </div>
 
@@ -24,5 +25,6 @@
   .light-tag { left: 12px; background: #fff; color: #17233b; }
   .dark-tag { right: 12px; background: #111820; color: #fff; }
   input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
-  input:focus-visible ~ .divider { outline: 2px solid var(--blue); outline-offset: 3px; }
+  input:disabled { display: none; }
+  .theme-slider:has(input:focus-visible) { outline: 3px solid var(--blue); outline-offset: 2px; }
 </style>

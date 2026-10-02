@@ -27,6 +27,8 @@ export const date = (value?: string | null) =>
   value && !value.startsWith("0001-")
     ? new Date(value).toLocaleString()
     : "Not observed";
+export const checkedAt = (value?: string | null) =>
+  value && !value.startsWith("0001-") ? new Date(value).toLocaleString() : "Not checked";
 export const size = (value: number) => {
   const [unit, name]: [number, string] = value > 0 && value < 1024 ** 2 ? [1024, "KiB"] : value > 0 && value < 1024 ** 3 ? [1024 ** 2, "MiB"] : [1024 ** 3, "GiB"];
   return `${(value / unit).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${name}`;

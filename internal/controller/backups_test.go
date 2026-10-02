@@ -190,3 +190,32 @@ func TestOrphanRelayRejectsMismatchedRepositoryID(t *testing.T) {
 	answer(200, string(foreignCleanup))
 	result(done, 404)
 }
+
+// A backup operation whose command carries an empty host_id (a run-now task) is shown on the
+// host that queued it, not on a blank one.
+func TestOperationsKeepHostWhenCommandHostIsEmpty(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	pool := a.poolOf(master.HostID)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.c.db.Exec("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)", "op-run-now", master.HostID, "backup-policy-run-now", "req-run-now", "queued", "", now, now, "root"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.c.db.Exec("INSERT INTO managed_resources VALUES(?,?,?,?,?,?,?,?,?)", "res-run-now", "backup-policy-run-now", pool, master.HostID, "run", "req-run-now", "{}", `{"vm":{"host_id":""},"restore":{"host_id":""}}`, "op-run-now"); err != nil {
+		t.Fatal(err)
+	}
+	var ops []protocol.Operation
+	read(t, a.call("GET", "/api/v1/operations", nil, nil, 200), &ops)
+	if len(ops) != 1 || ops[0].HostID != master.HostID {
+		t.Fatalf("run-now task lost its host: %+v", ops)
+	}
+}
+
+func TestAgentDecodeNamesUnknownFieldForUpgrade(t *testing.T) {
+	a := newClient(t)
+	master := a.enroll(a.token(a.site(), ""), csr(t))
+	body := a.call("POST", "/api/v1/agent/report", map[string]any{"version": 1, "sequence": 1, "removed_field": true}, certificate(t, master.CertificatePEM), 400).Body.String()
+	if !strings.Contains(body, "removed_field") || !strings.Contains(body, "upgrade or restart Nex Core") {
+		t.Fatalf("unknown field not named for the operator: %s", body)
+	}
+}

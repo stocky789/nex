@@ -47,24 +47,24 @@ before relying on a policy.
    **Save repository change**. Verify the updated policy before starting a new
    backup. New one-off jobs require their own repository selection; existing
    jobs are not switched automatically. The update uses the policy revision
-   shown by Core; another change made meanwhile causes a conflict. If the job still lists
-   a VM that was deleted from the pool, saving removes that VM from the job (the panel says
-   how many); a job whose VMs are all deleted cannot be moved from the UI. Delete such a job
-   (step 8), or use `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` with corrected
-   `vm_ids` and the current `expected_revision`. Core rejects a job that lists a deleted VM
-   with a generic "invalid backup request".
+   shown by Core; another change made meanwhile causes a conflict. The panel sends the
+   job's VM list to Core unchanged. If the job still lists a VM that was deleted from the pool,
+   Core refuses the change with its own error (a generic "invalid backup request") and the
+   job stays on its old repository. Delete such a job (step 8), or use
+   `PUT /api/v1/pools/{id}/backup-policies/{policy_id}` with corrected `vm_ids` and the current
+   `expected_revision`.
 8. To delete a backup job, expand it and select **Delete**. The dialog states what is kept.
    Type the job's name to confirm, then select **Delete backup job**. Core removes only the
    job's definition (schedule, VM list and retention rules) on the pool master, and no
    further backups are scheduled for it. Its recovery points, its run history and the
    repository's data are not deleted. Retention no longer applies to those points, so Nex
    does not remove them automatically; restore them, or delete them from **Recovery points**
-   or **Orphaned backups** when you no longer need them. Core refuses while a backup of the
-   job is running (the task names the run); wait for it to finish and delete the job again.
-   Once Core accepts the delete, no new backup starts for that job.
-   A run left in **needs attention** does not block the delete, so a stuck run never traps you:
-   its history row stays under **Backup runs** with that status, and Core does not retry it for the
-   deleted job. Check the repository for a partial backup before you delete the job.
+   or **Orphaned backups** when you no longer need them. Core refuses while any run of the
+   job is `pending` or `needs attention` (the task names the run); wait for a running backup
+   to finish, or settle a stuck run, and delete the job again. A run left in **needs
+   attention** therefore blocks the delete until it settles: check the repository for a
+   partial backup first. Once Core accepts the delete, no new backup starts for that job, and
+   its remaining history rows stay under **Backup runs**.
    Deleting cannot be undone; create a new job to resume backups of those VMs. The delete is
    safe to retry with the same request, and a job that is already gone is reported as not found.
 
@@ -102,10 +102,17 @@ through Core's authenticated paged API.
 - An uncertain save keeps Review open and disables Back, Cancel and Close. Inspect
   **Tasks** before **Retry exact request**; the retry keeps the original coverage,
   repository, schedule, retention and request identity.
-- Next run does not advance while paused: resume the schedule.
+- Next run does not advance while paused: resume the schedule. A disabled, paused or
+  unscheduled job shows "—" under **Next run**.
+- **Recovery points** loads a page at a time. **Load more** adds pages, and every poll re-reads
+  all the pages you have loaded, so **Protected** and last-test state stay current on later
+  pages. Run history after its first load reads only the newest pages on each poll. History and
+  catalog walks stop at 100 pages (about 6,400 items): beyond that the page shows an
+  "inventory too large" error instead of a partial view.
 - **Delete backup job** fails with "type the backup job name": the typed name must match
-  exactly. It fails with "backup run ... is still running": wait for that run to finish
-  (or resolve it) and delete again. "backup policy not found" means the job is already gone.
+  exactly. It fails with a run that is "still running" or needs attention: wait for that
+  run to finish (or settle it) and delete again. "backup policy not found" means the job is
+  already gone.
 - Missed runs appear after Core downtime: expected; use **Run now** rather than expecting
   automatic catch-up of every skipped slot.
 - An offline or unknown repository warning reflects Core's latest report; check
@@ -118,9 +125,11 @@ through Core's authenticated paged API.
   member is offline; only new runs and metadata wait. Check the retained run
   and member status before retrying. Keep the master available when an exact
   complete replica cannot be verified. A
-  disposable fixture passed promotion with directly seeded runs beyond 69 MB;
-  bounded post-promotion backup and restore passed later for all four candidate
-  destinations. Broader faults remain open.
+  disposable fixture on an earlier build (see the
+  [destination QA matrix](../qa/2026-09-28-backup-repository-destinations.md), which does not
+  accept the current tree) passed promotion with directly seeded runs beyond 69 MB and
+  bounded post-promotion backup and restore on all four candidate destinations. Broader
+  faults remain open.
 - A run that remains reserved or reports `needs_attention` needs host-side inspection
   before an operator submits another run for the same VM.
 - If history is unavailable or loading, **Unknown** is not evidence that a VM has
@@ -147,6 +156,11 @@ through Core's authenticated paged API.
   before it began, settles `failed` and the next scheduled occurrence runs normally.
   Silence, departure from the pool, or an unverified outcome does not prove a run
   stopped; the master keeps its reservations until authenticated host evidence settles it.
+- Scheduler: if a VM left the pool or its command cannot be prepared, that occurrence
+  records a `failed` run and the other jobs still run in the same tick. A due slot on a
+  repository that is busy (being registered, forgotten or tested) records a `skipped_overlap`
+  run with stage `busy` instead of vanishing. A job deleted during the tick is skipped
+  without a record.
 - If **Change repository** reports a revision conflict, reload the policy,
   review its current settings and submit a new change. If the reply is
   uncertain, keep the panel open and use **Check task status**; any retry must
@@ -161,9 +175,11 @@ through Core's authenticated paged API.
   run, recovery point, restore pin and verification receipt in its signed
   authority, so a takeover host holds them all. Core enforces at most 256
   repositories, 1,000 policies and 256 KiB per record. Run history, catalog
-  points, restore pins and verification receipts have no count limit: up to
-  64 MiB and 100,000 records of each travel in the small form, and beyond that
-  Core uses paged replication, which still works but sends more data on each
+  points, restore pins and verification receipts have no fixed count limit, but
+  the authority travels to members in one paged form, and growth past 64 MiB or
+  100,000 records of a kind is admitted only while every member whose acknowledgement
+  is required holds the current replica; otherwise the new policy or run is refused
+  until the member is current. Replicating a large authority sends more data on each
   change. When the number of repositories or policies reaches 80% of its limit,
   the master's host reports a degraded `pool-backup-authority-capacity` check
   naming the limit and usage. The check clears by itself once repositories or

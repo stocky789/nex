@@ -29,8 +29,8 @@ func PoolWitnessClusterName(poolID string) string {
 // host.  Nothing rewrites it afterwards, so it is the member's join time.
 type PoolMember struct {
 	HostID string `json:"host_id"`
-	// Hostname is reported by this Core and retained by the pool master.
-	// Older membership records omit it until upgraded peers can verify its replica.
+	// Hostname is reported by this Core when it initialises or joins a pool. Members of
+	// pools created before hostnames were reported omit it; nothing backfills it.
 	Hostname string `json:"hostname,omitempty"`
 	// SanlockHostID is assigned once by the pool master and remains stable for this
 	// membership identity. Sanlock host IDs are 1..2000; zero means this legacy member
@@ -1243,6 +1243,10 @@ func (r PoolAuthorityReplica) SectionDigests() ([]PoolReplicaSection, error) {
 	return out, nil
 }
 
+// ErrPoolAuthorityReplicaSections is returned for a replica that declares fewer or more
+// sections than this build defines, as one written by an older build does.
+var ErrPoolAuthorityReplicaSections = errors.New("pool authority replica does not declare every section")
+
 // VerifySections proves the stored sections are the ones the signature covers and that
 // none of them is missing.  A replica that declares fewer sections is refused, not used.
 func (r PoolAuthorityReplica) VerifySections() error {
@@ -1251,7 +1255,7 @@ func (r PoolAuthorityReplica) VerifySections() error {
 		return err
 	}
 	if len(r.Sections) != len(want) {
-		return errors.New("pool authority replica does not declare every section")
+		return ErrPoolAuthorityReplicaSections
 	}
 	for i, section := range r.Sections {
 		if section.Name != want[i].Name || section.SHA256 != want[i].SHA256 {

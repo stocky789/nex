@@ -80,7 +80,7 @@
     "web/src/backup-policies.tsx",
     "web/src/backup-repositories.test.mjs",
     "web/src/backup-repositories.tsx",
-    "web/src/backups-panels.test.mjs",
+    "web/src/backups-replace.test.mjs",
     "web/src/backups.tsx",
     "web/src/vm-list.test.mjs",
     "web/src/vm-list.tsx"

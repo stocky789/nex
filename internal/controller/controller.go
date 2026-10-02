@@ -257,6 +257,14 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
+		if name, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+			msg := "invalid JSON request: unknown field " + name
+			if strings.HasPrefix(r.URL.Path, "/api/v1/agent/") {
+				msg += "; upgrade or restart Nex Core on the reporting host"
+			}
+			fail(w, 400, msg)
+			return false
+		}
 		fail(w, 400, "invalid JSON request")
 		return false
 	}
@@ -756,8 +764,8 @@ func (c *Controller) operation(w http.ResponseWriter, r *http.Request, user, csr
 func (c *Controller) operations(w http.ResponseWriter, r *http.Request, user, csrf string) {
 	// Backup requests queue on the pool master, which dispatches them to the executing host.
 	rows, err := c.db.Query(`SELECT o.id, CASE WHEN o.kind LIKE 'backup-%' THEN coalesce(
-		(SELECT coalesce(json_extract(command,'$.restore.host_id'), json_extract(command,'$.restore_replace.host_id'),
-			json_extract(command,'$.test_restore.host_id'), json_extract(command,'$.vm.host_id'))
+		(SELECT coalesce(NULLIF(json_extract(command,'$.restore.host_id'),''), NULLIF(json_extract(command,'$.restore_replace.host_id'),''),
+			NULLIF(json_extract(command,'$.test_restore.host_id'),''), NULLIF(json_extract(command,'$.vm.host_id'),''))
 		 FROM managed_resources WHERE operation_id=o.id LIMIT 1), o.host_id) ELSE o.host_id END,
 		o.kind, o.request_id, o.status, o.error, o.created_at, o.updated_at, o.actor
 		FROM operations o ORDER BY o.created_at DESC LIMIT 1000`)

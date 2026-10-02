@@ -3,6 +3,7 @@ package controller
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -240,6 +241,31 @@ func TestConsoleRejectsConcurrentHostTunnelBeforeUpgrade(t *testing.T) {
 	first, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil || first.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("first host tunnel upgrade: response=%v error=%v", first, err)
+	}
+}
+
+type failingHijacker struct{ http.ResponseWriter }
+
+func (failingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, errors.New("hijack failed")
+}
+
+func TestConsoleHostTunnelRetriesAfterFailedHijack(t *testing.T) {
+	c := &Controller{consoles: consoleHub{sessions: map[string]*consoleSession{
+		"ticket": {hostID: "host", user: "root", expires: time.Now().Add(time.Minute), agent: make(chan net.Conn, 1)},
+	}}}
+	req := httptest.NewRequest(http.MethodPost, "/console/ticket", nil)
+	req.SetPathValue("token", "ticket")
+	w := httptest.NewRecorder()
+	c.agentConsole(failingHijacker{w}, req, "host")
+	if w.Code != 500 {
+		t.Fatalf("failed hijack answered %d", w.Code)
+	}
+	c.consoles.mu.Lock()
+	claimed := c.consoles.sessions["ticket"].agentClaimed
+	c.consoles.mu.Unlock()
+	if claimed {
+		t.Fatal("a failed hijack left the session unclaimable")
 	}
 }
 

@@ -83,8 +83,19 @@ func openListener(address, socket string) (net.Listener, error) {
 		}
 		return net.Listen("tcp", address)
 	}
-	if _, err := os.Lstat(socket); err == nil {
-		return nil, errors.New("socket path already exists; refusing to replace it")
+	if info, err := os.Lstat(socket); err == nil {
+		// A crashed container (restart policy) leaves its socket behind; remove
+		// only a socket nobody is listening on, never a file or a live server.
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, errors.New("socket path already exists; refusing to replace it")
+		}
+		if conn, dialErr := net.DialTimeout("unix", socket, time.Second); dialErr == nil {
+			conn.Close()
+			return nil, errors.New("socket path is served by a live process; refusing to replace it")
+		}
+		if err := os.Remove(socket); err != nil {
+			return nil, err
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}

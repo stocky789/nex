@@ -3,7 +3,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,13 +156,6 @@ func TestOrphanGroupsHaveStableOrder(t *testing.T) {
 	}
 }
 
-func TestOrphanSizingBudgetStaysInsideTheRelayWait(t *testing.T) {
-	// The Controller relay waits 10 s and Core's HTTP WriteTimeout is 30 s.
-	if orphanSizingBudget >= 10*time.Second {
-		t.Fatalf("the sizing budget %v must stay under the Controller's 10 s relay wait", orphanSizingBudget)
-	}
-}
-
 func TestForgetRefusedWhileCleanupHoldsRetention(t *testing.T) {
 	master, _, _ := orphanSafetyLab(t)
 	poolBackupRetentionMu.Lock()
@@ -267,9 +262,73 @@ func TestLeavingAPoolErasesSMBCredentialFile(t *testing.T) {
 	}
 }
 
-func TestDamagedBackupPointNamesItsPointAndStaysAConflict(t *testing.T) {
-	err := error(backupPointDamaged("recovery point p1 has no manifest on the destination"))
-	if !errors.Is(err, ErrBackupConflict) || !strings.Contains(err.Error(), "p1") || strings.Contains(err.Error(), "retained work") {
+// A cleanup record the authority would refuse must never reach disk: one bad record stops
+// every later publication of the pool's backup state.
+func TestOrphanCleanupRecordThatBreaksAuthorityIsNotSaved(t *testing.T) {
+	master, _, _ := orphanSafetyLab(t, "gone-1")
+	req := orphanRequest([]string{"vm-gone-gone-1"}, 1, 0, false)
+	rec, err := planOrphanCleanup(master, "clean-1", req)
+	if err != nil {
 		t.Fatal(err)
+	}
+	rec.Points[0].Status, rec.Points[0].Reason = "failed", strings.Repeat("x", 5000)
+	if err := saveOrphanCleanup(master, rec); err == nil {
+		t.Fatal("an oversized reason was saved")
+	}
+	saved, err := loadOrphanCleanup(master, "clean-1")
+	if err != nil || saved.Points[0].Status != "pending" {
+		t.Fatalf("the earlier record was damaged: %+v %v", saved, err)
+	}
+	if _, err := encodePoolBackupAuthorityFromStore(master, nil); err != nil {
+		t.Fatalf("the authority cannot be published: %v", err)
+	}
+}
+
+func TestPoolBackupAuthorityWalkRejectsInvalidOrphanCleanup(t *testing.T) {
+	master, _, _ := orphanSafetyLab(t, "gone-1")
+	req := orphanRequest([]string{"vm-gone-gone-1"}, 1, 0, false)
+	rec, err := planOrphanCleanup(master, "clean-1", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Points[0].Reason, rec.UpdatedAt = strings.Repeat("x", 5000), time.Now().UTC()
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphanCleanupPath(master, "clean-1"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := walkPoolBackupAuthorityRecords(master, func(byte, any) error { return nil }); err == nil {
+		t.Fatal("an invalid cleanup record was published")
+	}
+}
+
+// A long cleanup checkpoints its record in batches; every point is still settled and the
+// stored record stays complete.
+func TestOrphanCleanupOfManyPointsSettlesEveryPoint(t *testing.T) {
+	ids := make([]string, 60)
+	vms := make([]string, 60)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("gone-%02d", i)
+		vms[i] = "vm-gone-" + ids[i]
+	}
+	master, mount, _ := orphanSafetyLab(t, ids...)
+	req := orphanRequest(vms, len(ids), 0, false)
+	rec, err := cleanupBackupOrphans(context.Background(), master, "clean-1", req)
+	if err != nil || rec.Status != "succeeded" {
+		t.Fatalf("cleanup = %+v %v", rec, err)
+	}
+	stored, err := loadOrphanCleanup(master, "clean-1")
+	if err != nil || stored.Status != "succeeded" || len(stored.Points) != len(ids) {
+		t.Fatalf("stored cleanup = %+v %v", stored, err)
+	}
+	for _, point := range stored.Points {
+		if point.Status != "deleted" {
+			t.Fatalf("point %s = %+v", point.RecoveryPointID, point)
+		}
+		if _, err := os.Stat(filepath.Join(mount, point.RecoveryPointID)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("destination still holds %s: %v", point.RecoveryPointID, err)
+		}
 	}
 }

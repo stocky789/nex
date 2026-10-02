@@ -3,15 +3,20 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"nex.local/nex/internal/protocol"
+	"nex.local/nex/internal/vmhost"
+	"nex.local/nex/internal/vmhost/vmhosttest"
 )
 
 func TestBackupCredentialHandoffScopeReplayRotationAndPrivacy(t *testing.T) {
@@ -304,8 +309,7 @@ func TestBackupCredentialRotationRetiresOldReceipt(t *testing.T) {
 // The receipt key is sealed by systemd-creds (the fake runner here); no plaintext key file exists.
 func TestBackupCredentialKeyIsSealedAtRest(t *testing.T) {
 	s := seedBackupMaster(t)
-	key, err := backupCredentialKey(s, true)
-	if err != nil || len(key) != 32 {
+	if _, err := backupCredentialAEAD(s, true); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	dir := filepath.Join(s.dir, "backup-credential-key")
@@ -316,31 +320,105 @@ func TestBackupCredentialKeyIsSealedAtRest(t *testing.T) {
 	if err != nil || !bytes.HasPrefix(sealed, []byte("sealed:")) {
 		t.Fatalf("key is not sealed at rest: %v", err)
 	}
-	if again, err := backupCredentialKey(s, false); err != nil || !bytes.Equal(again, key) {
+	forgetBackupCredentialKey(s)
+	again, err := backupCredentialAEAD(s, false)
+	if err != nil {
 		t.Fatalf("reopen: %v", err)
+	}
+	nonce := make([]byte, again.NonceSize())
+	if got := again.Seal(nil, nonce, []byte("x"), nil); len(got) == 0 {
+		t.Fatal("reopened key does not seal")
 	}
 }
 
-// Regression for BUG-0778: retrying a credential request whose stored receipt was sealed
-// under a lost key answered "cannot be decrypted" with nothing the operator could act on.
-func TestBackupCredentialRequestAfterKeyLossSaysToUseNewRequestID(t *testing.T) {
+func countingSystemdCreds(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	var execs atomic.Int32
+	vmhost.SetSystemdCredsRunner(func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+		execs.Add(1)
+		return vmhosttest.FakeSystemdCreds(ctx, stdin, name, args...)
+	})
+	t.Cleanup(func() { vmhost.SetSystemdCredsRunner(vmhosttest.FakeSystemdCreds) })
+	return &execs
+}
+
+func testBackupCredentialHandoff(s *Store, requestID string) protocol.StorageCredentialHandoff {
+	return protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{RequestID: requestID,
+		RegistrationRequestID: "backup-credential:s3:register-1", PoolID: s.State.PoolID, HostID: s.State.HostID,
+		RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
+		Credentials: protocol.StorageCredentials{Username: "example-key", Secret: "example-secret"}}
+}
+
+// Opening N receipts must not exec systemd-creds N times (once per receipt, under
+// clusterSecretMu, on every heartbeat); a replaced key file is still noticed.
+func TestBackupCredentialKeyIsDecryptedOncePerKeyFile(t *testing.T) {
 	s := seedBackupMaster(t)
-	handoff := func(requestID string) protocol.StorageCredentialHandoff {
-		return protocol.StorageCredentialHandoff{Offer: protocol.StorageCredentialOffer{RequestID: requestID,
-			RegistrationRequestID: "backup-credential:s3:register-1", PoolID: s.State.PoolID, HostID: s.State.HostID,
-			RepositoryID: "repo-1", ExpiresAt: time.Now().Add(time.Minute)},
-			Credentials: protocol.StorageCredentials{Username: "example-key", Secret: "example-secret"}}
+	for i := range 5 {
+		if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, fmt.Sprintf("credential-%d", i))); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := saveBackupCredential(s, handoff("credential-1")); err != nil {
+	forgetBackupCredentialKey(s) // as after a Core restart
+	execs := countingSystemdCreds(t)
+	for i := 0; i < 3; i++ {
+		if _, err := BackupCredentialReceipts(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := execs.Load(); got != 1 {
+		t.Fatalf("systemd-creds execs for 3 listings of 5 receipts = %d, want 1", got)
+	}
+	keyPath := filepath.Join(s.dir, "backup-credential-key", "key.cred")
+	if err := os.WriteFile(keyPath, append([]byte("sealed:"), make([]byte, 32)...), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(s.dir, "backup-credential-key", "key.cred")); err != nil {
+	if _, err := BackupCredentialReceipts(s); !errors.Is(err, errBackupCredentialDamaged) {
+		t.Fatalf("listing after the key file was replaced = %v, want every receipt reported damaged", err)
+	}
+}
+
+// A key lost while receipts remain is reported, never replaced: a new key would leave every
+// receipt unreadable, and restoring the old key.cred later would no longer help.
+func TestBackupCredentialWriteAfterKeyLossRefusesToCreateKey(t *testing.T) {
+	s := seedBackupMaster(t)
+	if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, "credential-1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := saveBackupCredential(s, handoff("credential-2")); err != nil { // seals a new key
+	keyPath := filepath.Join(s.dir, "backup-credential-key", "key.cred")
+	sealed, err := os.ReadFile(keyPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := saveBackupCredential(s, handoff("credential-1")); err == nil || !strings.Contains(err.Error(), "new request id") {
-		t.Fatalf("reused request id after key loss = %v", err)
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, "credential-2")); !errors.Is(err, errBackupCredentialKeyMissing) {
+		t.Fatalf("save after key loss = %v, want key missing", err)
+	}
+	if _, err := os.Lstat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("a receipt write recreated the lost key: %v", err)
+	}
+	if err := os.WriteFile(keyPath, sealed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, "credential-1")); err != nil {
+		t.Fatalf("replay with the restored key: %v", err)
+	}
+}
+
+// Regression for BUG-0778: retrying a credential request whose stored receipt cannot be
+// authenticated under the key on disk answered "cannot be decrypted" with nothing the
+// operator could act on.
+func TestBackupCredentialRequestUnderOtherKeySaysToUseNewRequestID(t *testing.T) {
+	s := seedBackupMaster(t)
+	if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, "credential-1")); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(s.dir, "backup-credential-key", "key.cred")
+	if err := os.WriteFile(keyPath, append([]byte("sealed:"), make([]byte, 32)...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveBackupCredential(s, testBackupCredentialHandoff(s, "credential-1")); err == nil || !strings.Contains(err.Error(), "new request id") {
+		t.Fatalf("reused request id under another key = %v", err)
 	}
 }

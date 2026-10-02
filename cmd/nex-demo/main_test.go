@@ -2,6 +2,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,6 +65,29 @@ func TestTCPListenerCannotExposePublicInterface(t *testing.T) {
 	listener, err := openListener("127.0.0.1:0", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	listener.Close()
+}
+
+func TestUnixSocketReplacesOnlyStaleSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.sock")
+	crashed, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := openListener("", path); err == nil {
+		second.Close()
+		t.Fatal("replaced the socket of a live server")
+	}
+	// Closing without unlinking models a killed process leaving its socket behind.
+	crashed.(*net.UnixListener).SetUnlinkOnClose(false)
+	crashed.Close()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("stale socket missing: %v", err)
+	}
+	listener, err := openListener("", path)
+	if err != nil {
+		t.Fatalf("restart after crash must replace a stale socket: %v", err)
 	}
 	listener.Close()
 }

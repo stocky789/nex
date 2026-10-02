@@ -10010,24 +10010,34 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: adding negotiated capabilities without checking the receiver's bounded report
   count and an actual post-negotiation report.
 
-## BUG-0674 — Hwmon stall regression depended on another test's live sensor read
+## BUG-0674 — Large ISO VM create reported as CPU incompatibility
 
 - Date: 2026-09-28.
-- Symptom: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls` intermittently failed with `first read = []` in the full agent package, passing alone.
-- Root cause: the test used the package-wide `hwmonLast` reader; an earlier report could leave a real sensor read in flight, so the first call returned no cached values.
-- Fix: keep the production singleton; run the fixture against a local `hwmonReader` instance so it does not depend on host sensors or test order.
-- Regression: failed before with `first read = []` (twice), passed after. `go test ./internal/agent -run '^TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls$' -count=2`. No forge run claimed.
-- Avoid: resetting the production singleton in a test while its background goroutine can still overwrite fixture state.
+- Symptom: creating a guest that attached a multi-GiB install ISO on remote storage failed
+  after about 20–24 seconds with `CPU baseline … is not verified compatible with this
+  host's KVM runtime`. The same CPU baseline created guests without that ISO successfully.
+  The Controller process did not restart.
+- Root cause: VM placement preflight is hard-capped at 20 seconds, but it fully SHA-256'd
+  the install ISO under `context.Background()` (overrunning the deadline). The following
+  native CPU compare then ran with an already cancelled context; that failure was wrapped
+  as a CPU incompatibility.
+- Fix: placement checks ISO presence and recorded size only (same approach as BUG-0541);
+  create/update Execute still verifies the digest before defining the guest. Native CPU
+  compare now preserves context cancellation/deadline errors instead of renaming them.
+- Regression: `TestCheckVMPlacementMediaUsesPresenceNotDigest` and
+  `TestNativeCPUComparePreservesContextDeadline` failed before and passed after.
+  `go test ./internal/vmhost -count=1` passed.
+- Avoid: doing unbounded remote ISO hashing inside a short placement timeout, or wrapping
+  every compare failure as "CPU incompatible".
 
-## BUG-0675 — Policy run-now returned 503 after reserving a backup
+## BUG-0675 — DHCP Controller resume left host permanently stale
 
-- Date: 2026-09-28.
-- Symptom: Core-local policy run-now returned `503 backup operation unavailable` while the durable run still published a recovery point and succeeded.
-- Root cause: a newly queued journal entry has no `ObservedAt`; its pending result copied the zero timestamp into the metadata receipt, which validation refused after reservation.
-- Fix: pending backup results use the journal's request time until an observed result exists, so Core can acknowledge the reservation.
-- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before (`backup metadata receipt is invalid`), passed after. `go test ./internal/agent -run '^TestPolicyRunNowAcknowledgesReservedRun$' -count=1`. No CI run claimed.
-- Avoid: treating a 503 submit reply as proof no durable run exists, or retrying under a new operation ID before checking the original.
-
+- Date: 2026-09-28
+- Symptom: After updating Core via apt and rebooting, Controller came up but the host stayed stale/unknown in the Controller GUI; apt reported both packages already at the newest version and refused further upgrades; Core local deployment stayed `needs_attention` with `controller address verification failed: ... connection refused`.
+- Root cause: On Resume, a DHCP Controller deployment skips `ResumeAgent` and rediscovers the guest IP via qemu-ga, then verifies TLS once. Guest-agent DHCP can succeed before `nex-controller` listens on :8443, so verification fails, the operation is marked `needs_attention`, and the embedded agent never starts. Nothing retries until `nex-core-local` is restarted after the Controller is already up.
+- Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes after rediscovery; if that still fails, Resume falls back to starting the enrolled agent on its last known endpoint so the host is not permanently blind.
+- Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify (`connection refused`) and passes with the retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bounded failure. `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1` ok. Lab recovery: restarting `nex-core-local` after Controller was listening cleared `needs_attention`, resumed reporting (`connection healthy`, `nex-controller` `running`).
+- Avoid: treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback when verification fails.
 ## BUG-0676 — S3 restore copy omitted its local destination directory
 
 - Date: 2026-09-28.
@@ -10708,7 +10718,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Date: 2026-09-30
 - Symptom: SFTP protect markers exceeded the 64-byte read cap; retired SMB3 sealed files stayed on host; failed unprotect could delete a newer marker; lost key silently replaced; backoff keyed on error text; capacity warning misjudged limits; push session fixed-length; discovery wrote to `/tmp`.
 - Root cause: Caps sized for old short markers, retirement only rewrote the receipt, `defer os.Remove` and a discarded rename error, key creation on the read path, and copied literal limits.
-- Fix: Marker cap 128; retirement removes the sealed SMB3 file; marker removal renames a newer marker back or keeps `.rm-*`; key created only on receipt write; one capped `member unreachable` backoff class; shared limit constants; sliding push session; discovery uses `/dev/shm`.
+- Fix: Marker cap 128; retirement removes the sealed SMB3 file; marker removal renames a newer marker back or keeps `.rm-*`; key created only while no receipt exists (tightened by BUG-1844); one capped `member unreachable` backoff class; shared limit constants; sliding push session; discovery uses `/dev/shm`.
 - Regression: `TestSFTPProtectsMaximumLengthPointID`, `TestSFTPUnprotectKeepsUnreadableMarker`, `TestPeerBackoffTreatsUnreachableMemberAsOneShortCappedClass`, `TestBackupAuthorityPushSessionSlidesOnAcceptedPages` and others, each red via `go test -overlay` then green; crash window and real-host remount untested: `go test -count=1 ./internal/agent/ ./internal/vmhost/`
 - Avoid: Caps sized to today's example IDs, `defer` cleanup of a file that may be the only copy, and keying backoff on error text.
 
@@ -10720,24 +10730,6 @@ Append resolved defects with their evidence and the approach to avoid.
 - Fix: The key is sealed with `systemd-creds` to `backup-credential-key/key.cred` and loaded via `LoadCredentialEncrypted=`; `sweepBackupProtectMarkers` and `sweepMarkers` restore or remove leftovers at scan and unprotect.
 - Regression: `TestBackupCredentialKeyIsSealedAndLoadedFromServiceCredential`, `TestBackupProtectMarkerSweepSettlesLeftovers`, `TestSFTPSweepRestoresLeftoverMarker`; real TPM2 sealing and unit start not run: `go test -count=1 ./...`
 - Avoid: A key file beside the data it protects, and treating a `.rm-*` file as garbage.
-
-## BUG-0753 — Large ISO VM create reported as CPU incompatibility
-
-- Date: 2026-09-28
-- Symptom: Creating a guest with a multi-GiB install ISO on remote storage failed after about 20-24 s with `CPU baseline ... is not verified compatible with this host's KVM runtime`; the same baseline worked without the ISO.
-- Root cause: Placement preflight (20 s cap) fully SHA-256'd the ISO under `context.Background()`, overrunning the deadline; the next CPU compare ran with a cancelled context and was wrapped as incompatibility.
-- Fix: Placement checks ISO presence and recorded size only (as in BUG-0541); Execute still verifies the digest; CPU compare preserves context cancellation/deadline errors.
-- Regression: `TestCheckVMPlacementMediaUsesPresenceNotDigest`, `TestNativeCPUComparePreservesContextDeadline` failed before and passed after: `go test ./internal/vmhost -count=1`
-- Avoid: Unbounded remote ISO hashing inside a short placement timeout, or wrapping every compare failure as "CPU incompatible".
-
-## BUG-0754 — DHCP Controller resume left host permanently stale
-
-- Date: 2026-09-28
-- Symptom: After a Core apt update and reboot, the host stayed stale in the Controller GUI and local deployment stayed `needs_attention` with `controller address verification failed: ... connection refused`.
-- Root cause: DHCP resume rediscovers the guest IP and verifies TLS once; that can succeed before `nex-controller` listens on :8443, so it is marked `needs_attention` and the agent never starts, with no retry.
-- Fix: `refreshDHCPAgentReady` retries TLS verification for up to five minutes; if it still fails, Resume starts the enrolled agent on its last known endpoint.
-- Regression: `TestRefreshDHCPAgentReadyWaitsForControllerListen` failed with single-shot verify and passes with retry; `TestRefreshDHCPAgentReadyFailsWhenControllerNeverListens` covers the bound: `go test ./internal/localcore/ -run TestRefreshDHCPAgentReady -count=1`
-- Avoid: Treating a single post-DHCP TLS dial as terminal readiness, or leaving DHCP resume without an agent fallback.
 
 ## BUG-0755 — `systemd-creds --no-ask-password` rejected on Debian 13; credential delivery failed with 503
 
@@ -10834,7 +10826,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Date: 2026-09-30
 - Symptom: After a backup credential key was lost and regenerated, one repository's sealed receipt could not be opened. The health pass aborted for all repositories (a new one stayed `unknown`), every operation on the old one failed `backup state is unavailable on this host`, and registering the same ID again was refused.
 - Root cause: `probePoolBackupRepositories` returned `ErrBackupUnavailable` on the first repository whose credential could not be read; `unsafeBackupRepositoryReplacement` refused any credential change, so an unreadable credential could never be replaced.
-- Fix: the pass marks only that repository `offline` with a visible re-register message and continues; a same-ID, same-destination registration may replace the credential when the master cannot read the old one. A readable credential is still never replaced, and an S3 identity mismatch is a conflict. There is still no repository delete.
+- Fix: the pass marks only that repository `offline` with a visible re-register message and continues; a same-ID, same-destination registration may replace the credential when the master cannot read the old one. A readable credential is still never replaced, and an S3 identity mismatch is a conflict. Later changes: forgetting a repository exists, and a lost key is no longer regenerated while receipts remain (BUG-1844), so the unreadable-receipt state now arises from a replaced key file.
 - Regression: `TestUnreadableBackupCredentialAffectsOnlyThatRepositoryAndCanBeReplaced`: `go test ./internal/agent/ -count=1`; fails without either half of the fix. SMB3/SFTP and a real lab are not re-run.
 - Avoid: Returning from a per-repository loop on one item's error, and refusing every credential change instead of only the ones that would discard a working secret.
 
@@ -10880,7 +10872,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Symptom: `503 not redeemed: backup credential receipt cannot be decrypted` with nothing the operator could act on.
 - Root cause: the replay check opened the stored receipt, which was sealed under a lost key; a lost key and a tampered file are indistinguishable, so it must stay refused.
 - Fix: the refusal now says to send the credential again with a new request ID.
-- Regression: `TestBackupCredentialRequestAfterKeyLossSaysToUseNewRequestID` (fails without the fix): `go test ./internal/agent -count=1`.
+- Regression: `TestBackupCredentialRequestUnderOtherKeySaysToUseNewRequestID` (renamed from `TestBackupCredentialRequestAfterKeyLossSaysToUseNewRequestID`; a lost key no longer silently recreates, see BUG-1844): `go test ./internal/agent -count=1`.
 - Avoid: Overwriting a receipt that fails authentication to make a retry succeed.
 
 ## BUG-0779 — Members kept the old repository name and credential reference after a same-ID re-registration
@@ -11005,7 +10997,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Date: 2026-09-30
 - Symptom: a snapshot delete failed "pool master refused snapshot delete reservation" and the master kept `pending_recovery`, blocking every later snapshot operation and the VM delete.
 - Root cause: the master saves a reservation, then fails the request when a ready member does not acknowledge the replica push; the requester treated that as a definite refusal, aborted its journal, and the stored failure was replayed, so the exact retry the master waits for never came.
-- Fix (partial): the requester side now marks that outcome `vmhost.ErrSnapshotReservationUnconfirmed`. Still open: `abortSnapshotLocalIntent` callers in `managed_snapshot*.go` must keep the journal (needs_attention, retried by the run loop) for that error.
+- Fix (partial, completed by BUG-0923 and BUG-1001): the requester side now marks that outcome `vmhost.ErrSnapshotReservationUnconfirmed`; `abortSnapshotLocalIntent` keeps the journal (needs_attention, retried by the run loop) for that error. The requester later keys the retry on the master's `X-Nex-Snapshot-Saved` header instead of message text (BUG-1850).
 - Regression: `TestUnacknowledgedMasterReservationStaysRetryable`: `go test ./internal/agent -count=1`. End-to-end retry not covered until the vmhost half lands.
 - Avoid: Treating a non-200 from an action that already saved state as a clean refusal.
 
@@ -11163,7 +11155,7 @@ Append resolved defects with their evidence and the approach to avoid.
 - Symptom: the **Back up now** panel (and its deep link) rendered below the jobs list and recovery points, near y 2138, and the page did not scroll (G9); the orphan cleanup "may still be running" alert stayed above a finished result (R8).
 - Root cause: a mount-time `scrollIntoView` ran before the lists loaded, so the panel moved after it; the poll never cleared its error on a later success.
 - Fix: the panel renders above the backup jobs list, and the scroll effect is removed; a successful poll calls `setPollError("")`.
-- Regression: source assertions in `web/src/backups-selection.test.mjs` and `web/src/backup-orphans.test.mjs` (added with the fix; not run against the old source), `cd web && npx tsc --noEmit && npm test`. No browser re-walk.
+- Regression: the source-assertion test `web/src/backups-selection.test.mjs` no longer exists (removed with the backup workspace redesign, see BUG-1045); the orphan poll clearing is covered by `web/src/backup-orphans.test.mjs`. The Back up now panel is now a modal `.slideover` opened by the page, so it cannot render below the lists; `tests/integration/backup_workspace_browser.py` drives it in a browser. No unit test forbids a `scrollIntoView` on mount.
 - Avoid: Scrolling to an element before the content above it has loaded.
 
 ## BUG-0960 — A forgotten destination or a changed SFTP host key could not be recovered from the UI
@@ -11284,7 +11276,7 @@ Append resolved defects with their evidence and the approach to avoid.
 
 ## BUG-1024 — The 12 hour run limit could not be exercised
 - Symptom: the lab could not test the stalled-run deadline.
-- Fix: `peerBackupRunLimit` is a variable that reads `NEX_BACKUP_RUN_LIMIT` (a Go duration) and defaults to 12 h.
+- Fix: `peerBackupRunLimit` is a variable that reads `NEX_BACKUP_RUN_LIMIT` (a Go duration) and defaults to 12 h. Superseded by BUG-1102: production ignores the variable; only a `-tags lab` build (`backup_run_limit_lab.go`) can shorten the limit.
 - Regression: none new; the existing deadline tests still pass. A run executing on the master itself is still unbounded by design: its local worker owns it and settling the record under it could admit a second run of the same VM.
 - Avoid: constants that no test or lab can shorten.
 
@@ -11323,10 +11315,10 @@ Append resolved defects with their evidence and the approach to avoid.
 - Avoid: reusing a generic unavailable error for a refusal the operator can act on.
 
 ## BUG-1045 — G9 regression test was deleted
-- Symptom: `web/src/backups-selection.test.mjs` and `web/src/backups-retry.test.mjs` were removed with the backup workspace redesign; nothing failed if Back up now rendered below the lists or scrolled on mount (F5). BUG-0985 still names the deleted file.
-- Fix: `web/src/backups-panels.test.mjs` asserts the slide-over precedes the jobs and recovery views, no `scrollIntoView`, the `panelLocked` guard before a point switch, and the held restore request.
-- Regression: that file (`cd web && npm test`). The old assertions did not match the redesigned source, so they were rewritten, not restored.
-- Avoid: deleting a regression test with its feature without moving the assertion.
+- Symptom: `web/src/backups-selection.test.mjs` and `web/src/backups-retry.test.mjs` were removed with the backup workspace redesign; nothing failed if Back up now rendered below the lists or scrolled on mount (F5).
+- Fix: a replacement source-text test, `web/src/backups-panels.test.mjs`, was added and then deleted again because it pinned source text rather than behaviour. The behaviours it named are now covered by behaviour tests: the held and replayed restore, backup, protect and test requests by `web/src/backup-held.test.mjs`, `web/src/backups-replace.test.mjs` and `web/src/backups-test-restores.test.mjs`, and the slide-over lifecycle, locked footer and exact retry in a browser by `tests/integration/backup_workspace_browser.py`.
+- Regression: `cd web && npm test` runs the three behaviour tests; the browser test needs Playwright and was not run in the review-fix environment. There is no unit-level assertion that the panel precedes the lists or that nothing scrolls on mount; the panel is a modal slide-over by construction, so that failure mode needs the browser test to regress.
+- Avoid: deleting a regression test with its feature without moving its assertion, and pinning layout with source-text matches.
 
 ## BUG-1000 — A member-owned snapshot delete stranded when the master had already settled it (N1)
 - Symptom: after the master settled a snapshot delete but the owner missed the acknowledgement, the owner's journal stayed `pending`, the task ended `failed` ("snapshot target not found") or `needs_attention`, no retry or restart cleared it, and the VM could not be deleted ("retained snapshots") or moved.
@@ -11901,3 +11893,246 @@ of real storage or hardware certification.
 - Fix: atomically claim host admission under the console hub lock before hijacking, independently of the channel's later occupancy. A failed first handshake remains single-use; subsequent console attempts obtain fresh tickets.
 - Regression: forced browser-dequeue and host-pre-upgrade interleavings both failed before the fix with duplicate `101`; `go test -race -count=10 -timeout 2m ./internal/controller -run '^TestConsole(AuthorizationPairingAndRelay|RejectsConcurrentHostTunnelBeforeUpgrade)$'` passed afterward in 16.514 seconds. Both forge phase1 jobs and the GitHub Go job already run this package on pushes and pull requests; no remote run is claimed. Final suite/runtime evidence: [console pairing QA](qa/2026-10-02-console-pairing-race.md).
 - Avoid: using queue length as connection ownership, delaying the duplicate assertion, or allowing another handshake after the browser consumes the tunnel.
+
+## BUG-1840 — Hwmon stall regression depended on another test's live sensor read
+
+- Date: 2026-09-28.
+- Symptom: `TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls` intermittently failed with `first read = []` in the full agent package, passing alone.
+- Root cause: the test used the package-wide `hwmonLast` reader; an earlier report could leave a real sensor read in flight, so the first call returned no cached values.
+- Fix: keep the production singleton; run the fixture against a local `hwmonReader` instance so it does not depend on host sensors or test order.
+- Regression: failed before with `first read = []` (twice), passed after. `go test ./internal/agent -run '^TestHwmonSensorsWithinReturnsLastValuesWhenAChipStalls$' -count=2`. No forge run claimed.
+- Avoid: resetting the production singleton in a test while its background goroutine can still overwrite fixture state.
+
+## BUG-1841 — Policy run-now returned 503 after reserving a backup
+
+- Date: 2026-09-28.
+- Symptom: Core-local policy run-now returned `503 backup operation unavailable` while the durable run still published a recovery point and succeeded.
+- Root cause: a newly queued journal entry has no `ObservedAt`; its pending result copied the zero timestamp into the metadata receipt, which validation refused after reservation.
+- Fix: pending backup results use the journal's request time until an observed result exists, so Core can acknowledge the reservation.
+- Regression: `TestPolicyRunNowAcknowledgesReservedRun` failed before (`backup metadata receipt is invalid`), passed after. `go test ./internal/agent -run '^TestPolicyRunNowAcknowledgesReservedRun$' -count=1`. No CI run claimed.
+- Avoid: treating a 503 submit reply as proof no durable run exists, or retrying under a new operation ID before checking the original.
+
+## BUG-1842 — Repository backends held the pool peer lock across remote I/O
+
+- Date: 2026-10-02
+- Symptom: a slow or hung S3, SFTP or NFS/SMB3 repository stalled every backup, retention, protect and authority operation on the master, because they all take `poolPeerMu`.
+- Root cause: publish, abort, delete, protect and retention held `poolPeerMu` for the whole remote operation, including object reads, listings and removals.
+- Fix: the lock now covers only the authority, pin and catalog re-checks and the commit write itself (S3 manifest and delete-record PUTs under a 15 s deadline, SFTP final rename and delete/abort records, filesystem fence and intent). Reads, listings and removals run outside it, with a fresh authority check before each removal.
+- Regression: `TestS3DeleteRemovesObjectsWithoutPoolPeerLock`, `TestS3AbortReadsArtifactsWithoutPoolPeerLock`, `TestS3AbortClaimReadsWithoutPoolPeerLock`, `TestS3SetProtectedReadsMarkerWithoutPoolPeerLock`, `TestS3PublishVerifiesCommittedPointWithoutPoolPeerLock`, `TestS3CommitWriteHoldsPoolPeerLockOnlyBriefly`, `TestS3DeleteRefusesAfterAuthorityLoss`, `TestSFTPDeleteRemovesFilesWithoutPoolPeerLock`, `TestSFTPDeleteStopsRemovingAfterAuthorityLoss`, `TestSFTPAbortRemovalRunsWithoutPoolPeerLock`, `TestSFTPSetProtectedReadsOutsidePoolPeerLock`, `TestFilesystemDeleteAndAbortReachTheMountOutsidePoolPeerMu`, `TestFilesystemRecordedDeleteWaitsForAuthority`: `go test ./internal/agent -run 'S3|SFTP|Filesystem' -count=1`. Added with the fix; not run against the old source.
+- Avoid: holding a process-wide lock across network or mount I/O, and removing destination data without re-checking authority immediately before each removal.
+
+## BUG-1843 — SFTP sweep and one damaged marker blocked unrelated deletes; S3 damaged points blocked rebuild
+
+- Date: 2026-10-02
+- Symptom: an SFTP delete marker for one point stopped retirement of every other point, the delete-marker sweep ran without verifying the repository or authority, and an S3 point with a missing or resized artifact failed the whole scan and could not be cleared.
+- Root cause: `SweepDeleteMarkers` skipped `verify()` and the authority check, `retireSettledDeletes` stopped at the first bad marker, and the S3 scan and delete treated one damaged point as a repository-wide failure.
+- Fix: the sweep verifies identity and authority first, a bad marker is skipped and reported while other points proceed, S3 Scan skips damaged or vanished points (the rebuild names them) and Delete clears a point whose manifest is sound without statting artifacts. A point with a missing or invalid manifest still cannot be cleared by Delete and needs manual cleanup.
+- Regression: `TestSFTPSweepDeleteMarkersVerifiesRepositoryAndAuthority`, `TestSFTPDeleteIgnoresAnotherPointsDamagedMarker`, `TestS3ScanSkipsDamagedPointAndDeleteClearsIt`, `TestS3RegistersPrefixWhoseOwnerRecordIsLong`, `TestS3CopyArtifactsRefusesRelativeDirWithoutCreatingIt`: `go test ./internal/agent -run 'S3|SFTP' -count=1`. Added with the fix; not run against the old source.
+- Avoid: letting one damaged item abort a loop over independent points, and sweeping repository state before proving the repository is the registered one.
+
+## BUG-1844 — Backup credential key was decrypted once per receipt under the cluster lock and silently recreated after loss
+
+- Date: 2026-10-02
+- Symptom: the heartbeat listing executed `systemd-creds` once per receipt while holding `clusterSecretMu`, and a missing `key.cred` was recreated by the next write, orphaning every sealed receipt.
+- Root cause: `backupCredentialKey` opened the sealed key on every call, and the key was created whenever it was absent.
+- Fix: the opened AEAD is cached per store directory keyed by the exact sealed `key.cred` bytes (a replaced file misses the cache; an invalid key evicts it), warmed before the locks are taken. The key is created only while the receipt directory holds no receipt; otherwise the write fails with `backup credential key is missing while receipts remain: restore it, or remove the backup credential receipts and register the repositories again`.
+- Regression: `TestBackupCredentialKeyIsDecryptedOncePerKeyFile` (3 listings of 5 receipts = 1 exec; a replaced key is noticed), `TestBackupCredentialWriteAfterKeyLossRefusesToCreateKey`, `TestBackupCredentialRequestUnderOtherKeySaysToUseNewRequestID`: `go test ./internal/agent -run BackupCredential -count=1`. Added with the fix; not run against the old source.
+- Avoid: executing an external helper under a shared lock on a heartbeat path, and regenerating a key that existing ciphertext depends on.
+
+## BUG-1845 — Legacy plaintext storage credential receipts and orphaned secrets survived the upgrade
+
+- Date: 2026-10-02
+- Symptom: after an upgrade from the previous release, receipts under `storage-credentials/` still held the username, secret and domain in plaintext with an HMAC proof the new code could not verify, and orphaned `.write-*` temp files and the legacy receipt key were never removed. A retired receipt also kept the hash of its credential body.
+- Root cause: the new receipt format had no migration and no sweep of files that no receipt names.
+- Fix: the status listing now sweeps unnamed files (`.write-*`, the legacy receipt key, receipt-id-shaped files; never when a receipt fails to parse), rewrites a ready legacy receipt without the plaintext and recomputes its proof in the new form so a Controller retry still matches, and drops the proof of a retired receipt. Save, bind, remove and the sweep share a package mutex so the sweep cannot delete an in-flight write.
+- Regression: `TestStorageCredentialListingSweepsOrphanedSecrets`, `TestStorageCredentialListingScrubsLegacyPlaintextReceipt`, `TestStorageCredentialRetirementDropsProof`: `go test ./internal/vmhost -run StorageCredential -count=1`. Not run against a real previous-release state directory; a replay that arrives before the first listing after the upgrade still conflicts.
+- Avoid: changing a stored secret format without migrating or erasing the old files, and keeping proof material in tombstones.
+
+## BUG-1846 — One hung remote mount blocked every storage and backup registration
+
+- Date: 2026-10-02
+- Symptom: a share that never answered held the single global remote-preparation slot (and the SMB backup preparation mutex, which ignored cancellation), so registering any other mount waited behind it; a failed mount also reported the unit's whole journal tail.
+- Root cause: both locks were global and held across remote I/O.
+- Fix: each is now a context-aware keyed lock with one slot per storage or backup-registration ID (validation runs first so the key set stays bounded); the journal read is limited to `--since` the attempt start and capped at 1 KiB, and the mount credential file read is capped.
+- Regression: `TestRemotePreparationOfOneMountDoesNotBlockAnother`, `TestRemotePreparationWaitHonoursContext`, `TestFailedRemoteMountReportsMountHelperMessage`: `go test ./internal/vmhost -run 'RemotePreparation|FailedRemoteMount' -count=1`.
+- Avoid: global locks around per-resource remote I/O, and unbounded diagnostic text from a unit journal.
+
+## BUG-1847 — Forget refused on history runs, raced catalog import and admitted work while detaching
+
+- Date: 2026-10-02
+- Symptom: forgetting a repository refused for missed or succeeded runs and for catalog operations that create no run, a catalog import or rebuild could commit points for a repository being forgotten, new jobs or runs were admitted while the mount detached, and a partial forget could not resume.
+- Root cause: the blocker scan counted every run status, nothing checked the repository record at catalog commit, jobs, pins and counts were checked once before detaching, and no intent was recorded.
+- Fix: forget blocks only on `pending` and `needs_attention` runs; catalog commit refuses a forgotten repository; jobs, runs, pins and counts are re-scoped after the detach and compared with what was confirmed; a removal intent lets a retry under the same operation ID converge; policy upsert and run reservation get a conflict while the repository is mutation-busy or has a forget intent.
+- Regression: `TestForgetTreatsMissedAndSkippedRunsAsHistory`, `TestForgetRechecksJobsAddedWhileUnmounting`, `TestForgetResumesAfterPartialRemoval`, `TestCatalogCommitRefusesForgottenRepository`, `TestCatalogImportKeepsUnprotectCompletedAfterScan`: `go test ./internal/agent -run 'Forget|Catalog' -count=1`. Added with the fix; not run against the old source.
+- Avoid: one-shot admission checks around a multi-step destructive operation, and refusing on state that does not constrain the operation.
+
+## BUG-1848 — Scheduler starved later policies and dropped due slots
+
+- Date: 2026-10-02
+- Symptom: one policy whose VM had left the pool, or whose command could not be prepared, aborted the whole scheduler tick so later policies never ran, and a due slot on a busy repository vanished without a record.
+- Root cause: `ApplyBackupScheduleTick` returned on the first per-policy error and ignored `ErrBackupConflict`.
+- Fix: a lookup or preparation failure records a `failed` run for that occurrence and the tick continues; a busy repository records `skipped_overlap` with stage `busy`; a deleted policy is skipped without a record; only failing to save the record aborts the tick.
+- Regression: `TestApplyBackupScheduleTickMissingVMDoesNotStarveOtherPolicies`, `TestApplyBackupScheduleTickRecordsSlotWhenRepositoryBusy`: `go test ./internal/agent -run ApplyBackupScheduleTick -count=1`. Added with the fix; not run against the old source. A policy deleted mid-tick can still leave missed history.
+- Avoid: returning from a loop over independent items on one item's error, and letting a due occurrence leave no trace.
+
+## BUG-1849 — Policy delete was allowed while a run needed attention
+
+- Date: 2026-10-02
+- Symptom: deleting a backup job while one of its runs was `needs_attention` removed the definition under a run Core was still observing.
+- Root cause: the delete guard looked only at `pending` runs.
+- Fix: delete refuses while any run of the job is `pending` or `needs_attention`; the task names the run.
+- Regression: `TestPolicyDeleteRefusedWhileRunNeedsAttention`: `go test ./internal/agent -run PolicyDelete -count=1`. Supersedes the 'does not block' note in the sixth-closeout change record.
+- Avoid: guards that treat an unresolved run as settled.
+
+## BUG-1850 — Snapshot reservation retry keyed on error text
+
+- Date: 2026-10-02
+- Symptom: the requester decided whether a master refusal was retryable by matching the text `not yet acknowledged`.
+- Root cause: the saved-but-unacknowledged state was only signalled in the message.
+- Fix: the master sets the response header `X-Nex-Snapshot-Saved` on that `409` and the requester reads it; `reservationUnconfirmed` unwraps to its cause.
+- Regression: covered by the existing snapshot reservation tests (`go test ./internal/agent ./internal/vmhost -run Snapshot -count=1`); no dedicated header test was added.
+- Avoid: matching error strings to drive protocol behaviour.
+
+## BUG-1851 — Member backup and restore POSTs failed permanently while the master probed the repository
+
+- Date: 2026-10-02
+- Symptom: a scheduled backup was settled as 'member never started' because the member's POST hit the repository mutation held by the master's health probe and received a permanent `400`.
+- Root cause: `ErrBackupConflict` mapped to 400 and `permanentPeerStatus` treats 400 as permanent.
+- Fix: a member POST that finds the mutation held answers `ErrBackupUnavailable`, mapped to a retryable `409`, and the master's existing retry applies. Related dispatch fixes: a run that already needs attention keeps its stage and reason across unreachable observations, member-side peer-dispatched entries report no queued outcome, a master change or eject is not blocked by entries of an ejected or departed member, a stalled local run still blocks snapshots of its VM while its worker is alive, a VM-spec read error retries instead of failing the run, and failures the member never started carry stage `not_started`.
+- Regression: `TestMemberBackupRequestOnBusyRepositoryIsRetryable`, `TestPeerObservationUnsettled`, `TestMemberPeerBackupEntryReportsNoPhantomOutcome`, `TestSnapshotsWaitForLiveBackupWorkerOfSameVM`, `TestUnobservableMemberJournalEntryDoesNotBlockTransfer`, `TestTransferRefusalLeavesAgedReceiptsAloneWhenRefusing`, `TestUnreadableVMSpecRetriesInsteadOfFailingRun`, `TestBlockersBatchAndKeepAttentionReason`, `TestTestRestoreNeverStartedUsesStageNotText`: `go test ./internal/agent -run 'Peer|Blocker|Transfer|Snapshots|VMSpec|NeverStarted' -count=1`. Added with the fix; not run against the old source. The preparation-slot retry for catalog operations has no test.
+- Avoid: mapping a transient contention conflict to a permanent client error.
+
+## BUG-1852 — Member-published backup artifacts were trusted by size alone
+
+- Date: 2026-10-02
+- Symptom: the master cataloged a member's point after checking only artifact sizes, so a corrupt but same-size artifact became a recovery point.
+- Root cause: `verifyPeerBackupPoint` stopped at presence and size.
+- Fix: the master hashes every artifact against the manifest (`VerifyArtifacts` on the repository storage boundary, one hour budget) before cataloging or retention; a mismatch is permanent and an unreachable repository is retried.
+- Regression: `TestFilesystemVerifyArtifactsHashesStoredContent`, `TestS3VerifyArtifactsHashesStoredContent`, `TestSFTPVerifyArtifactsHashesStoredContent`: `go test ./internal/agent -run VerifyArtifacts -count=1`. The dispatch call site has no dedicated test.
+- Avoid: trusting a remote writer's metadata without reading what was written.
+
+## BUG-1853 — Authority push held the backup lock across lease preparation and member round trips
+
+- Date: 2026-10-02
+- Symptom: a stuck member or storage lease left blocked pushes and held `poolBackupAuthorityMu`, delaying every backup metadata write and leaving a goroutine behind each probe tick.
+- Root cause: storage-lease reconcile, three page walks and per-member checks ran under the lock, and waiters queued.
+- Fix: lease preparation runs before the lock, at most one push per Store waits (others get an immediate busy answer, bounded by the push timeout), staging is one walk and trusts a root this process already verified, installs are temp-link plus rename, activation verifies the whole root before acting on any page, and growth admission asks members in parallel.
+- Regression: `TestPoolAuthorityPushPreparesStorageLeaseOutsideBackupLock`, `TestPoolAuthorityPushWaitsForBackupLockWithoutQueueing`, `TestPoolAuthorityPushRestagesAfterFailureNotOnEveryTick`, `TestActivationVerifiesWholeRootBeforeActingOnPages` (fails with the pre-verify removed, checked by mutation), `TestLinkPoolBackupBlobReplacesPageAtomically`, `TestBackupAuthorityGrowthAsksMembersInParallel`: `go test -race ./internal/agent -run 'PoolAuthorityPush|Activation|LinkPoolBackupBlob|AuthorityGrowth' -count=1`.
+- Avoid: slow I/O under a lock shared with unrelated writers.
+
+## BUG-1854 — Post-takeover catalog import marked repositories offline on cancellation and never retried
+
+- Date: 2026-10-02
+- Symptom: a cancelled context or timeout during the adopt-time catalog rebuild marked a reachable repository offline and still advanced to re-pointing.
+- Root cause: the reconcile loop treated any error as an unreachable repository.
+- Fix: cancellation returns without marking anything; repositories that are genuinely unreachable are recorded in `pool-backup-catalog-pending.json` and `ImportPendingBackupCatalogs` imports them once access recovers (called from the health probe).
+- Regression: `TestCatalogReconcileCancellationIsNotAnUnreachableRepository`, `TestUnreachableRepositoryCatalogImportsOnceItAnswers`: `go test ./internal/agent -run 'CatalogReconcile|UnreachableRepositoryCatalog' -count=1`.
+- Avoid: treating context cancellation as evidence about the remote system.
+
+## BUG-1855 — Snapshot probe failures were retried forever or abandoned wrongly
+
+- Date: 2026-10-02
+- Symptom: a VM, domain or snapshot libvirt reported as missing was kept as 'ownership unconfirmed' and retried indefinitely, while firmware and manifest read errors were also wrapped as unconfirmed.
+- Root cause: `managedSnapshotProbe` and `snapshotFirmwareSources` wrapped every failure in `ErrOwnershipUnconfirmed`.
+- Fix: only an unreachable libvirt (virsh could not start, was killed, or its last line names a connect, transport or timeout failure) is unconfirmed; 'domain not found' and 'snapshot not found' are plain refusals that clean the journal; a preflight journal is dropped after 15 minutes from its first observation.
+- Regression: `TestSnapshotProbeFailureIsUnconfirmedNotRefusal`, `TestSnapshotFirmwareSourceValidationIsARefusal`, `TestSnapshotPreflightUnconfirmedExpires`: `go test ./internal/vmhost -run Snapshot -count=1`.
+- Avoid: classifying every probe error as uncertain, and retaining journals with no expiry.
+
+## BUG-1856 — VM delete left retained restore-replace vTPM state behind
+
+- Date: 2026-10-02
+- Symptom: deleting a VM that had been restore-replaced left the retained vTPM trees on disk although the guide said TPM state is always removed with the VM.
+- Root cause: delete never collected `nex-restore-<vm>-<op>` trees; only release did.
+- Fix: delete collects them into the journaled `retained_tpm` before undefining the domain, re-verifies them afterwards and removes them in both delete modes; a changed tree refuses the delete before the undefine; an interrupted removal resumes with what remains. Release is unchanged and shares `collectRetainedTPM`.
+- Regression: `TestDeleteRemovesRetainedTPMTrees`, `TestDeleteRefusesChangedRetainedTPMTree`, `TestReleaseRetainedRefusesForeignRequestAndUnresolvedChange`: `go test ./internal/vmhost -run 'Delete|ReleaseRetained' -count=1`. Added with the fix; not run against the old source.
+- Avoid: documenting data removal that the code path does not perform.
+
+## BUG-1857 — Online S3/SFTP backup could fill the VM images filesystem
+
+- Date: 2026-10-02
+- Symptom: an online backup to a remote repository staged disks under `.nex-backup-work` without checking free space, and failed runs could leave stale per-operation directories.
+- Root cause: no preflight and no sweep.
+- Fix: `CaptureOnlineDisks` requires free space of at least the summed live disk capacity plus 1/16 plus 1 GiB on the work-dir filesystem before `backup-begin` (a plain failure, not ErrOnlineBackupUncertain); `SweepOnlineBackupWork` removes stale directories only after proving no running domain has a backup job and is called before the next online backup.
+- Regression: `TestSweepOnlineBackupWork`: `go test ./internal/vmhost -run SweepOnlineBackupWork -count=1`. The space preflight has no dedicated test.
+- Avoid: staging data on a shared filesystem without a capacity check.
+
+## BUG-1858 — Recovery point flags stayed stale after Load more
+
+- Date: 2026-10-02
+- Symptom: after **Load more**, a point's Protected and last-test state on later pages never refreshed because each poll re-read only the first page.
+- Root cause: `refreshBackupPage` replaced the first page and kept appended pages as they were.
+- Fix: `refreshLoadedPages` re-reads every page the operator has loaded on each poll (a 409 or generation change falls back to the fresh first page); run history polls read only the newest pages after the first load; walks stop at 100 pages with an 'inventory too large' error.
+- Regression: `web/src/backup-pages.test.mjs` (refresh of protection beyond the first page, page cap, repeated cursor, empty page, total overrun): `cd web && npm test`. Added with the fix; not run against the old source.
+- Avoid: refreshing only the head of a paginated list that the user has extended.
+
+## BUG-1859 — Unsettled backup requests were forgotten when the operator followed the Tasks link
+
+- Date: 2026-10-02
+- Symptom: after an uncertain reply, opening Tasks and coming back dropped the retry state, and a fresh request ID could duplicate an action that had landed; Change repository also removed VMs the UI believed deleted.
+- Root cause: the exact-retry bodies lived in component state, and the UI filtered the job's VM list using its own inventory.
+- Fix: `backup-held.ts` keeps frozen bodies, restore drafts and points per pool in a module-level store; Change repository sends the VM list and overrides exactly as Core reports them and Core decides; the Quiesced mode option is removed from Back up now.
+- Regression: `web/src/backup-held.test.mjs`, `web/src/backup-policies.test.mjs`, `web/src/backups-replace.test.mjs`, `web/src/backups-test-restores.test.mjs`: `cd web && npm test`. The browser test `tests/integration/backup_workspace_browser.py` compiles but was not run for these fixes.
+- Avoid: keeping the only copy of an idempotency key in component state, and client-side guesses about server inventory.
+
+## BUG-1860 — Controller dropped host IDs, overwrote attention errors and leaked a console claim
+
+- Date: 2026-10-02
+- Symptom: `GET /api/v1/operations` lost the queuing host of a run-now task when the command's host ID was empty, a queued observation overwrote the `error` of a `needs_attention` row, and a failed host-console hijack left the ticket claimed.
+- Root cause: `json_extract` returned an empty string instead of NULL, the refresh UPDATE set `error` unconditionally, and `agentClaimed` was never cleared on a failed hijack or `101` write.
+- Fix: each `json_extract` is wrapped in `NULLIF(...,'')`, the refresh keeps `error` for `needs_attention` rows, and the claim is cleared when the Hijacker is missing, Hijack fails or the `101` write or flush fails. The relayed orphan refusal is capped at 512 bytes.
+- Regression: `TestOperationsKeepHostWhenCommandHostIsEmpty`, `TestQueuedObservationRefreshesMirrorSilenceClock`, `TestConsoleHostTunnelRetriesAfterFailedHijack`: `go test ./internal/controller -run 'Operations|QueuedObservation|ConsoleHostTunnel' -count=1`.
+- Avoid: treating an empty JSON string as absent in SQL and leaving claim flags set on early failure.
+
+## BUG-1861 — Upgrade refusals named neither the field nor the cause
+
+- Date: 2026-10-02
+- Symptom: an unrestarted 0.4.18 master reported fields the new Controller no longer accepts and received a bare 400; a joiner that predates hostname reporting was refused with an opaque `join refused`.
+- Root cause: strict decoding hid the field name and the join handler returned one generic refusal.
+- Fix: `decodeLimit` names the unknown field and, on `/api/v1/agent/*`, adds `upgrade or restart Nex Core on the reporting host`; the master answers `409 joining Core did not report a valid hostname; upgrade and restart Nex Core on the joining host` and the joiner relays up to 256 bytes of it. This is a deliberate hard cutover with no shim; hostnames are not backfilled.
+- Regression: `TestAgentDecodeNamesUnknownFieldForUpgrade`, `TestPoolPeerJoinWithoutHostnameStatesTheRefusal`: `go test ./internal/controller ./internal/agent -run 'AgentDecodeNamesUnknownField|PoolPeerJoinWithoutHostname' -count=1`. No mixed-version native run exists.
+- Avoid: hiding the actionable cause of a version refusal behind a generic message.
+
+## BUG-1862 — Demo deploy wrapper accepted a compression bomb
+
+- Date: 2026-10-02
+- Symptom: a layer that inflates far past the archive size could fill the deploy host's disk before any check ran.
+- Root cause: `nex-demo-deploy` checked the compressed archive size and member names but not the inflated size, the member count or the loaded image size.
+- Fix: each layer is stream-decompressed during inspection against one 1 GiB budget shared by all layers (gzip, xz and bz2 counted, zstd rejected), the tar is capped at 4,096 members, the loaded image is checked against a 1 GiB cap and removed if oversized or unverifiable, and stale `import-*` directories are swept once the deploy lock is held.
+- Regression: `tests/test_demo_archive.py`: `test_compressed_layer_cannot_inflate_past_the_bound`, `test_inflation_budget_is_shared_across_layers`, `test_member_count_is_bounded`, `test_loaded_image_over_size_cap_is_removed`, `test_stale_import_directories_are_swept` drive the real wrapper with a fake Docker. Not run against the old wrapper and not run with real Docker and a real bomb.
+- Avoid: validating only the compressed size of an untrusted archive.
+
+## BUG-1863 — Replaying the current demo release removed its rollback image
+
+- Date: 2026-10-02
+- Symptom: deploying the release that was already running either failed with an immutable-tag error or deleted the retained rollback image.
+- Root cause: `releases.json` and the old-retained image removal used different retained sets, and a rebuilt image with a new config ID was treated as a different image under an immutable tag.
+- Fix: `retained` is computed once and used for both, an already-running image is kept and restarted, and a different image under a retained non-current tag is still refused.
+- Regression: `tests/test_demo_archive.py`: `test_rollback_retention_and_replay_of_current_release`, `test_unhealthy_candidate_rolls_back_and_is_discarded`, `test_different_image_under_a_retained_tag_is_refused`. Not run against the old wrapper.
+- Avoid: deriving two decisions from separately computed sets, and making a same-release re-run destructive.
+
+## BUG-1864 — Demo crash loop on a stale socket and truncated source downloads
+
+- Date: 2026-10-02
+- Symptom: after a crash the demo server refused to start because its socket path existed, and a slow `/source` download was cut by the listener's write timeout.
+- Root cause: `openListener` refused any existing path, and the handler had no per-response deadline.
+- Fix: a socket nobody listens on is removed (regular files and live servers are still refused) and `/source` sets a 20-minute per-response write deadline; the nginx `/source` limit is 10 r/m with burst 6.
+- Regression: `TestUnixSocketReplacesOnlyStaleSocket` (cmd/nex-demo), `TestSourceDownloadOutlivesListenerWriteTimeout` (a 64 MiB archive read slowly is complete; it was truncated before the fix), `TestHashedChunksAreImmutableAndShellIsNot` (internal/demo): `go test ./internal/demo ./cmd/nex-demo -count=1`.
+- Avoid: refusing to start on state a crash leaves behind, and relying on a server-wide write timeout for large downloads.
+
+## BUG-1865 — Catalog import ignored protection markers it did not know and scans modified the repository
+
+- Date: 2026-10-02
+- Symptom: import kept a point unprotected although a protection marker existed, and a scan settled `.rm-*` leftovers, so listing changed the repository.
+- Root cause: import trusted the catalog over the marker and Scan performed the settling.
+- Fix: import re-reads the marker under the point's metadata reservation and adopts it unless an unprotect completed after the scan; Scan is read-only on every backend and a set-aside marker with no marker file counts as protected; protect and unprotect settle leftovers.
+- Regression: `TestCatalogImportKeepsUnprotectCompletedAfterScan`, `TestBackupProtectMarkerSweepSettlesLeftovers`: `go test ./internal/agent -run 'CatalogImport|ProtectMarker' -count=1`.
+- Avoid: mutating a repository from a read-only listing.
+
+## BUG-1866 — Release of retained originals ignored the VM's pool, host and unresolved changes
+
+- Date: 2026-10-02
+- Symptom: a release request naming another pool or host was accepted by the engine, and a release could race an unfinished create, update, power, media or delete of the same VM.
+- Root cause: the engine checked only the confirmation and files; vm-delete admission no longer compared the request's VM ID with the owner.
+- Fix: `releaseRetainedOriginals` checks pool and host and refuses while another change of the VM is pending or `needs_attention`; `poolVMDeleteMatchesOwner` restores the VM ID match.
+- Regression: `TestReleaseRetainedRefusesForeignRequestAndUnresolvedChange`: `go test ./internal/vmhost -run ReleaseRetained -count=1`.
+- Avoid: relying on the Controller's admission instead of the executing Core's own checks.

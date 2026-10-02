@@ -5,9 +5,10 @@ import type { Storage } from "./managed";
 import { Badge, Panel, Section, date } from "./ui";
 import { Icon } from "./icons";
 import {
-  appendBackupPage, backupOpID, collectBackupPageItems, refreshBackupPage, rid, stableBody,
+  appendBackupPage, backupOpID, collectBackupPageItems, pageURL, refreshLoadedPages, refreshRunHistory,
   type BackupCatalogPage, type BackupRecoveryPoint, type BackupRepository, type BackupRun, type BackupRunPage,
 } from "./backup-types";
+import { heldFor, sendHeld, type RestoreDraft } from "./backup-held";
 import { BackupPolicies, type BackupPolicy } from "./backup-policies";
 import "./settings.css";
 
@@ -26,8 +27,12 @@ type Props = {
 type BackupNowStep = 1 | 2;
 type RestoreStep = 1 | 2;
 type RestoreMode = "new" | "replace" | "test";
-type RestoreDraft = { name: string; host: string; storage: string; vmID: string; confirmation: string };
 const restoreKey = (mode: RestoreMode, pointID: string) => `${mode}-${pointID}`;
+// One back-up-now request is held per VM; the key carries the VM because the request body does not.
+const backupNowPrefix = "backup-now-";
+const backupNowKey = (vmID: string) => `${backupNowPrefix}${vmID}`;
+type BackupNowBody = { request_id: string; repository_id: string; consistency: "stopped" | "crash" };
+const message = (e: unknown) => e instanceof Error ? e.message : String(e);
 
 function storageUsable(s: Storage, hostID?: string) {
   if (s.tombstone || !s.capabilities?.vm_disk) return false;
@@ -81,6 +86,12 @@ function useLatestLoad() {
 }
 
 export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, vmFilter = "", flow = "" }: Props) {
+  // Requests whose outcome is unknown outlive this page, so a retry after visiting Tasks is still exact.
+  const held = heldFor(pool?.id || "");
+  const heldBackup = Object.keys(held.bodies).find(key => key.startsWith(backupNowPrefix));
+  const heldBackupBody = heldBackup ? held.bodies[heldBackup] as BackupNowBody : undefined;
+  const heldCreate = Boolean(held.bodies["policy-create"]);
+  const heldJob = heldCreate || Object.keys(held.bodies).some(key => key.startsWith("repository-"));
   const [catalogPage, setCatalogPage] = useState<BackupCatalogPage | null>(null);
   const [repos, setRepos] = useState<BackupRepository[] | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[] | null>(null);
@@ -99,17 +110,16 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [filterRepo, setFilterRepo] = useState("");
   const [selectedID, setSelectedID] = useState("");
   const [selectedPoint, setSelectedPoint] = useState<BackupRecoveryPoint | null>(null);
-  const [view, setView] = useState<"jobs" | "points">(flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
+  const [view, setView] = useState<"jobs" | "points">(heldJob ? "jobs" : heldBackup || Object.keys(held.drafts).length ? "points" : flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [backupOpen, setBackupOpen] = useState(flow === "backup-now");
-  const [policyOpen, setPolicyOpen] = useState(flow === "create-policy");
+  const [backupOpen, setBackupOpen] = useState(flow === "backup-now" || Boolean(heldBackup));
+  const [policyOpen, setPolicyOpen] = useState(flow === "create-policy" || heldCreate);
   const [repositoryPanelOpen, setRepositoryPanelOpen] = useState(false);
-  const [backupStep, setBackupStep] = useState<BackupNowStep>(1);
-  const [backupVM, setBackupVM] = useState(vmFilter);
-  const [backupRepo, setBackupRepo] = useState("");
-  const [backupMode, setBackupMode] = useState<"stopped" | "crash" | "quiesced">("stopped");
-  const [backupUncertain, setBackupUncertain] = useState(false);
+  const [backupStep, setBackupStep] = useState<BackupNowStep>(heldBackup ? 2 : 1);
+  const [backupVM, setBackupVM] = useState(heldBackup ? heldBackup.slice(backupNowPrefix.length) : vmFilter);
+  const [backupRepo, setBackupRepo] = useState(heldBackupBody?.repository_id ?? "");
+  const [backupUncertain, setBackupUncertain] = useState(Boolean(heldBackup));
   const [restoreMode, setRestoreMode] = useState<RestoreMode>("new");
   const [restoreStep, setRestoreStep] = useState<RestoreStep>(1);
   const [restoreName, setRestoreName] = useState("");
@@ -119,10 +129,10 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const [replaceConfirm, setReplaceConfirm] = useState("");
   const [cleanupConfirm, setCleanupConfirm] = useState<Record<string, string>>({});
   const [working, setWorking] = useState("");
-  const requests = useRef<Record<string, string>>({});
-  const pendingBackup = useRef<Record<string, { vm_id: string; repository_id: string; consistency: string }>>({});
-  const pendingProtect = useRef<Record<string, { repository_id: string; recovery_point_id: string; protected: boolean }>>({});
-  const restoreDrafts = useRef<Record<string, RestoreDraft>>({});
+  const jobRunsRef = useRef<BackupRun[] | null>(null);
+  jobRunsRef.current = jobRuns;
+  const catalogLoaded = useRef(0);
+  catalogLoaded.current = catalogPage?.items.length ?? 0;
   const presentationDrafts = useRef<Record<string, RestoreDraft>>({});
   const inventoryLoad = useLatestLoad();
   const jobRunLoad = useLatestLoad();
@@ -148,7 +158,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   const reportedPoint = points?.find(p => p.id === selectedID);
   const selected = reportedPoint || (selectedPoint?.id === selectedID ? selectedPoint : null);
   const restoreOriginal = replacementTarget(selected, poolVMs);
-  const uncertainRestore = Boolean(selected && restoreDrafts.current[restoreKey(restoreMode, selected.id)]);
+  const uncertainRestore = Boolean(selected && held.drafts[restoreKey(restoreMode, selected.id)]);
   const activeTests = activeTestRestores(runs, selected, data.vms, poolID);
 
   const catalogPath = () => {
@@ -164,12 +174,18 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     if (!poolID) { setCatalogPage({ items: [], generation: "", total: 0, untested_count: 0, backup_days_14: [] }); return; }
     const { signal, stale } = catalogLoad.begin();
     const scope = currentFilterKey();
+    const base = catalogPath();
     try {
-      const page = await api<BackupCatalogPage>(catalogPath(), "GET", undefined, undefined, undefined, signal);
+      const first = await api<BackupCatalogPage>(base, "GET", undefined, undefined, undefined, signal);
       if (stale()) return;
-      const sameScope = catalogScope.current === scope;
+      // Re-read every page the operator has loaded: Core's page generation does not change when a point's
+      // protection or test result does, so keeping loaded rows would show stale retention state.
+      const loaded = catalogScope.current === scope ? catalogLoaded.current : 0;
+      const page = await refreshLoadedPages<BackupRecoveryPoint, BackupCatalogPage>(first, loaded, (cursor, generation) =>
+        api<BackupCatalogPage>(pageURL(base, cursor, generation), "GET", undefined, undefined, undefined, signal));
+      if (stale()) return;
       catalogScope.current = scope;
-      setCatalogPage(current => refreshBackupPage(current, page, sameScope));
+      setCatalogPage(page);
       setCatalogError("");
     } catch (err) {
       if (stale()) return;
@@ -188,7 +204,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     try {
       const response = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, signal);
       if (stale()) return;
-      const all = await collectBackupPageItems(response, (cursor, generation) => api<BackupRunPage>(`${base}&cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
+      const all = await collectBackupPageItems(response, (cursor, generation) => api<BackupRunPage>(pageURL(base, cursor, generation), "GET", undefined, undefined, undefined, signal));
       if (stale()) return;
       runLoading.current = "";
       setPointRuns(all);
@@ -212,7 +228,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
         try {
           const first = await api<BackupRunPage>(base, "GET", undefined, undefined, undefined, signal);
           if (stale()) return;
-          const all = await collectBackupPageItems(first, (cursor, generation) => api<BackupRunPage>(`${base}?cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(generation)}`, "GET", undefined, undefined, undefined, signal));
+          const all = await refreshRunHistory(jobRunsRef.current, first, (cursor, generation) => api<BackupRunPage>(pageURL(base, cursor, generation), "GET", undefined, undefined, undefined, signal));
           if (stale()) return;
           setJobRuns(all);
           setJobRunError("");
@@ -268,7 +284,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     const base = catalogPath();
     const cursor = catalogPage.next_cursor;
     const scope = filterKey;
-    const path = `${base}${base.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}&generation=${encodeURIComponent(catalogPage.generation)}`;
+    const path = pageURL(base, cursor, catalogPage.generation);
     try {
       const page = await api<BackupCatalogPage>(path);
       if (scope !== currentFilterKey()) return;
@@ -291,7 +307,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
   }, [reportedPoint]);
 
   useEffect(() => {
-    if (pendingBackup.current["backup-now"] || Object.keys(restoreDrafts.current).length || working || repositoryPanelOpen || policyOpen) return;
+    if (Object.keys(held.bodies).some(key => key.startsWith(backupNowPrefix)) || Object.keys(held.drafts).length || working || repositoryPanelOpen || policyOpen) return;
     saveRestoreDraft();
     setFilterVM(vmFilter);
     setBackupVM(vmFilter);
@@ -302,35 +318,8 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setPolicyOpen(flow === "create-policy");
   }, [vmFilter, flow]);
 
+  // The page is keyed by pool, so every ref and state starts fresh; this only starts the loads.
   useEffect(() => {
-    setCatalogPage(null);
-    setRepos(null);
-    setPolicies(null);
-    setPointRuns(null);
-    setJobRuns(null);
-    setError("");
-    setCatalogError("");
-    setRepositoryError("");
-    setPolicyError("");
-    setRunError("");
-    setJobRunError("");
-    setPageNotice("");
-    setSelectedID("");
-    setSelectedPoint(null);
-    setRestoreOpen(false);
-    setView(flow === "create-policy" ? "jobs" : vmFilter || flow ? "points" : "jobs");
-    presentationDrafts.current = {};
-    selectedIDRef.current = "";
-    runLoading.current = "";
-    jobRunLoading.current = false;
-    setBackupUncertain(false);
-    setBackupOpen(flow === "backup-now");
-    setPolicyOpen(flow === "create-policy");
-    setBackupStep(1);
-    requests.current = {};
-    pendingBackup.current = {};
-    pendingProtect.current = {};
-    restoreDrafts.current = {};
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 15000);
     return () => { window.clearInterval(timer); inventoryLoad.cancel(); jobRunLoad.cancel(); catalogLoad.cancel(); runLoad.cancel(); };
@@ -363,11 +352,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     }
   }, [repos, backupUncertain]);
 
-  const requestID = (key: string, prefix: string) => {
-    requests.current[key] ??= rid(prefix);
-    return requests.current[key];
-  };
-  const clearRequest = (key: string) => { delete requests.current[key]; };
 
   const filtered = useMemo(() => [...(points || [])]
     .sort((a, b) => (b.captured_at || "").localeCompare(a.captured_at || "")), [points]);
@@ -406,7 +390,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     if (panelLocked) return;
     saveRestoreDraft();
     const key = restoreKey(mode, point.id);
-    const pending = restoreDrafts.current[key];
+    const pending = held.drafts[key];
     const draft = pending || presentationDrafts.current[key];
     const source = replacementTarget(point, poolVMs);
     if (mode === "replace" && !source) return;
@@ -425,17 +409,22 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setCleanupConfirm({});
   };
 
+  // Reopen a restore whose outcome is unknown after the page was left, so its exact request can be retried.
+  useEffect(() => {
+    const key = Object.keys(held.drafts)[0];
+    const point = key && held.points[key];
+    if (point) openRestore(point, key.split("-")[0] as RestoreMode);
+  }, []);
+
   const closeBackup = () => {
     if (working || backupUncertain) return;
-    clearRequest("backup-now");
-    delete pendingBackup.current["backup-now"];
     setBackupOpen(false);
     setBackupStep(1);
   };
 
   const backupTarget = poolVMs.find(v => v.id === backupVM);
   const backupRunning = backupTarget?.state === "running";
-  const backupConsistency = backupRunning ? (backupMode === "stopped" ? "crash" : backupMode) : "stopped";
+  const backupConsistency = backupRunning ? "crash" : "stopped";
   const backupBlocker = (() => {
     if (unavailable) return "Controller inventory could not be loaded.";
     if (busy) return "Another task is already in progress.";
@@ -444,7 +433,6 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     if (!backupTarget) return "Selected VM is not in this pool.";
     if (backupTarget.protected) return "Controller appliance: use its own panel.";
     if (backupTarget.state !== "shut off" && backupTarget.state !== "running") return `Guest must be shut off or running (observed ${backupTarget.state}).`;
-    if (backupRunning && backupConsistency === "quiesced") return "Quiesced online backup is not supported yet.";
     if (backupRunning && backupTarget.spec?.boot?.firmware === "uefi") return "Online backup is not supported for UEFI guests yet.";
     if (backupTarget.freshness !== "fresh") return "Current VM state is unknown.";
     const host = data.hosts.find(h => h.id === backupTarget.host_id);
@@ -454,32 +442,23 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
 
   const submitBackup = async () => {
     if (backupBlocker || !backupTarget) return;
-    const key = "backup-now";
+    const key = backupNowKey(backupTarget.id);
     setWorking(key);
     setError("");
     try {
-      const body = stableBody(pendingBackup.current, key, { vm_id: backupTarget.id, repository_id: backupRepo, consistency: backupConsistency });
-      const reply = await api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(body.vm_id)}/backup`, "POST", {
-        request_id: requestID(key, "bnow"),
-        repository_id: body.repository_id,
-        consistency: body.consistency,
-      });
-      clearRequest(key);
-      delete pendingBackup.current[key];
+      const outcome = await sendHeld(held, key, "bnow", (request_id): BackupNowBody => ({ request_id, repository_id: backupRepo, consistency: backupConsistency }),
+        body => api<{ operation?: { id?: string } }>(`vms/${encodeURIComponent(backupTarget.id)}/backup`, "POST", body));
+      if ("error" in outcome) {
+        setBackupUncertain(!outcome.definitive);
+        setError(message(outcome.error));
+        return;
+      }
       setBackupUncertain(false);
-      onNotice(`${backupTarget.name}: backup requested`, backupOpID(reply));
+      onNotice(`${backupTarget.name}: backup requested`, backupOpID(outcome.reply));
       setBackupOpen(false);
       setBackupStep(1);
-      await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
+      await reload().catch(e => setError(message(e)));
       await refresh();
-    } catch (e) {
-      const status = (e as { status?: number }).status;
-      if (status && status >= 400 && status < 500 && status !== 409) {
-        clearRequest(key);
-        delete pendingBackup.current[key];
-        setBackupUncertain(false);
-      } else setBackupUncertain(true);
-      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setWorking("");
     }
@@ -517,41 +496,31 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setWorking(key);
     setError("");
     try {
-      restoreDrafts.current[key] = { name: restoreName, host: restoreHost, storage: restoreStorage, vmID: restoreVMID, confirmation: replaceConfirm };
-      let path = `pools/${encodeURIComponent(pool.id)}/backup-restore`;
-      let body: Record<string, unknown> = {
-        request_id: requestID(key, restoreMode === "replace" ? "brep" : restoreMode === "test" ? "btes" : "bres"),
+      held.drafts[key] = { name: restoreName, host: restoreHost, storage: restoreStorage, vmID: restoreVMID, confirmation: replaceConfirm };
+      held.points[key] = selected;
+      const path = `pools/${encodeURIComponent(pool.id)}/${restoreMode === "replace" ? "backup-restore-replace" : restoreMode === "test" ? "backup-test-restore" : "backup-restore"}`;
+      const outcome = await sendHeld(held, key, restoreMode === "replace" ? "brep" : restoreMode === "test" ? "btes" : "bres", request_id => ({
+        request_id,
         host_id: restoreHost,
         repository_id: selected.repository_id,
         recovery_point_id: selected.id,
         storage_id: restoreStorage,
-      };
-      if (restoreMode === "replace") {
-        path = `pools/${encodeURIComponent(pool.id)}/backup-restore-replace`;
-        body = { ...body, original_vm_id: selected.source_vm_id, confirm_replace: true };
-      } else if (restoreMode === "test") {
-        path = `pools/${encodeURIComponent(pool.id)}/backup-test-restore`;
-        body = { ...body, new_vm_id: restoreVMID, new_vm_name: restoreName.trim() };
-      } else {
-        body = { ...body, new_vm_id: restoreVMID, new_vm_name: restoreName.trim() };
+        ...(restoreMode === "replace" ? { original_vm_id: selected.source_vm_id, confirm_replace: true } : { new_vm_id: restoreVMID, new_vm_name: restoreName.trim() }),
+      }), body => api<{ operation?: { id?: string } }>(path, "POST", body));
+      if ("error" in outcome) {
+        if (outcome.definitive) { delete held.drafts[key]; delete held.points[key]; }
+        setError(message(outcome.error));
+        return;
       }
-      const reply = await api<{ operation?: { id?: string } }>(path, "POST", body);
-      clearRequest(key);
-      delete restoreDrafts.current[key];
+      delete held.drafts[key];
+      delete held.points[key];
       delete presentationDrafts.current[key];
       setRestoreOpen(false);
       const label = restoreMode === "replace" ? "restore replace" : restoreMode === "test" ? "test restore" : "restore as new";
-      onNotice(`${restoreName.trim() || selected.source_vm_name || selected.id}: ${label} requested`, backupOpID(reply));
+      onNotice(`${restoreName.trim() || selected.source_vm_name || selected.id}: ${label} requested`, backupOpID(outcome.reply));
       setSelectedID("");
-      await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
+      await reload().catch(e => setError(message(e)));
       await refresh();
-    } catch (e) {
-      const status = (e as { status?: number }).status;
-      if (status && status >= 400 && status < 500 && status !== 409) {
-        clearRequest(key);
-        delete restoreDrafts.current[key];
-      }
-      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setWorking("");
     }
@@ -563,26 +532,12 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setWorking(key);
     setError("");
     try {
-      const body = stableBody(pendingProtect.current, key, {
-        repository_id: point.repository_id,
-        recovery_point_id: point.id,
-        protected: !point.protected,
-      });
-      const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(pool.id)}/backup-protect`, "POST", {
-        request_id: requestID(key, "bpro"),
-        ...body,
-      });
-      clearRequest(key);
-      delete pendingProtect.current[key];
-      onNotice(`${point.source_vm_name || point.id}: ${body.protected ? "protect" : "unprotect"} requested`, backupOpID(reply));
+      const outcome = await sendHeld(held, key, "bpro", request_id => ({
+        request_id, repository_id: point.repository_id, recovery_point_id: point.id, protected: !point.protected,
+      }), body => api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(pool.id)}/backup-protect`, "POST", body));
+      if ("error" in outcome) { setError(message(outcome.error)); return; }
+      onNotice(`${point.source_vm_name || point.id}: ${outcome.body.protected ? "protect" : "unprotect"} requested`, backupOpID(outcome.reply));
       await refresh();
-    } catch (e) {
-      const status = (e as { status?: number }).status;
-      if (status && status >= 400 && status < 500 && status !== 409) {
-        clearRequest(key);
-        delete pendingProtect.current[key];
-      }
-      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setWorking("");
     }
@@ -596,24 +551,21 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
     setWorking(key);
     setError("");
     try {
-      const reply = await api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(pool.id)}/backup-test-${action}`, "POST", {
-        request_id: requestID(key, "btest"),
-        repository_id: point.repository_id,
-        recovery_point_id: point.id,
-        test_vm_id: vmID,
-        ...(result ? { result } : {}),
-      });
-      clearRequest(key);
-      onNotice(`${point.source_vm_name || point.id}: ${action === "verify" ? `${result} test result` : "test VM cleanup"} requested`, backupOpID(reply));
+      const outcome = await sendHeld(held, key, "btest", request_id => ({
+        request_id, repository_id: point.repository_id, recovery_point_id: point.id, test_vm_id: vmID, ...(result ? { result } : {}),
+      }), body => api<{ operation?: { id?: string } }>(`pools/${encodeURIComponent(pool.id)}/backup-test-${action}`, "POST", body));
+      if ("error" in outcome) { setError(message(outcome.error)); return; }
+      onNotice(`${point.source_vm_name || point.id}: ${action === "verify" ? `${result} test result` : "test VM cleanup"} requested`, backupOpID(outcome.reply));
       setCleanupConfirm({});
-      await reload().catch(e => setError(e instanceof Error ? e.message : String(e)));
+      await reload().catch(e => setError(message(e)));
       await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setWorking("");
     }
   };
+
+  const pointPanel = Boolean(selected && view === "points" && !backupOpen && !policyOpen);
+
 
   if (!pool) {
     return <><h1 className="sr-only">Backups</h1><p className="empty">Choose a pool in the scope menu to see its backups.</p></>;
@@ -631,13 +583,14 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       <button type="button" role="tab" id="backup-jobs-tab" tabIndex={view === "jobs" ? 0 : -1} aria-controls="backup-jobs-view" aria-selected={view === "jobs"} disabled={panelLocked || policyOpen} onClick={() => switchView("jobs")}>Backup jobs</button>
       <button type="button" role="tab" id="backup-points-tab" tabIndex={view === "points" ? 0 : -1} aria-controls="recovery-points" aria-selected={view === "points"} disabled={panelLocked || policyOpen} onClick={() => switchView("points")}>Recovery points</button>
     </div>
-    {[error, catalogError, repositoryError, policyError, jobRunError, runError].filter(Boolean).map((message, index) => <p key={index} className="why" role="alert">{message}</p>)}
+    {/* Each message renders once, on the surface the operator is looking at: a panel shows its own. */}
+    {!(backupOpen || policyOpen || pointPanel || repositoryPanelOpen) && (view === "jobs" ? [jobRunError] : [error, catalogError, repositoryError, runError]).filter(Boolean).map(text => <p key={text} className="why" role="alert">{text}</p>)}
     {backupOpen && <Panel wide icon="backup" title="Back up now" onClose={closeBackup} closeDisabled={Boolean(working) || backupUncertain}
       footer={<>
         {backupBlocker && <p className="why" role="status">{backupBlocker}</p>}
         <div className="actions">
           {backupStep === 1 ? <button type="submit" form="backup-now-destination" className="primary" disabled={!backupVM || !backupRepo || Boolean(working)}>Review backup</button> :
-            <><button type="button" disabled={Boolean(working) || backupUncertain} onClick={() => setBackupStep(1)}>Back</button><button type="button" className="primary" disabled={Boolean(backupBlocker) || Boolean(working)} onClick={() => void submitBackup()}>{working === "backup-now" ? "Working…" : backupUncertain ? "Retry backup request" : "Back up now"}</button></>}
+            <><button type="button" disabled={Boolean(working) || backupUncertain} onClick={() => setBackupStep(1)}>Back</button><button type="button" className="primary" disabled={Boolean(backupBlocker) || Boolean(working)} onClick={() => void submitBackup()}>{working.startsWith(backupNowPrefix) ? "Working…" : backupUncertain ? "Retry backup request" : "Back up now"}</button></>}
           <button type="button" disabled={Boolean(working) || backupUncertain} onClick={closeBackup}>Cancel</button>
         </div>
       </>}>
@@ -645,27 +598,24 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       {repositoryError && <p className="why" role="alert">{repositoryError}</p>}
       {repos === null && !repositoryError && <p className="muted" role="status">Loading backup repositories…</p>}
       <ol className="backup-steps"><li aria-current={backupStep === 1 ? "step" : undefined}>Destination</li><li aria-current={backupStep === 2 ? "step" : undefined}>Review and submit</li></ol>
-      {backupUncertain && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same backup request.</p>}
+      {backupUncertain && <p className="why" role="status">The previous reply was uncertain. Retry the same backup request, or check <a href="#/tasks">Tasks</a>; the request is kept if you leave this page.</p>}
       {backupStep === 1 && <form id="backup-now-destination" className="stack" onSubmit={e => { e.preventDefault(); if (backupVM && backupRepo) setBackupStep(2); }}>
-        <label>Virtual machine<select required value={backupVM} disabled={Boolean(working) || backupUncertain} onChange={e => { setBackupVM(e.target.value); setBackupMode("stopped"); clearRequest("backup-now"); }}>
+        <label>Virtual machine<select required value={backupVM} disabled={Boolean(working) || backupUncertain} onChange={e => setBackupVM(e.target.value)}>
           <option value="">Select VM</option>
           {poolVMs.filter(v => !v.protected).map(v => <option key={v.id} value={v.id}>{v.name}{v.state !== "shut off" ? ` · ${v.state}` : ""}</option>)}
         </select></label>
-        <label>Repository<select required value={backupRepo} disabled={Boolean(working) || backupUncertain} onChange={e => { setBackupRepo(e.target.value); clearRequest("backup-now"); }}>
+        <label>Repository<select required value={backupRepo} disabled={Boolean(working) || backupUncertain} onChange={e => setBackupRepo(e.target.value)}>
           <option value="">Select repository</option>
           {(repos || []).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select></label>
         {repos !== null && repos.length === 0 && <p className="why">Create a backup repository in <a href="#/settings/backups">Settings → Backups</a> before backing up a VM.</p>}
-        {backupRunning && <label>Mode<select value={backupMode === "stopped" ? "crash" : backupMode} onChange={e => { setBackupMode(e.target.value as "crash" | "quiesced"); clearRequest("backup-now"); }} disabled={Boolean(working) || backupUncertain}>
-          <option value="crash">Crash-consistent</option>
-          <option value="quiesced">Quiesced</option>
-        </select></label>}
+        {backupRunning && <p className="note">This VM is running: the backup is crash-consistent, as if power were cut.</p>}
       </form>}
       {backupStep === 2 && <div className="stack">
         <dl className="details backup-summary">
           <dt>VM</dt><dd>{backupTarget?.name || backupVM}</dd>
           <dt>Repository</dt><dd>{repoByID.get(backupRepo)?.name || backupRepo}</dd>
-          <dt>Mode</dt><dd>{backupConsistency === "stopped" ? "Stopped full backup" : backupConsistency === "crash" ? "Online crash-consistent" : "Online quiesced"}</dd>
+          <dt>Mode</dt><dd>{backupConsistency === "stopped" ? "Stopped full backup" : "Online crash-consistent"}</dd>
           <dt>Disks</dt><dd>{backupTarget?.spec?.disks?.length ? backupTarget.spec.disks.map(d => d.name).join(", ") : "From Core definition"}</dd>
         </dl>
       </div>}
@@ -676,7 +626,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       api={api} data={data} pool={pool} repos={repos} policies={policies} runs={jobRuns} error={error || policyError || repositoryError}
       busy={busy} unavailable={unavailable} working={working} setWorking={setWorking}
       onNotice={onNotice} onError={setError} reload={async () => { await reload(); await refresh(); }}
-      requestID={requestID} clearRequest={clearRequest}
+      held={held}
       onRepositoryPanelChange={setRepositoryPanelOpen}
       openCreate={policyOpen} onOpenCreate={() => { if (!panelLocked) { saveRestoreDraft(); setSelectedID(""); setRestoreOpen(false); setBackupOpen(false); setPolicyOpen(true); } }} onCloseCreate={() => setPolicyOpen(false)}
     />
@@ -687,7 +637,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       </button>
       <button type="button" className="sm" onClick={() => { location.hash = "/settings/backups"; }}>Repositories</button>
     </>}>
-      {pageNotice && <p className="why" role="status">{pageNotice}</p>}
+      {pageNotice && !pointPanel && <p className="why" role="status">{pageNotice}</p>}
       <button type="button" className="backup-filter-toggle" aria-expanded={filtersOpen} aria-controls="backup-point-filters" onClick={() => setFiltersOpen(open => !open)}>Filters</button>
       <div className="backup-layout">
       <aside id="backup-point-filters" className={`backup-filters${filtersOpen ? " open" : ""}`} aria-label="Recovery point filters">
@@ -748,7 +698,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       </> : undefined}
       actions={!restoreOpen ? <>
         <button type="button" className="sm primary" disabled={panelLocked || busy || unavailable} onClick={() => openRestore(selected)}>Restore…</button>
-        <button type="button" className="sm" disabled={panelLocked || busy || unavailable} onClick={() => void toggleProtect(selected)}>{pendingProtect.current[`protect-${selected.id}`] ? "Retry protection request" : selected.protected ? "Unprotect from deletion" : "Protect from deletion"}</button>
+        <button type="button" className="sm" disabled={panelLocked || busy || unavailable} onClick={() => void toggleProtect(selected)}>{held.bodies[`protect-${selected.id}`] ? "Retry protection request" : selected.protected ? "Unprotect from deletion" : "Protect from deletion"}</button>
       </> : undefined}>
       {error && <p className="why" role="alert">{error}</p>}
       {runError && <p className="why" role="alert">{runError}</p>}
@@ -771,7 +721,7 @@ export function Backups({ api, data, pool, busy, unavailable, reload, onNotice, 
       </section>
       {restoreOpen && <section className="backup-panel" aria-label="Restore">
         <ol className="backup-steps"><li aria-current={restoreStep === 1 ? "step" : undefined}>Destination</li><li aria-current={restoreStep === 2 ? "step" : undefined}>Review and submit</li></ol>
-        {uncertainRestore && <p className="why" role="status">The previous reply was uncertain. Check <a href="#/tasks">Tasks</a>, or retry the same request with these selections. The destination and restore choice are frozen.</p>}
+        {uncertainRestore && <p className="why" role="status">The previous reply was uncertain. Retry the same request with these selections, or check <a href="#/tasks">Tasks</a>; the request is kept if you leave this page. The destination and restore choice are frozen.</p>}
         <fieldset disabled={panelLocked || restoreStep === 2}>
           <legend>Restore choice</legend>
           <label className="backup-choice"><input type="radio" name="backup-restore-mode" checked={restoreMode === "new"} onChange={() => openRestore(selected, "new")} /><span><strong>Restore as new</strong><small className="backup-meta">Create a separate VM with new identity. The original VM is unchanged.</small></span></label>

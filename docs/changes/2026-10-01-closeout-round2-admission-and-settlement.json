@@ -12,7 +12,7 @@
     "internal/agent/backup_peer_pin_adoption_test.go",
     "internal/agent/backup_repository_identity_test.go",
     "internal/controller/backup_adoption_test.go",
-    "web/src/backups-panels.test.mjs",
+    "web/src/backups-replace.test.mjs",
     "docs/guide/restore-replace.md",
     "docs/guide/backup-repositories.md",
     "docs/changes/2026-10-01-backup-workspace-ui.json",
@@ -39,6 +39,6 @@
   },
   "verification": {
     "method": "Focused Go tests in internal/agent and internal/controller (each new regression failed with its fix reverted) and web typecheck and tests. No lab run and no browser walkthrough.",
-    "evidence": ["internal/agent/pool_vm_release_test.go", "internal/agent/backup_orphan_reprotect_test.go", "internal/agent/backup_peer_pin_adoption_test.go", "internal/agent/backup_test_restore_test.go", "internal/agent/backup_repository_identity_test.go", "internal/controller/backup_adoption_test.go", "web/src/backups-panels.test.mjs"]
+    "evidence": ["internal/agent/pool_vm_release_test.go", "internal/agent/backup_orphan_reprotect_test.go", "internal/agent/backup_peer_pin_adoption_test.go", "internal/agent/backup_test_restore_test.go", "internal/agent/backup_repository_identity_test.go", "internal/controller/backup_adoption_test.go", "web/src/backups-replace.test.mjs"]
   }
 }

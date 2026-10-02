@@ -460,3 +460,79 @@ func TestReleaseRetainedTPMRefusesOversizedAdmissionBeforeDeletion(t *testing.T)
 		t.Fatalf("refusal blocked later managed work: %v", err)
 	}
 }
+
+func (l releaseRetainedLab) delete(t *testing.T, op string, wipe bool) protocol.Result {
+	t.Helper()
+	r, err := l.e.Execute(context.Background(), protocol.Command{OperationID: op, Kind: "vm-delete",
+		Delete: &protocol.VMDeleteRequest{VMID: l.vm.ID, PoolID: l.vm.PoolID, HostID: l.vm.HostID, DeleteDisks: wipe}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// The vTPM state a restore replace retained is key material of the VM: deleting the VM removes
+// it whether or not the disks are kept, and never touches the live or another VM's tree.
+func TestDeleteRemovesRetainedTPMTrees(t *testing.T) {
+	for _, wipe := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wipe=%t", wipe), func(t *testing.T) {
+			l := newReleaseRetainedLab(t, "shut off")
+			retained, current, unrelated := addReleaseRetainedTPM(t, l)
+			fakeCommand(t, "virsh", `case "$3" in domstate) echo "shut off";; list) ;; undefine) exit 0;; *) exit 2;; esac`)
+			if r := l.delete(t, "delete-1", wipe); r.Status != "succeeded" {
+				t.Fatalf("delete: %+v", r)
+			}
+			if fileExists(retained) {
+				t.Fatal("retained vTPM tree survived the VM")
+			}
+			if !fileExists(current) || !fileExists(unrelated) {
+				t.Fatal("delete removed a vTPM tree that is not this VM's retained original")
+			}
+			if fileExists(l.original) == wipe {
+				t.Fatalf("original disk present=%v with wipe=%t", fileExists(l.original), wipe)
+			}
+		})
+	}
+}
+
+// A retained tree that no longer matches what its edit recorded refuses the delete before the
+// domain is undefined, so no half-deleted VM keeps unverifiable key material.
+func TestDeleteRefusesChangedRetainedTPMTree(t *testing.T) {
+	l := newReleaseRetainedLab(t, "shut off")
+	retained, _, _ := addReleaseRetainedTPM(t, l)
+	if err := os.WriteFile(filepath.Join(retained, "tpm2", "tpm2-00.permall"), []byte("mutated"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "virsh.log")
+	t.Setenv("VMHOST_LOG", log)
+	fakeCommand(t, "virsh", `echo "$3" >> "$VMHOST_LOG"; case "$3" in domstate) echo "shut off";; list) ;; undefine) exit 0;; *) exit 2;; esac`)
+	if r := l.delete(t, "delete-mutated", true); r.Status != "failed" || !strings.Contains(r.Error, "TPM state changed") {
+		t.Fatalf("mutated retained tree: %+v", r)
+	}
+	if calls, _ := os.ReadFile(log); strings.Contains(string(calls), "undefine") {
+		t.Fatalf("domain undefined despite an unverifiable retained tree: %q", calls)
+	}
+	if !fileExists(retained) || !fileExists(l.original) {
+		t.Fatal("refused delete removed retained state")
+	}
+}
+
+// Release enforces the VM's pool and host and refuses while a change of the VM is unfinished,
+// as delete does, rather than relying on the pool's admission alone.
+func TestReleaseRetainedRefusesForeignRequestAndUnresolvedChange(t *testing.T) {
+	l := newReleaseRetainedLab(t, "shut off")
+	foreign := protocol.Command{OperationID: "release-foreign", Kind: "vm-release-retained",
+		ReleaseRetained: &protocol.VMReleaseRetainedRequest{VMID: l.vm.ID, PoolID: l.vm.PoolID, HostID: "other-host", Confirmation: l.vm.Name}}
+	if r, err := l.e.Execute(context.Background(), foreign, nil); err != nil || r.Status != "failed" || !strings.Contains(r.Error, "pool or host") || !fileExists(l.original) {
+		t.Fatalf("foreign host release: %+v %v", r, err)
+	}
+	pending := l.vm
+	pending.Revision = 2
+	if err := l.e.save(managedJournal{Command: protocol.Command{OperationID: "edit-pending", Kind: "vm-update", VM: &pending},
+		Result: protocol.Result{OperationID: "edit-pending", Status: "needs_attention"}, Stage: "defining"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := l.release(t, "release-blocked", l.vm.Name); r.Status != "failed" || !strings.Contains(r.Error, "still unresolved") || !fileExists(l.original) {
+		t.Fatalf("release beside an unfinished edit: %+v", r)
+	}
+}
